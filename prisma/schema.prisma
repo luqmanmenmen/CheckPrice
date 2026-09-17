@@ -26,3 +26,70 @@ model Product {
   updatedAt     DateTime @updatedAt
   createdAt     DateTime @default(now())
 }
+
+model User {
+  id        String   @id @default(cuid())
+  nik       String   @unique
+  pin       String
+  name      String
+  role      Role     @default(SA)
+  shifts    Shift[]
+  tickets   Ticket[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum Role {
+  SA           // Cashier, Fitter, Entrance, Runner all grouped under SA (Sales Area) who can request
+  WAREHOUSE    // Warehouse staff who fulfill requests
+}
+
+model Shift {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  type      Int       // 1 or 2
+  startTime DateTime  @default(now())
+  endTime   DateTime?
+  tickets   Ticket[]
+}
+
+model Ticket {
+  id          String   @id @default(cuid())
+  shiftId     String
+  shift       Shift    @relation(fields: [shiftId], references: [id])
+  requesterId String
+  requester   User     @relation(fields: [requesterId], references: [id])
+  
+  type        TicketType
+  priority    Priority @default(LOW)
+  status      Status   @default(PENDING)
+  
+  sku         String
+  size        String?
+  qty         Int?
+  photoUrl    String?  // URL to the physical price tag photo
+  ocrData     String?  // JSON string of OCR raw data
+  
+  reason      String?  // OOS reason from warehouse
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+enum TicketType {
+  STOCK_CHECK // Tanya Stok
+  REQUEST     // Request Barang
+}
+
+enum Priority {
+  LOW
+  HIGH
+}
+
+enum Status {
+  PENDING
+  READY
+  OOS
+  COMPLETED // When SA accepts the ready item
+}

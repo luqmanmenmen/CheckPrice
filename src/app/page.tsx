@@ -2,7 +2,9 @@
 
 import { useState, useRef } from "react";
 import dynamic from "next/dynamic";
-import { Search, Camera, X, CalendarRange, Tag, Package2, Layers } from "lucide-react";
+import { Search, Camera, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2 } from "lucide-react";
+import { DetectedSku } from "@/components/TextScanner";
+import { useEffect } from "react";
 
 const Scanner = dynamic(() => import("@/components/Scanner"), { ssr: false });
 const TextScanner = dynamic(() => import("@/components/TextScanner"), { ssr: false });
@@ -57,6 +59,32 @@ export default function Home() {
   const [error, setError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Review Screen States
+  const [reviewData, setReviewData] = useState<{sku: string, detected: DetectedSku, snapshot?: string} | null>(null);
+  const [qty, setQty] = useState(1);
+  const [submitting, setSubmitting] = useState(false);
+  const [activeTicketType, setActiveTicketType] = useState<"REQUEST" | "STOCK_CHECK" | null>(null);
+  const [user, setUser] = useState<{name: string, nik: string, role: string} | null>(null);
+
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then(res => res.json())
+      .then(data => {
+        if (data.user) setUser(data.user);
+      })
+      .catch(console.error);
+  }, []);
+
+  const handleLogout = async () => {
+    if (!confirm("Akhiri shift dan keluar?")) return;
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+      window.location.href = "/login";
+    } catch (error) {
+      console.error("Failed to logout:", error);
+    }
+  };
+
   const searchProduct = async (identifier: string) => {
     const trimmed = identifier.trim();
     if (!trimmed) return;
@@ -82,9 +110,54 @@ export default function Home() {
     }
   };
 
-  const handleScanSuccess = (decodedText: string) => {
+  const handleBarcodeSuccess = (decodedText: string) => {
     setManualInput(decodedText);
     searchProduct(decodedText);
+  };
+
+  const handleTextScanSuccess = (sku: string, detected: DetectedSku, snapshot?: string) => {
+    setScanMode("none");
+    if (activeTicketType) {
+      // Jika mode tiket gudang
+      setReviewData({ sku, detected, snapshot });
+    } else {
+      // Jika mode pencarian biasa
+      setManualInput(sku);
+      searchProduct(sku);
+    }
+  };
+
+  const submitTicket = async () => {
+    if (!reviewData || !activeTicketType) return;
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/tickets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sku: reviewData.sku,
+          size: reviewData.detected.size,
+          qty: qty,
+          type: activeTicketType,
+          photoUrl: reviewData.snapshot, // Base64 snapshot
+          ocrData: reviewData.detected.rawText
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert("Tiket berhasil dikirim ke Gudang!");
+        setReviewData(null);
+        setActiveTicketType(null);
+        setQty(1);
+        searchProduct(reviewData.sku); // Automatically search after sending
+      } else {
+        alert(data.error || "Gagal mengirim tiket");
+      }
+    } catch (err) {
+      alert("Terjadi kesalahan jaringan");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleClear = () => {
@@ -115,8 +188,117 @@ export default function Home() {
   return (
     <div className="flex flex-col gap-5">
 
+      {/* User Header */}
+      {user && (
+        <div className="bg-gradient-to-r from-blue-700 to-indigo-800 -mx-5 -mt-5 p-5 pt-8 pb-6 shadow-md rounded-b-3xl flex justify-between items-center text-white">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center backdrop-blur-sm border border-white/30">
+              <UserCircle2 className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-xs text-blue-200 font-medium tracking-wide uppercase">Area Sales (Shift Aktif)</p>
+              <h1 className="font-bold text-lg leading-tight">{user.name} <span className="text-blue-200 font-normal">({user.nik})</span></h1>
+            </div>
+          </div>
+          <button 
+            onClick={handleLogout}
+            className="bg-red-500/20 hover:bg-red-500/40 border border-red-500/50 p-2.5 rounded-xl transition-colors"
+            title="Akhiri Shift & Keluar"
+          >
+            <LogOut className="w-5 h-5 text-red-100" />
+          </button>
+        </div>
+      )}
+      
+      {/* Review Screen Overlay */}
+      {reviewData && (
+        <div className="fixed inset-0 bg-black/80 z-50 p-4 flex flex-col justify-center items-center overflow-y-auto pt-20">
+          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="bg-slate-100 p-4 border-b flex justify-between items-center shrink-0">
+              <h3 className="font-bold text-slate-800">Verifikasi Tiket</h3>
+              <button onClick={() => setReviewData(null)} className="p-1 bg-slate-200 rounded-full hover:bg-slate-300">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-4 overflow-y-auto space-y-4">
+              {reviewData.snapshot && (
+                <div className="rounded-xl overflow-hidden border border-slate-200">
+                  <img src={reviewData.snapshot} alt="Snapshot" className="w-full h-auto object-cover max-h-48" />
+                </div>
+              )}
+              
+              <div className="bg-blue-50 border border-blue-100 p-4 rounded-xl space-y-2">
+                <p className="text-xs font-bold text-blue-500 uppercase">Hasil Bacaan AI:</p>
+                <div className="flex items-center justify-between bg-white px-3 py-2 rounded-lg shadow-sm">
+                  <span className="text-sm text-slate-500">SKU</span>
+                  <span className="font-mono font-bold text-lg">{reviewData.sku}</span>
+                </div>
+                <div className="flex items-center justify-between bg-white px-3 py-2 rounded-lg shadow-sm">
+                  <span className="text-sm text-slate-500">Ukuran (Size)</span>
+                  <span className="font-bold text-lg text-blue-700">{reviewData.detected.size || "?"}</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-2">Quantity (Qty)</label>
+                <div className="flex items-center gap-4">
+                  <button onClick={() => setQty(Math.max(1, qty - 1))} className="w-12 h-12 bg-slate-100 rounded-xl text-xl font-bold border hover:bg-slate-200">-</button>
+                  <input 
+                    type="number" 
+                    min={1} 
+                    value={qty} 
+                    onChange={(e) => setQty(parseInt(e.target.value) || 1)}
+                    className="flex-1 text-center font-bold text-xl h-12 border rounded-xl"
+                  />
+                  <button onClick={() => setQty(qty + 1)} className="w-12 h-12 bg-slate-100 rounded-xl text-xl font-bold border hover:bg-slate-200">+</button>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 border-t flex flex-col gap-3 shrink-0 bg-slate-50">
+              <button 
+                onClick={submitTicket}
+                disabled={submitting}
+                className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-blue-200 flex items-center justify-center gap-2 hover:bg-blue-700"
+              >
+                Kirim ke Gudang
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Warehouse Ticket Section */}
+      <div className="pt-2">
+        <h2 className="text-sm font-bold text-slate-500 uppercase mb-2">Tiket Gudang</h2>
+        <div className="flex gap-2">
+          <button
+            onClick={() => {
+              setActiveTicketType("REQUEST");
+              setScanMode("text");
+            }}
+            className="flex-1 bg-gradient-to-br from-blue-600 to-indigo-600 text-white p-3 rounded-xl shadow-sm flex flex-col items-center justify-center gap-1 hover:opacity-90 transition-opacity"
+          >
+            <HandHelping className="w-6 h-6" />
+            <span className="font-bold text-sm">Request Barang</span>
+          </button>
+          <button
+            onClick={() => {
+              setActiveTicketType("STOCK_CHECK");
+              setScanMode("text");
+            }}
+            className="flex-1 bg-white border-2 border-slate-200 text-slate-700 p-3 rounded-xl shadow-sm flex flex-col items-center justify-center gap-1 hover:bg-slate-50 transition-colors"
+          >
+            <MessageSquare className="w-6 h-6" />
+            <span className="font-bold text-sm">Tanya Stok</span>
+          </button>
+        </div>
+      </div>
+
       {/* Search */}
       <div className="pt-2 flex flex-col gap-3">
+        <h2 className="text-sm font-bold text-slate-500 uppercase mb-2">Cari Info Produk</h2>
         <div className="flex gap-2 items-center">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-5 h-5" />
@@ -161,14 +343,17 @@ export default function Home() {
             )}
           </button>
           <button
-            onClick={() => setScanMode(scanMode === "text" ? "none" : "text")}
+            onClick={() => {
+              setActiveTicketType(null);
+              setScanMode(scanMode === "text" ? "none" : "text");
+            }}
             className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 transition-all font-semibold text-sm ${
-              scanMode === "text"
+              scanMode === "text" && !activeTicketType
                 ? "border-red-100 text-red-600 bg-red-50 hover:bg-red-100"
                 : "border-indigo-100 text-indigo-600 bg-indigo-50 hover:bg-indigo-100"
             }`}
           >
-            {scanMode === "text" ? (
+            {scanMode === "text" && !activeTicketType ? (
               <><X className="w-4 h-4" /> Tutup</>
             ) : (
               <><Search className="w-4 h-4" /> OCR Teks</>
@@ -180,15 +365,16 @@ export default function Home() {
       {/* Scanner Views */}
       {scanMode === "barcode" && (
         <div className="animate-in slide-in-from-top-4 duration-300">
-          <Scanner onScanSuccess={handleScanSuccess} />
+          <Scanner onScanSuccess={handleBarcodeSuccess} />
           <p className="text-center text-xs text-slate-500 mt-2">Arahkan kamera ke barcode garis</p>
         </div>
       )}
       
       {scanMode === "text" && (
         <div className="animate-in slide-in-from-top-4 duration-300">
-          <TextScanner onScanSuccess={handleScanSuccess} />
-          <p className="text-center text-xs text-slate-500 mt-2">Arahkan kamera ke layar/label harga. Ketuk kotak biru jika SKU muncul.</p>
+          <TextScanner onScanResult={handleTextScanSuccess} />
+          {activeTicketType === "REQUEST" && <p className="text-center text-xs font-bold text-blue-600 mt-2">Mode: Kamera Request Barang</p>}
+          {activeTicketType === "STOCK_CHECK" && <p className="text-center text-xs font-bold text-slate-600 mt-2">Mode: Kamera Tanya Stok</p>}
         </div>
       )}
 

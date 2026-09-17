@@ -4,25 +4,28 @@ import { useEffect, useRef, useState } from "react";
 import Tesseract from "tesseract.js";
 
 interface TextScannerProps {
-  onScanSuccess: (text: string) => void;
+  onScanResult: (sku: string, detected: DetectedSku, snapshot?: string) => void;
 }
 
-interface BoundingBox {
+export interface BoundingBox {
   x0: number;
   y0: number;
   x1: number;
   y1: number;
 }
 
-interface DetectedSku {
+export interface DetectedSku {
   text: string;
   bbox: BoundingBox;
+  size?: string;
+  rawText?: string;
 }
 
-export default function TextScanner({ onScanSuccess }: TextScannerProps) {
+export default function TextScanner({ onScanResult }: TextScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const [isScanning, setIsScanning] = useState(false);
   const [status, setStatus] = useState("Memulai AI Google Lens...");
@@ -104,9 +107,11 @@ export default function TextScanner({ onScanSuccess }: TextScannerProps) {
         updateScale(); // Ensure scale is fresh
 
         const found: DetectedSku[] = [];
+        let fullTextStr = "";
         
         words.forEach((word: any) => {
            const text = word.text.toUpperCase();
+           fullTextStr += text + " ";
            
            // Cari pola SKU: 7-15 karakter gabungan angka/huruf/strip, yang punya minimal 1 angka
            const match = text.match(/[A-Z0-9-]{7,15}/);
@@ -122,6 +127,31 @@ export default function TextScanner({ onScanSuccess }: TextScannerProps) {
               }
            }
         });
+
+        // Ekstrak ukuran jika ada (S, M, L, XL, XXL) dari full text
+        const sizeMatch = fullTextStr.match(/\b(XS|S|M|L|XL|XXL|XXXL|3XL|4XL)\b/);
+        const extractedSize = sizeMatch ? sizeMatch[1] : undefined;
+
+        setDetectedSkus(found);
+
+        // Jika menemukan setidaknya 1 SKU, hentikan kamera dan trigger onScanResult
+        if (found.length > 0) {
+           // Ambil snapshot base64
+           const snapshot = canvas.toDataURL("image/jpeg", 0.8);
+           
+           // Ambil SKU pertama yang paling valid
+           const bestSku = found[0];
+           bestSku.size = extractedSize;
+           bestSku.rawText = fullTextStr;
+           
+           onScanResult(bestSku.text, bestSku, snapshot);
+           
+           if (intervalRef.current) {
+              clearInterval(intervalRef.current);
+           }
+           setIsScanning(false);
+           return; // Stop further processing
+        }
 
         // Deduplicate by text (keep the one with best confidence or just first)
         const uniqueFound = found.filter((v, i, a) => a.findIndex(t => (t.text === v.text)) === i);
@@ -139,9 +169,12 @@ export default function TextScanner({ onScanSuccess }: TextScannerProps) {
          scanFrame();
        }
     }, 1500);
+    intervalRef.current = scanInterval;
 
     return () => {
-      clearInterval(scanInterval);
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
       window.removeEventListener("resize", updateScale);
       setIsScanning(false);
       if (stream) {
@@ -174,7 +207,7 @@ export default function TextScanner({ onScanSuccess }: TextScannerProps) {
         {detectedSkus.map((sku, idx) => (
           <button
             key={idx}
-            onClick={() => onScanSuccess(sku.text)}
+            onClick={() => onScanResult(sku.text, sku)}
             className="absolute border-2 border-blue-500 bg-blue-500/20 rounded-md cursor-pointer hover:bg-blue-500/40 transition-colors group flex items-end justify-center"
             style={{
               left: `${sku.bbox.x0 * scale.x}px`,
@@ -195,26 +228,17 @@ export default function TextScanner({ onScanSuccess }: TextScannerProps) {
             {status}
           </p>
         </div>
-      </div>
 
-      {/* Daftar Hasil Scan */}
-      {detectedSkus.length > 0 && (
-        <div className="bg-white border rounded-xl p-4 shadow-sm">
-          <p className="text-sm font-bold text-slate-700 mb-2">Terdeteksi {detectedSkus.length} SKU:</p>
-          <div className="flex flex-wrap gap-2">
-            {detectedSkus.map((sku, idx) => (
-              <button
-                key={idx}
-                onClick={() => onScanSuccess(sku.text)}
-                className="bg-indigo-50 border border-indigo-200 text-indigo-700 px-3 py-1.5 rounded-lg text-sm font-mono font-bold hover:bg-indigo-100 transition-colors"
-              >
-                {sku.text}
-              </button>
-            ))}
+        {/* Ganti multi-SKU list dengan indikator fokus karena SA akan diarahkan ke Review Screen otomatis */}
+        <div className="absolute bottom-4 left-0 right-0 p-4">
+          <div className="bg-white/90 backdrop-blur shadow-lg rounded-xl p-4 text-center">
+            <p className="text-sm text-gray-600">
+              Arahkan kamera ke layar/label harga.<br/>
+              Kamera akan <span className="font-bold text-blue-600">otomatis memfoto</span> jika SKU berhasil dibaca.
+            </p>
           </div>
-          <p className="text-xs text-slate-500 mt-2 italic">Ketuk pada nomor SKU di atas untuk mencari.</p>
         </div>
-      )}
+      </div>
     </div>
   );
 }
