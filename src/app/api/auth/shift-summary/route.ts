@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
       total: tickets.length,
       pending: tickets.filter(t => t.status === 'PENDING').length,
       completed: tickets.filter(t => t.status === 'COMPLETED').length,
-      rejected: tickets.filter(t => t.status === 'REJECTED').length,
+      rejected: tickets.filter(t => t.status === 'OOS').length,
       recentTickets: tickets.slice(0, 5) // Send 5 most recent for preview
     };
 

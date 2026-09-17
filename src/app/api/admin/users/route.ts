@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
         name: true,
         role: true,
         status: true,
-        lastActive: true,
+        updatedAt: true,
       },
       orderBy: {
         name: "asc",

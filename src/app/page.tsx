@@ -65,7 +65,7 @@ export default function Home() {
   const [qty, setQty] = useState(1);
   const [submitting, setSubmitting] = useState(false);
   const [activeTicketType, setActiveTicketType] = useState<"REQUEST" | "STOCK_CHECK" | null>(null);
-  const [user, setUser] = useState<{name: string, nik: string, role: string, status?: string} | null>(null);
+  const [user, setUser] = useState<{name: string, nik: string, role: string, status?: string, jobTitle?: string} | null>(null);
   const [togglingStatus, setTogglingStatus] = useState(false);
 
   // Logout Summary States
