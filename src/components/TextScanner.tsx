@@ -113,14 +113,14 @@ export default function TextScanner({ onScanSuccess }: TextScannerProps) {
 
       try {
         setIsScanning(false);
-        // We use recognize and get words
-        const { data: { words } } = await worker.recognize(canvas);
+        const result: any = await worker.recognize(canvas);
+        const words: any[] = result.data.words || [];
         
         updateScale(); // Ensure scale is fresh
 
         const found: DetectedSku[] = [];
         
-        words.forEach(word => {
+        words.forEach((word: any) => {
            const cleanedText = word.text.replace(/\n/g, "").trim().toUpperCase();
            // Strict check: SKU is usually numeric (at least 7 chars) or alphanumeric (8+ chars)
            const isLikelySku = /[0-9]/.test(cleanedText) && /^[A-Z0-9-]{7,15}$/.test(cleanedText);
