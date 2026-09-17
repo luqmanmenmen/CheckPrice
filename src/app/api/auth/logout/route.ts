@@ -23,13 +23,19 @@ export async function POST(req: NextRequest) {
     }
 
     const response = NextResponse.json({ success: true });
-    response.cookies.delete("token"); // Clear cookie
+    response.cookies.set("token", "", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 0,
+      path: "/"
+    });
 
     return response;
   } catch (error) {
     console.error("Logout error:", error);
     const response = NextResponse.json({ error: "Terjadi kesalahan" }, { status: 500 });
-    response.cookies.delete("token");
+    response.cookies.set("token", "", { maxAge: 0, path: "/" });
     return response;
   }
 }

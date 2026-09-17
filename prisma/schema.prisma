@@ -33,15 +33,22 @@ model User {
   pin       String
   name      String
   role      Role     @default(SA)
+  status    UserStatus @default(ACTIVE)
   shifts    Shift[]
   tickets   Ticket[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
+enum UserStatus {
+  ACTIVE
+  BREAK
+}
+
 enum Role {
   SA           // Cashier, Fitter, Entrance, Runner all grouped under SA (Sales Area) who can request
   WAREHOUSE    // Warehouse staff who fulfill requests
+  SUPER_ADMIN  // Master control
 }
 
 model Shift {

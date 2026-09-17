@@ -16,6 +16,7 @@ export async function proxy(request: NextRequest) {
     pathname.startsWith('/api/auth') || 
     pathname.startsWith('/api/upload') ||
     pathname.startsWith('/_next') ||
+    pathname.startsWith('/assets') ||
     pathname === '/favicon.ico'
   ) {
     return NextResponse.next()
@@ -35,10 +36,14 @@ export async function proxy(request: NextRequest) {
     if (role === 'WAREHOUSE' && pathname === '/') {
       return NextResponse.redirect(new URL('/warehouse', request.url))
     }
-    
-    // RBAC: SA cannot access warehouse
-    if (role === 'SA' && pathname.startsWith('/warehouse')) {
+    // RBAC: SA cannot access warehouse or super-admin
+    if (role === 'SA' && (pathname.startsWith('/warehouse') || pathname.startsWith('/super-admin'))) {
       return NextResponse.redirect(new URL('/', request.url))
+    }
+
+    // RBAC: SUPER_ADMIN should be routed to /super-admin
+    if (role === 'SUPER_ADMIN' && pathname !== '/super-admin' && !pathname.startsWith('/api/')) {
+      return NextResponse.redirect(new URL('/super-admin', request.url))
     }
 
     return NextResponse.next()
@@ -49,5 +54,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+  matcher: ['/((?!_next/static|_next/image|assets|favicon.ico).*)'],
 }

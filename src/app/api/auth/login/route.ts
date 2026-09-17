@@ -4,27 +4,35 @@ import { signToken } from "@/lib/auth";
 
 export async function POST(req: NextRequest) {
   try {
-    const { nik, pin, shift } = await req.json();
+    const { nik, pin, shift, jobTitle } = await req.json();
 
-    if (!nik || !pin) {
-      return NextResponse.json({ error: "NIK dan PIN wajib diisi" }, { status: 400 });
+    if (!nik || !pin || !jobTitle) {
+      return NextResponse.json({ error: "NIK, PIN, dan Posisi wajib diisi" }, { status: 400 });
     }
 
-    // Auto-seed for testing (since we don't have registration yet)
+    let role = "SA";
+    if (jobTitle === "Gudang Stock") role = "WAREHOUSE";
+
+    // Auto-seed for testing
     let user = await prisma.user.findUnique({ where: { nik } });
     if (!user) {
-      // If NIK is W001 -> create Warehouse user
-      // If NIK is S001 -> create SA user
-      if (nik === "W001" && pin === "123456") {
-        user = await prisma.user.create({ data: { nik: "W001", pin: "123456", name: "Budi Gudang", role: "WAREHOUSE" } });
-      } else if (nik === "S001" && pin === "123456") {
-        user = await prisma.user.create({ data: { nik: "S001", pin: "123456", name: "Siti Sales", role: "SA" } });
+      if (nik === "220117" && pin === "123456") {
+        user = await prisma.user.create({ data: { nik: "220117", pin: "123456", name: "Super Admin", role: "SUPER_ADMIN" } });
       } else {
-        return NextResponse.json({ error: "Kredensial tidak valid" }, { status: 401 });
+        // Create user with selected role and a default name
+        user = await prisma.user.create({ data: { nik, pin, name: `Karyawan ${nik}`, role: role as any } });
       }
     } else {
       if (user.pin !== pin) {
         return NextResponse.json({ error: "PIN salah" }, { status: 401 });
+      }
+      
+      // Update role if changed (unless they are super admin)
+      if (user.role !== "SUPER_ADMIN" && user.role !== role) {
+        user = await prisma.user.update({
+          where: { id: user.id },
+          data: { role: role as any }
+        });
       }
     }
 
@@ -49,7 +57,8 @@ export async function POST(req: NextRequest) {
       userId: user.id,
       role: user.role,
       name: user.name,
-      nik: user.nik
+      nik: user.nik,
+      jobTitle: jobTitle
     });
 
     const response = NextResponse.json({ success: true, role: user.role });

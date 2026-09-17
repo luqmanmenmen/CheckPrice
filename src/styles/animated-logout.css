@@ -1,0 +1,200 @@
+/*==============================
+      BUTTON
+==============================*/
+
+.logoutButton {
+  position: relative;
+  width: 160px;
+  height: 58px;
+  border: none;
+  outline: none;
+  cursor: pointer;
+  border-radius: 12px;
+  background: #20263c;
+  transition: .3s;
+  color: #fff;
+  box-shadow: 0 10px 25px rgba(0,0,0,.25), 0 4px 10px rgba(0,0,0,.15);
+  font-family: Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif;
+  overflow: hidden;
+}
+
+.logoutButton:hover {
+  background: #2a3150;
+  box-shadow: 0 16px 35px rgba(0,0,0,.35), 0 8px 18px rgba(0,0,0,.2);
+}
+
+.logoutButton:active {
+  transform: scale(.97);
+}
+
+/*==============================
+      TEXT
+==============================*/
+
+.button-text {
+  position: absolute;
+  left: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 16px;
+  font-weight: 100;
+  letter-spacing: .4px;
+  z-index: 10;
+  font-family: inherit;
+}
+
+/*==============================
+      SVG DEFAULT
+==============================*/
+
+.logoutButton svg {
+  position: absolute;
+  display: block;
+  overflow: visible;
+}
+
+/*==============================
+      DOOR FRAME
+==============================*/
+
+.doorway {
+  width: 40px;
+  right: 22px;
+  bottom: 10px;
+  fill: #d7dce6;
+  z-index: 3;
+}
+
+/*==============================
+      DOOR
+==============================*/
+
+.door {
+  width: 50px;
+  right: 21px;
+  bottom: 5px;
+  fill: #4d7cff;
+  transition: .45s ease;
+  transform: rotateY(20deg);
+  transform-origin: 100% 50%;
+  transform-style: preserve-3d;
+  z-index: 5;
+}
+
+.door path {
+  fill: #4d7cff;
+  stroke: #4371f7;
+  stroke-width: 4;
+}
+
+.door circle {
+  fill: #ffffff;
+}
+
+/*==============================
+      PERSON
+==============================*/
+
+.figure {
+  position: absolute;
+  width: 38px;
+  right: 32px;
+  bottom: 11px;
+  fill: #4e7bf8;
+  transform-origin: center;
+  transition: transform .8s linear, opacity .7s;
+  z-index: 9;
+}
+
+/*==============================
+      HOVER
+==============================*/
+
+.logoutButton:hover .door {
+  transform: perspective(300px) rotateY(45deg);
+}
+
+/*==============================
+      WALK
+==============================*/
+
+.logoutButton.walk .figure {
+  transform: translateX(20px);
+}
+
+.logoutButton.walk .door {
+  transform: perspective(300px) rotateY(75deg);
+}
+
+/*==============================
+      FALL
+==============================*/
+
+.logoutButton.fall {
+  animation: shake .25s;
+}
+
+.logoutButton.fall .figure {
+  animation: spin 1s linear infinite;
+  bottom: -1080px;
+  right: 1px;
+  opacity: 1;
+  transition: bottom 1s ease-in, opacity .5s;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg) scale(.94); }
+  to { transform: rotate(360deg) scale(.94); }
+}
+
+/*==============================
+      BANG
+==============================*/
+
+.bang {
+  opacity: 0;
+  fill: #ffcf33;
+}
+
+.logoutButton.fall .bang {
+  animation: flash .85s;
+  animation-delay: .2s;
+}
+
+/*==============================
+      KEYFRAMES
+==============================*/
+
+@keyframes shake {
+  0%, 100% { transform: rotate(0); }
+  20% { transform: rotate(-2deg); }
+  40% { transform: rotate(2deg); }
+  60% { transform: rotate(-2deg); }
+  80% { transform: rotate(2deg); }
+}
+
+@keyframes flash {
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* CSS VARIABLES FOR ANIMATION */
+.logoutButton {
+  --arm1: rotate(0deg);
+  --wrist1: rotate(0deg);
+  --arm2: rotate(0deg);
+  --wrist2: rotate(0deg);
+  --leg1: rotate(0deg);
+  --calf1: rotate(0deg);
+  --leg2: rotate(0deg);
+  --calf2: rotate(0deg);
+}
+
+.arm1 { transform: var(--arm1); transform-origin: 52% 45%; transition: .12s linear; }
+.wrist1 { transform: var(--wrist1); transform-origin: 59% 55%; transition: .12s linear; }
+.arm2 { transform: var(--arm2); transform-origin: 47% 43%; transition: .12s linear; }
+.wrist2 { transform: var(--wrist2); transform-origin: 35% 47%; transition: .12s linear; }
+.leg1 { transform: var(--leg1); transform-origin: 47% 64.5%; transition: .12s linear; }
+.calf1 { transform: var(--calf1); transform-origin: 55.5% 71.5%; transition: .12s linear; }
+.leg2 { transform: var(--leg2); transform-origin: 43% 63%; transition: .12s linear; }
+.calf2 { transform: var(--calf2); transform-origin: 41.5% 73%; transition: .12s linear; }

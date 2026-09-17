@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyToken } from "@/lib/auth";
+import prisma from "@/lib/prisma";
 
 export async function GET(req: NextRequest) {
   try {
@@ -9,7 +10,12 @@ export async function GET(req: NextRequest) {
     const session = await verifyToken(token);
     if (!session) return NextResponse.json({ user: null });
 
-    return NextResponse.json({ user: session });
+    const dbUser = await prisma.user.findUnique({
+      where: { id: session.userId },
+      select: { status: true }
+    });
+
+    return NextResponse.json({ user: { ...session, status: dbUser?.status || "ACTIVE" } });
   } catch (error) {
     return NextResponse.json({ user: null });
   }

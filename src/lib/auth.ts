@@ -5,6 +5,7 @@ interface SessionPayload {
   role: string;
   name: string;
   nik: string;
+  jobTitle?: string;
 }
 
 const getJwtSecretKey = () => {

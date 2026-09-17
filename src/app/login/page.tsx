@@ -1,13 +1,30 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+
+import ShiftToggle from "@/components/ShiftToggle";
 
 export default function Login() {
   const [nik, setNik] = useState("");
   const [pin, setPin] = useState("");
+  const [jobTitle, setJobTitle] = useState("Cashier");
   const [shift, setShift] = useState("1");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  
+  // Client-side only states for random positions
+  const [mounted, setMounted] = useState(false);
+  const [stars, setStars] = useState<{ x: number; y: number; delay: string }[]>([]);
+
+  useEffect(() => {
+    setMounted(true);
+    setStars(Array.from({ length: 50 }).map(() => ({
+      x: Math.random() * 100,
+      y: Math.random() * 100,
+      delay: (Math.random() * 3).toFixed(2),
+    })));
+  }, []);
+
   const router = useRouter();
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -19,7 +36,7 @@ export default function Login() {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nik, pin, shift })
+        body: JSON.stringify({ nik, pin, shift, jobTitle })
       });
 
       const data = await res.json();
@@ -40,8 +57,17 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-      <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-sm">
+    <div id="login-stage" className="login-stage relative min-h-screen flex items-center justify-center p-4">
+      {/* Background Stars (Optional extra effect) */}
+      <div className="absolute inset-0 pointer-events-none z-0">
+        <div className="page-stars" id="pageStars">
+          {mounted && stars.map((s, i) => (
+            <span key={i} style={{ left: `${s.x}%`, top: `${s.y}%`, animationDelay: `${s.delay}s` }}></span>
+          ))}
+        </div>
+      </div>
+
+      <div className="relative z-20 bg-white/95 backdrop-blur-xl p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/40">
         <div className="text-center mb-8">
           <h1 className="text-2xl font-bold text-blue-600">MaxDisplay</h1>
           <p className="text-gray-500 text-sm">Masuk untuk memulai shift Anda</p>
@@ -55,12 +81,26 @@ export default function Login() {
 
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Posisi / Role</label>
+            <select
+              value={jobTitle}
+              onChange={(e) => setJobTitle(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg p-3 text-lg bg-white"
+            >
+              <option value="Cashier">Cashier</option>
+              <option value="Fitter">Fitter</option>
+              <option value="Runner">Runner</option>
+              <option value="Gudang Stock">Gudang Stock</option>
+            </select>
+          </div>
+
+          <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">NIK Karyawan</label>
             <input
               type="text"
               required
               className="w-full border border-gray-300 rounded-lg p-3 text-lg"
-              placeholder="Contoh: S001 atau W001"
+              placeholder="Contoh: S001 atau 10045"
               value={nik}
               onChange={(e) => setNik(e.target.value.toUpperCase())}
             />
@@ -79,24 +119,14 @@ export default function Login() {
             />
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Pilih Shift</label>
-            <select
-              className="w-full border border-gray-300 rounded-lg p-3 text-lg bg-white"
-              value={shift}
-              onChange={(e) => setShift(e.target.value)}
-            >
-              <option value="1">Shift 1 (Pagi)</option>
-              <option value="2">Shift 2 (Siang)</option>
-            </select>
-          </div>
+          <ShiftToggle isNight={shift === "2"} onToggle={(isNight) => setShift(isNight ? "2" : "1")} />
 
           <button
             type="submit"
-            disabled={loading || pin.length < 6}
-            className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg mt-4 disabled:opacity-50"
+            disabled={loading || pin.length < 6 || !nik}
+            className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-black py-4 rounded-xl mt-6 shadow-lg shadow-blue-500/30 hover:shadow-blue-500/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loading ? "Memeriksa..." : "Mulai Shift"}
+            {loading ? "MEMERIKSA..." : "MULAI SHIFT SAYA"}
           </button>
         </form>
 

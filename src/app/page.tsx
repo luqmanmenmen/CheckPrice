@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { Search, Camera, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2 } from "lucide-react";
 import { DetectedSku } from "@/components/TextScanner";
 import { useEffect } from "react";
+import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
 
 const Scanner = dynamic(() => import("@/components/Scanner"), { ssr: false });
 const TextScanner = dynamic(() => import("@/components/TextScanner"), { ssr: false });
@@ -64,7 +65,13 @@ export default function Home() {
   const [qty, setQty] = useState(1);
   const [submitting, setSubmitting] = useState(false);
   const [activeTicketType, setActiveTicketType] = useState<"REQUEST" | "STOCK_CHECK" | null>(null);
-  const [user, setUser] = useState<{name: string, nik: string, role: string} | null>(null);
+  const [user, setUser] = useState<{name: string, nik: string, role: string, status?: string} | null>(null);
+  const [togglingStatus, setTogglingStatus] = useState(false);
+
+  // Logout Summary States
+  const [showSummary, setShowSummary] = useState(false);
+  const [shiftSummary, setShiftSummary] = useState<any>(null);
+  const [loadingSummary, setLoadingSummary] = useState(false);
 
   useEffect(() => {
     fetch("/api/auth/me")
@@ -75,8 +82,42 @@ export default function Home() {
       .catch(console.error);
   }, []);
 
-  const handleLogout = async () => {
-    if (!confirm("Akhiri shift dan keluar?")) return;
+  const toggleStatus = async () => {
+    if (!user || togglingStatus) return;
+    setTogglingStatus(true);
+    const newStatus = user.status === "ACTIVE" ? "BREAK" : "ACTIVE";
+    try {
+      const res = await fetch("/api/auth/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: newStatus })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setUser({ ...user, status: data.status });
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setTogglingStatus(false);
+    }
+  };
+
+  const handleLogoutClick = async () => {
+    setLoadingSummary(true);
+    setShowSummary(true);
+    try {
+      const res = await fetch("/api/auth/shift-summary");
+      const data = await res.json();
+      setShiftSummary(data.summary || { total: 0, pending: 0, completed: 0, rejected: 0, recentTickets: [] });
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingSummary(false);
+    }
+  };
+
+  const confirmLogout = async () => {
     try {
       await fetch("/api/auth/logout", { method: "POST" });
       window.location.href = "/login";
@@ -196,17 +237,88 @@ export default function Home() {
               <UserCircle2 className="w-6 h-6" />
             </div>
             <div>
-              <p className="text-xs text-blue-200 font-medium tracking-wide uppercase">Area Sales (Shift Aktif)</p>
+              <p className="text-xs text-blue-200 font-medium tracking-wide uppercase">{user.jobTitle || 'Sales Area'}</p>
               <h1 className="font-bold text-lg leading-tight">{user.name} <span className="text-blue-200 font-normal">({user.nik})</span></h1>
             </div>
           </div>
-          <button 
-            onClick={handleLogout}
-            className="bg-red-500/20 hover:bg-red-500/40 border border-red-500/50 p-2.5 rounded-xl transition-colors"
-            title="Akhiri Shift & Keluar"
-          >
-            <LogOut className="w-5 h-5 text-red-100" />
-          </button>
+          <div className="flex flex-col items-end gap-2">
+            <div className="scale-75 origin-right">
+              <AnimatedLogoutButton onLogout={handleLogoutClick} />
+            </div>
+            <div 
+              className={`relative flex p-0.5 rounded-full shadow-inner w-32 h-7 cursor-pointer border transition-colors ${togglingStatus ? 'opacity-50 pointer-events-none' : ''} ${user.status === 'ACTIVE' ? 'bg-slate-800/20 border-slate-700/30' : 'bg-slate-800/40 border-slate-700/50'}`} 
+              onClick={toggleStatus}
+            >
+              {/* Animated Pill Background */}
+              <div 
+                className={`absolute top-0.5 bottom-0.5 w-[calc(50%-2px)] rounded-full shadow-sm transition-all duration-300 ease-in-out ${user.status === 'ACTIVE' ? 'bg-green-500 left-0.5' : 'bg-amber-500 left-[50%]'}`}
+              />
+              <div className={`relative flex-1 flex items-center justify-center text-[10px] font-bold z-10 transition-colors duration-300 ${user.status === 'ACTIVE' ? 'text-white' : 'text-slate-500'}`}>
+                AKTIF
+              </div>
+              <div className={`relative flex-1 flex items-center justify-center text-[10px] font-bold z-10 transition-colors duration-300 ${user.status === 'BREAK' ? 'text-white' : 'text-slate-500'}`}>
+                REHAT
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Logout Summary Modal */}
+      {showSummary && (
+        <div className="fixed inset-0 bg-black/80 z-50 p-4 flex flex-col justify-center items-center">
+          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden flex flex-col shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="bg-gradient-to-r from-slate-800 to-slate-900 p-5 text-white text-center">
+              <h2 className="text-xl font-bold">Rekapan Shift Anda</h2>
+              <p className="text-slate-300 text-sm mt-1">Aktivitas (Daily Activity) Hari Ini</p>
+            </div>
+            
+            <div className="p-6 bg-slate-50">
+              {loadingSummary ? (
+                <div className="flex justify-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-slate-800" />
+                </div>
+              ) : shiftSummary ? (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-white border p-3 rounded-xl shadow-sm text-center">
+                      <p className="text-xs text-slate-500 font-bold uppercase mb-1">Total Tiket</p>
+                      <p className="text-2xl font-black text-slate-800">{shiftSummary.total}</p>
+                    </div>
+                    <div className="bg-green-50 border border-green-100 p-3 rounded-xl shadow-sm text-center">
+                      <p className="text-xs text-green-600 font-bold uppercase mb-1">Diambil/Selesai</p>
+                      <p className="text-2xl font-black text-green-700">{shiftSummary.completed}</p>
+                    </div>
+                    <div className="bg-red-50 border border-red-100 p-3 rounded-xl shadow-sm text-center">
+                      <p className="text-xs text-red-600 font-bold uppercase mb-1">OOS / Habis</p>
+                      <p className="text-2xl font-black text-red-700">{shiftSummary.rejected}</p>
+                    </div>
+                    <div className="bg-amber-50 border border-amber-100 p-3 rounded-xl shadow-sm text-center">
+                      <p className="text-xs text-amber-600 font-bold uppercase mb-1">Menunggu</p>
+                      <p className="text-2xl font-black text-amber-700">{shiftSummary.pending}</p>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-center text-slate-500">Gagal memuat rekap data.</p>
+              )}
+            </div>
+
+            <div className="p-4 border-t flex flex-col gap-3 bg-white">
+              <button 
+                onClick={confirmLogout}
+                className="w-full bg-red-600 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-red-200 hover:bg-red-700"
+              >
+                Konfirmasi Akhiri Shift
+              </button>
+              <button 
+                onClick={() => setShowSummary(false)}
+                className="w-full bg-slate-100 text-slate-700 font-bold py-3.5 rounded-xl hover:bg-slate-200"
+              >
+                Batal (Lanjut Shift)
+              </button>
+            </div>
+          </div>
         </div>
       )}
       
@@ -272,26 +384,32 @@ export default function Home() {
       {/* Warehouse Ticket Section */}
       <div className="pt-2">
         <h2 className="text-sm font-bold text-slate-500 uppercase mb-2">Tiket Gudang</h2>
-        <div className="flex gap-2">
-          <button
-            onClick={() => {
-              setActiveTicketType("REQUEST");
-              setScanMode("text");
+        <div className="relative flex p-1 bg-slate-200 rounded-xl shadow-inner">
+          {/* Animated Background Pill */}
+          <div 
+            className="absolute top-1 bottom-1 w-[calc(50%-4px)] bg-white rounded-lg shadow-sm transition-all duration-300 ease-in-out"
+            style={{ 
+              left: activeTicketType === 'REQUEST' ? '4px' : activeTicketType === 'STOCK_CHECK' ? 'calc(50%)' : '4px',
+              opacity: activeTicketType ? 1 : 0
             }}
-            className="flex-1 bg-gradient-to-br from-blue-600 to-indigo-600 text-white p-3 rounded-xl shadow-sm flex flex-col items-center justify-center gap-1 hover:opacity-90 transition-opacity"
+          />
+          <button
+            onClick={() => setActiveTicketType(activeTicketType === "REQUEST" ? null : "REQUEST")}
+            className={`relative flex-1 py-3 px-2 rounded-lg flex items-center justify-center gap-2 transition-colors duration-300 z-10 ${
+              activeTicketType === "REQUEST" ? "text-blue-700 font-bold" : "text-slate-500 font-medium hover:text-slate-700"
+            }`}
           >
-            <HandHelping className="w-6 h-6" />
-            <span className="font-bold text-sm">Request Barang</span>
+            <HandHelping className="w-5 h-5" />
+            <span className="text-sm">Request Barang</span>
           </button>
           <button
-            onClick={() => {
-              setActiveTicketType("STOCK_CHECK");
-              setScanMode("text");
-            }}
-            className="flex-1 bg-white border-2 border-slate-200 text-slate-700 p-3 rounded-xl shadow-sm flex flex-col items-center justify-center gap-1 hover:bg-slate-50 transition-colors"
+            onClick={() => setActiveTicketType(activeTicketType === "STOCK_CHECK" ? null : "STOCK_CHECK")}
+            className={`relative flex-1 py-3 px-2 rounded-lg flex items-center justify-center gap-2 transition-colors duration-300 z-10 ${
+              activeTicketType === "STOCK_CHECK" ? "text-indigo-700 font-bold" : "text-slate-500 font-medium hover:text-slate-700"
+            }`}
           >
-            <MessageSquare className="w-6 h-6" />
-            <span className="font-bold text-sm">Tanya Stok</span>
+            <MessageSquare className="w-5 h-5" />
+            <span className="text-sm">Tanya Stok</span>
           </button>
         </div>
       </div>
