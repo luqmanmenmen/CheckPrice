@@ -169,34 +169,69 @@ async function upsertProducts(
   let updated = 0;
   let failed = 0;
 
-  for (const [, item] of productMap) {
-    try {
-      // Pre-check: does this SKU already exist in DB?
-      const existing = await prisma.product.findUnique({ where: { sku: item.sku }, select: { id: true } });
+  const allItems = Array.from(productMap.values());
+  const allSkus = allItems.map((item) => item.sku);
 
-      if (existing) {
-        // SKU sudah ada → hanya update harga & info promo
-        await prisma.product.update({
-          where: { sku: item.sku },
-          data: {
-            hargaNormal:  item.hargaNormal,
-            hargaPromo:   item.hargaPromo,
-            diskon:       item.diskon,
-            discountType: item.discountType,
-            acara:        item.acara,
-            fromDate:     item.fromDate,
-            toDate:       item.toDate,
-          },
-        });
-        updated++;
-      } else {
-        // SKU baru → tambahkan semua data
-        await prisma.product.create({ data: { ...item } });
-        created++;
-      }
+  // 1. Ambil semua SKU yang sudah ada di database (Batch Query)
+  const existingProducts = await prisma.product.findMany({
+    where: { sku: { in: allSkus } },
+    select: { sku: true },
+  });
+  const existingSkuSet = new Set(existingProducts.map((p) => p.sku));
+
+  const itemsToCreate = [];
+  const itemsToUpdate = [];
+
+  for (const item of allItems) {
+    if (existingSkuSet.has(item.sku)) {
+      itemsToUpdate.push(item);
+    } else {
+      itemsToCreate.push(item);
+    }
+  }
+
+  // 2. Insert produk baru sekaligus (Bulk Insert)
+  if (itemsToCreate.length > 0) {
+    try {
+      // Chunking if array is too large, but 8000 is usually fine for createMany
+      const result = await prisma.product.createMany({
+        data: itemsToCreate,
+        skipDuplicates: true,
+      });
+      created = result.count;
     } catch (err) {
-      console.error("Upsert error SKU", item.sku, err);
-      failed++;
+      console.error("Bulk create error", err);
+      failed += itemsToCreate.length;
+    }
+  }
+
+  // 3. Update produk lama (Bulk Update via Transaction)
+  // We chunk it into 500 items per transaction so we don't hit parameter limits
+  if (itemsToUpdate.length > 0) {
+    const chunkSize = 500;
+    for (let i = 0; i < itemsToUpdate.length; i += chunkSize) {
+      const chunk = itemsToUpdate.slice(i, i + chunkSize);
+      try {
+        const updatePromises = chunk.map((item) =>
+          prisma.product.update({
+            where: { sku: item.sku },
+            data: {
+              hargaNormal: item.hargaNormal,
+              hargaPromo: item.hargaPromo,
+              diskon: item.diskon,
+              discountType: item.discountType,
+              acara: item.acara,
+              fromDate: item.fromDate,
+              toDate: item.toDate,
+            },
+          })
+        );
+        await prisma.$transaction(updatePromises);
+        updated += chunk.length;
+      } catch (err) {
+        console.error("Bulk update error on chunk", err);
+        failed += chunk.length;
+      }
     }
   }
 

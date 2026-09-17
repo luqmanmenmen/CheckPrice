@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { Search, Camera, X, CalendarRange, Tag, Package2, Layers } from "lucide-react";
 
 const Scanner = dynamic(() => import("@/components/Scanner"), { ssr: false });
+const TextScanner = dynamic(() => import("@/components/TextScanner"), { ssr: false });
 
 type ProductData = {
   id: number;
@@ -49,7 +50,7 @@ function formatDate(dateStr: string | null): string {
 }
 
 export default function Home() {
-  const [showScanner, setShowScanner] = useState(false);
+  const [scanMode, setScanMode] = useState<"none" | "barcode" | "text">("none");
   const [manualInput, setManualInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [product, setProduct] = useState<ProductData | null>(null);
@@ -70,7 +71,7 @@ export default function Home() {
 
       if (res.ok) {
         setProduct(data.data);
-        if (showScanner) setShowScanner(false);
+        if (scanMode !== "none") setScanMode("none");
       } else {
         setError(data.error || "Produk tidak ditemukan");
       }
@@ -97,6 +98,19 @@ export default function Home() {
   const discountPct = isOnPromo && product
     ? Math.round(((product.hargaNormal - product.hargaPromo!) / product.hargaNormal) * 100)
     : 0;
+
+  // Cek apakah promo sudah habis berdasarkan toDate
+  let isPromoExpired = false;
+  if (product && product.toDate) {
+    const toDateObj = new Date(product.toDate);
+    if (!isNaN(toDateObj.getTime())) {
+      // Set to end of the day to ensure promo is valid during that entire day
+      toDateObj.setHours(23, 59, 59, 999);
+      if (new Date() > toDateObj) {
+        isPromoExpired = true;
+      }
+    }
+  }
 
   return (
     <div className="flex flex-col gap-5">
@@ -131,27 +145,50 @@ export default function Home() {
           </button>
         </div>
 
-        <button
-          onClick={() => setShowScanner(!showScanner)}
-          className={`flex items-center justify-center gap-2 w-full py-2.5 rounded-xl border-2 transition-all font-semibold text-sm ${
-            showScanner
-              ? "border-red-100 text-red-600 bg-red-50 hover:bg-red-100"
-              : "border-blue-100 text-blue-600 bg-blue-50 hover:bg-blue-100"
-          }`}
-        >
-          {showScanner ? (
-            <><X className="w-4 h-4" /> Tutup Kamera</>
-          ) : (
-            <><Camera className="w-4 h-4" /> Scan Barcode via Kamera</>
-          )}
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setScanMode(scanMode === "barcode" ? "none" : "barcode")}
+            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 transition-all font-semibold text-sm ${
+              scanMode === "barcode"
+                ? "border-red-100 text-red-600 bg-red-50 hover:bg-red-100"
+                : "border-blue-100 text-blue-600 bg-blue-50 hover:bg-blue-100"
+            }`}
+          >
+            {scanMode === "barcode" ? (
+              <><X className="w-4 h-4" /> Tutup</>
+            ) : (
+              <><Camera className="w-4 h-4" /> Barcode</>
+            )}
+          </button>
+          <button
+            onClick={() => setScanMode(scanMode === "text" ? "none" : "text")}
+            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 transition-all font-semibold text-sm ${
+              scanMode === "text"
+                ? "border-red-100 text-red-600 bg-red-50 hover:bg-red-100"
+                : "border-indigo-100 text-indigo-600 bg-indigo-50 hover:bg-indigo-100"
+            }`}
+          >
+            {scanMode === "text" ? (
+              <><X className="w-4 h-4" /> Tutup</>
+            ) : (
+              <><Search className="w-4 h-4" /> OCR Teks</>
+            )}
+          </button>
+        </div>
       </div>
 
-      {/* Scanner View */}
-      {showScanner && (
+      {/* Scanner Views */}
+      {scanMode === "barcode" && (
         <div className="animate-in slide-in-from-top-4 duration-300">
           <Scanner onScanSuccess={handleScanSuccess} />
-          <p className="text-center text-xs text-slate-500 mt-2">Arahkan kamera ke barcode pada price tag</p>
+          <p className="text-center text-xs text-slate-500 mt-2">Arahkan kamera ke barcode garis</p>
+        </div>
+      )}
+      
+      {scanMode === "text" && (
+        <div className="animate-in slide-in-from-top-4 duration-300">
+          <TextScanner onScanSuccess={handleScanSuccess} />
+          <p className="text-center text-xs text-slate-500 mt-2">Arahkan kotak hijau ke teks angka/huruf SKU</p>
         </div>
       )}
 
@@ -247,11 +284,22 @@ export default function Home() {
 
               {/* Promo Info */}
               {product.acara && (
-                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 flex flex-col gap-1.5">
-                  <p className="text-xs font-bold text-amber-700 uppercase tracking-wide">Info Promo</p>
-                  <p className="text-sm text-amber-800 font-medium leading-snug">{product.acara}</p>
+                <div className={`border rounded-xl p-3.5 flex flex-col gap-1.5 ${isPromoExpired ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
+                  <div className="flex justify-between items-start">
+                    <p className={`text-xs font-bold uppercase tracking-wide ${isPromoExpired ? 'text-red-700' : 'text-amber-700'}`}>
+                      Info Promo
+                    </p>
+                    {isPromoExpired && (
+                      <span className="bg-red-600 text-white text-[10px] font-bold px-2 py-0.5 rounded uppercase animate-pulse">
+                        Promo Habis
+                      </span>
+                    )}
+                  </div>
+                  <p className={`text-sm font-medium leading-snug ${isPromoExpired ? 'text-red-800' : 'text-amber-800'}`}>
+                    {product.acara}
+                  </p>
                   {(product.fromDate || product.toDate) && (
-                    <div className="flex items-center gap-1.5 text-xs text-amber-700 mt-1">
+                    <div className={`flex items-center gap-1.5 text-xs mt-1 ${isPromoExpired ? 'text-red-700' : 'text-amber-700'}`}>
                       <CalendarRange className="w-3.5 h-3.5" />
                       <span>{formatDate(product.fromDate)} – {formatDate(product.toDate)}</span>
                     </div>
