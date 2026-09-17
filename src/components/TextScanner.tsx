@@ -74,6 +74,9 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     const initWorker = async () => {
       try {
         worker = await Tesseract.createWorker("eng");
+        await worker.setParameters({
+          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789- '
+        });
         startCamera();
       } catch (e) {
         console.error("Tesseract Init Error", e);
@@ -96,8 +99,10 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
       
-      // Draw frame
+      // Draw frame with high contrast and grayscale to help OCR read better
+      ctx.filter = 'grayscale(100%) contrast(300%) brightness(120%)';
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      ctx.filter = 'none'; // reset
 
       try {
         setIsScanning(false);
@@ -113,13 +118,13 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
            const text = word.text.toUpperCase();
            fullTextStr += text + " ";
            
-           // Cari pola SKU: 7-15 karakter gabungan angka/huruf/strip, yang punya minimal 1 angka
-           const match = text.match(/[A-Z0-9-]{7,15}/);
+           // Cari pola SKU: 6-15 karakter gabungan angka/huruf/strip
+           const match = text.match(/[A-Z0-9-]{6,15}/);
            
            if (match) {
               const candidate = match[0];
-              // Pastikan mengandung angka
-              if (/[0-9]/.test(candidate)) {
+              // Pastikan mengandung angka dan lebih dari 5 karakter
+              if (/[0-9]/.test(candidate) && candidate.length > 5) {
                  found.push({
                     text: candidate,
                     bbox: word.bbox

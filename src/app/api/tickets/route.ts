@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
     const session = await verifyToken(token);
     if (!session) return NextResponse.json({ error: "Invalid token" }, { status: 401 });
 
-    const { sku, size, qty, type, photoUrl, ocrData } = await req.json();
+    const { items, sku, size, qty, type, photoUrl, ocrData } = await req.json();
 
     // Get user's active shift
     const activeShift = await prisma.shift.findFirst({
@@ -64,21 +64,42 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Anda belum memulai shift" }, { status: 400 });
     }
 
-    const ticket = await prisma.ticket.create({
-      data: {
+    if (items && Array.isArray(items)) {
+      // Bulk insert
+      const ticketsData = items.map(item => ({
         requesterId: session.userId,
         shiftId: activeShift.id,
-        sku,
-        size,
-        qty: qty ? parseInt(qty) : null,
-        type, // 'REQUEST' or 'STOCK_CHECK'
-        priority: type === 'REQUEST' ? 'HIGH' : 'LOW',
-        photoUrl,
-        ocrData
-      }
-    });
+        sku: item.sku,
+        size: item.size || null,
+        qty: item.qty ? parseInt(item.qty) : 1,
+        type: item.type, // 'REQUEST' or 'STOCK_CHECK'
+        priority: (item.type === 'REQUEST' ? 'HIGH' : 'LOW') as any,
+        photoUrl: item.photoUrl || null,
+        ocrData: item.ocrData || null,
+      }));
 
-    return NextResponse.json({ success: true, ticket });
+      await prisma.ticket.createMany({
+        data: ticketsData
+      });
+
+      return NextResponse.json({ success: true, message: `${ticketsData.length} tiket dikirim` });
+    } else {
+      // Single insert (backward compatibility)
+      const ticket = await prisma.ticket.create({
+        data: {
+          requesterId: session.userId,
+          shiftId: activeShift.id,
+          sku,
+          size,
+          qty: qty ? parseInt(qty) : null,
+          type, // 'REQUEST' or 'STOCK_CHECK'
+          priority: type === 'REQUEST' ? 'HIGH' : 'LOW',
+          photoUrl,
+          ocrData
+        }
+      });
+      return NextResponse.json({ success: true, ticket });
+    }
   } catch (error) {
     console.error("Ticket error:", error);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
