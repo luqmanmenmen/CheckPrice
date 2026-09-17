@@ -60,10 +60,9 @@ export default function Home() {
   const [error, setError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Review Screen States
   const [submitting, setSubmitting] = useState(false);
   const [qty, setQty] = useState(1);
-
+  const [activeTicketType, setActiveTicketType] = useState<"REQUEST" | "STOCK_CHECK" | null>(null);
   const [cart, setCart] = useState<any[]>([]);
   const [user, setUser] = useState<{name: string, nik: string, role: string, status?: string, jobTitle?: string} | null>(null);
   const [togglingStatus, setTogglingStatus] = useState(false);
@@ -325,6 +324,39 @@ export default function Home() {
         </div>
       )}
 
+      {/* Warehouse Ticket Section */}
+      <div className="pt-2">
+        <h2 className="text-sm font-bold text-slate-500 uppercase mb-2">Pilih Mode Pemindaian</h2>
+        <div className="relative flex p-1 bg-slate-200 rounded-xl shadow-inner">
+          {/* Animated Background Pill */}
+          <div 
+            className="absolute top-1 bottom-1 w-[calc(50%-4px)] bg-white rounded-lg shadow-sm transition-all duration-300 ease-in-out"
+            style={{ 
+              left: activeTicketType === 'REQUEST' ? '4px' : activeTicketType === 'STOCK_CHECK' ? 'calc(50%)' : '4px',
+              opacity: activeTicketType ? 1 : 0
+            }}
+          />
+          <button
+            onClick={() => setActiveTicketType(activeTicketType === "REQUEST" ? null : "REQUEST")}
+            className={`relative flex-1 py-3 px-2 rounded-lg flex items-center justify-center gap-2 transition-colors duration-300 z-10 ${
+              activeTicketType === "REQUEST" ? "text-blue-700 font-bold" : "text-slate-500 font-medium hover:text-slate-700"
+            }`}
+          >
+            <HandHelping className="w-5 h-5" />
+            <span className="text-sm">Request Barang</span>
+          </button>
+          <button
+            onClick={() => setActiveTicketType(activeTicketType === "STOCK_CHECK" ? null : "STOCK_CHECK")}
+            className={`relative flex-1 py-3 px-2 rounded-lg flex items-center justify-center gap-2 transition-colors duration-300 z-10 ${
+              activeTicketType === "STOCK_CHECK" ? "text-indigo-700 font-bold" : "text-slate-500 font-medium hover:text-slate-700"
+            }`}
+          >
+            <MessageSquare className="w-5 h-5" />
+            <span className="text-sm">Tanya Stok</span>
+          </button>
+        </div>
+      </div>
+
       {/* Search */}
       <div className="pt-2 flex flex-col gap-3">
         <h2 className="text-sm font-bold text-slate-500 uppercase mb-2">Cari Info Produk</h2>
@@ -496,14 +528,18 @@ export default function Home() {
 
               {/* Aksi Gudang */}
               <div className="flex flex-col gap-2 mt-2">
-                <p className="text-xs font-bold text-slate-500 uppercase">Kirim ke Gudang</p>
+                <p className="text-xs font-bold text-slate-500 uppercase">Masukkan ke Keranjang</p>
                 <div className="flex gap-2">
-                  <button onClick={() => addToCart("REQUEST", 1, "")} className="flex-1 bg-blue-100 text-blue-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-blue-200 active:scale-95 transition-all">
-                    <HandHelping className="w-4 h-4" /> Request
-                  </button>
-                  <button onClick={() => addToCart("STOCK_CHECK", 1, "")} className="flex-1 bg-indigo-100 text-indigo-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-indigo-200 active:scale-95 transition-all">
-                    <MessageSquare className="w-4 h-4" /> Tanya Stok
-                  </button>
+                  {(!activeTicketType || activeTicketType === "REQUEST") && (
+                    <button onClick={() => addToCart("REQUEST", 1, "")} className="flex-1 bg-blue-100 text-blue-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-blue-200 active:scale-95 transition-all">
+                      <HandHelping className="w-4 h-4" /> Request
+                    </button>
+                  )}
+                  {(!activeTicketType || activeTicketType === "STOCK_CHECK") && (
+                    <button onClick={() => addToCart("STOCK_CHECK", 1, "")} className="flex-1 bg-indigo-100 text-indigo-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-indigo-200 active:scale-95 transition-all">
+                      <MessageSquare className="w-4 h-4" /> Tanya Stok
+                    </button>
+                  )}
                 </div>
               </div>
 
