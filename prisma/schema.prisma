@@ -1,0 +1,28 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Product {
+  id            Int      @id @default(autoincrement())
+  sku           String   @unique
+  barcode       String?  @unique
+  article       String?
+  description   String
+  acara         String?
+  fromDate      String?
+  toDate        String?
+  hargaNormal   Float
+  hargaPromo    Float?
+  diskon        String?
+  discountType  String?
+  brand         String?
+  dept          String?
+  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @default(now())
+}
