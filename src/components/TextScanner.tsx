@@ -96,21 +96,6 @@ export default function TextScanner({ onScanSuccess }: TextScannerProps) {
       // Draw frame
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-      // --- Pre-processing for Excel Screens (Grayscale & Contrast) ---
-      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const data = imgData.data;
-      for (let i = 0; i < data.length; i += 4) {
-         const r = data[i];
-         const g = data[i + 1];
-         const b = data[i + 2];
-         // Luma grayscale
-         const gray = 0.299 * r + 0.587 * g + 0.114 * b;
-         // Increase contrast (thresholding to make black text on white background pop)
-         const threshold = gray > 140 ? 255 : 0; 
-         data[i] = data[i + 1] = data[i + 2] = threshold;
-      }
-      ctx.putImageData(imgData, 0, 0);
-
       try {
         setIsScanning(false);
         const result: any = await worker.recognize(canvas);
@@ -121,15 +106,20 @@ export default function TextScanner({ onScanSuccess }: TextScannerProps) {
         const found: DetectedSku[] = [];
         
         words.forEach((word: any) => {
-           const cleanedText = word.text.replace(/\n/g, "").trim().toUpperCase();
-           // Strict check: SKU is usually numeric (at least 7 chars) or alphanumeric (8+ chars)
-           const isLikelySku = /[0-9]/.test(cleanedText) && /^[A-Z0-9-]{7,15}$/.test(cleanedText);
+           const text = word.text.toUpperCase();
            
-           if (isLikelySku) {
-              found.push({
-                 text: cleanedText,
-                 bbox: word.bbox
-              });
+           // Cari pola SKU: 7-15 karakter gabungan angka/huruf/strip, yang punya minimal 1 angka
+           const match = text.match(/[A-Z0-9-]{7,15}/);
+           
+           if (match) {
+              const candidate = match[0];
+              // Pastikan mengandung angka
+              if (/[0-9]/.test(candidate)) {
+                 found.push({
+                    text: candidate,
+                    bbox: word.bbox
+                 });
+              }
            }
         });
 
