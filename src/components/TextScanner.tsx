@@ -7,17 +7,33 @@ interface TextScannerProps {
   onScanSuccess: (text: string) => void;
 }
 
+interface BoundingBox {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+interface DetectedSku {
+  text: string;
+  bbox: BoundingBox;
+}
+
 export default function TextScanner({ onScanSuccess }: TextScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
   const [isScanning, setIsScanning] = useState(false);
-  const [status, setStatus] = useState("Memulai kamera...");
+  const [status, setStatus] = useState("Memulai AI Google Lens...");
+  const [detectedSkus, setDetectedSkus] = useState<DetectedSku[]>([]);
+  const [scale, setScale] = useState({ x: 1, y: 1 });
 
   useEffect(() => {
     let stream: MediaStream | null = null;
     let scanInterval: NodeJS.Timeout;
-    
-    // Function to start camera
+    let worker: Tesseract.Worker | null = null;
+
     const startCamera = async () => {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
@@ -25,8 +41,12 @@ export default function TextScanner({ onScanSuccess }: TextScannerProps) {
         });
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
+          videoRef.current.onloadedmetadata = () => {
+             // Calculate scale when video metadata loads
+             updateScale();
+          };
         }
-        setStatus("Mencari teks (Arahkan ke tulisan SKU)...");
+        setStatus("Mencari angka/huruf SKU di layar...");
         setIsScanning(true);
       } catch (err) {
         console.error("Camera error:", err);
@@ -34,16 +54,27 @@ export default function TextScanner({ onScanSuccess }: TextScannerProps) {
       }
     };
 
-    startCamera();
+    const updateScale = () => {
+       if (videoRef.current) {
+         const v = videoRef.current;
+         if (v.videoWidth > 0 && v.videoHeight > 0) {
+            setScale({
+               x: v.clientWidth / v.videoWidth,
+               y: v.clientHeight / v.videoHeight
+            });
+         }
+       }
+    };
 
-    // Worker for OCR
-    let worker: Tesseract.Worker | null = null;
-    
+    window.addEventListener("resize", updateScale);
+
     const initWorker = async () => {
       try {
         worker = await Tesseract.createWorker("eng");
+        startCamera();
       } catch (e) {
         console.error("Tesseract Init Error", e);
+        setStatus("Gagal memuat AI Pembaca Teks.");
       }
     };
     initWorker();
@@ -58,46 +89,54 @@ export default function TextScanner({ onScanSuccess }: TextScannerProps) {
 
       if (!ctx) return;
 
-      // Set canvas size to match video to draw image
+      // Ensure canvas size matches actual video resolution
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
+      
+      // Draw frame
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
+      // --- Pre-processing for Excel Screens (Grayscale & Contrast) ---
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imgData.data;
+      for (let i = 0; i < data.length; i += 4) {
+         const r = data[i];
+         const g = data[i + 1];
+         const b = data[i + 2];
+         // Luma grayscale
+         const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+         // Increase contrast (thresholding to make black text on white background pop)
+         const threshold = gray > 140 ? 255 : 0; 
+         data[i] = data[i + 1] = data[i + 2] = threshold;
+      }
+      ctx.putImageData(imgData, 0, 0);
+
       try {
-        // Pause scanning while processing frame
         setIsScanning(false);
-        const { data: { text } } = await worker.recognize(canvas);
+        // We use recognize and get words
+        const { data: { words } } = await worker.recognize(canvas);
         
-        // Clean text (uppercase, replace newlines with spaces)
-        const cleanedText = text.replace(/\n/g, " ").toUpperCase();
+        updateScale(); // Ensure scale is fresh
+
+        const found: DetectedSku[] = [];
         
-        // Split by spaces and find potential SKUs
-        // We will look for words that look like SKUs:
-        // Rule: 7 to 15 characters, containing numbers, optionally letters or dashes.
-        const words = cleanedText.split(/\s+/);
-        const potentialSkus = words.filter(w => {
-           // Basic regex: at least one number, length 7-15, only alphanumeric and dashes
-           return /[0-9]/.test(w) && /^[A-Z0-9-]{7,15}$/.test(w);
+        words.forEach(word => {
+           const cleanedText = word.text.replace(/\n/g, "").trim().toUpperCase();
+           // Strict check: SKU is usually numeric (at least 7 chars) or alphanumeric (8+ chars)
+           const isLikelySku = /[0-9]/.test(cleanedText) && /^[A-Z0-9-]{7,15}$/.test(cleanedText);
+           
+           if (isLikelySku) {
+              found.push({
+                 text: cleanedText,
+                 bbox: word.bbox
+              });
+           }
         });
 
-        if (potentialSkus.length > 0) {
-           // Sort candidates: prefer 8-digit numbers
-           const bestCandidate = potentialSkus.sort((a, b) => {
-              const aIs8Digit = /^\d{8}$/.test(a);
-              const bIs8Digit = /^\d{8}$/.test(b);
-              if (aIs8Digit && !bIs8Digit) return -1;
-              if (!aIs8Digit && bIs8Digit) return 1;
-              return 0;
-           })[0];
-
-           if (bestCandidate) {
-             onScanSuccess(bestCandidate);
-             // Stop further scanning once success is called
-             return; 
-           }
-        }
+        // Deduplicate by text (keep the one with best confidence or just first)
+        const uniqueFound = found.filter((v, i, a) => a.findIndex(t => (t.text === v.text)) === i);
         
-        // Resume scanning if no match
+        setDetectedSkus(uniqueFound);
         setIsScanning(true);
       } catch (err) {
         console.error("OCR Error", err);
@@ -105,15 +144,15 @@ export default function TextScanner({ onScanSuccess }: TextScannerProps) {
       }
     };
 
-    // Run scan periodically (every 1 second)
     scanInterval = setInterval(() => {
        if (isScanning) {
          scanFrame();
        }
-    }, 1000);
+    }, 1500);
 
     return () => {
       clearInterval(scanInterval);
+      window.removeEventListener("resize", updateScale);
       setIsScanning(false);
       if (stream) {
         stream.getTracks().forEach((track) => track.stop());
@@ -125,29 +164,67 @@ export default function TextScanner({ onScanSuccess }: TextScannerProps) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div className="flex flex-col gap-3 relative rounded-2xl overflow-hidden bg-black shadow-inner">
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        className="w-full object-cover min-h-[300px]"
-      />
-      
-      <canvas ref={canvasRef} className="hidden" />
+    <div className="flex flex-col gap-3">
+      {/* Viewport Kamera */}
+      <div 
+        ref={containerRef}
+        className="relative rounded-2xl overflow-hidden bg-black shadow-inner"
+      >
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className="w-full h-auto min-h-[300px]"
+        />
+        
+        <canvas ref={canvasRef} className="hidden" />
 
-      {/* Scanning Target Overlay */}
-      <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-6">
-        <div className="w-full max-w-[280px] h-[100px] border-2 border-white/50 rounded-lg relative">
-           <div className="absolute top-0 left-0 w-4 h-4 border-t-4 border-l-4 border-green-500 rounded-tl-lg -ml-1 -mt-1"></div>
-           <div className="absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 border-green-500 rounded-tr-lg -mr-1 -mt-1"></div>
-           <div className="absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 border-green-500 rounded-bl-lg -ml-1 -mb-1"></div>
-           <div className="absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 border-green-500 rounded-br-lg -mr-1 -mb-1"></div>
+        {/* Kotak-kotak biru ala Google Lens */}
+        {detectedSkus.map((sku, idx) => (
+          <button
+            key={idx}
+            onClick={() => onScanSuccess(sku.text)}
+            className="absolute border-2 border-blue-500 bg-blue-500/20 rounded-md cursor-pointer hover:bg-blue-500/40 transition-colors group flex items-end justify-center"
+            style={{
+              left: `${sku.bbox.x0 * scale.x}px`,
+              top: `${sku.bbox.y0 * scale.y}px`,
+              width: `${(sku.bbox.x1 - sku.bbox.x0) * scale.x}px`,
+              height: `${(sku.bbox.y1 - sku.bbox.y0) * scale.y}px`,
+            }}
+          >
+            {/* Tooltip teks */}
+            <span className="absolute -bottom-8 bg-blue-700 text-white text-xs font-bold px-2 py-1 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+              {sku.text} (Pilih)
+            </span>
+          </button>
+        ))}
+
+        <div className="absolute top-4 left-0 right-0 flex justify-center pointer-events-none">
+          <p className="bg-black/60 text-white text-xs px-4 py-2 rounded-full backdrop-blur-sm animate-pulse shadow-md">
+            {status}
+          </p>
         </div>
-        <p className="mt-4 bg-black/60 text-white text-xs px-3 py-1.5 rounded-full backdrop-blur-sm animate-pulse">
-          {status}
-        </p>
       </div>
+
+      {/* Daftar Hasil Scan */}
+      {detectedSkus.length > 0 && (
+        <div className="bg-white border rounded-xl p-4 shadow-sm">
+          <p className="text-sm font-bold text-slate-700 mb-2">Terdeteksi {detectedSkus.length} SKU:</p>
+          <div className="flex flex-wrap gap-2">
+            {detectedSkus.map((sku, idx) => (
+              <button
+                key={idx}
+                onClick={() => onScanSuccess(sku.text)}
+                className="bg-indigo-50 border border-indigo-200 text-indigo-700 px-3 py-1.5 rounded-lg text-sm font-mono font-bold hover:bg-indigo-100 transition-colors"
+              >
+                {sku.text}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-slate-500 mt-2 italic">Ketuk pada nomor SKU di atas untuk mencari.</p>
+        </div>
+      )}
     </div>
   );
 }

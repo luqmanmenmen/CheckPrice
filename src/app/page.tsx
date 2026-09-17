@@ -188,7 +188,7 @@ export default function Home() {
       {scanMode === "text" && (
         <div className="animate-in slide-in-from-top-4 duration-300">
           <TextScanner onScanSuccess={handleScanSuccess} />
-          <p className="text-center text-xs text-slate-500 mt-2">Arahkan kotak hijau ke teks angka/huruf SKU</p>
+          <p className="text-center text-xs text-slate-500 mt-2">Arahkan kamera ke layar/label harga. Ketuk kotak biru jika SKU muncul.</p>
         </div>
       )}
 
