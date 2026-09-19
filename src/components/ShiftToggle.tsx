@@ -37,7 +37,7 @@ export default function ShiftToggle({ isNight, onToggle }: ShiftToggleProps) {
       {/* LABEL */}
       <div className="label mb-2">
         <span id="labelDay" className={`text-slate-700 font-bold ${!isNight ? "visible" : ""}`}>Shift 1 (Pagi)</span>
-        <span id="labelNight" className={`text-slate-700 font-bold ${isNight ? "visible" : ""}`}>Shift 2 (Malam)</span>
+        <span id="labelNight" className={`text-slate-700 font-bold ${isNight ? "visible" : ""}`}>Shift 2 (Siang)</span>
       </div>
 
       {/* MAIN TOGGLE */}
