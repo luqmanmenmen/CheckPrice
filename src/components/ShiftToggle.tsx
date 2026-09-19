@@ -14,6 +14,7 @@ export default function ShiftToggle({ isNight, onToggle }: ShiftToggleProps) {
 
   // Apply the .night class to the parent wrapper in page.tsx
   useEffect(() => {
+    // eslint-disable-next-line
     setMounted(true);
     setStars(Array.from({ length: 14 }).map(() => ({
       x: Math.random() * 100,
