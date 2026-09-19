@@ -57,7 +57,7 @@ export default function Login() {
   };
 
   return (
-    <div id="login-stage" className="login-stage relative min-h-screen flex flex-col p-4 overflow-y-auto">
+    <div id="login-stage" className="login-stage relative min-h-screen flex flex-col p-4">
       {/* Background Stars (Optional extra effect) */}
       <div className="absolute inset-0 pointer-events-none z-0">
         <div className="page-stars" id="pageStars">
