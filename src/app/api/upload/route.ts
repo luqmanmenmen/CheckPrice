@@ -38,18 +38,50 @@ function safeFloat(val: any): number {
 // -------------------------------------------------------
 const REQUIRED_COLS = ["SKU", "DESCRIPTION", "HARGA NORMAL"];
 
+// Mapping fleksibel nama kolom → nama standar kita
+// Agar sheet dengan variasi nama kolom tetap terbaca
+const COL_ALIASES: Record<string, string[]> = {
+  "SKU":          ["SKU", "KODE", "KODE PRODUK", "PRODUCT CODE", "CODE", "ID"],
+  "DESCRIPTION":  ["DESCRIPTION", "NAMA", "NAMA PRODUK", "PRODUCT NAME", "DESC", "KETERANGAN", "DESKRIPSI"],
+  "HARGA NORMAL": ["HARGA NORMAL", "HARGA", "NORMAL PRICE", "PRICE", "HARGA JUAL", "REGULAR PRICE", "HARGA POKOK"],
+  "HARGA PROMO":  ["HARGA PROMO", "PROMO PRICE", "PROMO", "HARGA DISKON", "DISC PRICE"],
+  "ARTICLE":      ["ARTICLE", "ARTIKEL", "BARCODE", "NO ARTIKEL"],
+  "FROM DATE":    ["FROM DATE", "DARI TANGGAL", "START DATE", "TGL MULAI", "FROM"],
+  "TO DATE":      ["TO DATE", "SAMPAI TANGGAL", "END DATE", "TGL AKHIR", "TO", "BERLAKU SAMPAI"],
+  "DISKON":       ["DISKON", "DISCOUNT", "DISC", "POTONGAN"],
+  "DISCOUNT TYPE":["DISCOUNT TYPE", "TIPE DISKON", "JENIS DISKON"],
+  "BRAND":        ["BRAND", "MEREK", "MERK"],
+  "DEPT":         ["DEPT", "DEPARTMENT", "DIVISI", "KATEGORI", "CATEGORY"],
+  "ACARA":        ["ACARA", "EVENT", "PROMO NAME", "NAMA PROMO"],
+};
+
 // Some sheets have column names with leading/trailing spaces like " HARGA NORMAL "
 // Normalize a row object so all keys are trimmed
 function normalizeKeys(row: any): any {
   const out: any = {};
   for (const key of Object.keys(row)) {
-    out[key.trim()] = row[key];
+    out[key.trim().toUpperCase()] = row[key];
   }
   return out;
 }
 
-function sheetHasRequiredCols(normalizedRow: any): boolean {
-  return REQUIRED_COLS.every((col) => col in normalizedRow);
+// Remap keys from raw normalized row using alias mapping
+function remapKeys(row: any): any {
+  const out: any = { ...row };
+  for (const [standard, aliases] of Object.entries(COL_ALIASES)) {
+    if (standard in out) continue; // already has the standard key
+    for (const alias of aliases) {
+      if (alias in out) {
+        out[standard] = out[alias];
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+function sheetHasRequiredCols(remappedRow: any): boolean {
+  return REQUIRED_COLS.every((col) => col in remappedRow && remappedRow[col] !== undefined && remappedRow[col] !== "");
 }
 
 // -------------------------------------------------------
@@ -112,12 +144,12 @@ function processWorkbook(buffer: Buffer): {
       continue;
     }
 
-    // Normalize ALL rows to trim whitespace from column names
-    const rows = rawRows.map(normalizeKeys);
+    // Normalize ALL rows to trim whitespace from column names, then remap aliases
+    const rows = rawRows.map(r => remapKeys(normalizeKeys(r)));
 
     const firstRow = rows[0];
     if (!sheetHasRequiredCols(firstRow)) {
-      const foundKeys = Object.keys(firstRow).slice(0, 6).join(", ");
+      const foundKeys = Object.keys(firstRow).slice(0, 8).join(", ");
       sheetLog.push(`[SKIP] ${sheetName} — header tidak sesuai (found: ${foundKeys})`);
       continue;
     }
@@ -206,26 +238,45 @@ async function upsertProducts(
   }
 
   // 3. Update produk lama (Bulk Update via Transaction)
-  // We chunk it into 500 items per transaction so we don't hit parameter limits
+  // FULL SYNC: semua field promo selalu diupdate termasuk reset ke null
+  // Jika di Excel baru SKU tidak ada promonya, maka promo di DB otomatis dihapus
   if (itemsToUpdate.length > 0) {
     const chunkSize = 500;
     for (let i = 0; i < itemsToUpdate.length; i += chunkSize) {
       const chunk = itemsToUpdate.slice(i, i + chunkSize);
       try {
-        const updatePromises = chunk.map((item) =>
-          prisma.product.update({
+        const updatePromises = chunk.map((item) => {
+          // Cek apakah promo masih aktif (toDate belum lewat)
+          let promoStillValid = false;
+          if (item.hargaPromo && item.toDate) {
+            const toDateObj = new Date(item.toDate);
+            toDateObj.setHours(23, 59, 59, 999);
+            promoStillValid = new Date() <= toDateObj;
+          } else if (item.hargaPromo && !item.toDate) {
+            // Ada harga promo tapi tidak ada tanggal → tetap pakai promo
+            promoStillValid = true;
+          }
+
+          return prisma.product.update({
             where: { sku: item.sku },
             data: {
+              // Selalu update harga normal
               hargaNormal: item.hargaNormal,
-              hargaPromo: item.hargaPromo,
-              diskon: item.diskon,
-              discountType: item.discountType,
-              acara: item.acara,
-              fromDate: item.fromDate,
-              toDate: item.toDate,
+              // Update deskripsi & info produk juga
+              description: item.description,
+              article: item.article,
+              brand: item.brand,
+              dept: item.dept,
+              // Promo: jika valid pakai data baru, jika tidak reset ke null
+              hargaPromo: promoStillValid ? item.hargaPromo : null,
+              diskon: promoStillValid ? item.diskon : null,
+              discountType: promoStillValid ? item.discountType : null,
+              acara: promoStillValid ? item.acara : null,
+              fromDate: promoStillValid ? item.fromDate : null,
+              toDate: promoStillValid ? item.toDate : null,
             },
-          })
-        );
+          });
+        });
         await prisma.$transaction(updatePromises);
         updated += chunk.length;
       } catch (err) {
