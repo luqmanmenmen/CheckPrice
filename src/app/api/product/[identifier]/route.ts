@@ -1,15 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { prisma as db } from "@/lib/prisma";
 
-// Use a single Prisma instance to avoid connection pool issues
-let prisma: PrismaClient;
-
-function getPrisma(): PrismaClient {
-  if (!prisma) {
-    prisma = new PrismaClient();
-  }
-  return prisma;
-}
+export const dynamic = 'force-dynamic';
 
 export async function GET(
   request: NextRequest,
@@ -17,41 +9,96 @@ export async function GET(
 ) {
   try {
     const { identifier } = await params;
-    const db = getPrisma();
-
-    // Trim and clean the identifier
     const cleaned = identifier.trim();
-
-    // 1. Find by SKU (exact match — SKU is primary key in this system)
-    let product = await db.product.findFirst({
-      where: { sku: cleaned },
-    });
-
-    // 2. Try barcode if SKU not found
+    let product;
+    // 1. Exact match by SKU, Barcode, or Article
+    product = await db.product.findFirst({ where: { sku: cleaned } });
+    
     if (!product && cleaned) {
-      product = await db.product.findFirst({
-        where: { barcode: cleaned },
-      });
+      product = await db.product.findFirst({ where: { barcode: cleaned } });
     }
 
-    // 3. Try article code (exact match)
     if (!product && cleaned) {
-      product = await db.product.findFirst({
-        where: { article: cleaned },
-      });
+      product = await db.product.findFirst({ where: { article: cleaned } });
+    }
+
+    // Helper to auto-remove promo if expired
+    const checkAndCleanPromo = async (p: any) => {
+      if (p && p.toDate) {
+        const toDateObj = new Date(p.toDate);
+        if (!isNaN(toDateObj.getTime())) {
+          toDateObj.setHours(23, 59, 59, 999);
+          if (new Date() > toDateObj) {
+            try {
+              // Promo expired, update DB to remove promo fields
+              const updated = await db.product.update({
+                where: { id: p.id },
+                data: {
+                  hargaPromo: null,
+                  diskon: null,
+                  discountType: null,
+                  acara: null,
+                  fromDate: null,
+                  toDate: null
+                }
+              });
+              return updated;
+            } catch (e) {
+              console.error("Auto-clean promo error:", e);
+            }
+          }
+        }
+      }
+      return p;
+    };
+
+    // 2. Try searching by name (description)
+    if (!product && cleaned) {
+      const { searchParams } = new URL(request.url);
+      const page = parseInt(searchParams.get('page') || '1', 10);
+      const limit = 10;
+      const skip = (page - 1) * limit;
+
+      const [nameMatches, total] = await Promise.all([
+        db.product.findMany({
+          where: { description: { contains: cleaned, mode: 'insensitive' } },
+          skip,
+          take: limit,
+          orderBy: { description: 'asc' }
+        }),
+        db.product.count({
+          where: { description: { contains: cleaned, mode: 'insensitive' } }
+        })
+      ]);
+      
+      if (total > 1 || page > 1) {
+        const cleanedMatches = await Promise.all(nameMatches.map(checkAndCleanPromo));
+        return NextResponse.json({ 
+          data: cleanedMatches,
+          meta: {
+            page,
+            limit,
+            total,
+            totalPages: Math.ceil(total / limit)
+          }
+        });
+      } else if (total === 1 && page === 1) {
+        product = nameMatches[0];
+      }
     }
 
     if (!product) {
-      // Get total count for debugging
       const total = await db.product.count();
       return NextResponse.json(
         {
           error: `Produk tidak ditemukan untuk: "${cleaned}"`,
-          hint: `Total produk di database: ${total}. Pastikan SKU sudah benar.`,
+          hint: `Total produk di database: ${total}. Pastikan SKU atau nama sudah benar.`,
         },
         { status: 404 }
       );
     }
+
+    product = await checkAndCleanPromo(product);
 
     return NextResponse.json({ data: product });
   } catch (error) {

@@ -68,9 +68,9 @@ export default function Login() {
       </div>
 
       <div className="relative z-20 bg-white/95 backdrop-blur-xl p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/40">
-        <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-blue-600">MaxDisplay</h1>
-          <p className="text-gray-500 text-sm">Masuk untuk memulai shift Anda</p>
+        <div className="text-center mb-8 flex flex-col items-center">
+          <img src="/suko-logo.webp" alt="SUKO Logo" className="h-20 mb-4 object-contain drop-shadow-md" />
+          <p className="text-gray-500 text-sm font-medium">Masuk untuk memulai shift Anda</p>
         </div>
 
         {error && (
@@ -137,6 +137,10 @@ export default function Login() {
             <li>Gudang: NIK <b>W001</b>, PIN <b>123456</b></li>
           </ul>
         </div>
+      </div>
+
+      <div className="absolute bottom-4 left-0 right-0 text-center text-xs font-bold text-white/50 tracking-wide z-10 drop-shadow-sm">
+        Powered by Luqmen 😼🕶️
       </div>
     </div>
   );

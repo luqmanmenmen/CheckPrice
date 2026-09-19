@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { verifyToken } from "@/lib/auth";
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(req: NextRequest) {
   try {
     const token = req.cookies.get("token")?.value;
@@ -38,7 +40,24 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ success: true, tickets });
+    const skus = [...new Set(tickets.map((t: any) => t.sku))];
+    const products = await prisma.product.findMany({
+      where: { sku: { in: skus } },
+      select: { sku: true, description: true, hargaNormal: true }
+    });
+    
+    // Parse description to just get the name (before colon)
+    const productMap = Object.fromEntries(
+      products.map(p => [p.sku, { name: p.description.split(":")[0].trim(), hargaNormal: p.hargaNormal }])
+    );
+
+    const ticketsWithProduct = tickets.map((t: any) => ({
+      ...t,
+      productName: productMap[t.sku]?.name || "Produk Tidak Diketahui",
+      hargaNormal: productMap[t.sku]?.hargaNormal || 0
+    }));
+
+    return NextResponse.json({ success: true, tickets: ticketsWithProduct });
   } catch (error) {
     console.error("Fetch tickets error:", error);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
@@ -114,7 +133,28 @@ export async function PATCH(req: NextRequest) {
     const session = await verifyToken(token);
     if (!session) return NextResponse.json({ error: "Invalid token" }, { status: 401 });
 
-    const { ticketId, status, reason } = await req.json();
+    const body = await req.json();
+
+    // Handle batch update
+    if (body.updates && Array.isArray(body.updates)) {
+      const results = [];
+      for (const update of body.updates) {
+        if (!update.ticketId || !update.status) continue;
+        
+        if (session.role === "WAREHOUSE" && !["READY", "OOS"].includes(update.status)) continue;
+        if (session.role === "SA" && update.status !== "COMPLETED") continue;
+        
+        const updatedTicket = await prisma.ticket.update({
+          where: { id: update.ticketId },
+          data: { status: update.status, reason: update.reason }
+        });
+        results.push(updatedTicket);
+      }
+      return NextResponse.json({ success: true, count: results.length });
+    }
+
+    // Handle single update (backward compatibility)
+    const { ticketId, status, reason } = body;
 
     if (!ticketId || !status) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });

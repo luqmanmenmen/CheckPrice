@@ -10,7 +10,7 @@ export default function UploadPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [result, setResult] = useState<{ success: boolean; message: string; skipped?: string[]; files?: string[] } | null>(null);
+  const [result, setResult] = useState<{ success: boolean; message: string; logs?: string[]; files?: string[] } | null>(null);
   const [showSkipped, setShowSkipped] = useState(false);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -31,7 +31,7 @@ export default function UploadPage() {
     try {
       const res = await fetch("/api/upload", { method: "POST", body: formData });
       const data = await res.json();
-      setResult({ success: res.ok, message: data.message || data.error, skipped: data.skipped, files: data.files });
+      setResult({ success: res.ok, message: data.message || data.error, logs: data.logs, files: data.files });
       if (res.ok) setFiles([]);
     } catch {
       setResult({ success: false, message: "Terjadi kesalahan saat mengunggah file." });
@@ -46,7 +46,7 @@ export default function UploadPage() {
     try {
       const res = await fetch("/api/upload");
       const data = await res.json();
-      setResult({ success: res.ok, message: data.message || data.error, skipped: data.skipped, files: data.files });
+      setResult({ success: res.ok, message: data.message || data.error, logs: data.logs, files: data.files });
     } catch {
       setResult({ success: false, message: "Terjadi kesalahan saat import dari folder SUKO." });
     } finally {
@@ -146,30 +146,36 @@ export default function UploadPage() {
 
       {/* Result */}
       {result && (
-        <div className={`p-4 rounded-xl flex flex-col gap-2 animate-in zoom-in duration-300 ${
+        <div className={`p-4 rounded-xl flex flex-col gap-3 animate-in zoom-in duration-300 ${
           result.success ? "bg-green-50 text-green-800 border border-green-200" : "bg-red-50 text-red-800 border border-red-200"
         }`}>
           <div className="flex items-start gap-2">
             {result.success ? <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" /> : <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />}
-            <p className="font-semibold text-sm">{result.message}</p>
+            <p className="font-semibold text-sm leading-relaxed">{result.message}</p>
           </div>
           {result.files && result.files.length > 0 && (
-            <p className="text-xs opacity-70 pl-7">{result.files.length} file diproses</p>
+            <p className="text-xs font-bold pl-7">{result.files.length} file diproses otomatis.</p>
           )}
-          {result.skipped && result.skipped.length > 0 && (
+          {result.logs && result.logs.length > 0 && (
             <div>
               <button
                 onClick={() => setShowSkipped(!showSkipped)}
-                className="flex items-center gap-1 text-xs opacity-70 hover:opacity-100 pl-7"
+                className="flex items-center gap-1 text-xs opacity-80 hover:opacity-100 pl-7 font-bold transition-opacity"
               >
-                <Info className="w-3 h-3" />
-                {result.skipped.length} sheet dilewati
+                <Info className="w-4 h-4" />
+                Lihat Detail Laporan (Log)
                 {showSkipped ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
               </button>
               {showSkipped && (
-                <ul className="mt-1 pl-7 text-xs opacity-60 list-disc list-inside">
-                  {result.skipped.map((s, i) => <li key={i}>{s}</li>)}
-                </ul>
+                <div className="mt-3 pl-7 pr-2">
+                  <div className="bg-white/60 p-3 rounded-lg border border-black/5 max-h-48 overflow-y-auto">
+                    <ul className="text-[11px] font-mono opacity-80 space-y-1">
+                      {result.logs.map((s, i) => (
+                        <li key={i} className={s.startsWith('---') || s.startsWith('===') ? 'font-bold text-black pt-2 pb-1' : ''}>{s}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
               )}
             </div>
           )}

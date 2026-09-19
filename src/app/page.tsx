@@ -2,10 +2,15 @@
 
 import { useState, useRef } from "react";
 import dynamic from "next/dynamic";
-import { Search, Camera, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2 } from "lucide-react";
+import { Search, Camera, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle } from "lucide-react";
 import { DetectedSku } from "@/components/TextScanner";
 import { useEffect } from "react";
 import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
+import PullToRefresh from "@/components/PullToRefresh";
+import useSWR from "swr";
+import { Bell } from "lucide-react";
+
+const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
 const Scanner = dynamic(() => import("@/components/Scanner"), { ssr: false });
 const TextScanner = dynamic(() => import("@/components/TextScanner"), { ssr: false });
@@ -57,12 +62,22 @@ export default function Home() {
   const [manualInput, setManualInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [product, setProduct] = useState<ProductData | null>(null);
+  const [productsList, setProductsList] = useState<ProductData[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
   const [error, setError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
 
   const [submitting, setSubmitting] = useState(false);
   const [qty, setQty] = useState(1);
-  const [activeTicketType, setActiveTicketType] = useState<"REQUEST" | "STOCK_CHECK" | null>(null);
+  const [activeTab, setActiveTab] = useState<"REQUEST" | "STOCK_CHECK" | "ORDERS">("REQUEST");
   const [cart, setCart] = useState<any[]>([]);
   const [user, setUser] = useState<{name: string, nik: string, role: string, status?: string, jobTitle?: string} | null>(null);
   const [togglingStatus, setTogglingStatus] = useState(false);
@@ -71,6 +86,76 @@ export default function Home() {
   const [showSummary, setShowSummary] = useState(false);
   const [shiftSummary, setShiftSummary] = useState<any>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
+
+  const previousProcessedIds = useRef<Set<string>>(new Set());
+
+  // Fetch SA's active tickets every 10 seconds to reduce DB load
+  const { data: ticketData, mutate: mutateTickets } = useSWR(user && user.role === "SA" ? "/api/tickets" : null, fetcher, { refreshInterval: 10000 });
+  const activeTickets = ticketData?.tickets || [];
+  
+  const pendingCount = activeTickets.filter((t: any) => t.status === "PENDING").length;
+  const processedCount = activeTickets.filter((t: any) => ["READY", "OOS"].includes(t.status)).length;
+
+  useEffect(() => {
+    if (!activeTickets.length || !user || user.status === "BREAK") return;
+
+    // We only care about tickets that just became READY or OOS
+    const currentProcessedIds = new Set<string>(
+      activeTickets.filter((t: any) => t.status === "READY" || t.status === "OOS").map((t: any) => t.id)
+    );
+    
+    let hasNewProcessed = false;
+    let newProcessedTickets: any[] = [];
+
+    for (const id of currentProcessedIds) {
+      if (!previousProcessedIds.current.has(id)) {
+        hasNewProcessed = true;
+        const ticket = activeTickets.find((t: any) => t.id === id);
+        if (ticket) newProcessedTickets.push(ticket);
+      }
+    }
+
+    if (hasNewProcessed && previousProcessedIds.current.size > 0) {
+      playTingTong();
+      
+      // Show toasts for the newly processed tickets
+      newProcessedTickets.forEach(t => {
+        if (t.status === "READY") {
+          showToast(`Pesanan ${t.sku} sudah READY!`, "success");
+        } else if (t.status === "OOS") {
+          showToast(`Pesanan ${t.sku} KOSONG!`, "error");
+        }
+      });
+    }
+
+    previousProcessedIds.current = currentProcessedIds;
+  }, [activeTickets, user]);
+
+  const playTingTong = () => {
+    try {
+      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioContext();
+      
+      const playTone = (freq: number, startTime: number, duration: number) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.5, startTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, startTime + duration);
+        osc.start(startTime);
+        osc.stop(startTime + duration);
+      };
+
+      const now = ctx.currentTime;
+      playTone(659.25, now, 0.5); // Ting (E5)
+      playTone(523.25, now + 0.4, 0.7); // Tong (C5)
+    } catch (e) {
+      console.error("Audio playback failed", e);
+    }
+  };
 
   useEffect(() => {
     fetch("/api/auth/me")
@@ -125,20 +210,43 @@ export default function Home() {
     }
   };
 
-  const searchProduct = async (identifier: string) => {
+  const markAsCompleted = async (ticketId: string) => {
+    try {
+      await fetch("/api/tickets", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticketId, status: "COMPLETED" })
+      });
+      mutateTickets();
+    } catch (error) {
+      console.error("Failed to mark ticket as completed:", error);
+    }
+  };
+
+  const searchProduct = async (identifier: string, page: number = 1) => {
     const trimmed = identifier.trim();
     if (!trimmed) return;
 
     setLoading(true);
     setError("");
-    setProduct(null);
+    if (page === 1) {
+      setProduct(null);
+      setProductsList([]);
+    }
 
     try {
-      const res = await fetch(`/api/product/${encodeURIComponent(trimmed)}`);
+      const res = await fetch(`/api/product/${encodeURIComponent(trimmed)}?page=${page}`);
       const data = await res.json();
 
       if (res.ok) {
-        setProduct(data.data);
+        if (Array.isArray(data.data)) {
+          setProductsList(data.data);
+          setCurrentPage(data.meta?.page || 1);
+          setTotalPages(data.meta?.totalPages || 1);
+        } else {
+          setProduct(data.data);
+          setProductsList([]);
+        }
         if (scanMode !== "none") setScanMode("none");
       } else {
         setError(data.error || "Produk tidak ditemukan");
@@ -177,7 +285,7 @@ export default function Home() {
     }]);
     setProduct(null);
     setManualInput("");
-    alert(`Berhasil ditambahkan ke daftar. Total: ${cart.length + 1}`);
+    showToast(`Berhasil ditambahkan ke daftar. Total: ${cart.length + 1}`);
   };
 
   const submitCart = async () => {
@@ -191,21 +299,23 @@ export default function Home() {
       });
       const data = await res.json();
       if (res.ok) {
-        alert(`${cart.length} tiket berhasil dikirim ke Gudang!`);
+        showToast(`${cart.length} tiket berhasil dikirim ke Gudang!`);
         setCart([]);
       } else {
-        alert(data.error || "Gagal mengirim tiket");
+        showToast(data.error || "Gagal mengirim tiket", "error");
       }
     } catch (err) {
-      alert("Terjadi kesalahan jaringan");
+      showToast("Terjadi kesalahan jaringan", "error");
     } finally {
       setSubmitting(false);
+      mutateTickets(); // refresh list after submit
     }
   };
 
   const handleClear = () => {
     setManualInput("");
     setProduct(null);
+    setProductsList([]);
     setError("");
     inputRef.current?.focus();
   };
@@ -228,43 +338,65 @@ export default function Home() {
     }
   }
 
-  return (
-    <div className="flex flex-col gap-5 pb-32">
+  const handleRefresh = async () => {
+    window.location.reload();
+  };
 
-      {/* User Header */}
-      {user && (
-        <div className="bg-gradient-to-r from-blue-700 to-indigo-800 -mx-5 -mt-5 p-5 pt-8 pb-6 shadow-md rounded-b-3xl flex justify-between items-center text-white">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center backdrop-blur-sm border border-white/30">
-              <UserCircle2 className="w-6 h-6" />
-            </div>
-            <div>
-              <p className="text-xs text-blue-200 font-medium tracking-wide uppercase">{user.jobTitle || 'Sales Area'}</p>
-              <h1 className="font-bold text-lg leading-tight">{user.name} <span className="text-blue-200 font-normal">({user.nik})</span></h1>
-            </div>
-          </div>
-          <div className="flex flex-col items-end gap-2">
-            <div className="scale-75 origin-right">
-              <AnimatedLogoutButton onLogout={handleLogoutClick} />
-            </div>
-            <div 
-              className={`relative flex p-0.5 rounded-full shadow-inner w-32 h-7 cursor-pointer border transition-colors ${togglingStatus ? 'opacity-50 pointer-events-none' : ''} ${user.status === 'ACTIVE' ? 'bg-slate-800/20 border-slate-700/30' : 'bg-slate-800/40 border-slate-700/50'}`} 
-              onClick={toggleStatus}
-            >
-              {/* Animated Pill Background */}
-              <div 
-                className={`absolute top-0.5 bottom-0.5 w-[calc(50%-2px)] rounded-full shadow-sm transition-all duration-300 ease-in-out ${user.status === 'ACTIVE' ? 'bg-green-500 left-0.5' : 'bg-amber-500 left-[50%]'}`}
-              />
-              <div className={`relative flex-1 flex items-center justify-center text-[10px] font-bold z-10 transition-colors duration-300 ${user.status === 'ACTIVE' ? 'text-white' : 'text-slate-500'}`}>
-                AKTIF
+  return (
+    <>
+    {/* Toast Notification */}
+    {toast && (
+      <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-full shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-top-10 duration-300 font-bold text-sm whitespace-nowrap ${
+        toast.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'
+      }`}>
+        {toast.type === 'success' ? <CheckCircle2 className="w-5 h-5" /> : <XCircle className="w-5 h-5" />}
+        <span>{toast.message}</span>
+      </div>
+    )}
+
+    <PullToRefresh onRefresh={handleRefresh}>
+      <div className={`flex flex-col lg:flex-row gap-6 max-w-7xl mx-auto w-full ${cart.length > 0 ? 'pb-32' : 'pb-6'}`}>
+        <div className="flex-1 flex flex-col w-full">
+          {/* User Header */}
+          {user && (
+            <div className="bg-gradient-to-r from-blue-700 to-indigo-800 lg:rounded-2xl p-5 pt-8 lg:pt-5 pb-6 shadow-md rounded-b-3xl flex justify-between items-start text-white mb-5">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 mt-1 bg-white/20 rounded-full flex items-center justify-center backdrop-blur-sm border border-white/30 shrink-0">
+                  <UserCircle2 className="w-6 h-6" />
+                </div>
+                <div className="flex flex-col items-start gap-2.5">
+                  <div>
+                    <p className="text-xs text-blue-200 font-medium tracking-wide uppercase">{user.jobTitle || 'Sales Area'}</p>
+                    <h1 className="font-bold text-lg leading-tight">{user.name} <span className="text-blue-200 font-normal">({user.nik})</span></h1>
+                  </div>
+                  <div 
+                    className={`relative flex p-0.5 rounded-full shadow-inner w-32 h-7 cursor-pointer border transition-colors ${togglingStatus ? 'opacity-50 pointer-events-none' : ''} ${user.status === 'ACTIVE' ? 'bg-slate-800/20 border-slate-700/30' : 'bg-slate-800/40 border-slate-700/50'}`} 
+                    onClick={toggleStatus}
+                  >
+                    {/* Animated Pill Background */}
+                    <div 
+                      className={`absolute top-0.5 bottom-0.5 w-[calc(50%-2px)] rounded-full shadow-sm transition-all duration-300 ease-in-out ${user.status === 'ACTIVE' ? 'bg-green-500 left-0.5' : 'bg-amber-500 left-[50%]'}`}
+                    />
+                    <div className={`relative flex-1 flex items-center justify-center text-[10px] font-bold z-10 transition-colors duration-300 ${user.status === 'ACTIVE' ? 'text-white' : 'text-slate-500'}`}>
+                      AKTIF
+                    </div>
+                    <div className={`relative flex-1 flex items-center justify-center text-[10px] font-bold z-10 transition-colors duration-300 ${user.status === 'BREAK' ? 'text-white' : 'text-slate-500'}`}>
+                      REHAT
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div className={`relative flex-1 flex items-center justify-center text-[10px] font-bold z-10 transition-colors duration-300 ${user.status === 'BREAK' ? 'text-white' : 'text-slate-500'}`}>
-                REHAT
+              <div className="flex flex-col items-end">
+                <div className="scale-80 origin-top-right">
+                  <AnimatedLogoutButton onLogout={handleLogoutClick} />
+                </div>
               </div>
             </div>
-          </div>
-        </div>
-      )}
+          )}
+
+      {/* Main Content Wrapper */}
+      <div className="px-4 lg:px-0 flex flex-col gap-5">
+
 
       {/* Logout Summary Modal */}
       {showSummary && (
@@ -324,42 +456,100 @@ export default function Home() {
         </div>
       )}
 
-      {/* Warehouse Ticket Section */}
+      {/* Menu / Tabs Selection */}
       <div className="pt-2">
         <h2 className="text-sm font-bold text-slate-500 uppercase mb-2">Pilih Mode Pemindaian</h2>
-        <div className="relative flex p-1 bg-slate-200 rounded-xl shadow-inner">
-          {/* Animated Background Pill */}
-          <div 
-            className="absolute top-1 bottom-1 w-[calc(50%-4px)] bg-white rounded-lg shadow-sm transition-all duration-300 ease-in-out"
-            style={{ 
-              left: activeTicketType === 'REQUEST' ? '4px' : activeTicketType === 'STOCK_CHECK' ? 'calc(50%)' : '4px',
-              opacity: activeTicketType ? 1 : 0
-            }}
-          />
+        <div className="relative flex p-1 bg-slate-200/80 rounded-xl shadow-inner overflow-x-auto gap-1">
           <button
-            onClick={() => setActiveTicketType(activeTicketType === "REQUEST" ? null : "REQUEST")}
-            className={`relative flex-1 py-3 px-2 rounded-lg flex items-center justify-center gap-2 transition-colors duration-300 z-10 ${
-              activeTicketType === "REQUEST" ? "text-blue-700 font-bold" : "text-slate-500 font-medium hover:text-slate-700"
+            onClick={() => setActiveTab("REQUEST")}
+            className={`relative flex-1 py-3 px-2 rounded-lg flex items-center justify-center gap-2 transition-all duration-300 z-10 ${
+              activeTab === "REQUEST" ? "bg-white shadow-sm text-blue-700 font-bold" : "text-slate-500 font-medium hover:text-slate-700"
             }`}
           >
-            <HandHelping className="w-5 h-5" />
-            <span className="text-sm">Request Barang</span>
+            <HandHelping className="w-4 h-4" />
+            <span className="text-xs font-semibold whitespace-nowrap">Request Barang</span>
           </button>
           <button
-            onClick={() => setActiveTicketType(activeTicketType === "STOCK_CHECK" ? null : "STOCK_CHECK")}
-            className={`relative flex-1 py-3 px-2 rounded-lg flex items-center justify-center gap-2 transition-colors duration-300 z-10 ${
-              activeTicketType === "STOCK_CHECK" ? "text-indigo-700 font-bold" : "text-slate-500 font-medium hover:text-slate-700"
+            onClick={() => setActiveTab("STOCK_CHECK")}
+            className={`relative flex-1 py-3 px-2 rounded-lg flex items-center justify-center gap-2 transition-all duration-300 z-10 ${
+              activeTab === "STOCK_CHECK" ? "bg-white shadow-sm text-indigo-700 font-bold" : "text-slate-500 font-medium hover:text-slate-700"
             }`}
           >
-            <MessageSquare className="w-5 h-5" />
-            <span className="text-sm">Tanya Stok</span>
+            <MessageSquare className="w-4 h-4" />
+            <span className="text-xs font-semibold whitespace-nowrap">Tanya Stok</span>
+          </button>
+          <button
+            onClick={() => setActiveTab("ORDERS")}
+            className={`relative flex-1 py-3 px-2 rounded-lg flex items-center justify-center gap-2 transition-all duration-300 z-10 ${
+              activeTab === "ORDERS" ? "bg-white shadow-sm text-amber-700 font-bold" : "text-slate-500 font-medium hover:text-slate-700"
+            }`}
+          >
+            <div className="relative">
+               <Bell className={`w-4 h-4 ${activeTab === 'ORDERS' ? 'text-amber-600' : 'text-slate-400'}`} />
+               {(pendingCount > 0 || processedCount > 0) && (
+                 <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                   <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${processedCount > 0 ? 'bg-green-400' : 'bg-amber-400'}`}></span>
+                   <span className={`relative inline-flex rounded-full h-2.5 w-2.5 border-white border ${processedCount > 0 ? 'bg-green-500' : 'bg-amber-500'}`}></span>
+                 </span>
+               )}
+            </div>
+            <span className="text-xs font-semibold whitespace-nowrap">Cek Pesanan</span>
           </button>
         </div>
       </div>
 
-      {/* Search */}
-      <div className="pt-2 flex flex-col gap-3">
+      {activeTab === "ORDERS" ? (
+        <div className="pt-2 flex flex-col gap-3 animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <h2 className="text-sm font-bold text-slate-500 uppercase mb-1">Daftar Pesanan Aktif</h2>
+          {activeTickets.length === 0 ? (
+            <div className="flex flex-col items-center py-12 opacity-50 bg-slate-50 rounded-2xl border-2 border-dashed">
+              <CheckCircle2 className="w-12 h-12 mb-2 text-slate-400" />
+              <p className="text-center font-bold text-slate-500">Tidak ada pesanan aktif.</p>
+              <p className="text-xs text-center mt-1">Semua pesanan sudah selesai.</p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {activeTickets.map((t: any) => (
+                <div key={t.id} className="bg-white border shadow-sm p-4 rounded-xl flex flex-col gap-3">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-slate-400">{t.type === 'REQUEST' ? 'Request' : 'Tanya Stok'}</span>
+                      <p className="font-black text-lg text-slate-800">{t.sku}</p>
+                      <p className="text-sm font-bold text-slate-600 max-w-[280px] leading-tight">{t.productName}</p>
+                      {t.hargaNormal > 0 && (
+                        <p className="text-xs font-semibold text-blue-600 mt-0.5">Rp {t.hargaNormal.toLocaleString('id-ID')}</p>
+                      )}
+                      <p className="text-xs font-medium text-slate-500 mt-0.5">{new Date(t.createdAt).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</p>
+                    </div>
+                    <span className={`text-[10px] font-bold px-3 py-1.5 rounded-full border uppercase tracking-wider ${
+                      t.status === 'READY' ? 'bg-green-50 text-green-700 border-green-200' :
+                      t.status === 'OOS' ? 'bg-red-50 text-red-700 border-red-200' :
+                      'bg-amber-50 text-amber-700 border-amber-200'
+                    }`}>
+                      {t.status === 'READY' ? 'READY (Ada)' : t.status === 'OOS' ? 'KOSONG' : 'MENUNGGU'}
+                    </span>
+                  </div>
+                  
+                  {/* Action to clear it from list */}
+                  {(t.status === 'READY' || t.status === 'OOS') && (
+                    <button 
+                      onClick={() => markAsCompleted(t.id)}
+                      className="w-full mt-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 rounded-lg text-sm transition-colors active:scale-95"
+                    >
+                      Selesai & Tutup Pesanan
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
+          {/* Search */}
+          <div className="pt-2 flex flex-col gap-3 animate-in fade-in slide-in-from-bottom-4 duration-300">
         <h2 className="text-sm font-bold text-slate-500 uppercase mb-2">Cari Info Produk</h2>
+        
         <div className="flex gap-2 items-center">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-5 h-5" />
@@ -367,7 +557,7 @@ export default function Home() {
               ref={inputRef}
               type="text"
               inputMode="numeric"
-              placeholder="Ketik SKU / Scan Barcode..."
+              placeholder="Ketik SKU, Barcode, atau Nama Produk..."
               className="w-full pl-10 pr-10 py-3.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all text-sm font-mono"
               value={manualInput}
               onChange={(e) => setManualInput(e.target.value)}
@@ -447,6 +637,58 @@ export default function Home() {
       {error && !loading && (
         <div className="bg-red-50 text-red-700 p-4 rounded-xl text-center border border-red-200 text-sm font-medium animate-in zoom-in duration-200">
           {error}
+        </div>
+      )}
+
+      {/* Products List Selection */}
+      {productsList.length > 0 && !loading && (
+        <div className="bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden animate-in slide-in-from-bottom-6 duration-400 p-4">
+          <h2 className="text-sm font-bold text-slate-500 uppercase mb-3">Pilih Produk:</h2>
+          <div className="flex flex-col gap-2">
+            {productsList.map((p) => {
+              const { name, details } = parseDescription(p.description);
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => {
+                    setProduct(p);
+                    setProductsList([]);
+                  }}
+                  className="text-left p-3 border rounded-xl hover:bg-blue-50 hover:border-blue-200 transition-colors"
+                >
+                  <p className="font-bold text-slate-800">{name}</p>
+                  {details && <p className="text-xs text-slate-500 truncate">{details}</p>}
+                  <div className="flex gap-2 mt-2">
+                    <span className="text-[10px] font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-600">SKU: {p.sku}</span>
+                    <span className="text-[10px] font-bold text-blue-600">{formatRupiah(p.hargaPromo || p.hargaNormal)}</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Pagination Controls */}
+          {totalPages > 1 && (
+            <div className="flex justify-between items-center mt-4 pt-4 border-t border-slate-100">
+              <button 
+                onClick={() => searchProduct(manualInput, currentPage - 1)}
+                disabled={currentPage <= 1 || loading}
+                className="px-4 py-2 bg-slate-100 text-slate-600 font-bold text-xs rounded-lg disabled:opacity-50 hover:bg-slate-200 transition-colors"
+              >
+                Sebelumnya
+              </button>
+              <span className="text-xs font-bold text-slate-500">
+                Hal {currentPage} dari {totalPages}
+              </span>
+              <button 
+                onClick={() => searchProduct(manualInput, currentPage + 1)}
+                disabled={currentPage >= totalPages || loading}
+                className="px-4 py-2 bg-blue-100 text-blue-700 font-bold text-xs rounded-lg disabled:opacity-50 hover:bg-blue-200 transition-colors"
+              >
+                Selanjutnya
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -530,14 +772,14 @@ export default function Home() {
               <div className="flex flex-col gap-2 mt-2">
                 <p className="text-xs font-bold text-slate-500 uppercase">Masukkan ke Keranjang</p>
                 <div className="flex gap-2">
-                  {(!activeTicketType || activeTicketType === "REQUEST") && (
-                    <button onClick={() => addToCart("REQUEST", 1, "")} className="flex-1 bg-blue-100 text-blue-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-blue-200 active:scale-95 transition-all">
-                      <HandHelping className="w-4 h-4" /> Request
+                  {activeTab === "REQUEST" && (
+                    <button onClick={() => addToCart("REQUEST", 1, "")} className="w-full bg-blue-100 text-blue-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-blue-200 active:scale-95 transition-all">
+                      <HandHelping className="w-4 h-4" /> Request Barang Ini
                     </button>
                   )}
-                  {(!activeTicketType || activeTicketType === "STOCK_CHECK") && (
-                    <button onClick={() => addToCart("STOCK_CHECK", 1, "")} className="flex-1 bg-indigo-100 text-indigo-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-indigo-200 active:scale-95 transition-all">
-                      <MessageSquare className="w-4 h-4" /> Tanya Stok
+                  {activeTab === "STOCK_CHECK" && (
+                    <button onClick={() => addToCart("STOCK_CHECK", 1, "")} className="w-full bg-indigo-100 text-indigo-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-indigo-200 active:scale-95 transition-all">
+                      <MessageSquare className="w-4 h-4" /> Tanya Stok Barang Ini
                     </button>
                   )}
                 </div>
@@ -574,29 +816,52 @@ export default function Home() {
       })()}
 
       {/* Empty state */}
-      {!product && !loading && !error && (
+      {!product && productsList.length === 0 && !loading && !error && (
         <div className="flex flex-col items-center py-12 gap-3 text-slate-400">
           <Search className="w-14 h-14 opacity-30" />
-          <p className="text-sm">Masukkan nomor SKU lalu tekan Enter</p>
-          <p className="text-xs opacity-70 text-center">Contoh SKU: 13463728 &nbsp;|&nbsp; Atau tekan Scan untuk kamera</p>
+          <p className="text-sm">Masukkan SKU, Barcode, atau Nama Produk</p>
+          <p className="text-xs opacity-70 text-center">Contoh: 13463728 atau "Kemeja"</p>
         </div>
       )}
+      </>
+      )}
 
-      {/* Cart FAB */}
+      </div> {/* End Main Content Wrapper */}
+      
+      </div> {/* End left column */}
+
+      {/* Cart FAB (Mobile) / Sidebar (Desktop) */}
       {cart.length > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t shadow-[0_-10px_20px_rgba(0,0,0,0.05)] z-50 animate-in slide-in-from-bottom-full duration-300 max-w-md mx-auto">
+        <div className="fixed lg:sticky lg:top-24 bottom-0 left-0 right-0 lg:left-auto lg:right-auto p-4 lg:p-5 bg-white lg:rounded-2xl lg:border border-t shadow-[0_-10px_20px_rgba(0,0,0,0.05)] lg:shadow-xl z-50 animate-in slide-in-from-bottom-full lg:slide-in-from-right-8 duration-300 w-full lg:w-[350px] mx-auto h-fit">
           <div className="flex justify-between items-center mb-3">
             <div>
               <p className="text-xs text-slate-500 font-bold uppercase">Daftar Kirim</p>
               <p className="font-extrabold text-blue-700">{cart.length} Barang</p>
             </div>
-            <button onClick={() => setCart([])} className="text-xs text-red-500 font-bold uppercase py-1 px-3 bg-red-50 rounded-lg">Kosongkan</button>
+            <button onClick={() => setCart([])} className="text-xs text-red-500 font-bold uppercase py-1 px-3 bg-red-50 rounded-lg hover:bg-red-100 transition-colors">Kosongkan</button>
           </div>
+          
+          {/* Desktop Cart Items Preview */}
+          <div className="hidden lg:flex flex-col gap-2 mb-4 max-h-[40vh] overflow-y-auto pr-1">
+            {cart.map((item, idx) => (
+              <div key={idx} className="text-xs border rounded p-2 flex justify-between items-center bg-slate-50">
+                <div className="truncate pr-2">
+                  <span className="font-bold block truncate">{item.productName.split(':')[0]}</span>
+                  <span className="text-slate-500">{item.sku}</span>
+                </div>
+                <div className="font-bold text-blue-700">{item.type === 'REQUEST' ? 'REQ' : 'CEK'}</div>
+              </div>
+            ))}
+          </div>
+
           <button onClick={submitCart} disabled={submitting} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-4 rounded-xl shadow-lg shadow-blue-200 flex items-center justify-center gap-2 active:scale-95 transition-all">
             {submitting ? <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white" /> : "Kirim Semua ke Gudang 🚀"}
           </button>
         </div>
       )}
-    </div>
+
+      </div>
+    </PullToRefresh>
+    </>
   );
 }
