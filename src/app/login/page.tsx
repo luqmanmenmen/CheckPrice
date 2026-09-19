@@ -112,6 +112,8 @@ export default function Login() {
             <label className="block text-sm font-medium text-gray-700 mb-1">PIN (6 Angka)</label>
             <input
               type="password"
+              inputMode="numeric"
+              pattern="[0-9]*"
               required
               maxLength={6}
               className="w-full border border-gray-300 rounded-lg p-3 text-lg tracking-widest text-center font-mono"

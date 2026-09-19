@@ -569,8 +569,7 @@ export default function Home() {
             <input
               ref={inputRef}
               type="text"
-              inputMode="numeric"
-              placeholder="Ketik SKU, Barcode, atau Nama Produk..."
+              placeholder="Cari Produk..."
               className="w-full pl-10 pr-20 py-3.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all text-sm font-mono"
               value={manualInput}
               onChange={(e) => setManualInput(e.target.value)}
