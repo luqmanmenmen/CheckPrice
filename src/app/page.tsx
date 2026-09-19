@@ -696,8 +696,8 @@ export default function Home() {
                   <Tag className="w-4 h-4" />
                   <span>{product.discountType || "SPECIAL PRICE"}</span>
                 </div>
-                <span className="bg-white text-red-600 font-extrabold text-sm px-3 py-1 rounded-full">
-                  HEMAT {discountPct}%
+                <span className="bg-white text-red-600 font-extrabold text-sm px-3 py-1 rounded-full shadow-sm">
+                  HEMAT {formatRupiah(product.hargaNormal - product.hargaPromo!)}
                 </span>
               </div>
             )}
@@ -744,9 +744,9 @@ export default function Home() {
                         {formatRupiah(product.hargaNormal)}
                       </p>
                     </div>
-                    <div className="bg-red-100 text-red-700 rounded-xl px-4 py-2 text-center shrink-0">
-                      <p className="text-2xl font-black leading-none">{discountPct}%</p>
-                      <p className="text-xs font-medium">OFF</p>
+                    <div className="bg-red-600 text-white rounded-lg px-2.5 py-1.5 text-center shrink-0 shadow-sm flex flex-col justify-center items-center h-fit mt-1">
+                      <p className="text-sm font-black leading-none">{discountPct}%</p>
+                      <p className="text-[9px] font-bold uppercase mt-0.5 opacity-90 tracking-wide">OFF</p>
                     </div>
                   </div>
                 ) : (
