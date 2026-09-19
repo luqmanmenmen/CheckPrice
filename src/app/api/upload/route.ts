@@ -107,23 +107,19 @@ function parseRow(row: any) {
   const brand = String(row["BRAND"] ?? "").trim() || null;
   const dept = String(row["DEPT"] ?? "").trim() || null;
 
-  // Jika tidak ada harga promo, reset semua field promo ke null
-  // Agar produk harga normal tidak menyimpan tanggal/diskon yang tidak relevan
-  const hasPromo = hargaPromo !== null && hargaPromo > 0 && hargaPromo !== hargaNormal;
-
   return {
     sku,
     article,
     description,
+    acara,
+    fromDate,
+    toDate,
+    hargaNormal,
+    hargaPromo,
+    diskon,
+    discountType,
     brand,
     dept,
-    hargaNormal,
-    hargaPromo: hasPromo ? hargaPromo : null,
-    diskon: hasPromo ? diskon : null,
-    discountType: hasPromo ? discountType : null,
-    acara: hasPromo ? acara : null,
-    fromDate: hasPromo ? fromDate : null,
-    toDate: hasPromo ? toDate : null,
   };
 }
 
