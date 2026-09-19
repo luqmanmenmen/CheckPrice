@@ -57,7 +57,7 @@ export default function Login() {
   };
 
   return (
-    <div id="login-stage" className="login-stage relative min-h-screen flex items-center justify-center p-4">
+    <div id="login-stage" className="login-stage relative min-h-screen flex p-4 overflow-y-auto">
       {/* Background Stars (Optional extra effect) */}
       <div className="absolute inset-0 pointer-events-none z-0">
         <div className="page-stars" id="pageStars">
@@ -67,7 +67,7 @@ export default function Login() {
         </div>
       </div>
 
-      <div className="relative z-20 bg-white/95 backdrop-blur-xl p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/40">
+      <div className="relative z-20 m-auto bg-white/95 backdrop-blur-xl p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/40 my-8">
         <div className="text-center mb-8 flex flex-col items-center">
           <img src="/suko-logo.webp" alt="SUKO Logo" className="h-20 mb-4 object-contain drop-shadow-md" />
           <p className="text-gray-500 text-sm font-medium">Masuk untuk memulai shift Anda</p>
