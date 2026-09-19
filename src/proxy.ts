@@ -30,7 +30,7 @@ export async function proxy(request: NextRequest) {
 
   try {
     const verified = await jwtVerify(token, getJwtSecretKey());
-    const role = (verified.payload as any).role;
+    const role = (verified.payload as Record<string, unknown>).role;
 
     // RBAC: Warehouse role can only access /warehouse
     if (role === 'WAREHOUSE' && pathname === '/') {
@@ -47,7 +47,7 @@ export async function proxy(request: NextRequest) {
     }
 
     return NextResponse.next()
-  } catch (err) {
+  } catch {
     // Invalid token
     return NextResponse.redirect(new URL('/login', request.url))
   }

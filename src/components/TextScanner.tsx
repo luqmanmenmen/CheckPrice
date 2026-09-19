@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-use-before-define */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import { useEffect, useRef, useState } from "react";
@@ -34,6 +36,104 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
   const [torchOn, setTorchOn] = useState(false);
   const [hasTorch, setHasTorch] = useState(false);
   const [foundSku, setFoundSku] = useState<string | null>(null);
+
+  async function scanFrameForText() {
+    if (isHandlingResult.current || !workerRef.current || !canvasRef.current || !scannerRef.current) return;
+    
+    // Pastikan scanner sedang jalan
+    if (scannerRef.current.getState() !== Html5QrcodeScannerState.SCANNING) return;
+
+    // Ambil elemen video yang dibuat oleh html5-qrcode
+    const video = document.querySelector("#reader video") as HTMLVideoElement;
+    if (!video || video.readyState !== video.HAVE_ENOUGH_DATA) return;
+
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    // Set ukuran canvas
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    // Filter kontras tinggi untuk membantu OCR baca teks
+    ctx.filter = 'grayscale(100%) contrast(300%) brightness(120%)';
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.filter = 'none';
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result: any = await workerRef.current.recognize(canvas);
+      const text = result.data.text.toUpperCase();
+      
+      // LOGIKA CERDAS: Incar tepat 8 angka berjejer (contoh: 13472861)
+      // Kita pisahkan berdasarkan spasi/baris baru agar tidak mengambil sebagian angka dari kode seperti 605-12218278
+      const words = text.split(/\s+/);
+      let found8Digit = null;
+      for (const w of words) {
+         if (/^\d{8}$/.test(w)) {
+             found8Digit = w;
+             break;
+         }
+      }
+      
+      if (found8Digit) {
+         handleSuccess(found8Digit, "OCR (Angka 8-Digit)");
+         return;
+      }
+
+      // Fallback: Kode artikel (Kombinasi Huruf & Angka, 6-15 char)
+      const articleMatch = text.match(/[A-Z0-9-]{6,15}/g);
+      if (articleMatch) {
+         for (const candidate of articleMatch) {
+            // Pastikan mengandung angka dan valid
+            if (/[0-9]/.test(candidate) && candidate.length > 5 && !/^\d{13}$/.test(candidate)) { // hindari salah tangkap EAN13 sebagai teks
+               // handleSuccess(candidate, "OCR (Kode Artikel)");
+               // Kita tahan dulu yang ini agar tidak false positive, prioritas ke 8 digit.
+               // Tapi bisa diaktifkan jika diperlukan.
+            }
+         }
+      }
+    } catch (err) {
+      console.error("OCR Check Error", err);
+    }
+  }
+
+  function handleSuccess(sku: string, source: string) {
+    if (isHandlingResult.current) return;
+    isHandlingResult.current = true;
+    
+    setFoundSku(sku);
+    setStatus(`Berhasil ditemukan: ${sku} via ${source}`);
+    
+    // Ambil snapshot
+    let snapshot = undefined;
+    if (canvasRef.current) {
+        // Gambar video terkini ke kanvas (tanpa filter) untuk snapshot bersih
+        const video = document.querySelector("#reader video") as HTMLVideoElement;
+        if (video) {
+           const ctx = canvasRef.current.getContext("2d");
+           if (ctx) {
+              canvasRef.current.width = video.videoWidth;
+              canvasRef.current.height = video.videoHeight;
+              ctx.drawImage(video, 0, 0, canvasRef.current.width, canvasRef.current.height);
+              snapshot = canvasRef.current.toDataURL("image/jpeg", 0.6);
+           }
+        }
+    }
+
+    const dummyBbox = { x0: 0, y0: 0, x1: 0, y1: 0 };
+    
+    // Hentikan proses
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    if (scannerRef.current && scannerRef.current.getState() === Html5QrcodeScannerState.SCANNING) {
+       scannerRef.current.stop().catch(console.error);
+    }
+
+    // Jeda sedikit agar UI terlihat berubah menjadi centang hijau
+    setTimeout(() => {
+       onScanResult(sku, { text: sku, bbox: dummyBbox, rawText: source }, snapshot);
+    }, 800);
+  }
 
   useEffect(() => {
     let isMounted = true;
@@ -86,6 +186,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
         setTimeout(() => {
           if (scannerRef.current?.getState() === Html5QrcodeScannerState.SCANNING) {
             const track = scannerRef.current.getRunningTrackCameraCapabilities();
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             if (track && (track as any).torchFeature()?.isSupported()) {
               setHasTorch(true);
             }
@@ -125,102 +226,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     }
   };
 
-  const scanFrameForText = async () => {
-    if (isHandlingResult.current || !workerRef.current || !canvasRef.current || !scannerRef.current) return;
-    
-    // Pastikan scanner sedang jalan
-    if (scannerRef.current.getState() !== Html5QrcodeScannerState.SCANNING) return;
 
-    // Ambil elemen video yang dibuat oleh html5-qrcode
-    const video = document.querySelector("#reader video") as HTMLVideoElement;
-    if (!video || video.readyState !== video.HAVE_ENOUGH_DATA) return;
-
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    // Set ukuran canvas
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-
-    // Filter kontras tinggi untuk membantu OCR baca teks
-    ctx.filter = 'grayscale(100%) contrast(300%) brightness(120%)';
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    ctx.filter = 'none';
-
-    try {
-      const result: any = await workerRef.current.recognize(canvas);
-      const text = result.data.text.toUpperCase();
-      
-      // LOGIKA CERDAS: Incar tepat 8 angka berjejer (contoh: 13472861)
-      // Kita pisahkan berdasarkan spasi/baris baru agar tidak mengambil sebagian angka dari kode seperti 605-12218278
-      const words = text.split(/\s+/);
-      let found8Digit = null;
-      for (const w of words) {
-         if (/^\d{8}$/.test(w)) {
-             found8Digit = w;
-             break;
-         }
-      }
-      
-      if (found8Digit) {
-         handleSuccess(found8Digit, "OCR (Angka 8-Digit)");
-         return;
-      }
-
-      // Fallback: Kode artikel (Kombinasi Huruf & Angka, 6-15 char)
-      const articleMatch = text.match(/[A-Z0-9-]{6,15}/g);
-      if (articleMatch) {
-         for (const candidate of articleMatch) {
-            // Pastikan mengandung angka dan valid
-            if (/[0-9]/.test(candidate) && candidate.length > 5 && !/^\d{13}$/.test(candidate)) { // hindari salah tangkap EAN13 sebagai teks
-               // handleSuccess(candidate, "OCR (Kode Artikel)");
-               // Kita tahan dulu yang ini agar tidak false positive, prioritas ke 8 digit.
-               // Tapi bisa diaktifkan jika diperlukan.
-            }
-         }
-      }
-    } catch (err) {
-      console.error("OCR Check Error", err);
-    }
-  };
-
-  const handleSuccess = (sku: string, source: string) => {
-    if (isHandlingResult.current) return;
-    isHandlingResult.current = true;
-    
-    setFoundSku(sku);
-    setStatus(`Berhasil ditemukan: ${sku} via ${source}`);
-    
-    // Ambil snapshot
-    let snapshot = undefined;
-    if (canvasRef.current) {
-        // Gambar video terkini ke kanvas (tanpa filter) untuk snapshot bersih
-        const video = document.querySelector("#reader video") as HTMLVideoElement;
-        if (video) {
-           const ctx = canvasRef.current.getContext("2d");
-           if (ctx) {
-              canvasRef.current.width = video.videoWidth;
-              canvasRef.current.height = video.videoHeight;
-              ctx.drawImage(video, 0, 0, canvasRef.current.width, canvasRef.current.height);
-              snapshot = canvasRef.current.toDataURL("image/jpeg", 0.6);
-           }
-        }
-    }
-
-    const dummyBbox = { x0: 0, y0: 0, x1: 0, y1: 0 };
-    
-    // Hentikan proses
-    if (intervalRef.current) clearInterval(intervalRef.current);
-    if (scannerRef.current && scannerRef.current.getState() === Html5QrcodeScannerState.SCANNING) {
-       scannerRef.current.stop().catch(console.error);
-    }
-
-    // Jeda sedikit agar UI terlihat berubah menjadi centang hijau
-    setTimeout(() => {
-       onScanResult(sku, { text: sku, bbox: dummyBbox, rawText: source }, snapshot);
-    }, 800);
-  };
 
   return (
     <div className="flex flex-col gap-3">
