@@ -261,30 +261,31 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
            </button>
         )}
 
-        {/* Indikator Status Bawah */}
-        <div className="absolute bottom-6 left-0 right-0 px-6 flex justify-center pointer-events-none z-50">
-          <div className="bg-white/95 backdrop-blur-xl shadow-2xl rounded-2xl p-4 w-full text-center border border-white/40 flex flex-col items-center gap-2 transform transition-all duration-300">
-            {foundSku ? (
-              <>
-                 <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mb-1">
-                    <CheckCircle2 className="w-7 h-7 text-green-600" />
-                 </div>
-                 <p className="font-black text-xl text-slate-800">{foundSku}</p>
-                 <p className="text-xs text-green-600 font-bold">Memproses...</p>
-              </>
-            ) : (
-              <>
-                 <div className="flex items-center gap-2 text-blue-600 font-bold mb-1">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Menganalisis...</span>
-                 </div>
-                 <p className="text-xs text-slate-600 font-medium">
-                   Arahkan ke <strong className="text-slate-800">Garis Barcode</strong> atau <strong className="text-slate-800">Angka SKU (8 Digit)</strong>
-                 </p>
-                 <p className="text-[10px] text-slate-400 mt-1">{status}</p>
-              </>
-            )}
-          </div>
+      </div>
+      
+      {/* Indikator Status Bawah (dipindah ke luar kamera agar tidak menutupi area scan) */}
+      <div className="flex justify-center z-10 w-full mt-2">
+        <div className="bg-white/95 backdrop-blur-xl shadow-lg rounded-2xl p-4 w-full text-center border border-slate-200 flex flex-col items-center gap-2 transform transition-all duration-300">
+          {foundSku ? (
+            <>
+               <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mb-1">
+                  <CheckCircle2 className="w-7 h-7 text-green-600" />
+               </div>
+               <p className="font-black text-xl text-slate-800">{foundSku}</p>
+               <p className="text-xs text-green-600 font-bold">Memproses...</p>
+            </>
+          ) : (
+            <>
+               <div className="flex items-center gap-2 text-blue-600 font-bold mb-1">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Menganalisis...</span>
+               </div>
+               <p className="text-xs text-slate-600 font-medium">
+                 Arahkan ke <strong className="text-slate-800">Garis Barcode</strong> atau <strong className="text-slate-800">Angka SKU (8 Digit)</strong>
+               </p>
+               <p className="text-[10px] text-slate-400 mt-1">{status}</p>
+            </>
+          )}
         </div>
       </div>
       
