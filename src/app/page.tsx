@@ -601,22 +601,7 @@ export default function Home() {
           </button>
         </div>
 
-        <div className="flex gap-2">
-          <button
-            onClick={() => setScanMode(scanMode === "barcode" ? "none" : "barcode")}
-            className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 transition-all font-semibold text-sm ${
-              scanMode === "barcode"
-                ? "border-red-100 text-red-600 bg-red-50 hover:bg-red-100"
-                : "border-blue-100 text-blue-600 bg-blue-50 hover:bg-blue-100"
-            }`}
-          >
-            {scanMode === "barcode" ? (
-              <><X className="w-4 h-4" /> Tutup Scanner Barcode</>
-            ) : (
-              <><Camera className="w-4 h-4" /> Scan Barcode Garis</>
-            )}
-          </button>
-        </div>
+
       </div>
 
       {/* Scanner Views */}
