@@ -86,28 +86,9 @@ export default function WarehouseDashboard() {
   };
 
   // Check for new tickets and play notification sound
-  useEffect(() => {
-    if (!tickets.length || !user || user.status === "BREAK") return;
-
-    const currentTicketIds = new Set(tickets.map(t => t.id));
-    
-    let hasNewTicket = false;
-    for (const id of currentTicketIds) {
-      if (!previousTicketIds.current.has(id)) {
-        hasNewTicket = true;
-        break;
-      }
-    }
-
-    if (hasNewTicket && previousTicketIds.current.size > 0) {
-      playTingTong();
-    }
-
-    previousTicketIds.current = currentTicketIds;
-  }, [tickets, user]);
-
-  const playTingTong = () => {
+  function playTingTong() {
     try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
       const ctx = new AudioContext();
       
@@ -130,10 +111,31 @@ export default function WarehouseDashboard() {
     } catch (e) {
       console.error("Audio playback failed", e);
     }
-  };
+  }
+
+  useEffect(() => {
+    if (!tickets.length || !user || user.status === "BREAK") return;
+
+    const currentTicketIds = new Set(tickets.map(t => t.id));
+    
+    let hasNewTicket = false;
+    for (const id of currentTicketIds) {
+      if (!previousTicketIds.current.has(id)) {
+        hasNewTicket = true;
+        break;
+      }
+    }
+
+    if (hasNewTicket && previousTicketIds.current.size > 0) {
+      playTingTong();
+    }
+
+    previousTicketIds.current = currentTicketIds;
+  }, [tickets, user]);
 
   const handleLogoutClick = async () => {
     await fetch("/api/auth/logout", { method: "POST" });
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
     window.location.href = "/login";
   };
 
