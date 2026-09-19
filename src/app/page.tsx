@@ -798,8 +798,8 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Promo Info */}
-              {product.acara && (
+              {/* Promo Info - hanya tampil jika ada harga promo aktif */}
+              {isOnPromo && product.acara && (
                 <div className={`border rounded-xl p-3.5 flex flex-col gap-1.5 ${isPromoExpired ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
                   <div className="flex justify-between items-start">
                     <p className={`text-xs font-bold uppercase tracking-wide ${isPromoExpired ? 'text-red-700' : 'text-amber-700'}`}>
