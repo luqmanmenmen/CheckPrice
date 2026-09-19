@@ -236,6 +236,18 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
         {/* Kontainer html5-qrcode */}
         <div id="reader" className="w-full min-h-[300px] sm:min-h-[400px] bg-black"></div>
 
+        {/* Overlay Animasi Scan Grid ala Alfa Gift */}
+        {!foundSku && (
+          <div className="absolute inset-0 pointer-events-none z-10 overflow-hidden flex flex-col justify-start">
+            <div className="w-full h-[25%] bg-gradient-to-b from-transparent to-red-500/20 border-b-[3px] border-red-500 animate-scan-grid shadow-[0_10px_20px_rgba(239,68,68,0.3)] relative">
+               <div className="absolute inset-0 opacity-40" style={{
+                 backgroundImage: 'linear-gradient(rgba(239,68,68,1) 1px, transparent 1px), linear-gradient(90deg, rgba(239,68,68,1) 1px, transparent 1px)',
+                 backgroundSize: '15px 15px'
+               }}></div>
+            </div>
+          </div>
+        )}
+
         {/* Hidden Canvas untuk OCR */}
         <canvas ref={canvasRef} className="hidden" />
 
@@ -283,6 +295,15 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
         #reader__dashboard_section_csr { display: none !important; }
         #reader__dashboard_section_swaplink { display: none !important; }
         #reader__scan_region { background: black !important; }
+
+        @keyframes scan-grid {
+          0% { transform: translateY(-100%); }
+          50% { transform: translateY(400%); }
+          100% { transform: translateY(-100%); }
+        }
+        .animate-scan-grid {
+          animation: scan-grid 2.5s ease-in-out infinite;
+        }
       `}} />
     </div>
   );

@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react";
 import dynamic from "next/dynamic";
-import { Search, Camera, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle } from "lucide-react";
+import { Search, Camera, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle, ScanText } from "lucide-react";
 import { DetectedSku } from "@/components/TextScanner";
 import { useEffect } from "react";
 import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
@@ -571,17 +571,27 @@ export default function Home() {
               type="text"
               inputMode="numeric"
               placeholder="Ketik SKU, Barcode, atau Nama Produk..."
-              className="w-full pl-10 pr-10 py-3.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all text-sm font-mono"
+              className="w-full pl-10 pr-20 py-3.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all text-sm font-mono"
               value={manualInput}
               onChange={(e) => setManualInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && searchProduct(manualInput)}
               autoFocus
             />
-            {manualInput && (
-              <button onClick={handleClear} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-                <X className="w-4 h-4" />
-              </button>
-            )}
+            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+              {manualInput && (
+                <button onClick={handleClear} className="text-slate-400 hover:text-slate-600">
+                  <X className="w-5 h-5" />
+                </button>
+              )}
+              {!manualInput && (
+                <button 
+                  onClick={() => setScanMode(scanMode === "text" ? "none" : "text")}
+                  className={`text-slate-400 hover:text-indigo-600 transition-colors ${scanMode === "text" ? "text-indigo-600" : ""}`}
+                >
+                  <ScanText className="w-5 h-5" />
+                </button>
+              )}
+            </div>
           </div>
           <button
             onClick={() => searchProduct(manualInput)}
@@ -594,32 +604,16 @@ export default function Home() {
         <div className="flex gap-2">
           <button
             onClick={() => setScanMode(scanMode === "barcode" ? "none" : "barcode")}
-            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 transition-all font-semibold text-sm ${
+            className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 transition-all font-semibold text-sm ${
               scanMode === "barcode"
                 ? "border-red-100 text-red-600 bg-red-50 hover:bg-red-100"
                 : "border-blue-100 text-blue-600 bg-blue-50 hover:bg-blue-100"
             }`}
           >
             {scanMode === "barcode" ? (
-              <><X className="w-4 h-4" /> Tutup</>
+              <><X className="w-4 h-4" /> Tutup Scanner Barcode</>
             ) : (
-              <><Camera className="w-4 h-4" /> Barcode</>
-            )}
-          </button>
-          <button
-            onClick={() => {
-              setScanMode(scanMode === "text" ? "none" : "text");
-            }}
-            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 transition-all font-semibold text-sm ${
-              scanMode === "text"
-                ? "border-red-100 text-red-600 bg-red-50 hover:bg-red-100"
-                : "border-indigo-100 text-indigo-600 bg-indigo-50 hover:bg-indigo-100"
-            }`}
-          >
-            {scanMode === "text" ? (
-              <><X className="w-4 h-4" /> Tutup</>
-            ) : (
-              <><Search className="w-4 h-4" /> OCR Teks</>
+              <><Camera className="w-4 h-4" /> Scan Barcode Garis</>
             )}
           </button>
         </div>
