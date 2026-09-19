@@ -223,9 +223,13 @@ export default function Home() {
     }
   };
 
+  const searchCounterRef = useRef(0);
+
   const searchProduct = async (identifier: string, page: number = 1) => {
     const trimmed = identifier.trim();
     if (!trimmed) return;
+
+    const currentSearch = ++searchCounterRef.current;
 
     setLoading(true);
     setError("");
@@ -236,9 +240,14 @@ export default function Home() {
 
     try {
       const res = await fetch(`/api/product/${encodeURIComponent(trimmed)}?page=${page}`);
+      
+      // If a newer search was initiated while we were waiting, ignore this response
+      if (searchCounterRef.current !== currentSearch) return;
+
       const data = await res.json();
 
       if (res.ok) {
+        setError(""); // Explicitly clear any stale errors
         if (Array.isArray(data.data)) {
           setProductsList(data.data);
           setCurrentPage(data.meta?.page || 1);
@@ -252,9 +261,13 @@ export default function Home() {
         setError(data.error || "Produk tidak ditemukan");
       }
     } catch {
-      setError("Terjadi kesalahan jaringan.");
+      if (searchCounterRef.current === currentSearch) {
+        setError("Terjadi kesalahan jaringan.");
+      }
     } finally {
-      setLoading(false);
+      if (searchCounterRef.current === currentSearch) {
+        setLoading(false);
+      }
     }
   };
 
