@@ -10,13 +10,20 @@ const getJwtSecretKey = () => {
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
   
-  // Public paths
+  // Public paths - no auth required
   if (
     pathname.startsWith('/login') || 
     pathname.startsWith('/api/auth') || 
     pathname.startsWith('/api/upload') ||
     pathname.startsWith('/_next') ||
     pathname.startsWith('/assets') ||
+    pathname.endsWith('.png') ||
+    pathname.endsWith('.jpg') ||
+    pathname.endsWith('.jpeg') ||
+    pathname.endsWith('.gif') ||
+    pathname.endsWith('.svg') ||
+    pathname.endsWith('.webp') ||
+    pathname.endsWith('.ico') ||
     pathname === '/favicon.ico'
   ) {
     return NextResponse.next()
