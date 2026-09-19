@@ -21,7 +21,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
       <header className="bg-white shadow-sm border-b sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 lg:px-8 h-16 flex items-center justify-between">
           <Link href="/" className="flex items-center">
-            <img src="/suko-logo.webp" alt="SUKO" className="h-12 object-contain" />
+            <img src="/suko-logo.png" alt="SUKO" className="h-12 object-contain" />
           </Link>
           <nav className="flex gap-4">
             <Link href="/upload" className="flex flex-col items-center text-xs text-slate-500 hover:text-blue-600">

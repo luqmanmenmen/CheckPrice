@@ -354,7 +354,7 @@ export default function Home() {
       </div>
     )}
 
-    <PullToRefresh onRefresh={handleRefresh}>
+    <div className="w-full h-full">
       <div className={`flex flex-col lg:flex-row gap-6 max-w-7xl mx-auto w-full ${cart.length > 0 ? 'pb-32' : 'pb-6'}`}>
         <div className="flex-1 flex flex-col w-full">
           {/* User Header */}
@@ -861,7 +861,7 @@ export default function Home() {
       )}
 
       </div>
-    </PullToRefresh>
+    </div>
     </>
   );
 }

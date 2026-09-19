@@ -57,7 +57,7 @@ export default function Login() {
   };
 
   return (
-    <div id="login-stage" className="login-stage relative min-h-screen flex p-4 overflow-y-auto">
+    <div id="login-stage" className="login-stage relative min-h-screen flex flex-col p-4 overflow-y-auto">
       {/* Background Stars (Optional extra effect) */}
       <div className="absolute inset-0 pointer-events-none z-0">
         <div className="page-stars" id="pageStars">
@@ -67,9 +67,11 @@ export default function Login() {
         </div>
       </div>
 
-      <div className="relative z-20 m-auto bg-white/95 backdrop-blur-xl p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/40 my-8">
+      <div className="flex-grow shrink-0 min-h-[2rem]"></div>
+
+      <div className="relative z-20 mx-auto bg-white/95 backdrop-blur-xl p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/40 shrink-0">
         <div className="text-center mb-8 flex flex-col items-center">
-          <img src="/suko-logo.webp" alt="SUKO Logo" className="h-20 mb-4 object-contain drop-shadow-md" />
+          <img src="/suko-logo.png" alt="SUKO Logo" className="h-20 mb-4 object-contain drop-shadow-md" />
           <p className="text-gray-500 text-sm font-medium">Masuk untuk memulai shift Anda</p>
         </div>
 
@@ -139,7 +141,9 @@ export default function Login() {
         </div>
       </div>
 
-      <div className="absolute bottom-4 left-0 right-0 text-center text-xs font-bold text-white/50 tracking-wide z-10 drop-shadow-sm">
+      <div className="flex-grow shrink-0 min-h-[4rem]"></div>
+
+      <div className="text-center text-xs font-bold text-white/50 tracking-wide z-10 drop-shadow-sm pb-4">
         Powered by Luqmen 😼🕶️
       </div>
     </div>
