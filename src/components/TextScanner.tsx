@@ -153,10 +153,18 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       const text = result.data.text.toUpperCase();
       
       // LOGIKA CERDAS: Incar tepat 8 angka berjejer (contoh: 13472861)
-      const sku8DigitMatch = text.match(/\b\d{8}\b/);
+      // Kita pisahkan berdasarkan spasi/baris baru agar tidak mengambil sebagian angka dari kode seperti 605-12218278
+      const words = text.split(/\s+/);
+      let found8Digit = null;
+      for (const w of words) {
+         if (/^\d{8}$/.test(w)) {
+             found8Digit = w;
+             break;
+         }
+      }
       
-      if (sku8DigitMatch) {
-         handleSuccess(sku8DigitMatch[0], "OCR (Angka 8-Digit)");
+      if (found8Digit) {
+         handleSuccess(found8Digit, "OCR (Angka 8-Digit)");
          return;
       }
 

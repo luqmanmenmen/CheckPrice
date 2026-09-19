@@ -264,10 +264,10 @@ export default function Home() {
     setScanMode("none");
   };
 
-  const handleTextScanSuccess = (result: any) => {
-    if (result.sku) {
-      setManualInput(result.sku);
-      searchProduct(result.sku);
+  const handleTextScanSuccess = (sku: string) => {
+    if (sku) {
+      setManualInput(sku);
+      searchProduct(sku);
     }
     setScanMode("none");
   };
