@@ -8,7 +8,6 @@
   min-height: 100vh;
   margin: 0;
   font-family: 'Segoe UI', Helvetica, Arial, sans-serif;
-  overflow: hidden;
   
     background: radial-gradient(120% 90% at 50% 30%, #3f6a97 0%, #123a63 70%);
   transition: background 1.1s ease;
@@ -21,8 +20,11 @@
 
 .login-stage {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
   
   
