@@ -139,6 +139,19 @@ export default function SuperAdminDashboard() {
           <h2 className="font-bold text-slate-800">Laporan & Analitik</h2>
         </div>
         <div className="flex flex-col gap-3">
+          <Link href="/super-admin/laporan-penjualan" className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-cyan-50 hover:border-cyan-100 transition-all group">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-cyan-100 text-cyan-600 flex items-center justify-center group-hover:scale-110 transition-transform shadow-sm">
+                <DollarSign className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="font-bold text-slate-800 text-sm">Laporan Penjualan (Sales)</p>
+                <p className="text-[10px] text-slate-500">Omzet dan daftar barang terjual dari upload PQ terakhir</p>
+              </div>
+            </div>
+            <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-cyan-600 transition-colors" />
+          </Link>
+
           <Link href="/super-admin/saran-po" className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-indigo-50 hover:border-indigo-100 transition-all group">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center group-hover:scale-110 transition-transform shadow-sm">
