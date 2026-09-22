@@ -334,11 +334,6 @@ export default function Home() {
     inputRef.current?.focus();
   };
 
-  const isOnPromo = product && product.hargaPromo && product.hargaPromo > 0 && product.hargaPromo !== product.hargaNormal;
-  const discountPct = isOnPromo && product
-    ? Math.round(((product.hargaNormal - product.hargaPromo!) / product.hargaNormal) * 100)
-    : 0;
-
   // Cek apakah promo sudah habis berdasarkan toDate
   let isPromoExpired = false;
   if (product && product.toDate) {
@@ -351,6 +346,11 @@ export default function Home() {
       }
     }
   }
+
+  const isOnPromo = product && product.hargaPromo && product.hargaPromo > 0 && product.hargaPromo !== product.hargaNormal && !isPromoExpired;
+  const discountPct = isOnPromo && product
+    ? Math.round(((product.hargaNormal - product.hargaPromo!) / product.hargaNormal) * 100)
+    : 0;
 
   const handleRefresh = async () => {
     window.location.reload();
@@ -728,6 +728,11 @@ export default function Home() {
                 {product.brand && (
                   <span className="bg-slate-800 text-white text-xs font-bold px-2.5 py-1.5 rounded-lg uppercase tracking-wide">
                     {product.brand}
+                  </span>
+                )}
+                {isPromoExpired && (
+                  <span className="bg-rose-100 text-rose-700 text-xs font-bold px-2.5 py-1.5 rounded-lg border border-rose-200">
+                    Masa Berlaku Promo Habis
                   </span>
                 )}
               </div>
