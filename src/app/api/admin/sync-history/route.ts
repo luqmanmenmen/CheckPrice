@@ -7,9 +7,13 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const limit = searchParams.get('limit') ? parseInt(searchParams.get('limit')!) : 1;
+    const typeParam = searchParams.get('type');
+
+    const whereClause = typeParam ? { type: typeParam } : {};
 
     if (limit === 1) {
       const history = await prisma.syncHistory.findFirst({
+        where: whereClause,
         orderBy: { createdAt: "desc" },
         include: {
           user: {
@@ -21,6 +25,7 @@ export async function GET(req: NextRequest) {
     }
 
     const histories = await prisma.syncHistory.findMany({
+      where: whereClause,
       take: limit,
       orderBy: { createdAt: "desc" },
       include: {
@@ -50,8 +55,19 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "Riwayat tidak ditemukan" }, { status: 404 });
     }
 
-    // Jika yang dihapus adalah PQ_HARIAN, kita harus me-revert penjualan yang tercatat pada hari itu
+    // Jika yang dihapus adalah PQ_HARIAN, pastikan itu adalah upload terakhir
     if (history.type === "PQ_HARIAN") {
+      const latestPqHistory = await prisma.syncHistory.findFirst({
+        where: { type: "PQ_HARIAN" },
+        orderBy: { createdAt: "desc" }
+      });
+
+      if (latestPqHistory && latestPqHistory.id !== history.id) {
+        return NextResponse.json({ 
+          error: "Akses ditolak! Anda hanya diizinkan menghapus data PQ_HARIAN yang paling terakhir diunggah untuk mencegah kerusakan data." 
+        }, { status: 403 });
+      }
+
       const startOfDay = new Date(history.createdAt);
       startOfDay.setHours(0, 0, 0, 0);
       

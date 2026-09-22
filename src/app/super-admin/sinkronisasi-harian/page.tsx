@@ -15,7 +15,7 @@ export default function UpdateProdukPage() {
 
   const fetchSyncHistory = async () => {
     try {
-      const res = await fetch("/api/admin/sync-history?limit=5");
+      const res = await fetch("/api/admin/sync-history?limit=5&type=PQ_HARIAN");
       const data = await res.json();
       if (data.success && data.data && data.data.length > 0) {
         const latest = data.data[0];
@@ -299,12 +299,14 @@ export default function UpdateProdukPage() {
                     )}
                   </div>
                 </div>
-                <button 
-                  onClick={() => handleDeleteHistory(hist.id, hist.fileName)}
-                  className="px-3 py-1.5 text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-lg border border-rose-200 transition-colors self-start sm:self-center shrink-0"
-                >
-                  Hapus Log
-                </button>
+                {idx === 0 && (
+                  <button 
+                    onClick={() => handleDeleteHistory(hist.id, hist.fileName)}
+                    className="px-3 py-1.5 text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-lg border border-rose-200 transition-colors self-start sm:self-center shrink-0"
+                  >
+                    Hapus Log
+                  </button>
+                )}
               </div>
             ))}
           </div>
