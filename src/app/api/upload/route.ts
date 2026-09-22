@@ -7,6 +7,8 @@ import { verifyToken } from "@/lib/auth";
 
 const prisma = new PrismaClient();
 
+export const maxDuration = 60; // Izinkan proses upload hingga 60 detik (Mencegah Vercel 10s Timeout)
+
 // -------------------------------------------------------
 // Helper: parse Excel date serial OR string date
 // -------------------------------------------------------
