@@ -72,6 +72,7 @@ export default function UpdateProdukPage() {
     
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("type", "PQ_HARIAN");
 
     try {
       const res = await fetch("/api/upload", {

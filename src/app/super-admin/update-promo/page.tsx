@@ -66,6 +66,7 @@ export default function UpdateHargaPage() {
     
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("type", "UPDATE_PROMO");
 
     try {
       const res = await fetch("/api/upload", {
