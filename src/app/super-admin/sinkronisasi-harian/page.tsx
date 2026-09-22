@@ -73,6 +73,12 @@ export default function UpdateProdukPage() {
   const handleUpload = async () => {
     if (!file) return;
     
+    const pin = window.prompt("Masukkan PIN Keamanan untuk memulai proses upload PQ Harian:");
+    if (pin !== "220117") {
+      alert("PIN Salah! Upload dibatalkan.");
+      return;
+    }
+
     setStatus("uploading");
     setProgress(30); // Fake initial progress for better UX
     

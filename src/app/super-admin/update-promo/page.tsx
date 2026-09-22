@@ -61,6 +61,13 @@ export default function UpdateHargaPage() {
 
   const handleUpload = async () => {
     if (files.length === 0) return;
+    
+    const pin = window.prompt("Masukkan PIN Keamanan untuk memulai proses upload:");
+    if (pin !== "220117") {
+      alert("PIN Salah! Upload dibatalkan.");
+      return;
+    }
+
     setStatus("uploading");
     setProgress(30);
     
