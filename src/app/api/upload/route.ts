@@ -241,6 +241,7 @@ async function upsertProducts(
         description: item.description ?? "-",
         hargaNormal: item.hargaNormal ?? 0,
         stok: item.stok ?? 0,
+        sales_mtd: 0, // PAKSA 0: Jangan pakai data sales global dari pusat
       });
     }
   }
