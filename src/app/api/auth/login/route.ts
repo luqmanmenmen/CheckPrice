@@ -13,14 +13,15 @@ export async function POST(req: NextRequest) {
     let role = "SA";
     if (jobTitle === "Gudang Stock") role = "WAREHOUSE";
 
-    // Auto-seed for testing
+    // Cek user
     let user = await prisma.user.findUnique({ where: { nik } });
+    
     if (!user) {
-      if (nik === "220117" && pin === "123456") {
-        user = await prisma.user.create({ data: { nik: "220117", pin: "123456", name: "Super Admin", role: "SUPER_ADMIN" } });
+      if (nik === "22054178" && pin === "220117") {
+        // @ts-ignore
+        user = await prisma.user.create({ data: { nik: "22054178", pin: "220117", name: "Bambang (Super Admin)", role: "SUPER_ADMIN", toko: "Server" } });
       } else {
-        // Create user with selected role and a default name
-        user = await prisma.user.create({ data: { nik, pin, name: `Karyawan ${nik}`, role: role as any } });
+        return NextResponse.json({ error: "Akun tidak terdaftar. Silakan hubungi Super Admin." }, { status: 404 });
       }
     } else {
       if (user.pin !== pin) {
@@ -58,7 +59,9 @@ export async function POST(req: NextRequest) {
       role: user.role,
       name: user.name,
       nik: user.nik,
-      jobTitle: jobTitle
+      // @ts-ignore
+      toko: user.toko,
+      jobTitle
     });
 
     const response = NextResponse.json({ success: true, role: user.role });
