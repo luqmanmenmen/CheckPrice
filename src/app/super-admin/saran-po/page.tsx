@@ -19,7 +19,13 @@ export default function LaporanPOPage() {
     fetcher
   );
 
-  const exportToPDF = async () => {
+  const handleExportPDF = async () => {
+    const pin = window.prompt("Masukkan PIN Keamanan untuk mengekspor data:");
+    if (pin !== "220117") {
+      alert("PIN Salah! Akses ditolak.");
+      return;
+    }
+
     setIsExporting(true);
     try {
       const res = await fetch(`/api/admin/po?minMtd=${minMtd}&page=1&limit=5000`);
@@ -157,7 +163,7 @@ export default function LaporanPOPage() {
             </div>
           </div>
           <button 
-            onClick={exportToPDF}
+            onClick={handleExportPDF}
             disabled={isExporting}
             className="px-4 py-2 bg-rose-600 text-white rounded-lg text-sm font-bold shadow-sm flex items-center gap-2 hover:bg-rose-700 transition-colors w-full sm:w-auto justify-center disabled:opacity-70 disabled:cursor-not-allowed"
           >

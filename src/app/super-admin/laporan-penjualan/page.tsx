@@ -80,6 +80,12 @@ export default function LaporanPenjualanPage() {
   const exportPDF = () => {
     if (!data) return;
     
+    const pin = window.prompt("Masukkan PIN Keamanan untuk mengekspor laporan:");
+    if (pin !== "220117") {
+      alert("PIN Salah! Akses ditolak.");
+      return;
+    }
+    
     const doc = new jsPDF();
     
     doc.setFontSize(16);
