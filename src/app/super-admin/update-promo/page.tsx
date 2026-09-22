@@ -5,7 +5,7 @@ import { ArrowLeft, UploadCloud, FileType, CheckCircle2, AlertTriangle } from "l
 import Link from "next/link";
 
 export default function UpdateHargaPage() {
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [status, setStatus] = useState<"idle" | "uploading" | "success" | "error">("idle");
   const [progress, setProgress] = useState(0);
@@ -45,14 +45,14 @@ export default function UpdateHargaPage() {
     setIsDragging(false);
     
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      setFile(e.dataTransfer.files[0]);
+      setFiles(Array.from(e.dataTransfer.files));
       setStatus("idle");
     }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      setFile(e.target.files[0]);
+      setFiles(Array.from(e.target.files));
       setStatus("idle");
     }
   };
@@ -60,12 +60,14 @@ export default function UpdateHargaPage() {
   const [resultMsg, setResultMsg] = useState("");
 
   const handleUpload = async () => {
-    if (!file) return;
+    if (files.length === 0) return;
     setStatus("uploading");
     setProgress(30);
     
     const formData = new FormData();
-    formData.append("file", file);
+    files.forEach(file => {
+      formData.append("file", file);
+    });
     formData.append("type", "UPDATE_PROMO");
 
     try {
@@ -137,25 +139,26 @@ export default function UpdateHargaPage() {
         className={`border-2 border-dashed rounded-2xl p-8 flex flex-col items-center justify-center text-center transition-all ${
           isDragging 
             ? "border-emerald-500 bg-emerald-50" 
-            : file 
+            : files.length > 0
               ? "border-slate-300 bg-white" 
               : "border-slate-300 bg-white hover:border-emerald-400 hover:bg-slate-50"
         }`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
-        onClick={() => !file && fileInputRef.current?.click()}
-        style={{ cursor: file ? 'default' : 'pointer' }}
+        onClick={() => files.length === 0 && fileInputRef.current?.click()}
+        style={{ cursor: files.length > 0 ? 'default' : 'pointer' }}
       >
         <input 
           type="file" 
           ref={fileInputRef}
           onChange={handleFileChange}
           accept=".csv, .xlsx" 
+          multiple
           className="hidden" 
         />
         
-        {file ? (
+        {files.length > 0 ? (
           <div className="flex flex-col items-center w-full">
             <div className="w-16 h-16 rounded-full bg-emerald-100 flex items-center justify-center mb-4 relative">
               <FileType className="w-8 h-8 text-emerald-600" />
@@ -165,15 +168,19 @@ export default function UpdateHargaPage() {
                 </div>
               )}
             </div>
-            <p className="font-bold text-slate-800 mb-1">{file.name}</p>
-            <p className="text-xs text-slate-500 mb-6">
-              {(file.size / (1024 * 1024)).toFixed(2)} MB
-            </p>
+            <p className="font-bold text-slate-800 mb-1">{files.length} File Terpilih</p>
+            <div className="flex flex-wrap gap-2 justify-center max-w-md mb-6 mt-2">
+              {files.map((f, i) => (
+                <span key={i} className="px-2 py-1 bg-slate-100 text-slate-600 text-[10px] rounded border border-slate-200 truncate max-w-[150px]">
+                  {f.name}
+                </span>
+              ))}
+            </div>
 
             {status === "idle" && (
               <div className="flex gap-2">
                 <button 
-                  onClick={(e) => { e.stopPropagation(); setFile(null); }}
+                  onClick={(e) => { e.stopPropagation(); setFiles([]); }}
                   className="px-4 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100 transition-colors"
                 >
                   Batal
