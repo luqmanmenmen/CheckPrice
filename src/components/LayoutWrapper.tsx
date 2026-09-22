@@ -3,10 +3,16 @@
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { Package, UploadCloud } from "lucide-react";
+import useSWR from "swr";
+
+const fetcher = (url: string) => fetch(url).then(res => res.json());
 
 export default function LayoutWrapper({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isAuth = pathname?.startsWith("/login");
+  const { data } = useSWR("/api/auth/me", fetcher);
+  
+  const isSuperAdmin = data?.user?.role === "SUPER_ADMIN";
 
   if (isAuth) {
     return (
@@ -24,10 +30,12 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
             <img src="/suko-logo.png" alt="SUKO" className="h-12 object-contain" />
           </Link>
           <nav className="flex gap-4">
-            <Link href="/upload" className="flex flex-col items-center text-xs text-slate-500 hover:text-blue-600">
-              <UploadCloud className="w-5 h-5 mb-1" />
-              Update Data
-            </Link>
+            {isSuperAdmin && (
+              <Link href="/super-admin" className="flex flex-col items-center text-xs text-slate-500 hover:text-blue-600">
+                <UploadCloud className="w-5 h-5 mb-1" />
+                Update Data
+              </Link>
+            )}
           </nav>
         </div>
       </header>

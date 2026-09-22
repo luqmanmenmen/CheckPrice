@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { ArrowLeft, UploadCloud, FileType, CheckCircle2, AlertTriangle } from "lucide-react";
 import Link from "next/link";
 import { PinModal } from "@/components/PinModal";
+import { AlertModal } from "@/components/AlertModal";
 
 export default function UpdateHargaPage() {
   const [files, setFiles] = useState<File[]>([]);
@@ -12,7 +13,9 @@ export default function UpdateHargaPage() {
   const [progress, setProgress] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [lastSync, setLastSync] = useState<{name: string; date: string} | null>(null);
-  const [showPinModal, setShowPinModal] = useState(false);
+  const [showPinModal, setShowPinModal] = useState<{isOpen: boolean, action: "upload" | "reset" | null}>({isOpen: false, action: null});
+  const [alertState, setAlertState] = useState<{isOpen: boolean; title: string; message: string; type: "error" | "success" | "warning"}>({isOpen: false, title: "", message: "", type: "error"});
+  const [isResetting, setIsResetting] = useState(false);
 
   const fetchSyncHistory = async () => {
     try {
@@ -63,11 +66,37 @@ export default function UpdateHargaPage() {
 
   const handleUploadClick = () => {
     if (files.length === 0) return;
-    setShowPinModal(true);
+    setShowPinModal({ isOpen: true, action: "upload" });
   };
 
-  const handleUploadConfirm = async (pin: string) => {
-    setShowPinModal(false);
+  const handleResetClick = () => {
+    setShowPinModal({ isOpen: true, action: "reset" });
+  };
+
+  const executeReset = async (pin: string) => {
+    setIsResetting(true);
+    try {
+      const res = await fetch("/api/admin/reset-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "UPDATE_PROMO", pin })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setAlertState({ isOpen: true, title: "Berhasil", message: "Semua riwayat upload Promo berhasil dihapus.", type: "success" });
+        setLastSync(null);
+      } else {
+        setAlertState({ isOpen: true, title: "Gagal", message: data.error || "Gagal mereset data.", type: "error" });
+      }
+    } catch (err) {
+      console.error(err);
+      setAlertState({ isOpen: true, title: "Kesalahan Jaringan", message: "Terjadi kesalahan saat mereset data.", type: "error" });
+    } finally {
+      setIsResetting(false);
+    }
+  };
+
+  const executeUpload = async () => {
     setStatus("uploading");
     setProgress(30);
     
@@ -93,28 +122,50 @@ export default function UpdateHargaPage() {
       } else {
         setStatus("error");
         setResultMsg(data.error || "Gagal memproses file.");
-        alert(data.error || "Gagal memproses file.");
+        setAlertState({ isOpen: true, title: "Upload Gagal", message: data.error || "Gagal memproses file.", type: "error" });
       }
     } catch (error) {
       console.error(error);
       setProgress(100);
       setStatus("error");
       setResultMsg("Terjadi kesalahan saat mengunggah.");
-      alert("Terjadi kesalahan saat mengunggah.");
+      setAlertState({ isOpen: true, title: "Kesalahan", message: "Terjadi kesalahan jaringan atau server saat mengunggah.", type: "error" });
+    }
+  };
+
+  const handlePinSubmit = (pin: string) => {
+    const action = showPinModal.action;
+    setShowPinModal({ isOpen: false, action: null });
+    if (action === "reset") {
+      executeReset(pin);
+    } else if (action === "upload") {
+      executeUpload();
     }
   };
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 pb-24 max-w-2xl mx-auto flex flex-col gap-6">
       {/* Header */}
-      <div className="flex items-center gap-3 mb-2">
-        <Link href="/super-admin" className="p-2 rounded-full hover:bg-slate-200 transition-colors">
-          <ArrowLeft className="w-5 h-5 text-slate-700" />
-        </Link>
-        <div>
-          <h1 className="font-bold text-xl text-slate-800">Update Harga & Promo</h1>
-          <p className="text-xs text-slate-500">Sinkronisasi harga mingguan (Rabu Malam)</p>
+      <div className="flex items-center gap-3 mb-2 justify-between">
+        <div className="flex items-center gap-3">
+          <Link href="/super-admin" className="p-2 rounded-full hover:bg-slate-200 transition-colors">
+            <ArrowLeft className="w-5 h-5 text-slate-700" />
+          </Link>
+          <div>
+            <h1 className="font-bold text-xl text-slate-800">Update Harga & Promo</h1>
+            <p className="text-xs text-slate-500">Sinkronisasi harga mingguan (Rabu Malam)</p>
+          </div>
         </div>
+        
+        <button
+          onClick={handleResetClick}
+          disabled={isResetting}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-rose-600 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition-colors disabled:opacity-50"
+          title="Hapus semua riwayat log promo"
+        >
+          <AlertTriangle className="w-3.5 h-3.5" />
+          {isResetting ? "Mereset..." : "Reset Log"}
+        </button>
       </div>
 
       {/* Warning Card */}
@@ -245,11 +296,19 @@ export default function UpdateHargaPage() {
       </div>
 
       <PinModal 
-        isOpen={showPinModal} 
-        onClose={() => setShowPinModal(false)} 
-        onSubmit={handleUploadConfirm} 
-        title="Otorisasi Update Promo"
-        description="Masukkan PIN Keamanan untuk memulai proses sinkronisasi harga."
+        isOpen={showPinModal.isOpen} 
+        onClose={() => setShowPinModal({ isOpen: false, action: null })} 
+        onSubmit={handlePinSubmit} 
+        title={showPinModal.action === "reset" ? "Otorisasi Reset Log" : "Otorisasi Update Promo"}
+        description={showPinModal.action === "reset" ? "Peringatan! Log riwayat upload Promo akan dihapus. Lanjutkan?" : "Masukkan PIN Keamanan untuk memulai proses sinkronisasi harga."}
+      />
+
+      <AlertModal
+        isOpen={alertState.isOpen}
+        onClose={() => setAlertState(prev => ({ ...prev, isOpen: false }))}
+        title={alertState.title}
+        message={alertState.message}
+        type={alertState.type}
       />
     </div>
   );

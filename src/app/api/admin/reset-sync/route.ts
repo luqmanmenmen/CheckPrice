@@ -13,12 +13,23 @@ const prisma = new PrismaClient();
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { pin } = body;
+    const { pin, type } = body;
 
     if (pin !== "220117") {
       return NextResponse.json({ error: "PIN salah" }, { status: 403 });
     }
 
+    if (type === "UPDATE_PROMO") {
+      const deletedHistory = await prisma.syncHistory.deleteMany({
+        where: { type: "UPDATE_PROMO" }
+      });
+      return NextResponse.json({
+        success: true,
+        message: `Reset berhasil! ${deletedHistory.count} riwayat upload promo dibersihkan.`
+      });
+    }
+
+    // DEFAULT (PQ_HARIAN):
     // 1. Hapus semua DailySales
     const deletedSales = await prisma.dailySales.deleteMany({});
 

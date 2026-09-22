@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { ArrowLeft, UploadCloud, FileType, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { PinModal } from "@/components/PinModal";
+import { AlertModal } from "@/components/AlertModal";
 
 export default function UpdateProdukPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -15,6 +16,7 @@ export default function UpdateProdukPage() {
   const [pinModalState, setPinModalState] = useState<{isOpen: boolean, action: "upload" | "reset" | null}>({isOpen: false, action: null});
   const [historyList, setHistoryList] = useState<any[]>([]);
   const [isResetting, setIsResetting] = useState(false);
+  const [alertState, setAlertState] = useState<{isOpen: boolean; title: string; message: string; type: "error" | "success" | "warning"}>({isOpen: false, title: "", message: "", type: "error"});
 
   const fetchSyncHistory = async () => {
     try {
@@ -59,7 +61,7 @@ export default function UpdateProdukPage() {
         setFile(droppedFile);
         setStatus("idle");
       } else {
-        alert("Mohon upload file CSV atau Excel");
+        setAlertState({ isOpen: true, title: "Format Salah", message: "Mohon upload file CSV atau Excel", type: "warning" });
       }
     }
   };
@@ -103,14 +105,14 @@ export default function UpdateProdukPage() {
       } else {
         setStatus("error");
         setResultMsg(data.error || "Gagal memproses file.");
-        alert(data.error || "Gagal memproses file.");
+        setAlertState({ isOpen: true, title: "Upload Gagal", message: data.error || "Gagal memproses file.", type: "error" });
       }
     } catch (error) {
       console.error(error);
       setProgress(100);
       setStatus("error");
       setResultMsg("Terjadi kesalahan saat mengunggah.");
-      alert("Terjadi kesalahan saat mengunggah.");
+      setAlertState({ isOpen: true, title: "Kesalahan", message: "Terjadi kesalahan jaringan atau server saat mengunggah.", type: "error" });
     }
   };
 
@@ -141,8 +143,6 @@ export default function UpdateProdukPage() {
   };
 
   const handleResetClick = () => {
-    const confirm1 = window.confirm("⚠️ PERINGATAN!\n\nIni akan menghapus SEMUA riwayat upload PQ dan mereset semua data penjualan (MTD) ke 0.\n\nData stok, harga, dan promo TIDAK akan terpengaruh.\n\nLanjutkan?");
-    if (!confirm1) return;
     setPinModalState({ isOpen: true, action: "reset" });
   };
 
@@ -155,15 +155,16 @@ export default function UpdateProdukPage() {
         body: JSON.stringify({ pin })
       });
       const data = await res.json();
-      if (data.success) {
-        alert("✅ " + data.message);
+      if (res.ok && data.success) {
+        setAlertState({ isOpen: true, title: "Berhasil", message: "Semua log berhasil dihapus dan MTD di-reset.", type: "success" });
         fetchSyncHistory();
+        setLastSync(null);
       } else {
-        alert("Gagal reset: " + data.error);
+        setAlertState({ isOpen: true, title: "Gagal", message: data.error || "Gagal mereset.", type: "error" });
       }
     } catch (err) {
       console.error(err);
-      alert("Terjadi kesalahan jaringan.");
+      setAlertState({ isOpen: true, title: "Kesalahan Jaringan", message: "Terjadi kesalahan jaringan saat mereset data.", type: "error" });
     } finally {
       setIsResetting(false);
     }
@@ -377,6 +378,14 @@ export default function UpdateProdukPage() {
         description={pinModalState.action === "reset" 
           ? "PERINGATAN! Ini akan menghapus log dan sales MTD. Masukkan PIN untuk lanjut." 
           : "Masukkan PIN Keamanan untuk memproses file PQ Harian."}
+      />
+
+      <AlertModal
+        isOpen={alertState.isOpen}
+        onClose={() => setAlertState(prev => ({ ...prev, isOpen: false }))}
+        title={alertState.title}
+        message={alertState.message}
+        type={alertState.type}
       />
     </div>
   );
