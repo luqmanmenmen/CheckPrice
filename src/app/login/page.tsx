@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 import ShiftToggle from "@/components/ShiftToggle";
+import { ShoppingCart, Shirt, Footprints, Package } from "lucide-react";
 
 export default function Login() {
   const [nik, setNik] = useState("");
@@ -23,6 +24,15 @@ export default function Login() {
       y: Math.random() * 100,
       delay: (Math.random() * 3).toFixed(2),
     })));
+
+    // Auto-select shift based on time
+    const currentHour = new Date().getHours();
+    // Jika jam 1 siang (13:00) ke atas, otomatis Shift Siang ("2"), jika di bawah itu Shift Pagi ("1")
+    if (currentHour >= 13) {
+      setShift("2");
+    } else {
+      setShift("1");
+    }
   }, []);
 
   const router = useRouter();
@@ -83,17 +93,33 @@ export default function Login() {
 
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Posisi / Role</label>
-            <select
-              value={jobTitle}
-              onChange={(e) => setJobTitle(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg p-3 text-lg bg-white"
-            >
-              <option value="Cashier">Cashier</option>
-              <option value="Fitter">Fitter</option>
-              <option value="Runner">Runner</option>
-              <option value="Gudang Stock">Gudang Stock</option>
-            </select>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Posisi / Role</label>
+            <div className="grid grid-cols-2 gap-3">
+              {[
+                { name: "Cashier", icon: ShoppingCart },
+                { name: "Fitter", icon: Shirt },
+                { name: "Runner", icon: Footprints },
+                { name: "Gudang Stock", icon: Package },
+              ].map((role) => {
+                const Icon = role.icon;
+                const isSelected = jobTitle === role.name;
+                return (
+                  <button
+                    key={role.name}
+                    type="button"
+                    onClick={() => setJobTitle(role.name)}
+                    className={`flex flex-col items-center justify-center p-3 rounded-xl border-2 transition-all duration-200 ${
+                      isSelected
+                        ? "border-blue-500 bg-blue-50 text-blue-700 shadow-sm ring-2 ring-blue-500/20 ring-offset-1"
+                        : "border-slate-100 bg-slate-50 text-slate-500 hover:border-slate-200 hover:bg-slate-100"
+                    }`}
+                  >
+                    <Icon className={`w-6 h-6 mb-1 ${isSelected ? "text-blue-600" : "text-slate-400"}`} />
+                    <span className="text-[11px] font-bold tracking-wide uppercase">{role.name}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <div>

@@ -36,8 +36,8 @@ export default function ShiftToggle({ isNight, onToggle }: ShiftToggleProps) {
       
       {/* LABEL */}
       <div className="label mb-2">
-        <span id="labelDay" className={`text-slate-700 font-bold ${!isNight ? "visible" : ""}`}>Shift 1 (Pagi)</span>
-        <span id="labelNight" className={`text-slate-700 font-bold ${isNight ? "visible" : ""}`}>Shift 2 (Siang)</span>
+        <span id="labelDay" className={`text-slate-700 font-bold ${!isNight ? "visible" : ""}`}>Shift Pagi</span>
+        <span id="labelNight" className={`text-slate-700 font-bold ${isNight ? "visible" : ""}`}>Shift Siang</span>
       </div>
 
       {/* MAIN TOGGLE */}
@@ -46,9 +46,9 @@ export default function ShiftToggle({ isNight, onToggle }: ShiftToggleProps) {
         className={`switch ${isNight ? "night on" : ""}`}
         id="switchBtn"
         aria-pressed={isNight}
-        onClick={() => onToggle(!isNight)}
-        aria-label="Toggle day and night mode"
-        style={{ width: '100%' }}
+        disabled
+        aria-label="Toggle day and night mode (Automatic)"
+        style={{ width: '100%', cursor: 'default', opacity: 1 }}
       >
         <div className="track">
           {/* TRACK STARS */}

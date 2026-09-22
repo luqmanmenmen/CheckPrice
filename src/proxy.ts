@@ -48,8 +48,8 @@ export async function proxy(request: NextRequest) {
       return NextResponse.redirect(new URL('/', request.url))
     }
 
-    // RBAC: SUPER_ADMIN should be routed to /super-admin
-    if (role === 'SUPER_ADMIN' && pathname !== '/super-admin' && !pathname.startsWith('/api/')) {
+    // RBAC: SUPER_ADMIN should be routed to /super-admin (and sub-routes)
+    if (role === 'SUPER_ADMIN' && !pathname.startsWith('/super-admin') && !pathname.startsWith('/api/')) {
       return NextResponse.redirect(new URL('/super-admin', request.url))
     }
 

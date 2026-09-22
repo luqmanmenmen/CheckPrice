@@ -23,8 +23,24 @@ model Product {
   discountType  String?
   brand         String?
   dept          String?
+  stok          Int      @default(0)
+  sales_mtd     Int      @default(0)
+  sales_wtd     Int      @default(0)
+  poSuggestions PoSuggestion[]
+  dailySales    DailySales[]
   updatedAt     DateTime @updatedAt
   createdAt     DateTime @default(now())
+}
+
+model DailySales {
+  id        String   @id @default(cuid())
+  productId Int
+  product   Product  @relation(fields: [productId], references: [id])
+  date      DateTime
+  qtySold   Int
+  createdAt DateTime @default(now())
+
+  @@unique([productId, date]) // Only one record per product per day
 }
 
 model User {
@@ -36,6 +52,7 @@ model User {
   status    UserStatus @default(ACTIVE)
   shifts    Shift[]
   tickets   Ticket[]
+  syncHistory SyncHistory[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -99,4 +116,31 @@ enum Status {
   READY
   OOS
   COMPLETED // When SA accepts the ready item
+}
+
+model PoSuggestion {
+  id          String   @id @default(cuid())
+  productId   Int
+  product     Product  @relation(fields: [productId], references: [id])
+  suggestedQty Int
+  reason      String
+  status      PoStatus @default(OPEN)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+enum PoStatus {
+  OPEN
+  CLOSED
+}
+
+model SyncHistory {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  type      String   // "PQ_HARIAN", "PROMO_MINGGUAN"
+  fileName  String
+  status    String   // "SUCCESS", "FAILED"
+  records   Int
+  createdAt DateTime @default(now())
 }

@@ -30,6 +30,7 @@ type ProductData = {
   discountType: string | null;
   brand: string | null;
   dept: string | null;
+  stok: number;
 };
 
 // Parse the description to get a clean product name
@@ -731,8 +732,8 @@ export default function Home() {
                 )}
               </div>
 
-              {/* Harga */}
-              <div className="bg-slate-50 rounded-xl p-4 border">
+              {/* Harga & Stok */}
+              <div className="bg-slate-50 rounded-xl p-4 border flex flex-col gap-4">
                 {isOnPromo ? (
                   <div className="flex items-end justify-between gap-3">
                     <div>
@@ -757,6 +758,18 @@ export default function Home() {
                     </p>
                   </div>
                 )}
+                
+                {/* Stok Box */}
+                <div className="pt-4 border-t flex items-center justify-between">
+                  <p className="text-xs font-bold text-slate-500 uppercase">Sisa Stok (EOH)</p>
+                  <span className={`px-4 py-1.5 rounded-lg text-lg font-black tracking-wide ${
+                    product.stok > 10 ? 'bg-green-100 text-green-700' :
+                    product.stok > 0 ? 'bg-amber-100 text-amber-700' :
+                    'bg-red-100 text-red-700'
+                  }`}>
+                    {product.stok} <span className="text-[10px] font-bold uppercase opacity-80">pcs</span>
+                  </span>
+                </div>
               </div>
 
               {/* Aksi Gudang */}

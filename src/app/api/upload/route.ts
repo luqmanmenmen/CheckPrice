@@ -3,6 +3,7 @@ import { PrismaClient } from "@prisma/client";
 import * as xlsx from "xlsx";
 import * as path from "path";
 import * as fs from "fs";
+import { verifyToken } from "@/lib/auth";
 
 const prisma = new PrismaClient();
 
@@ -53,6 +54,8 @@ const COL_ALIASES: Record<string, string[]> = {
   "BRAND":        ["BRAND", "MEREK", "MERK"],
   "DEPT":         ["DEPT", "DEPARTMENT", "DIVISI", "KATEGORI", "CATEGORY"],
   "ACARA":        ["ACARA", "EVENT", "PROMO NAME", "NAMA PROMO"],
+  "STOK":         ["STOK", "EOH_UNIT", "SISA STOK", "QTY"],
+  "SALES_MTD":    ["SALES_MTD", "MTD", "TERJUAL", "SALES"],
 };
 
 // Some sheets have column names with leading/trailing spaces like " HARGA NORMAL "
@@ -106,6 +109,8 @@ function parseRow(row: any) {
   const discountType = String(row["DISCOUNT TYPE"] ?? "").trim() || null;
   const brand = String(row["BRAND"] ?? "").trim() || null;
   const dept = String(row["DEPT"] ?? "").trim() || null;
+  const stok = parseInt(row["STOK"]) || 0;
+  const sales_mtd = parseInt(row["SALES_MTD"]) || 0;
 
   return {
     sku,
@@ -120,6 +125,8 @@ function parseRow(row: any) {
     discountType,
     brand,
     dept,
+    stok,
+    sales_mtd,
   };
 }
 
@@ -207,9 +214,10 @@ async function upsertProducts(
   // 1. Ambil semua SKU yang sudah ada di database (Batch Query)
   const existingProducts = await prisma.product.findMany({
     where: { sku: { in: allSkus } },
-    select: { sku: true },
+    select: { sku: true, stok: true },
   });
   const existingSkuSet = new Set(existingProducts.map((p) => p.sku));
+  const existingStokMap = new Map(existingProducts.map((p) => [p.sku, p.stok]));
 
   const itemsToCreate = [];
   const itemsToUpdate = [];
@@ -246,6 +254,13 @@ async function upsertProducts(
       const chunk = itemsToUpdate.slice(i, i + chunkSize);
       try {
         const updatePromises = chunk.map((item) => {
+          // LOGIKA DELTA EOH
+          const oldStok = existingStokMap.get(item.sku) || 0;
+          let salesDelta = 0;
+          if (oldStok > 0 && item.stok < oldStok) {
+            salesDelta = oldStok - item.stok;
+          }
+
           // Cek apakah promo masih aktif (toDate belum lewat)
           let promoStillValid = false;
           if (item.hargaPromo && item.toDate) {
@@ -267,6 +282,17 @@ async function upsertProducts(
               article: item.article,
               brand: item.brand,
               dept: item.dept,
+              // Update Stok
+              stok: item.stok,
+              // Update sales_mtd dengan delta
+              sales_mtd: salesDelta > 0 ? { increment: salesDelta } : undefined,
+              // Catat histori penjualan harian jika ada
+              dailySales: salesDelta > 0 ? {
+                create: {
+                  date: new Date(),
+                  qtySold: salesDelta
+                }
+              } : undefined,
               // Promo: jika valid pakai data baru, jika tidak reset ke null
               hargaPromo: promoStillValid ? item.hargaPromo : null,
               diskon: promoStillValid ? item.diskon : null,
@@ -294,6 +320,10 @@ async function upsertProducts(
 // -------------------------------------------------------
 export async function POST(request: NextRequest) {
   try {
+    const token = request.cookies.get("token")?.value;
+    const session = token ? await verifyToken(token) : null;
+    const userId = session?.userId;
+
     const formData = await request.formData();
     const files = formData.getAll("file") as File[];
 
@@ -316,6 +346,19 @@ export async function POST(request: NextRequest) {
       totalCreated += created;
       totalUpdated += updated;
       totalFailed  += failed;
+      
+      // Catat ke SyncHistory jika ada userId
+      if (userId) {
+        await prisma.syncHistory.create({
+          data: {
+            userId,
+            type: "PQ_HARIAN", // Atau sesuaikan dengan jenisnya nanti
+            fileName: file.name,
+            status: failed > 0 && created === 0 && updated === 0 ? "FAILED" : "SUCCESS",
+            records: created + updated,
+          }
+        });
+      }
     }
 
     return NextResponse.json({

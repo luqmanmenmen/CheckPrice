@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { UserCircle2, LogOut, Search, Activity, PauseCircle } from "lucide-react";
+import { UserCircle2, LogOut, Search, Activity, PauseCircle, Database, PackagePlus, DollarSign, FileSpreadsheet, ChevronRight, Boxes, TrendingUp, Tag, PackageSearch, Sparkles } from "lucide-react";
 import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
+import Link from "next/link";
 
 type User = {
   id: number;
@@ -91,6 +92,104 @@ export default function SuperAdminDashboard() {
             {users.filter(u => u.status === 'BREAK' && u.role !== 'SUPER_ADMIN').length}
           </span>
           <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Sedang Rehat</span>
+        </div>
+      </div>
+
+      {/* Manajemen Data Section */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+        <div className="flex items-center gap-2 mb-4">
+          <Database className="w-5 h-5 text-indigo-600" />
+          <h2 className="font-bold text-slate-800">Manajemen Data</h2>
+        </div>
+        <div className="flex flex-col gap-3">
+          {/* Menu Harian */}
+          <Link href="/super-admin/sinkronisasi-harian" className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-blue-50 hover:border-blue-100 transition-all group">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center group-hover:scale-110 transition-transform">
+                <FileSpreadsheet className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="font-bold text-slate-800 text-sm">Sinkronisasi Harian (PQ)</p>
+                <p className="text-[10px] text-slate-500">Update Produk Baru, Stok Sisa (EOH), dan Status Fast/Slow Move</p>
+              </div>
+            </div>
+            <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-blue-600 transition-colors" />
+          </Link>
+
+          {/* Menu Mingguan */}
+          <Link href="/super-admin/update-promo" className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-emerald-50 hover:border-emerald-100 transition-all group">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center group-hover:scale-110 transition-transform">
+                <DollarSign className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="font-bold text-slate-800 text-sm">Update Harga & Promo</p>
+                <p className="text-[10px] text-slate-500">Sinkronisasi harga mingguan (Rabu Malam)</p>
+              </div>
+            </div>
+            <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-emerald-600 transition-colors" />
+          </Link>
+        </div>
+      </div>
+
+      {/* Laporan & Analitik Section */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+        <div className="flex items-center gap-2 mb-4">
+          <Activity className="w-5 h-5 text-rose-600" />
+          <h2 className="font-bold text-slate-800">Laporan & Analitik</h2>
+        </div>
+        <div className="flex flex-col gap-3">
+          <Link href="/super-admin/saran-po" className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-indigo-50 hover:border-indigo-100 transition-all group">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center group-hover:scale-110 transition-transform shadow-sm">
+                <Sparkles className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="font-bold text-slate-800 text-sm">Inbox Saran PO</p>
+                <p className="text-[10px] text-slate-500">Rekomendasi pesanan AI (Syarat: 14 Hari Data)</p>
+              </div>
+            </div>
+            <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-indigo-600 transition-colors" />
+          </Link>
+
+          <Link href="/super-admin/rekap-pergerakan" className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-rose-50 hover:border-rose-100 transition-all group">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center group-hover:scale-110 transition-transform">
+                <TrendingUp className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="font-bold text-slate-800 text-sm">Rekap Pergerakan</p>
+                <p className="text-[10px] text-slate-500">Analisis Fast Move & Slow Move</p>
+              </div>
+            </div>
+            <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-rose-600 transition-colors" />
+          </Link>
+
+          <Link href="/super-admin/rekap-promo" className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-fuchsia-50 hover:border-fuchsia-100 transition-all group">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-fuchsia-100 text-fuchsia-600 flex items-center justify-center group-hover:scale-110 transition-transform">
+                <Tag className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="font-bold text-slate-800 text-sm">Rekap Promo Aktif</p>
+                <p className="text-[10px] text-slate-500">Daftar semua barang yang sedang diskon</p>
+              </div>
+            </div>
+            <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-fuchsia-600 transition-colors" />
+          </Link>
+
+          <Link href="/super-admin/rekap-stok" className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-amber-50 hover:border-amber-100 transition-all group">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center group-hover:scale-110 transition-transform">
+                <PackageSearch className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="font-bold text-slate-800 text-sm">Rekap Stok</p>
+                <p className="text-[10px] text-slate-500">Lihat sisa stok seluruh barang</p>
+              </div>
+            </div>
+            <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-amber-600 transition-colors" />
+          </Link>
         </div>
       </div>
 
