@@ -232,21 +232,21 @@ export default function SuperAdminDashboard() {
         />
       </div>
 
-      {/* Users List */}
+      {/* Staff On Duty List */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="p-3 bg-slate-100 border-b border-slate-200">
-          <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Daftar Karyawan</h2>
+          <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Staff On Duty</h2>
         </div>
         
         {loading ? (
           <div className="p-8 flex justify-center">
             <div className="w-6 h-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin"></div>
           </div>
-        ) : filteredUsers.length === 0 ? (
-          <div className="p-8 text-center text-slate-500 text-sm">Tidak ada karyawan ditemukan.</div>
+        ) : filteredUsers.filter(u => u.role !== 'SUPER_ADMIN' && u.status !== 'INACTIVE').length === 0 ? (
+          <div className="p-8 text-center text-slate-500 text-sm">Tidak ada staff yang sedang bertugas.</div>
         ) : (
           <div className="divide-y divide-slate-100">
-            {filteredUsers.filter(u => u.role !== 'SUPER_ADMIN').map((user) => (
+            {filteredUsers.filter(u => u.role !== 'SUPER_ADMIN' && u.status !== 'INACTIVE').map((user) => (
               <div key={user.id} className="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
                 <div className="flex flex-col">
                   <span className="font-bold text-slate-800 text-sm">{user.name}</span>
