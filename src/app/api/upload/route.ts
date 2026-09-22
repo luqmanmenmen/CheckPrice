@@ -57,8 +57,8 @@ const COL_ALIASES: Record<string, string[]> = {
   "BRAND":        ["BRAND", "MEREK", "MERK"],
   "DEPT":         ["DEPT", "DEPARTMENT", "DIVISI", "KATEGORI", "CATEGORY"],
   "ACARA":        ["ACARA", "EVENT", "PROMO NAME", "NAMA PROMO"],
-  "STOK":         ["STOK", "EOH_UNIT", "SISA STOK", "QTY"],
-  "SALES_MTD":    ["SALES_MTD", "MTD", "TERJUAL", "SALES"],
+  "STOK":         ["STOK", "EOH_UNIT", "EOH UNIT", "EOH", "SISA STOK", "QTY", "STOK SISA"],
+  "SALES_MTD":    ["SALES_MTD", "SALES MTD", "MTD", "TERJUAL", "SALES"],
 };
 
 // Some sheets have column names with leading/trailing spaces like " HARGA NORMAL "
