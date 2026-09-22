@@ -183,8 +183,8 @@ function processWorkbook(buffer: Buffer): {
       } else {
         // Duplicate SKU in different sheet of same file
         // Rule: Promo price wins over Normal Price
-        const existingIsPromo = existing.hargaPromo !== null && existing.hargaPromo > 0;
-        const newIsPromo = parsed.hargaPromo !== null && parsed.hargaPromo > 0;
+        const existingIsPromo = existing.hargaPromo !== null && existing.hargaPromo !== undefined && existing.hargaPromo > 0;
+        const newIsPromo = parsed.hargaPromo !== null && parsed.hargaPromo !== undefined && parsed.hargaPromo > 0;
 
         if (!existingIsPromo && newIsPromo) {
           // Replace: new has promo, old doesn't
@@ -232,11 +232,12 @@ async function upsertProducts(
       itemsToUpdate.push(item);
     } else {
       // New SKU → add with default fallback for missing required fields
-      const newSkuData = { ...item };
-      if (newSkuData.description === undefined) newSkuData.description = "-";
-      if (newSkuData.hargaNormal === undefined) newSkuData.hargaNormal = 0;
-      if (newSkuData.stok === undefined) newSkuData.stok = 0;
-      itemsToCreate.push(newSkuData);
+      itemsToCreate.push({
+        ...item,
+        description: item.description ?? "-",
+        hargaNormal: item.hargaNormal ?? 0,
+        stok: item.stok ?? 0,
+      });
     }
   }
 
@@ -461,8 +462,8 @@ export async function GET() {
         if (!existing) {
           globalMap.set(sku, item);
         } else {
-          const existingIsPromo = existing.hargaPromo !== null && existing.hargaPromo > 0;
-          const newIsPromo = item.hargaPromo !== null && item.hargaPromo > 0;
+          const existingIsPromo = existing.hargaPromo !== null && existing.hargaPromo !== undefined && existing.hargaPromo > 0;
+          const newIsPromo = item.hargaPromo !== null && item.hargaPromo !== undefined && item.hargaPromo > 0;
           if (!existingIsPromo && newIsPromo) {
             globalMap.set(sku, item);
           }
