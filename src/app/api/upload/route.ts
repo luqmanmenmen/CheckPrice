@@ -221,16 +221,15 @@ async function upsertProducts(
   // 1. Ambil semua SKU yang sudah ada di database (Batch Query)
   const existingProducts = await prisma.product.findMany({
     where: { sku: { in: allSkus } },
-    select: { sku: true, stok: true },
+    select: { id: true, sku: true, stok: true },
   });
-  const existingSkuSet = new Set(existingProducts.map((p) => p.sku));
-  const existingStokMap = new Map(existingProducts.map((p) => [p.sku, p.stok]));
+  const existingProductMap = new Map(existingProducts.map((p) => [p.sku, p]));
 
   const itemsToCreate = [];
   const itemsToUpdate = [];
 
   for (const item of allItems) {
-    if (existingSkuSet.has(item.sku)) {
+    if (existingProductMap.has(item.sku)) {
       itemsToUpdate.push(item);
     } else {
       // New SKU → add with default fallback for missing required fields
@@ -258,69 +257,105 @@ async function upsertProducts(
     }
   }
 
-  // 3. Update produk lama (Bulk Update via Transaction)
-  // FULL SYNC: semua field promo selalu diupdate termasuk reset ke null
-  // Jika di Excel baru SKU tidak ada promonya, maka promo di DB otomatis dihapus
+  // 3. Update produk lama (FAST Bulk Update Raw SQL)
   if (itemsToUpdate.length > 0) {
-    const chunkSize = 500;
+    const chunkSize = 1000; // Proses 1000 data sekaligus dalam 1 detik
+    
     for (let i = 0; i < itemsToUpdate.length; i += chunkSize) {
       const chunk = itemsToUpdate.slice(i, i + chunkSize);
-      try {
-        const updatePromises = chunk.map((item) => {
-          // LOGIKA DELTA EOH
-          const oldStok = existingStokMap.get(item.sku) || 0;
-          let salesDelta = 0;
-          if (item.stok !== undefined && oldStok > 0 && item.stok < oldStok) {
-            salesDelta = oldStok - item.stok;
-          }
+      
+      const values: any[] = [];
+      const rowPlaceholders: string[] = [];
+      let paramIndex = 1;
+      const dailySalesData: any[] = [];
 
-          // Cek apakah promo masih aktif (toDate belum lewat)
-          let promoStillValid = false;
-          if (item.hargaPromo && item.toDate) {
-            const toDateObj = new Date(item.toDate);
-            toDateObj.setHours(23, 59, 59, 999);
-            promoStillValid = new Date() <= toDateObj;
-          } else if (item.hargaPromo && !item.toDate) {
-            // Ada harga promo tapi tidak ada tanggal → tetap pakai promo
-            promoStillValid = true;
-          }
+      for (const item of chunk) {
+        const existingInfo = existingProductMap.get(item.sku);
+        if (!existingInfo) continue;
 
-          return prisma.product.update({
-            where: { sku: item.sku },
-            data: {
-              // Selalu update jika tidak undefined
-              hargaNormal: item.hargaNormal,
-              description: item.description,
-              article: item.article,
-              brand: item.brand,
-              dept: item.dept,
-              stok: item.stok,
-              // Update sales_mtd dengan delta
-              sales_mtd: salesDelta > 0 ? { increment: salesDelta } : undefined,
-              // Catat histori penjualan harian jika ada
-              dailySales: salesDelta > 0 ? {
-                create: {
-                  date: new Date(),
-                  qtySold: salesDelta
-                }
-              } : undefined,
-              // Promo fields...
-              ...(item.hargaPromo !== undefined ? {
-                hargaPromo: promoStillValid ? item.hargaPromo : null,
-                diskon: promoStillValid ? item.diskon : null,
-                discountType: promoStillValid ? item.discountType : null,
-                acara: promoStillValid ? item.acara : null,
-                fromDate: promoStillValid ? item.fromDate : null,
-                toDate: promoStillValid ? item.toDate : null,
-              } : {})
-            },
+        // LOGIKA DELTA EOH
+        const oldStok = existingInfo.stok || 0;
+        let salesDelta = 0;
+        if (item.stok !== undefined && oldStok > 0 && item.stok < oldStok) {
+          salesDelta = oldStok - item.stok;
+        }
+
+        // Cek apakah promo masih aktif (toDate belum lewat)
+        let finalPromo = item.hargaPromo;
+        let promoStillValid = false;
+        if (item.hargaPromo && item.toDate) {
+          const toDateObj = new Date(item.toDate);
+          toDateObj.setHours(23, 59, 59, 999);
+          promoStillValid = new Date() <= toDateObj;
+        } else if (item.hargaPromo && !item.toDate) {
+          promoStillValid = true;
+        }
+
+        rowPlaceholders.push(`($${paramIndex++}::text, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::int, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text)`);
+        
+        values.push(
+          item.sku,
+          item.hargaNormal !== undefined ? item.hargaNormal : null,
+          item.description !== undefined ? item.description : null,
+          item.article !== undefined ? item.article : null,
+          item.brand !== undefined ? item.brand : null,
+          item.dept !== undefined ? item.dept : null,
+          item.stok !== undefined ? item.stok : null,
+          salesDelta,
+          promoStillValid ? finalPromo : null,
+          promoStillValid ? item.diskon : null,
+          promoStillValid ? item.discountType : null,
+          promoStillValid ? item.acara : null,
+          promoStillValid ? item.fromDate : null,
+          promoStillValid ? item.toDate : null
+        );
+
+        if (salesDelta > 0) {
+          dailySalesData.push({
+            productId: existingInfo.id,
+            date: new Date(),
+            qtySold: salesDelta
           });
-        });
-        await prisma.$transaction(updatePromises);
-        updated += chunk.length;
-      } catch (err) {
-        console.error("Bulk update error on chunk", err);
-        failed += chunk.length;
+        }
+      }
+
+      if (rowPlaceholders.length > 0) {
+        try {
+          const query = `
+            UPDATE "Product" as p
+            SET 
+              "hargaNormal" = COALESCE(v."hargaNormal", p."hargaNormal"),
+              "description" = COALESCE(v."description", p."description"),
+              "article" = COALESCE(v."article", p."article"),
+              "brand" = COALESCE(v."brand", p."brand"),
+              "dept" = COALESCE(v."dept", p."dept"),
+              "stok" = COALESCE(v."stok", p."stok"),
+              "sales_mtd" = p."sales_mtd" + v."salesDelta",
+              "hargaPromo" = v."hargaPromo",
+              "diskon" = v."diskon",
+              "discountType" = v."discountType",
+              "acara" = v."acara",
+              "fromDate" = v."fromDate",
+              "toDate" = v."toDate",
+              "updatedAt" = CURRENT_TIMESTAMP
+            FROM (VALUES
+              ${rowPlaceholders.join(", ")}
+            ) AS v("sku", "hargaNormal", "description", "article", "brand", "dept", "stok", "salesDelta", "hargaPromo", "diskon", "discountType", "acara", "fromDate", "toDate")
+            WHERE p."sku" = v."sku"
+          `;
+
+          await prisma.$executeRawUnsafe(query, ...values);
+          updated += rowPlaceholders.length;
+
+          if (dailySalesData.length > 0) {
+            await prisma.dailySales.createMany({
+              data: dailySalesData
+            });
+          }
+        } catch (err) {
+          console.error("Bulk raw update error", err);
+          failed += rowPlaceholders.length;
+        }
       }
     }
   }
