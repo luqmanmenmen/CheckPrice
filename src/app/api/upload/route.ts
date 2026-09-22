@@ -141,12 +141,14 @@ function parseRow(row: any) {
 // Process one workbook (Buffer) → deduped product map
 //   Priority rule: PROMO record wins over NORMAL PRICE for same SKU
 // -------------------------------------------------------
-function processWorkbook(buffer: Buffer): {
+function processWorkbook(
+  buffer: Buffer, 
+  productMap: Map<string, ReturnType<typeof parseRow>> = new Map()
+): {
   productMap: Map<string, ReturnType<typeof parseRow>>;
   sheetLog: string[];
 } {
   const workbook = xlsx.read(buffer, { type: "buffer", cellDates: false });
-  const productMap = new Map<string, ReturnType<typeof parseRow>>();
   const sheetLog: string[] = [];
 
   for (const sheetName of workbook.SheetNames) {
@@ -414,55 +416,55 @@ export async function POST(request: NextRequest) {
     let totalFailed = 0;
     const allLogs: string[] = [];
 
+    // 1. Validasi semua file sebelum diproses
     for (const file of files) {
       if (uploadType === "PQ_HARIAN") {
-        // 1. Validasi format nama file HANYA UNTUK PQ
         const fileNameUpper = file.name.toUpperCase();
         const isValidFormat = /^POWER QUERY \d{1,2} [A-Z]+ \d{4}\.(CSV|XLSX)$/.test(fileNameUpper);
-        
         if (!isValidFormat) {
           return NextResponse.json({ 
-            error: `Format nama file salah: "${file.name}". Harus mengikuti format "POWER QUERY [TANGGAL] [BULAN] [TAHUN]" (contoh: POWER QUERY 19 SEPTEMBER 2026)` 
+            error: `Format nama file salah: "${file.name}". Harus mengikuti format "POWER QUERY [TANGGAL] [BULAN] [TAHUN]"` 
           }, { status: 400 });
         }
       }
 
-      // 2. Validasi duplikasi upload
       const existingHistory = await prisma.syncHistory.findFirst({
-        where: {
-          fileName: file.name,
-          status: "SUCCESS"
-        }
+        where: { fileName: file.name, status: "SUCCESS" }
       });
 
       if (existingHistory) {
         return NextResponse.json({ 
-          error: `File "${file.name}" sudah pernah di-upload sukses sebelumnya. Tidak bisa meng-upload file yang sama dua kali.` 
+          error: `File "${file.name}" sudah pernah di-upload sukses sebelumnya.` 
         }, { status: 400 });
       }
+    }
 
+    // 2. Proses semua isi file ke dalam SATU Map Global agar tidak kena Timeout
+    const globalProductMap = new Map<string, ReturnType<typeof parseRow>>();
+    
+    for (const file of files) {
       const buffer = Buffer.from(await file.arrayBuffer());
-      const { productMap, sheetLog } = processWorkbook(buffer);
+      const { sheetLog } = processWorkbook(buffer, globalProductMap);
       allLogs.push(`--- ${file.name} ---`);
       allLogs.push(...sheetLog);
+    }
 
-      const { created, updated, failed } = await upsertProducts(productMap);
-      totalCreated += created;
-      totalUpdated += updated;
-      totalFailed  += failed;
-      
-      // Catat ke SyncHistory jika ada userId
-      if (userId) {
-        await prisma.syncHistory.create({
-          data: {
-            userId,
-            type: uploadType,
-            fileName: file.name,
-            status: failed > 0 && created === 0 && updated === 0 ? "FAILED" : "SUCCESS",
-            records: created + updated,
-          }
-        });
-      }
+    // 3. Simpan ke database HANYA SEKALI untuk semua file sekaligus
+    const { created, updated, failed } = await upsertProducts(globalProductMap);
+    totalCreated = created;
+    totalUpdated = updated;
+    totalFailed = failed;
+
+    // 4. Catat histori sukses untuk masing-masing file
+    if (userId) {
+      const historyData = files.map(file => ({
+        userId,
+        type: uploadType,
+        fileName: file.name,
+        status: failed > 0 && created === 0 && updated === 0 ? "FAILED" : "SUCCESS",
+        records: Math.max(1, Math.floor((created + updated) / files.length)), // estimasi kasar
+      }));
+      await prisma.syncHistory.createMany({ data: historyData });
     }
 
     return NextResponse.json({

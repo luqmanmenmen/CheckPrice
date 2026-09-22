@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { ArrowLeft, UploadCloud, FileType, CheckCircle2, AlertTriangle } from "lucide-react";
 import Link from "next/link";
+import { PinModal } from "@/components/PinModal";
 
 export default function UpdateHargaPage() {
   const [files, setFiles] = useState<File[]>([]);
@@ -11,6 +12,7 @@ export default function UpdateHargaPage() {
   const [progress, setProgress] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [lastSync, setLastSync] = useState<{name: string; date: string} | null>(null);
+  const [showPinModal, setShowPinModal] = useState(false);
 
   const fetchSyncHistory = async () => {
     try {
@@ -59,15 +61,13 @@ export default function UpdateHargaPage() {
 
   const [resultMsg, setResultMsg] = useState("");
 
-  const handleUpload = async () => {
+  const handleUploadClick = () => {
     if (files.length === 0) return;
-    
-    const pin = window.prompt("Masukkan PIN Keamanan untuk memulai proses upload:");
-    if (pin !== "220117") {
-      alert("PIN Salah! Upload dibatalkan.");
-      return;
-    }
+    setShowPinModal(true);
+  };
 
+  const handleUploadConfirm = async (pin: string) => {
+    setShowPinModal(false);
     setStatus("uploading");
     setProgress(30);
     
@@ -193,7 +193,7 @@ export default function UpdateHargaPage() {
                   Batal
                 </button>
                 <button 
-                  onClick={handleUpload}
+                  onClick={handleUploadClick}
                   className="px-6 py-2 rounded-lg text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors shadow-md shadow-emerald-200"
                 >
                   Proses Update Harga
@@ -243,6 +243,14 @@ export default function UpdateHargaPage() {
           </>
         )}
       </div>
+
+      <PinModal 
+        isOpen={showPinModal} 
+        onClose={() => setShowPinModal(false)} 
+        onSubmit={handleUploadConfirm} 
+        title="Otorisasi Update Promo"
+        description="Masukkan PIN Keamanan untuk memulai proses sinkronisasi harga."
+      />
     </div>
   );
 }

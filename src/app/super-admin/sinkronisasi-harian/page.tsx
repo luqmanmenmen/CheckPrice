@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { ArrowLeft, UploadCloud, FileType, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import Link from "next/link";
+import { PinModal } from "@/components/PinModal";
 
 export default function UpdateProdukPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -11,7 +12,9 @@ export default function UpdateProdukPage() {
   const [progress, setProgress] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [lastSync, setLastSync] = useState<{name: string; date: string} | null>(null);
+  const [pinModalState, setPinModalState] = useState<{isOpen: boolean, action: "upload" | "reset" | null}>({isOpen: false, action: null});
   const [historyList, setHistoryList] = useState<any[]>([]);
+  const [isResetting, setIsResetting] = useState(false);
 
   const fetchSyncHistory = async () => {
     try {
@@ -70,15 +73,13 @@ export default function UpdateProdukPage() {
 
   const [resultMsg, setResultMsg] = useState("");
 
-  const handleUpload = async () => {
+  const handleUploadClick = () => {
     if (!file) return;
-    
-    const pin = window.prompt("Masukkan PIN Keamanan untuk memulai proses upload PQ Harian:");
-    if (pin !== "220117") {
-      alert("PIN Salah! Upload dibatalkan.");
-      return;
-    }
+    setPinModalState({ isOpen: true, action: "upload" });
+  };
 
+  const executeUpload = async () => {
+    if (!file) return;
     setStatus("uploading");
     setProgress(30); // Fake initial progress for better UX
     
@@ -139,16 +140,14 @@ export default function UpdateProdukPage() {
     }
   };
 
-  const handleResetAll = async () => {
+  const handleResetClick = () => {
     const confirm1 = window.confirm("⚠️ PERINGATAN!\n\nIni akan menghapus SEMUA riwayat upload PQ dan mereset semua data penjualan (MTD) ke 0.\n\nData stok, harga, dan promo TIDAK akan terpengaruh.\n\nLanjutkan?");
     if (!confirm1) return;
+    setPinModalState({ isOpen: true, action: "reset" });
+  };
 
-    const pin = window.prompt("Masukkan PIN Super Admin untuk konfirmasi reset total:");
-    if (pin !== "220117") {
-      alert("PIN Salah! Operasi dibatalkan.");
-      return;
-    }
-
+  const executeReset = async (pin: string) => {
+    setIsResetting(true);
     try {
       const res = await fetch("/api/admin/reset-sync", {
         method: "POST",
@@ -165,6 +164,19 @@ export default function UpdateProdukPage() {
     } catch (err) {
       console.error(err);
       alert("Terjadi kesalahan jaringan.");
+    } finally {
+      setIsResetting(false);
+    }
+  };
+
+  const handlePinSubmit = (pin: string) => {
+    const { action } = pinModalState;
+    setPinModalState({ isOpen: false, action: null });
+    
+    if (action === "reset") {
+      executeReset(pin);
+    } else if (action === "upload") {
+      executeUpload();
     }
   };
 
@@ -180,8 +192,9 @@ export default function UpdateProdukPage() {
           <p className="text-xs text-slate-500">Update Produk Baru, Stok Sisa (EOH), dan Analitik Penjualan</p>
         </div>
         <button
-          onClick={handleResetAll}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-rose-600 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition-colors"
+          onClick={handleResetClick}
+          disabled={isResetting}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-rose-600 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition-colors disabled:opacity-50"
           title="Hapus semua riwayat log PQ dan reset data penjualan"
         >
           <AlertCircle className="w-3.5 h-3.5" />
@@ -262,8 +275,8 @@ export default function UpdateProdukPage() {
                   Batal
                 </button>
                 <button 
-                  onClick={handleUpload}
-                  className="px-6 py-2 rounded-lg text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 transition-colors shadow-md shadow-indigo-200"
+                  onClick={handleUploadClick}
+                  className="px-6 py-2 rounded-lg text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors shadow-md shadow-emerald-200"
                 >
                   Mulai Import
                 </button>
@@ -356,6 +369,15 @@ export default function UpdateProdukPage() {
         </div>
       )}
 
+      <PinModal 
+        isOpen={pinModalState.isOpen} 
+        onClose={() => setPinModalState({ isOpen: false, action: null })} 
+        onSubmit={handlePinSubmit} 
+        title={pinModalState.action === "reset" ? "Otorisasi Reset Data" : "Otorisasi Upload PQ"}
+        description={pinModalState.action === "reset" 
+          ? "PERINGATAN! Ini akan menghapus log dan sales MTD. Masukkan PIN untuk lanjut." 
+          : "Masukkan PIN Keamanan untuk memproses file PQ Harian."}
+      />
     </div>
   );
 }
