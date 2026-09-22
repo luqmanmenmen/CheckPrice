@@ -337,6 +337,30 @@ export async function POST(request: NextRequest) {
     const allLogs: string[] = [];
 
     for (const file of files) {
+      // 1. Validasi format nama file
+      const fileNameUpper = file.name.toUpperCase();
+      const isValidFormat = /^POWER QUERY \d{1,2} [A-Z]+ \d{4}\.(CSV|XLSX)$/.test(fileNameUpper);
+      
+      if (!isValidFormat) {
+        return NextResponse.json({ 
+          error: `Format nama file salah: "${file.name}". Harus mengikuti format "POWER QUERY [TANGGAL] [BULAN] [TAHUN]" (contoh: POWER QUERY 19 SEPTEMBER 2026)` 
+        }, { status: 400 });
+      }
+
+      // 2. Validasi duplikasi upload
+      const existingHistory = await prisma.syncHistory.findFirst({
+        where: {
+          fileName: file.name,
+          status: "SUCCESS"
+        }
+      });
+
+      if (existingHistory) {
+        return NextResponse.json({ 
+          error: `File "${file.name}" sudah pernah di-upload sukses sebelumnya. Tidak bisa meng-upload file yang sama dua kali.` 
+        }, { status: 400 });
+      }
+
       const buffer = Buffer.from(await file.arrayBuffer());
       const { productMap, sheetLog } = processWorkbook(buffer);
       allLogs.push(`--- ${file.name} ---`);
