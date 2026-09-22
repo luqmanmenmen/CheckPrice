@@ -102,6 +102,20 @@ export default function SuperAdminDashboard() {
           <h2 className="font-bold text-slate-800">Manajemen Data</h2>
         </div>
         <div className="flex flex-col gap-3">
+          {/* Menu Karyawan */}
+          <Link href="/super-admin/users" className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-purple-50 hover:border-purple-100 transition-all group">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center group-hover:scale-110 transition-transform">
+                <UserCircle2 className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="font-bold text-slate-800 text-sm">Manajemen Karyawan</p>
+                <p className="text-[10px] text-slate-500">Daftarkan akun, PIN, dan Toko Karyawan</p>
+              </div>
+            </div>
+            <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-purple-600 transition-colors" />
+          </Link>
+
           {/* Menu Harian */}
           <Link href="/super-admin/sinkronisasi-harian" className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-blue-50 hover:border-blue-100 transition-all group">
             <div className="flex items-center gap-3">

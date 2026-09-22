@@ -12,10 +12,38 @@ export default function Login() {
   const [shift, setShift] = useState("1");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [toko, setToko] = useState("");
+  const [checkingNik, setCheckingNik] = useState(false);
   
   // Client-side only states for random positions
   const [mounted, setMounted] = useState(false);
   const [stars, setStars] = useState<{ x: number; y: number; delay: string }[]>([]);
+
+  useEffect(() => {
+    const checkNik = async () => {
+      if (nik.length >= 4) { // Can be "S001" or 6 digits
+        setCheckingNik(true);
+        try {
+          const res = await fetch(`/api/auth/check-nik?nik=${nik}`);
+          const data = await res.json();
+          if (res.ok) {
+            setToko(data.toko || "Toko Belum Di-set");
+          } else {
+            setToko("");
+          }
+        } catch (error) {
+          setToko("");
+        } finally {
+          setCheckingNik(false);
+        }
+      } else {
+        setToko("");
+      }
+    };
+    
+    const timeoutId = setTimeout(checkNik, 500); // Debounce
+    return () => clearTimeout(timeoutId);
+  }, [nik]);
 
   useEffect(() => {
     setMounted(true);
@@ -128,14 +156,24 @@ export default function Login() {
               type="text"
               required
               className="w-full border border-gray-300 rounded-lg p-3 text-lg"
-              placeholder="Contoh: S001 atau 10045"
+              placeholder="Contoh: 123456"
               value={nik}
               onChange={(e) => setNik(e.target.value.toUpperCase())}
             />
+            {checkingNik && <p className="text-xs text-blue-600 mt-1 animate-pulse">Memeriksa NIK...</p>}
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">PIN (6 Angka)</label>
+          {toko && (
+            <div className="animate-in slide-in-from-top-2 duration-300">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Penempatan Toko</label>
+              <div className="w-full border border-gray-300 rounded-lg p-3 text-lg bg-gray-50 text-gray-500 font-bold">
+                {toko}
+              </div>
+            </div>
+          )}
+
+          <div className={`transition-all duration-500 ${toko ? 'opacity-100 h-auto block' : 'opacity-50 pointer-events-none'}`}>
+            <label className="block text-sm font-medium text-gray-700 mb-1">PIN (Keamanan)</label>
             <input
               type="password"
               inputMode="numeric"
@@ -153,20 +191,12 @@ export default function Login() {
 
           <button
             type="submit"
-            disabled={loading || pin.length < 6 || !nik}
+            disabled={loading || pin.length < 4 || !nik || !toko}
             className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-black py-4 rounded-xl mt-6 shadow-lg shadow-blue-500/30 hover:shadow-blue-500/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? "MEMERIKSA..." : "MULAI SHIFT SAYA"}
           </button>
         </form>
-
-        <div className="mt-6 p-4 bg-blue-50 rounded-lg text-xs text-blue-800">
-          <p className="font-bold mb-1">Akun Testing Sementara:</p>
-          <ul className="list-disc pl-4 space-y-1">
-            <li>SA: NIK <b>S001</b>, PIN <b>123456</b></li>
-            <li>Gudang: NIK <b>W001</b>, PIN <b>123456</b></li>
-          </ul>
-        </div>
       </div>
 
       <div className="flex-grow shrink-0 min-h-[4rem]"></div>

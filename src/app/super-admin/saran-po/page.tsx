@@ -5,34 +5,52 @@ import Link from "next/link";
 import useSWR from "swr";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import { AlertModal } from "@/components/AlertModal";
+import { PinModal } from "@/components/PinModal";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
 export default function LaporanPOPage() {
   const [minMtd, setMinMtd] = useState(5);
   const [page, setPage] = useState(1);
-
   const [isExporting, setIsExporting] = useState(false);
+
+  // Modal State
+  const [showPinModal, setShowPinModal] = useState(false);
+  const [alert, setAlert] = useState<{ isOpen: boolean; title: string; message: string; type: "success" | "error" | "warning" }>({
+    isOpen: false,
+    title: "",
+    message: "",
+    type: "success"
+  });
+
+  const showAlert = (title: string, message: string, type: "success" | "error" | "warning") => {
+    setAlert({ isOpen: true, title, message, type });
+  };
 
   const { data, error, isLoading, mutate } = useSWR(
     `/api/admin/po?minMtd=${minMtd}&page=${page}&limit=50`,
     fetcher
   );
 
-  const handleExportPDF = async () => {
-    const pin = window.prompt("Masukkan PIN Keamanan untuk mengekspor data:");
+  const triggerExport = () => {
+    setShowPinModal(true);
+  };
+
+  const handleExportPDF = async (pin: string) => {
     if (pin !== "220117") {
-      alert("PIN Salah! Akses ditolak.");
+      showAlert("Akses Ditolak", "PIN yang Anda masukkan salah!", "error");
       return;
     }
 
     setIsExporting(true);
+    setShowPinModal(false);
     try {
       const res = await fetch(`/api/admin/po?minMtd=${minMtd}&page=1&limit=5000`);
       const exportData = await res.json();
 
       if (!exportData.success || !exportData.data || exportData.data.length === 0) {
-        alert("Tidak ada data untuk diexport!");
+        showAlert("Kosong", "Tidak ada data untuk diexport!", "warning");
         return;
       }
 
@@ -106,7 +124,7 @@ export default function LaporanPOPage() {
 
     } catch (err) {
       console.error(err);
-      alert("Gagal melakukan export PDF.");
+      showAlert("Error", "Gagal melakukan export PDF.", "error");
     } finally {
       setIsExporting(false);
     }
@@ -163,9 +181,9 @@ export default function LaporanPOPage() {
             </div>
           </div>
           <button 
-            onClick={handleExportPDF}
-            disabled={isExporting}
-            className="px-4 py-2 bg-rose-600 text-white rounded-lg text-sm font-bold shadow-sm flex items-center gap-2 hover:bg-rose-700 transition-colors w-full sm:w-auto justify-center disabled:opacity-70 disabled:cursor-not-allowed"
+            onClick={triggerExport}
+            disabled={isExporting || isLoading}
+            className="w-full sm:w-auto bg-green-600 hover:bg-green-700 text-white font-bold py-2.5 px-5 rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm transition-colors disabled:opacity-50"
           >
             {isExporting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
             {isExporting ? "Memproses..." : "Export PDF"}
@@ -256,9 +274,9 @@ export default function LaporanPOPage() {
               >
                 Prev
               </button>
-              <button 
-                disabled={page === data.meta.totalPages}
-                onClick={() => setPage(p => p + 1)}
+              <button
+                disabled={!data || page >= data.meta.totalPages}
+                onClick={() => setPage(page + 1)}
                 className="px-3 py-1 rounded border border-slate-300 bg-white text-sm font-medium hover:bg-slate-100 disabled:opacity-50"
               >
                 Next
@@ -267,6 +285,22 @@ export default function LaporanPOPage() {
           </div>
         )}
       </div>
+
+      <PinModal 
+        isOpen={showPinModal}
+        onClose={() => setShowPinModal(false)}
+        onSubmit={handleExportPDF}
+        title="Otorisasi Super Admin"
+        description="Masukkan PIN (220117) untuk mengunduh laporan berstatus Confidential."
+      />
+
+      <AlertModal 
+        isOpen={alert.isOpen}
+        title={alert.title}
+        message={alert.message}
+        type={alert.type}
+        onClose={() => setAlert(prev => ({ ...prev, isOpen: false }))}
+      />
       
       {/* Rumus Info */}
       <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 mt-2">

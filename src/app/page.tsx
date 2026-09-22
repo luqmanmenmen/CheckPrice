@@ -9,6 +9,7 @@ import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
 import PullToRefresh from "@/components/PullToRefresh";
 import useSWR from "swr";
 import { Bell } from "lucide-react";
+import Link from "next/link";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
@@ -379,10 +380,10 @@ export default function Home() {
                   <UserCircle2 className="w-6 h-6" />
                 </div>
                 <div className="flex flex-col items-start gap-2.5">
-                  <div>
-                    <p className="text-xs text-blue-200 font-medium tracking-wide uppercase">{user.jobTitle || 'Sales Area'}</p>
-                    <h1 className="font-bold text-lg leading-tight">{user.name} <span className="text-blue-200 font-normal">({user.nik})</span></h1>
-                  </div>
+                  <Link href="/profile" className="group cursor-pointer">
+                    <p className="text-xs text-blue-200 font-medium tracking-wide uppercase group-hover:text-white transition-colors">{user.jobTitle || 'Sales Area'}</p>
+                    <h1 className="font-bold text-lg leading-tight group-hover:text-blue-100 transition-colors">{user.name} <span className="text-blue-200 font-normal">({user.nik})</span></h1>
+                  </Link>
                   <div 
                     className={`relative flex p-0.5 rounded-full shadow-inner w-32 h-7 cursor-pointer border transition-colors ${togglingStatus ? 'opacity-50 pointer-events-none' : ''} ${user.status === 'ACTIVE' ? 'bg-slate-800/20 border-slate-700/30' : 'bg-slate-800/40 border-slate-700/50'}`} 
                     onClick={toggleStatus}

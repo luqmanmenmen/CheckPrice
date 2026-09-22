@@ -4,9 +4,11 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { UserCircle2, CheckCircle2, XCircle, Clock, ChevronDown, ChevronUp, PackageOpen } from "lucide-react";
 import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
 import PullToRefresh from "@/components/PullToRefresh";
+import Link from "next/link";
+import { AlertModal } from "@/components/AlertModal";
 import useSWR from "swr";
 
-const fetcher = (url: string) => fetch(url).then((res) => res.json());
+const fetcher = (url: string) => fetch(url).then(res => res.json());
 
 type Ticket = {
   id: string;
@@ -24,6 +26,17 @@ type Ticket = {
 export default function WarehouseDashboard() {
   const [user, setUser] = useState<any>(null);
   const [togglingStatus, setTogglingStatus] = useState(false);
+
+  const [alert, setAlert] = useState<{ isOpen: boolean; title: string; message: string; type: "success" | "error" | "warning" }>({
+    isOpen: false,
+    title: "",
+    message: "",
+    type: "warning"
+  });
+
+  const showAlert = (title: string, message: string, type: "success" | "error" | "warning" = "warning") => {
+    setAlert({ isOpen: true, title, message, type });
+  };
   const previousTicketIds = useRef<Set<string>>(new Set());
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [batchSelections, setBatchSelections] = useState<Record<string, "READY" | "OOS">>({});
@@ -170,7 +183,7 @@ export default function WarehouseDashboard() {
       }));
 
     if (updates.length === 0) {
-      alert("Pilih status (Ready / Kosong) untuk minimal satu barang sebelum memproses.");
+      showAlert("Peringatan", "Pilih status (Ready / Kosong) untuk minimal satu barang sebelum memproses.", "warning");
       return;
     }
 
@@ -379,6 +392,14 @@ export default function WarehouseDashboard() {
         )}
       </div>
       </div>
+
+      <AlertModal 
+        isOpen={alert.isOpen}
+        title={alert.title}
+        message={alert.message}
+        type={alert.type}
+        onClose={() => setAlert(prev => ({ ...prev, isOpen: false }))}
+      />
     </PullToRefresh>
   );
 }

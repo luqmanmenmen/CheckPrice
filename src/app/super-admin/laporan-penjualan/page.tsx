@@ -5,6 +5,8 @@ import { ArrowLeft, Calendar, DollarSign, Package, AlertTriangle, TrendingUp, Se
 import Link from "next/link";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
+import { AlertModal } from "@/components/AlertModal";
+import { PinModal } from "@/components/PinModal";
 
 type SalesItem = {
   id: string;
@@ -35,6 +37,19 @@ export default function LaporanPenjualanPage() {
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState("");
+
+  // Modal State
+  const [showPinModal, setShowPinModal] = useState(false);
+  const [alert, setAlert] = useState<{ isOpen: boolean; title: string; message: string; type: "success" | "error" | "warning" }>({
+    isOpen: false,
+    title: "",
+    message: "",
+    type: "success"
+  });
+
+  const showAlert = (title: string, message: string, type: "success" | "error" | "warning") => {
+    setAlert({ isOpen: true, title, message, type });
+  };
 
   const fetchReport = async (dateStr: string) => {
     setLoading(true);
@@ -77,14 +92,19 @@ export default function LaporanPenjualanPage() {
     return new Date(dateStr).toLocaleDateString('id-ID', options);
   };
 
-  const exportPDF = () => {
+  const triggerExport = () => {
+    setShowPinModal(true);
+  };
+
+  const exportPDF = (pin: string) => {
     if (!data) return;
     
-    const pin = window.prompt("Masukkan PIN Keamanan untuk mengekspor laporan:");
     if (pin !== "220117") {
-      alert("PIN Salah! Akses ditolak.");
+      showAlert("Akses Ditolak", "PIN yang Anda masukkan salah!", "error");
       return;
     }
+
+    setShowPinModal(false);
     
     const doc = new jsPDF();
     
@@ -253,8 +273,9 @@ export default function LaporanPenjualanPage() {
             </div>
             
             <button 
-              onClick={exportPDF}
-              className="flex items-center justify-center gap-2 bg-white border border-slate-200 text-slate-700 px-4 py-2.5 rounded-xl text-sm font-bold shadow-sm hover:bg-slate-50 hover:text-indigo-600 transition-colors"
+              onClick={triggerExport}
+              disabled={!data || data.items.length === 0}
+              className="w-full sm:w-auto bg-green-600 hover:bg-green-700 text-white font-bold py-2.5 px-5 rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm transition-colors disabled:opacity-50"
             >
               <Download className="w-4 h-4" />
               Export PDF
@@ -329,6 +350,22 @@ export default function LaporanPenjualanPage() {
           </div>
         </>
       )}
+
+      <PinModal 
+        isOpen={showPinModal}
+        onClose={() => setShowPinModal(false)}
+        onSubmit={exportPDF}
+        title="Otorisasi Super Admin"
+        description="Masukkan PIN (220117) untuk mengekspor laporan penjualan."
+      />
+
+      <AlertModal 
+        isOpen={alert.isOpen}
+        title={alert.title}
+        message={alert.message}
+        type={alert.type}
+        onClose={() => setAlert(prev => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 }
