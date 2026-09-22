@@ -37,13 +37,14 @@ function safeFloat(val: any): number {
 // -------------------------------------------------------
 // REQUIRED: a sheet must have at least SKU + DESCRIPTION + HARGA NORMAL
 // -------------------------------------------------------
-const REQUIRED_COLS = ["SKU", "DESCRIPTION", "HARGA NORMAL"];
+// REQUIRED: a sheet must have at least SKU
+const REQUIRED_COLS = ["SKU"];
 
 // Mapping fleksibel nama kolom → nama standar kita
 // Agar sheet dengan variasi nama kolom tetap terbaca
 const COL_ALIASES: Record<string, string[]> = {
   "SKU":          ["SKU", "KODE", "KODE PRODUK", "PRODUCT CODE", "CODE", "ID"],
-  "DESCRIPTION":  ["DESCRIPTION", "NAMA", "NAMA PRODUK", "PRODUCT NAME", "DESC", "KETERANGAN", "DESKRIPSI"],
+  "DESCRIPTION":  ["DESCRIPTION", "NAMA", "NAMA PRODUK", "PRODUCT NAME", "DESC", "KETERANGAN", "DESKRIPSI", "ITEM_DESCRIP"],
   "HARGA NORMAL": ["HARGA NORMAL", "HARGA", "NORMAL PRICE", "PRICE", "HARGA JUAL", "REGULAR PRICE", "HARGA POKOK"],
   "HARGA PROMO":  ["HARGA PROMO", "PROMO PRICE", "PROMO", "HARGA DISKON", "DISC PRICE"],
   "ARTICLE":      ["ARTICLE", "ARTIKEL", "BARCODE", "NO ARTIKEL"],
@@ -92,25 +93,29 @@ function sheetHasRequiredCols(remappedRow: any): boolean {
 // -------------------------------------------------------
 function parseRow(row: any) {
   const sku = String(row["SKU"] ?? "").trim();
-  const article = String(row["ARTICLE"] ?? "").trim() || null;
-  const description = String(row["DESCRIPTION"] ?? "").trim();
-  const acara = String(row["ACARA"] ?? "").trim() || null;
-  const fromDate = parseExcelDate(row["FROM DATE"]);
-  const toDate = parseExcelDate(row["TO DATE"]);
-  const hargaNormal = safeFloat(row["HARGA NORMAL"]);
+  const article = row["ARTICLE"] !== undefined ? (String(row["ARTICLE"]).trim() || null) : undefined;
+  const description = row["DESCRIPTION"] !== undefined ? String(row["DESCRIPTION"]).trim() : undefined;
+  const acara = row["ACARA"] !== undefined ? (String(row["ACARA"]).trim() || null) : undefined;
+  const fromDate = row["FROM DATE"] !== undefined ? parseExcelDate(row["FROM DATE"]) : undefined;
+  const toDate = row["TO DATE"] !== undefined ? parseExcelDate(row["TO DATE"]) : undefined;
+  const hargaNormal = row["HARGA NORMAL"] !== undefined ? safeFloat(row["HARGA NORMAL"]) : undefined;
+  
   const rawPromo = row["HARGA PROMO"];
-  // "NORMAL PRICE" string in hargaPromo column means no promo
-  const hargaPromoRaw =
-    typeof rawPromo === "string" && rawPromo.toUpperCase().includes("NORMAL")
+  let hargaPromo: number | null | undefined = undefined;
+  if (rawPromo !== undefined) {
+    const hargaPromoRaw = typeof rawPromo === "string" && rawPromo.toUpperCase().includes("NORMAL")
       ? null
       : safeFloat(rawPromo);
-  const hargaPromo = hargaPromoRaw && hargaPromoRaw > 0 ? hargaPromoRaw : null;
-  const diskon = String(row["DISKON"] ?? "").trim() || null;
-  const discountType = String(row["DISCOUNT TYPE"] ?? "").trim() || null;
-  const brand = String(row["BRAND"] ?? "").trim() || null;
-  const dept = String(row["DEPT"] ?? "").trim() || null;
-  const stok = parseInt(row["STOK"]) || 0;
-  const sales_mtd = parseInt(row["SALES_MTD"]) || 0;
+    hargaPromo = hargaPromoRaw && hargaPromoRaw > 0 ? hargaPromoRaw : null;
+  }
+
+  const diskon = row["DISKON"] !== undefined ? (String(row["DISKON"]).trim() || null) : undefined;
+  const discountType = row["DISCOUNT TYPE"] !== undefined ? (String(row["DISCOUNT TYPE"]).trim() || null) : undefined;
+  const brand = row["BRAND"] !== undefined ? (String(row["BRAND"]).trim() || null) : undefined;
+  const dept = row["DEPT"] !== undefined ? (String(row["DEPT"]).trim() || null) : undefined;
+  
+  const stok = row["STOK"] !== undefined && row["STOK"] !== "" ? parseInt(row["STOK"]) || 0 : undefined;
+  const sales_mtd = row["SALES_MTD"] !== undefined && row["SALES_MTD"] !== "" ? parseInt(row["SALES_MTD"]) || 0 : undefined;
 
   return {
     sku,
@@ -226,7 +231,12 @@ async function upsertProducts(
     if (existingSkuSet.has(item.sku)) {
       itemsToUpdate.push(item);
     } else {
-      itemsToCreate.push(item);
+      // New SKU → add with default fallback for missing required fields
+      const newSkuData = { ...item };
+      if (newSkuData.description === undefined) newSkuData.description = "-";
+      if (newSkuData.hargaNormal === undefined) newSkuData.hargaNormal = 0;
+      if (newSkuData.stok === undefined) newSkuData.stok = 0;
+      itemsToCreate.push(newSkuData);
     }
   }
 
@@ -257,7 +267,7 @@ async function upsertProducts(
           // LOGIKA DELTA EOH
           const oldStok = existingStokMap.get(item.sku) || 0;
           let salesDelta = 0;
-          if (oldStok > 0 && item.stok < oldStok) {
+          if (item.stok !== undefined && oldStok > 0 && item.stok < oldStok) {
             salesDelta = oldStok - item.stok;
           }
 
@@ -275,14 +285,12 @@ async function upsertProducts(
           return prisma.product.update({
             where: { sku: item.sku },
             data: {
-              // Selalu update harga normal
+              // Selalu update jika tidak undefined
               hargaNormal: item.hargaNormal,
-              // Update deskripsi & info produk juga
               description: item.description,
               article: item.article,
               brand: item.brand,
               dept: item.dept,
-              // Update Stok
               stok: item.stok,
               // Update sales_mtd dengan delta
               sales_mtd: salesDelta > 0 ? { increment: salesDelta } : undefined,
@@ -293,13 +301,15 @@ async function upsertProducts(
                   qtySold: salesDelta
                 }
               } : undefined,
-              // Promo: jika valid pakai data baru, jika tidak reset ke null
-              hargaPromo: promoStillValid ? item.hargaPromo : null,
-              diskon: promoStillValid ? item.diskon : null,
-              discountType: promoStillValid ? item.discountType : null,
-              acara: promoStillValid ? item.acara : null,
-              fromDate: promoStillValid ? item.fromDate : null,
-              toDate: promoStillValid ? item.toDate : null,
+              // Promo fields...
+              ...(item.hargaPromo !== undefined ? {
+                hargaPromo: promoStillValid ? item.hargaPromo : null,
+                diskon: promoStillValid ? item.diskon : null,
+                discountType: promoStillValid ? item.discountType : null,
+                acara: promoStillValid ? item.acara : null,
+                fromDate: promoStillValid ? item.fromDate : null,
+                toDate: promoStillValid ? item.toDate : null,
+              } : {})
             },
           });
         });
