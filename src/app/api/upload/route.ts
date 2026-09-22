@@ -221,7 +221,10 @@ async function upsertProducts(
   // 1. Ambil semua SKU yang sudah ada di database (Batch Query)
   const existingProducts = await prisma.product.findMany({
     where: { sku: { in: allSkus } },
-    select: { id: true, sku: true, stok: true },
+    select: { 
+      id: true, sku: true, stok: true,
+      hargaPromo: true, diskon: true, discountType: true, acara: true, fromDate: true, toDate: true
+    },
   });
   const existingProductMap = new Map(existingProducts.map((p) => [p.sku, p]));
 
@@ -280,15 +283,39 @@ async function upsertProducts(
           salesDelta = oldStok - item.stok;
         }
 
-        // Cek apakah promo masih aktif (toDate belum lewat)
-        let finalPromo = item.hargaPromo;
-        let promoStillValid = false;
-        if (item.hargaPromo && item.toDate) {
-          const toDateObj = new Date(item.toDate);
-          toDateObj.setHours(23, 59, 59, 999);
-          promoStillValid = new Date() <= toDateObj;
-        } else if (item.hargaPromo && !item.toDate) {
-          promoStillValid = true;
+        // Cek promo
+        let finalPromoToSave;
+        let finalDiskonToSave;
+        let finalDiscountTypeToSave;
+        let finalAcaraToSave;
+        let finalFromDateToSave;
+        let finalToDateToSave;
+
+        if (item.hargaPromo === undefined) {
+          // File Excel tidak memiliki kolom promo (misal: PQ Harian) -> Pertahankan promo yang ada
+          finalPromoToSave = existingInfo.hargaPromo;
+          finalDiskonToSave = existingInfo.diskon;
+          finalDiscountTypeToSave = existingInfo.discountType;
+          finalAcaraToSave = existingInfo.acara;
+          finalFromDateToSave = existingInfo.fromDate;
+          finalToDateToSave = existingInfo.toDate;
+        } else {
+          // File Excel memiliki kolom promo -> Cek validitas & replace
+          let promoStillValid = false;
+          if (item.hargaPromo && item.toDate) {
+            const toDateObj = new Date(item.toDate);
+            toDateObj.setHours(23, 59, 59, 999);
+            promoStillValid = new Date() <= toDateObj;
+          } else if (item.hargaPromo && !item.toDate) {
+            promoStillValid = true;
+          }
+
+          finalPromoToSave = promoStillValid ? item.hargaPromo : null;
+          finalDiskonToSave = promoStillValid ? item.diskon : null;
+          finalDiscountTypeToSave = promoStillValid ? item.discountType : null;
+          finalAcaraToSave = promoStillValid ? item.acara : null;
+          finalFromDateToSave = promoStillValid ? item.fromDate : null;
+          finalToDateToSave = promoStillValid ? item.toDate : null;
         }
 
         rowPlaceholders.push(`($${paramIndex++}::text, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::int, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text)`);
@@ -302,12 +329,12 @@ async function upsertProducts(
           item.dept !== undefined ? item.dept : null,
           item.stok !== undefined ? item.stok : null,
           salesDelta,
-          promoStillValid ? finalPromo : null,
-          promoStillValid ? item.diskon : null,
-          promoStillValid ? item.discountType : null,
-          promoStillValid ? item.acara : null,
-          promoStillValid ? item.fromDate : null,
-          promoStillValid ? item.toDate : null
+          finalPromoToSave,
+          finalDiskonToSave,
+          finalDiscountTypeToSave,
+          finalAcaraToSave,
+          finalFromDateToSave,
+          finalToDateToSave
         );
 
         if (salesDelta > 0) {
