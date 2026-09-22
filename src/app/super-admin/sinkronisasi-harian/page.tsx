@@ -11,16 +11,22 @@ export default function UpdateProdukPage() {
   const [progress, setProgress] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [lastSync, setLastSync] = useState<{name: string; date: string} | null>(null);
+  const [historyList, setHistoryList] = useState<any[]>([]);
 
   const fetchSyncHistory = async () => {
     try {
-      const res = await fetch("/api/admin/sync-history");
+      const res = await fetch("/api/admin/sync-history?limit=5");
       const data = await res.json();
-      if (data.success && data.data) {
+      if (data.success && data.data && data.data.length > 0) {
+        const latest = data.data[0];
         setLastSync({
-          name: data.data.user?.name || "Sistem",
-          date: new Date(data.data.createdAt).toLocaleString("id-ID", { dateStyle: 'medium', timeStyle: 'short' })
+          name: latest.user?.name || "Sistem",
+          date: new Date(latest.createdAt).toLocaleString("id-ID", { dateStyle: 'medium', timeStyle: 'short' })
         });
+        setHistoryList(data.data);
+      } else if (data.success && data.data) {
+        setHistoryList([]);
+        setLastSync(null);
       }
     } catch (e) {
       console.error(e);
@@ -98,6 +104,32 @@ export default function UpdateProdukPage() {
       setStatus("error");
       setResultMsg("Terjadi kesalahan saat mengunggah.");
       alert("Terjadi kesalahan saat mengunggah.");
+    }
+  };
+
+  const handleDeleteHistory = async (id: string, fileName: string) => {
+    const pin = window.prompt(`Masukkan PIN Keamanan untuk menghapus log upload "${fileName}":\n(PERHATIAN: Menghapus log ini akan mengizinkan file dengan nama yang sama untuk di-upload kembali.)`);
+    if (pin !== "220117") {
+      alert("PIN Salah! Operasi dibatalkan.");
+      return;
+    }
+    
+    try {
+      const res = await fetch("/api/admin/sync-history", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id })
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert("Riwayat berhasil dihapus!");
+        fetchSyncHistory();
+      } else {
+        alert("Gagal menghapus riwayat: " + data.error);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Terjadi kesalahan jaringan.");
     }
   };
 
@@ -238,6 +270,46 @@ export default function UpdateProdukPage() {
           </>
         )}
       </div>
+
+      {/* Riwayat Upload */}
+      {historyList.length > 0 && (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+          <div className="p-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+            <h3 className="font-bold text-slate-800 text-sm">Riwayat Upload Terakhir</h3>
+            <span className="text-[10px] bg-slate-200 text-slate-600 px-2 py-0.5 rounded font-bold">Terbaru</span>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {historyList.map((hist, idx) => (
+              <div key={hist.id || idx} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50 transition-colors">
+                <div className="flex items-start gap-3">
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${hist.status === 'SUCCESS' ? 'bg-green-100 text-green-600' : 'bg-rose-100 text-rose-600'}`}>
+                    <FileType className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-slate-700 text-sm">{hist.fileName}</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5 flex gap-2">
+                      <span>{new Date(hist.createdAt).toLocaleString("id-ID")}</span>
+                      <span>&bull;</span>
+                      <span>{hist.user?.name || 'Sistem'}</span>
+                    </p>
+                    {hist.status === 'SUCCESS' ? (
+                      <p className="text-[10px] text-green-600 font-bold mt-1 inline-block bg-green-50 px-1.5 py-0.5 rounded">{hist.records} baris diproses</p>
+                    ) : (
+                      <p className="text-[10px] text-rose-600 font-bold mt-1 inline-block bg-rose-50 px-1.5 py-0.5 rounded">Gagal diproses</p>
+                    )}
+                  </div>
+                </div>
+                <button 
+                  onClick={() => handleDeleteHistory(hist.id, hist.fileName)}
+                  className="px-3 py-1.5 text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-lg border border-rose-200 transition-colors self-start sm:self-center shrink-0"
+                >
+                  Hapus Log
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
     </div>
   );
