@@ -45,6 +45,7 @@ export async function GET(request: NextRequest) {
     });
 
     let totalRevenue = 0;
+    let totalPromoRevenue = 0;
     let totalQty = 0;
     let anomalyCount = 0;
 
@@ -73,6 +74,9 @@ export async function GET(request: NextRequest) {
       const itemTotal = unitPrice * sale.qtySold;
       
       totalRevenue += itemTotal;
+      if (status === "PROMO") {
+        totalPromoRevenue += itemTotal;
+      }
       totalQty += sale.qtySold;
 
       return {
@@ -95,6 +99,7 @@ export async function GET(request: NextRequest) {
         availableDates,
         summary: {
           totalRevenue,
+          totalPromoRevenue,
           totalQty,
           anomalyCount,
         },

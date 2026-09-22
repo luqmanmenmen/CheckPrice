@@ -23,6 +23,7 @@ type SalesData = {
   availableDates: string[];
   summary: {
     totalRevenue: number;
+    totalPromoRevenue: number;
     totalQty: number;
     anomalyCount: number;
   };
@@ -157,7 +158,7 @@ export default function LaporanPenjualanPage() {
       ) : (
         <>
           {/* Summary Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
             <div className="bg-gradient-to-br from-indigo-900 to-slate-800 p-5 rounded-2xl shadow-lg relative overflow-hidden group">
               <div className="absolute -right-4 -top-4 w-24 h-24 bg-white/10 rounded-full blur-2xl group-hover:bg-white/20 transition-all"></div>
               <div className="flex items-center gap-3 mb-2">
@@ -171,6 +172,22 @@ export default function LaporanPenjualanPage() {
               </p>
               <p className="text-xs text-indigo-300 mt-2 flex items-center gap-1">
                 <TrendingUp className="w-3 h-3" /> Berdasarkan data H-1
+              </p>
+            </div>
+
+            <div className="bg-gradient-to-br from-amber-600 to-amber-500 p-5 rounded-2xl shadow-lg relative overflow-hidden group">
+              <div className="absolute -right-4 -top-4 w-24 h-24 bg-white/10 rounded-full blur-2xl group-hover:bg-white/20 transition-all"></div>
+              <div className="flex items-center gap-3 mb-2">
+                <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center backdrop-blur-md">
+                  <DollarSign className="w-5 h-5 text-amber-100" />
+                </div>
+                <h3 className="font-bold text-amber-50 text-sm">Omzet Promo</h3>
+              </div>
+              <p className="text-3xl font-black text-white tracking-tight mt-1">
+                {formatCurrency(data?.summary.totalPromoRevenue || 0)}
+              </p>
+              <p className="text-xs text-amber-100 mt-2 flex items-center gap-1 opacity-80">
+                Porsi dari total omzet
               </p>
             </div>
 
