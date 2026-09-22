@@ -133,6 +133,35 @@ export default function UpdateProdukPage() {
     }
   };
 
+  const handleResetAll = async () => {
+    const confirm1 = window.confirm("⚠️ PERINGATAN!\n\nIni akan menghapus SEMUA riwayat upload PQ dan mereset semua data penjualan (MTD) ke 0.\n\nData stok, harga, dan promo TIDAK akan terpengaruh.\n\nLanjutkan?");
+    if (!confirm1) return;
+
+    const pin = window.prompt("Masukkan PIN Super Admin untuk konfirmasi reset total:");
+    if (pin !== "220117") {
+      alert("PIN Salah! Operasi dibatalkan.");
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/admin/reset-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin })
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert("✅ " + data.message);
+        fetchSyncHistory();
+      } else {
+        alert("Gagal reset: " + data.error);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Terjadi kesalahan jaringan.");
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 p-4 pb-24 max-w-2xl mx-auto flex flex-col gap-6">
       {/* Header */}
@@ -140,10 +169,18 @@ export default function UpdateProdukPage() {
         <Link href="/super-admin" className="p-2 rounded-full hover:bg-slate-200 transition-colors">
           <ArrowLeft className="w-5 h-5 text-slate-700" />
         </Link>
-        <div>
+        <div className="flex-1">
           <h1 className="font-bold text-xl text-slate-800">Sinkronisasi Harian</h1>
           <p className="text-xs text-slate-500">Update Produk Baru, Stok Sisa (EOH), dan Analitik Penjualan</p>
         </div>
+        <button
+          onClick={handleResetAll}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-rose-600 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition-colors"
+          title="Hapus semua riwayat log PQ dan reset data penjualan"
+        >
+          <AlertCircle className="w-3.5 h-3.5" />
+          Reset Semua
+        </button>
       </div>
 
       {/* Info Card */}
