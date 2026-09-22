@@ -222,7 +222,7 @@ export default function UpdateHargaPage() {
                   {resultMsg}
                 </div>
                 <button 
-                  onClick={() => { setFile(null); setStatus("idle"); }}
+                  onClick={() => { setFiles([]); setStatus("idle"); }}
                   className="text-emerald-600 text-sm font-bold hover:underline"
                 >
                   Upload file lain
