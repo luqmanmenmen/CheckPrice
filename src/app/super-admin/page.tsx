@@ -144,33 +144,7 @@ export default function SuperAdminDashboard() {
             <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-emerald-600 transition-colors" />
           </Link>
 
-          {/* Menu Clean Promo */}
-          <button 
-            onClick={async () => {
-              try {
-                const res = await fetch("/api/admin/clean-promo", { method: "POST" });
-                const data = await res.json();
-                if (data.success) {
-                  alert(data.message);
-                } else {
-                  alert("Gagal membersihkan promo");
-                }
-              } catch (e) {
-                alert("Terjadi kesalahan jaringan");
-              }
-            }}
-            className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-red-50 hover:border-red-100 transition-all group w-full text-left">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-red-100 text-red-600 flex items-center justify-center group-hover:scale-110 transition-transform">
-                <span className="text-xl">🧹</span>
-              </div>
-              <div>
-                <p className="font-bold text-slate-800 text-sm">Bersihkan Promo Expired</p>
-                <p className="text-[10px] text-slate-500">Menghapus otomatis promo yang sudah lewat tanggal</p>
-              </div>
-            </div>
-            <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-red-600 transition-colors" />
-          </button>
+
         </div>
       </div>
 
