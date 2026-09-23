@@ -11,6 +11,18 @@ export async function GET() {
       // take: 200 // removed limit so we can aggregate properly
     });
 
+    const productIds = activePromos.map(p => p.id);
+    const allSales = await prisma.dailySales.findMany({
+      where: { productId: { in: productIds } }
+    });
+
+    // Group sales by productId
+    const salesByProduct = new Map();
+    for (const s of allSales) {
+      if (!salesByProduct.has(s.productId)) salesByProduct.set(s.productId, []);
+      salesByProduct.get(s.productId).push(s);
+    }
+
     const items = [];
     const eventMap = new Map();
     const deptMap = new Map();
@@ -21,9 +33,7 @@ export async function GET() {
     for (const product of activePromos) {
       if (!product.fromDate) continue;
       
-      const sales = await prisma.dailySales.findMany({
-        where: { productId: product.id }
-      });
+      const sales = salesByProduct.get(product.id) || [];
 
       if (sales.length === 0) continue;
 
