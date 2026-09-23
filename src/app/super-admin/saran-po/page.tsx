@@ -232,7 +232,11 @@ export default function LaporanPOPage() {
                   <tr key={item.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
                     <td className="px-4 py-3 min-w-[250px]">
                       <div className="font-bold text-slate-800">{item.sku}</div>
-                      <div className="text-xs text-slate-500 truncate max-w-[300px]">{item.description}</div>
+                      <div className="text-xs text-slate-500 truncate max-w-[300px] mb-1">{item.description}</div>
+                      {item.trend === "NAIK" && <span className="inline-block text-[9px] font-bold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded border border-emerald-200 mb-1 mr-1">📈 TREN NAIK</span>}
+                      {item.trend === "TURUN" && <span className="inline-block text-[9px] font-bold bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded border border-rose-200 mb-1 mr-1">📉 DROP / MATI</span>}
+                      {item.trend === "STABIL" && <span className="inline-block text-[9px] font-bold bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded border border-blue-200 mb-1 mr-1">➖ STABIL</span>}
+                      
                       {item.dailySales && item.dailySales.length > 0 && (
                         <div className="mt-1 flex items-center gap-1 flex-wrap">
                           {item.dailySales.map((ds: any, i: number) => (

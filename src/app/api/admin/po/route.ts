@@ -51,18 +51,36 @@ export async function GET(request: Request) {
         if (saranPo < 0) saranPo = 0;
       }
 
+      // 1. Calculate WTD dynamically from DailySales (last 7 days)
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      
+      const dynamicWtd = p.dailySales
+        .filter(ds => ds.date >= sevenDaysAgo)
+        .reduce((sum, ds) => sum + ds.qtySold, 0);
+
+      // 2. Kalkulasi Tren
+      let trend = "STABIL";
+      if (dynamicWtd > (p.sales_mtd / 4)) {
+        trend = "NAIK";
+      } else if (dynamicWtd === 0 && p.stok > 3) {
+        // Jika tidak ada penjualan seminggu terakhir tapi stok masih ada, berarti barang ini MATI/TURUN
+        trend = "TURUN";
+      }
+
       return {
         id: p.id,
         sku: p.sku,
         description: p.description,
         dept: p.dept,
         stok: p.stok,
-        sales_wtd: p.sales_wtd,
+        sales_wtd: dynamicWtd,
         sales_mtd: p.sales_mtd,
         spd,
         minStock,
         maxStock,
         saranPo,
+        trend,
         dailySales: p.dailySales.map(ds => ({
           date: ds.date.toISOString(),
           qty: ds.qtySold
