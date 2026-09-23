@@ -125,8 +125,7 @@ function parseRow(row: any) {
   let hargaPromo: number | null | undefined = undefined;
   if (rawPromo !== undefined) {
     const rawPromoStr = typeof rawPromo === "string" ? rawPromo.toUpperCase() : "";
-    // Abaikan jika isinya teks seperti "NORMAL", "B2G1", "B1G1", "BXGY" dll yang bukan harga
-    const isTextPromo = rawPromoStr.includes("NORMAL") || rawPromoStr.match(/B\dG\d/) || rawPromoStr.includes("BXGY");
+    const isTextPromo = rawPromoStr.includes("NORMAL") || rawPromoStr.match(/B\dG\d/) || rawPromoStr.includes("BXGY") || rawPromoStr === "";
     
     const hargaPromoRaw = isTextPromo ? null : safeFloat(rawPromo);
     hargaPromo = hargaPromoRaw && hargaPromoRaw > 0 ? hargaPromoRaw : null;
@@ -207,16 +206,18 @@ function processWorkbook(
         added++;
       } else {
         // Duplicate SKU in different sheet of same file
-        // Rule: Promo price wins over Normal Price
-        const existingIsPromo = existing.hargaPromo !== null && existing.hargaPromo !== undefined && existing.hargaPromo > 0;
-        const newIsPromo = parsed.hargaPromo !== null && parsed.hargaPromo !== undefined && parsed.hargaPromo > 0;
+        // Rule: Promo active wins over Normal Price
+        const existingIsPromo = (existing.hargaPromo !== null && existing.hargaPromo !== undefined && existing.hargaPromo > 0) || 
+                                (existing.diskon !== null && existing.diskon !== undefined);
+        const newIsPromo = (parsed.hargaPromo !== null && parsed.hargaPromo !== undefined && parsed.hargaPromo > 0) || 
+                           (parsed.diskon !== null && parsed.diskon !== undefined);
 
         if (!existingIsPromo && newIsPromo) {
           // Replace: new has promo, old doesn't
           productMap.set(sku, parsed);
           updated++;
         }
-        // else: keep existing (existing already has promo, or both are normal price)
+        // else: keep existing
       }
     }
 
@@ -316,8 +317,14 @@ async function upsertProducts(
         let finalFromDateToSave;
         let finalToDateToSave;
 
-        if (item.hargaPromo === undefined) {
-          // File Excel tidak memiliki kolom promo (misal: PQ Harian) -> Pertahankan promo yang ada
+        // Smart File Recognition: Determine if THIS ROW contains ANY promo-related data updates
+        const isPromoFile = item.hargaPromo !== undefined || 
+                            item.diskon !== undefined || 
+                            item.discountType !== undefined || 
+                            item.acara !== undefined;
+
+        if (!isPromoFile) {
+          // File Excel murni PQ Harian (tanpa kolom promo) -> Proteksi promo yang ada!
           finalPromoToSave = existingInfo.hargaPromo;
           finalDiskonToSave = existingInfo.diskon;
           finalDiscountTypeToSave = existingInfo.discountType;
@@ -325,22 +332,39 @@ async function upsertProducts(
           finalFromDateToSave = existingInfo.fromDate;
           finalToDateToSave = existingInfo.toDate;
         } else {
-          // File Excel memiliki kolom promo -> Cek validitas & replace
+          // File Excel memiliki kolom promo -> Terapkan COALESCE dan Layered Validity
+          
+          // Jika kolom ada tapi isinya kosong (""), parser mengembalikan null (Niat Menghapus).
+          // Jika kolom hilang dari header, parser mengembalikan undefined (Niat Mengabaikan / Mempertahankan).
+          const newHargaPromo = item.hargaPromo !== undefined ? item.hargaPromo : existingInfo.hargaPromo;
+          const newDiskon = item.diskon !== undefined ? item.diskon : existingInfo.diskon;
+          const newDiscountType = item.discountType !== undefined ? item.discountType : existingInfo.discountType;
+          const newAcara = item.acara !== undefined ? item.acara : existingInfo.acara;
+          const newFromDate = item.fromDate !== undefined ? item.fromDate : existingInfo.fromDate;
+          const newToDate = item.toDate !== undefined ? item.toDate : existingInfo.toDate;
+
+          // Validity Check: Apakah benar-benar ada promo aktif secara logis?
+          const isPromoActive = (newHargaPromo !== null && newHargaPromo > 0) || 
+                                (newDiskon !== null) || 
+                                (newDiscountType !== null);
+
           let promoStillValid = false;
-          if (item.hargaPromo && item.toDate) {
-            const toDateObj = new Date(item.toDate);
-            toDateObj.setHours(23, 59, 59, 999);
-            promoStillValid = new Date() <= toDateObj;
-          } else if (item.hargaPromo && !item.toDate) {
-            promoStillValid = true;
+          if (isPromoActive) {
+            if (newToDate) {
+              const toDateObj = new Date(newToDate);
+              toDateObj.setHours(23, 59, 59, 999);
+              promoStillValid = new Date() <= toDateObj;
+            } else {
+              promoStillValid = true; // Tidak ada tanggal akhir = Berlaku selamanya
+            }
           }
 
-          finalPromoToSave = promoStillValid ? item.hargaPromo : null;
-          finalDiskonToSave = promoStillValid ? item.diskon : null;
-          finalDiscountTypeToSave = promoStillValid ? item.discountType : null;
-          finalAcaraToSave = promoStillValid ? item.acara : null;
-          finalFromDateToSave = promoStillValid ? item.fromDate : null;
-          finalToDateToSave = promoStillValid ? item.toDate : null;
+          finalPromoToSave = promoStillValid ? newHargaPromo : null;
+          finalDiskonToSave = promoStillValid ? newDiskon : null;
+          finalDiscountTypeToSave = promoStillValid ? newDiscountType : null;
+          finalAcaraToSave = promoStillValid ? newAcara : null;
+          finalFromDateToSave = promoStillValid ? newFromDate : null;
+          finalToDateToSave = promoStillValid ? newToDate : null;
         }
 
         rowPlaceholders.push(`($${paramIndex++}::text, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::int, $${paramIndex++}::int, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text)`);
