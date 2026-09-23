@@ -49,24 +49,36 @@ export default function RekapPergerakanPage() {
       </div>
 
       {/* Tabs */}
-      <div className="bg-white p-1 rounded-xl flex shadow-sm border border-slate-200">
+      <div className="bg-white p-1 rounded-xl flex shadow-sm border border-slate-200 overflow-x-auto">
         <button
           onClick={() => { setFilter("all"); setPage(1); }}
-          className={`flex-1 py-2 text-sm font-bold rounded-lg transition-colors ${filter === "all" ? "bg-slate-800 text-white" : "text-slate-500 hover:bg-slate-100"}`}
+          className={`flex-none px-4 py-2 text-sm font-bold rounded-lg transition-colors ${filter === "all" ? "bg-slate-800 text-white" : "text-slate-500 hover:bg-slate-100"}`}
         >
           Semua Data
         </button>
         <button
           onClick={() => { setFilter("fast"); setPage(1); }}
-          className={`flex-1 py-2 text-sm font-bold rounded-lg transition-colors ${filter === "fast" ? "bg-rose-500 text-white" : "text-slate-500 hover:bg-slate-100"}`}
+          className={`flex-none px-4 py-2 text-sm font-bold rounded-lg transition-colors ${filter === "fast" ? "bg-rose-500 text-white" : "text-slate-500 hover:bg-slate-100"}`}
         >
           🔥 Fast Move
         </button>
         <button
           onClick={() => { setFilter("slow"); setPage(1); }}
-          className={`flex-1 py-2 text-sm font-bold rounded-lg transition-colors ${filter === "slow" ? "bg-blue-500 text-white" : "text-slate-500 hover:bg-slate-100"}`}
+          className={`flex-none px-4 py-2 text-sm font-bold rounded-lg transition-colors ${filter === "slow" ? "bg-blue-500 text-white" : "text-slate-500 hover:bg-slate-100"}`}
         >
           🐢 Slow Move
+        </button>
+        <button
+          onClick={() => { setFilter("minus"); setPage(1); }}
+          className={`flex-none px-4 py-2 text-sm font-bold rounded-lg transition-colors ${filter === "minus" ? "bg-amber-500 text-white" : "text-slate-500 hover:bg-slate-100"}`}
+        >
+          ⚠️ Plus Minus
+        </button>
+        <button
+          onClick={() => { setFilter("kritis"); setPage(1); }}
+          className={`flex-none px-4 py-2 text-sm font-bold rounded-lg transition-colors ${filter === "kritis" ? "bg-red-600 text-white" : "text-slate-500 hover:bg-slate-100"}`}
+        >
+          🚨 Stok Kritis
         </button>
       </div>
 

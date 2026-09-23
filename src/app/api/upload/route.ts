@@ -100,14 +100,35 @@ function parseRow(row: any) {
   const acara = row["ACARA"] !== undefined ? (String(row["ACARA"]).trim() || null) : undefined;
   const fromDate = row["FROM DATE"] !== undefined ? parseExcelDate(row["FROM DATE"]) : undefined;
   const toDate = row["TO DATE"] !== undefined ? parseExcelDate(row["TO DATE"]) : undefined;
-  const hargaNormal = row["HARGA NORMAL"] !== undefined ? safeFloat(row["HARGA NORMAL"]) : undefined;
+  let hargaNormal = row["HARGA NORMAL"] !== undefined ? safeFloat(row["HARGA NORMAL"]) : undefined;
+  
+  // Smart Price Extraction untuk file Power Query (jika kolom harga tidak ada)
+  if (hargaNormal === undefined || hargaNormal === 0) {
+    const eohUnit = safeFloat(row["EOH_UNIT"]);
+    const eohRetail = safeFloat(row["EOH_RETAIL"]);
+    const ytdUnit = safeFloat(row["YTD_SALES_UNIT"]);
+    const ytdRetail = safeFloat(row["YTD_SALES_RETAIL"]);
+    const boyUnit = safeFloat(row["BOY_UNIT"]);
+    const boyRetail = safeFloat(row["BOY_RETAIL"]);
+
+    let basePrice = 0;
+    if (eohUnit > 0) basePrice = eohRetail / eohUnit;
+    else if (ytdUnit > 0) basePrice = ytdRetail / ytdUnit;
+    else if (boyUnit > 0) basePrice = boyRetail / boyUnit;
+
+    if (basePrice > 0) {
+      hargaNormal = Math.round(basePrice);
+    }
+  }
   
   const rawPromo = row["HARGA PROMO"];
   let hargaPromo: number | null | undefined = undefined;
   if (rawPromo !== undefined) {
-    const hargaPromoRaw = typeof rawPromo === "string" && rawPromo.toUpperCase().includes("NORMAL")
-      ? null
-      : safeFloat(rawPromo);
+    const rawPromoStr = typeof rawPromo === "string" ? rawPromo.toUpperCase() : "";
+    // Abaikan jika isinya teks seperti "NORMAL", "B2G1", "B1G1", "BXGY" dll yang bukan harga
+    const isTextPromo = rawPromoStr.includes("NORMAL") || rawPromoStr.match(/B\dG\d/) || rawPromoStr.includes("BXGY");
+    
+    const hargaPromoRaw = isTextPromo ? null : safeFloat(rawPromo);
     hargaPromo = hargaPromoRaw && hargaPromoRaw > 0 ? hargaPromoRaw : null;
   }
 
@@ -243,7 +264,7 @@ async function upsertProducts(
         description: item.description ?? "-",
         hargaNormal: item.hargaNormal ?? 0,
         stok: item.stok ?? 0,
-        sales_mtd: 0, // PAKSA 0: Jangan pakai data sales global dari pusat
+        sales_mtd: item.sales_mtd ?? 0,
       });
     }
   }
@@ -321,7 +342,7 @@ async function upsertProducts(
           finalToDateToSave = promoStillValid ? item.toDate : null;
         }
 
-        rowPlaceholders.push(`($${paramIndex++}::text, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::int, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text)`);
+        rowPlaceholders.push(`($${paramIndex++}::text, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::int, $${paramIndex++}::int, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text)`);
         
         values.push(
           item.sku,
@@ -332,6 +353,7 @@ async function upsertProducts(
           item.dept !== undefined ? item.dept : null,
           item.stok !== undefined ? item.stok : null,
           salesDelta,
+          item.sales_mtd !== undefined ? item.sales_mtd : null,
           finalPromoToSave,
           finalDiskonToSave,
           finalDiscountTypeToSave,
@@ -360,7 +382,7 @@ async function upsertProducts(
               "brand" = COALESCE(v."brand", p."brand"),
               "dept" = COALESCE(v."dept", p."dept"),
               "stok" = COALESCE(v."stok", p."stok"),
-              "sales_mtd" = p."sales_mtd" + v."salesDelta",
+              "sales_mtd" = COALESCE(v."sales_mtd", p."sales_mtd" + v."salesDelta"),
               "hargaPromo" = v."hargaPromo",
               "diskon" = v."diskon",
               "discountType" = v."discountType",
@@ -370,7 +392,7 @@ async function upsertProducts(
               "updatedAt" = CURRENT_TIMESTAMP
             FROM (VALUES
               ${rowPlaceholders.join(", ")}
-            ) AS v("sku", "hargaNormal", "description", "article", "brand", "dept", "stok", "salesDelta", "hargaPromo", "diskon", "discountType", "acara", "fromDate", "toDate")
+            ) AS v("sku", "hargaNormal", "description", "article", "brand", "dept", "stok", "salesDelta", "sales_mtd", "hargaPromo", "diskon", "discountType", "acara", "fromDate", "toDate")
             WHERE p."sku" = v."sku"
           `;
 

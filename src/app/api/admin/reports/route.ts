@@ -37,7 +37,11 @@ export async function GET(request: Request) {
       if (filter === 'fast') {
         where = { ...where, sales_mtd: { gt: 5 } }; // terjual lebih dari 5 = fast move
       } else if (filter === 'slow') {
-        where = { ...where, sales_mtd: { lte: 2 } }; // terjual 0-2 = slow move
+        where = { ...where, sales_mtd: { lte: 2 }, stok: { gte: 0 } }; // terjual 0-2 dan bukan stok minus
+      } else if (filter === 'minus') {
+        where = { ...where, stok: { lt: 0 } }; // khusus stok minus
+      } else if (filter === 'kritis') {
+        where = { ...where, sales_mtd: { gte: 3 }, stok: { lte: 5, gte: 0 } }; // laku tapi stok menipis
       }
     } else if (type === 'stok') {
       if (filter === 'habis') {
@@ -56,6 +60,13 @@ export async function GET(request: Request) {
       orderBy = [
         { sales_mtd: 'asc' },
         { stok: 'desc' }, // prioritas stok mati terbanyak
+      ];
+    } else if (type === 'pergerakan' && filter === 'minus') {
+      orderBy = { stok: 'asc' }; // stok paling minus di atas
+    } else if (type === 'pergerakan' && filter === 'kritis') {
+      orderBy = [
+        { stok: 'asc' }, // urutkan dari stok yang paling mepet (0, 1, 2)
+        { sales_mtd: 'desc' } // lalu terjual terbanyak
       ];
     } else if (type === 'stok') {
       orderBy = { stok: 'desc' };

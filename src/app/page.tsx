@@ -357,6 +357,56 @@ export default function Home() {
     window.location.reload();
   };
 
+  const handlePrintLabel = () => {
+    if (!product) return;
+    try {
+      import("jspdf").then(({ jsPDF }) => {
+        const doc = new jsPDF({
+          orientation: "landscape",
+          unit: "mm",
+          format: [70, 40]
+        });
+
+        doc.setDrawColor(0);
+        doc.setLineWidth(0.5);
+        doc.rect(2, 2, 66, 36);
+
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(8);
+        doc.text(product.brand || "SUKO", 35, 6, { align: "center" });
+        doc.line(2, 8, 68, 8);
+
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(7);
+        const nameLines = doc.splitTextToSize(product.description.substring(0, 50), 62);
+        doc.text(nameLines, 35, 12, { align: "center" });
+
+        doc.setFont("helvetica", "bold");
+        if (isOnPromo) {
+           doc.setFontSize(9);
+           doc.text(`Normal: ${formatRupiah(product.hargaNormal)}`, 35, 20, { align: "center" });
+           doc.line(25, 19, 45, 19); 
+           doc.setFontSize(14);
+           doc.text(formatRupiah(product.hargaPromo!), 35, 26, { align: "center" });
+           doc.setFontSize(6);
+           doc.text("PROMO", 35, 29, { align: "center" });
+        } else {
+           doc.setFontSize(14);
+           doc.text(formatRupiah(product.hargaNormal), 35, 24, { align: "center" });
+        }
+
+        doc.line(2, 32, 68, 32);
+        doc.setFontSize(8);
+        doc.text(`SKU: ${product.sku}`, 35, 36, { align: "center" });
+
+        doc.save(`PriceTag_${product.sku}.pdf`);
+        showToast("PDF Label berhasil diunduh!");
+      });
+    } catch (e) {
+      showToast("Gagal membuat PDF", "error");
+    }
+  };
+
   return (
     <>
     {/* Toast Notification */}
@@ -793,6 +843,13 @@ export default function Home() {
                     </button>
                   )}
                 </div>
+              </div>
+
+              {/* Cetak Label */}
+              <div className="flex flex-col gap-2 mt-2 pt-4 border-t border-slate-100">
+                <button onClick={handlePrintLabel} className="w-full bg-slate-800 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-slate-700 active:scale-95 transition-all shadow-sm">
+                  <span className="text-lg">🖨️</span> Cetak Label Harga (PDF)
+                </button>
               </div>
 
               {/* Promo Info - hanya tampil jika ada harga promo aktif */}

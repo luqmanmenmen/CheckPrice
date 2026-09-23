@@ -143,6 +143,34 @@ export default function SuperAdminDashboard() {
             </div>
             <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-emerald-600 transition-colors" />
           </Link>
+
+          {/* Menu Clean Promo */}
+          <button 
+            onClick={async () => {
+              try {
+                const res = await fetch("/api/admin/clean-promo", { method: "POST" });
+                const data = await res.json();
+                if (data.success) {
+                  alert(data.message);
+                } else {
+                  alert("Gagal membersihkan promo");
+                }
+              } catch (e) {
+                alert("Terjadi kesalahan jaringan");
+              }
+            }}
+            className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-red-50 hover:border-red-100 transition-all group w-full text-left">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-red-100 text-red-600 flex items-center justify-center group-hover:scale-110 transition-transform">
+                <span className="text-xl">🧹</span>
+              </div>
+              <div>
+                <p className="font-bold text-slate-800 text-sm">Bersihkan Promo Expired</p>
+                <p className="text-[10px] text-slate-500">Menghapus otomatis promo yang sudah lewat tanggal</p>
+              </div>
+            </div>
+            <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-red-600 transition-colors" />
+          </button>
         </div>
       </div>
 
@@ -192,14 +220,14 @@ export default function SuperAdminDashboard() {
             <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-rose-600 transition-colors" />
           </Link>
 
-          <Link href="/super-admin/rekap-promo" className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-fuchsia-50 hover:border-fuchsia-100 transition-all group">
+          <Link href="/super-admin/promo-analysis" className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-fuchsia-50 hover:border-fuchsia-100 transition-all group">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-fuchsia-100 text-fuchsia-600 flex items-center justify-center group-hover:scale-110 transition-transform">
                 <Tag className="w-5 h-5" />
               </div>
               <div>
-                <p className="font-bold text-slate-800 text-sm">Rekap Promo Aktif</p>
-                <p className="text-[10px] text-slate-500">Daftar semua barang yang sedang diskon</p>
+                <p className="font-bold text-slate-800 text-sm">Analisis Promo Aktif</p>
+                <p className="text-[10px] text-slate-500">Ukur efektivitas kenaikan sales promo</p>
               </div>
             </div>
             <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-fuchsia-600 transition-colors" />

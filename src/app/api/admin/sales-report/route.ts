@@ -11,11 +11,11 @@ export async function GET(request: NextRequest) {
     // Fetch available dates for the filter dropdown
     const availableDatesRaw = await prisma.dailySales.groupBy({
       by: ['date'],
-      orderBy: { date: 'desc' },
-      take: 30, // Last 30 days
+      orderBy: { date: 'desc' }
     });
     
-    const availableDates = availableDatesRaw.map(d => d.date.toISOString().split('T')[0]);
+    // Format to YYYY-MM-DD and remove duplicates, then take 30
+    const availableDates = Array.from(new Set(availableDatesRaw.map(d => d.date.toISOString().split('T')[0]))).slice(0, 30);
     
     // Default to the most recent date if no date is provided
     let targetDateStr = dateParam;
