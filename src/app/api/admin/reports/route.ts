@@ -5,6 +5,18 @@ const prisma = new PrismaClient();
 
 export async function GET(request: Request) {
   try {
+    // [SUPER ENGINE] Auto-clean expired promos on the fly BEFORE any query!
+    const todayStr = new Date().toISOString().split('T')[0];
+    await prisma.product.updateMany({
+      where: {
+        hargaPromo: { not: null },
+        toDate: { not: null, lt: todayStr }
+      },
+      data: {
+        hargaPromo: null, diskon: null, discountType: null, acara: null, fromDate: null, toDate: null
+      }
+    });
+
     const { searchParams } = new URL(request.url);
     const type = searchParams.get('type') || 'stok'; // stok, promo, pergerakan
     const filter = searchParams.get('filter') || 'all'; // fast, slow, all

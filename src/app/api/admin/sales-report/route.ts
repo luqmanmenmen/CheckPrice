@@ -5,6 +5,18 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
   try {
+    // [SUPER ENGINE] Auto-clean expired promos on the fly BEFORE any query!
+    const todayStr = new Date().toISOString().split('T')[0];
+    await prisma.product.updateMany({
+      where: {
+        hargaPromo: { not: null },
+        toDate: { not: null, lt: todayStr }
+      },
+      data: {
+        hargaPromo: null, diskon: null, discountType: null, acara: null, fromDate: null, toDate: null
+      }
+    });
+
     const { searchParams } = new URL(request.url);
     const dateParam = searchParams.get("date");
     
@@ -101,8 +113,8 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    // Fetch trend data (last 7 available dates)
-    const trendDates = [...availableDates].slice(0, 7).reverse();
+    // Fetch trend data (last 31 available dates - 1 month)
+    const trendDates = [...availableDates].slice(0, 31).reverse();
     const trendData = [];
     
     for (const d of trendDates) {

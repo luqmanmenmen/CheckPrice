@@ -275,14 +275,28 @@ export default function LaporanPenjualanPage() {
               <div className="flex flex-col lg:flex-row gap-8">
                 {/* Trend Chart Section */}
                 <div className="flex-1">
-                  <h2 className="font-bold text-slate-800 text-lg flex items-center gap-2 mb-6">
+                  <h2 className="font-bold text-slate-800 text-lg flex items-center gap-2 mb-2">
                     <TrendingUp className="w-5 h-5 text-indigo-500" />
-                    Tren Penjualan (7 Hari Terakhir)
+                    Tren Penjualan (1 Bulan Terakhir)
                   </h2>
-                  <div className="h-[300px] w-full">
+                  <p className="text-xs text-slate-500 mb-6">💡 Klik pada titik grafik untuk melihat rincian produk di hari tersebut.</p>
+                  <div className="h-[300px] w-full cursor-pointer">
                     {data?.trendData && data.trendData.length > 0 ? (
                       <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={data.trendData} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+                        <LineChart 
+                          data={data.trendData} 
+                          margin={{ top: 5, right: 20, left: 10, bottom: 5 }}
+                          onClick={(e: any) => {
+                            if (e && e.activePayload && e.activePayload.length > 0) {
+                              const clickedDate = e.activePayload[0].payload.fullDate;
+                              if (clickedDate) {
+                                setSelectedDate(clickedDate);
+                                // Opsional: Beralih ke tab rincian otomatis
+                                setActiveTab("DETAILS");
+                              }
+                            }
+                          }}
+                        >
                           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                           <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#64748b' }} dy={10} />
                           <YAxis 

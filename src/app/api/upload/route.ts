@@ -232,7 +232,8 @@ function processWorkbook(
 //   - SKU lama    → hanya update harga & info promo (update)
 // -------------------------------------------------------
 async function upsertProducts(
-  productMap: Map<string, ReturnType<typeof parseRow>>
+  productMap: Map<string, ReturnType<typeof parseRow>>,
+  uploadDate: Date = new Date()
 ): Promise<{ created: number; updated: number; failed: number }> {
   let created = 0;
   let updated = 0;
@@ -365,7 +366,7 @@ async function upsertProducts(
         if (salesDelta > 0) {
           dailySalesData.push({
             productId: existingInfo.id,
-            date: new Date(),
+            date: uploadDate,
             qtySold: salesDelta
           });
         }
@@ -433,6 +434,35 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "File tidak ditemukan" }, { status: 400 });
     }
 
+    // Helper untuk mengekstrak tanggal dari nama file PQ
+    function extractDateFromFilename(filename: string): Date {
+      const match = filename.toUpperCase().match(/POWER QUERY (\d{1,2}) ([A-Z]+) (\d{4})/);
+      if (match) {
+        const day = parseInt(match[1]);
+        const monthStr = match[2];
+        const year = parseInt(match[3]);
+        
+        const months: Record<string, number> = {
+          "JANUARI": 0, "JANUARY": 0, "JAN": 0,
+          "FEBRUARI": 1, "FEBRUARY": 1, "FEB": 1,
+          "MARET": 2, "MARCH": 2, "MAR": 2,
+          "APRIL": 3, "APR": 3,
+          "MEI": 4, "MAY": 4,
+          "JUNI": 5, "JUNE": 5, "JUN": 5,
+          "JULI": 6, "JULY": 6, "JUL": 6,
+          "AGUSTUS": 7, "AUGUST": 7, "AUG": 7,
+          "SEPTEMBER": 8, "SEP": 8,
+          "OKTOBER": 9, "OCTOBER": 9, "OCT": 9,
+          "NOVEMBER": 10, "NOV": 10,
+          "DESEMBER": 11, "DECEMBER": 11, "DEC": 11
+        };
+        
+        const month = months[monthStr] !== undefined ? months[monthStr] : new Date().getMonth();
+        return new Date(year, month, day, 12, 0, 0); // jam 12 siang untuk hindari bug timezone
+      }
+      return new Date();
+    }
+
     let totalCreated = 0;
     let totalUpdated = 0;
     let totalFailed = 0;
@@ -472,7 +502,9 @@ export async function POST(request: NextRequest) {
     }
 
     // 3. Simpan ke database HANYA SEKALI untuk semua file sekaligus
-    const { created, updated, failed } = await upsertProducts(globalProductMap);
+    // Ambil tanggal dari nama file terakhir yang diupload
+    const targetUploadDate = extractDateFromFilename(files[files.length - 1].name);
+    const { created, updated, failed } = await upsertProducts(globalProductMap, targetUploadDate);
     totalCreated = created;
     totalUpdated = updated;
     totalFailed = failed;
