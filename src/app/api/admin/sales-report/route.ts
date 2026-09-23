@@ -19,6 +19,7 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const dateParam = searchParams.get("date");
+    const timeframe = searchParams.get("timeframe") || "1M";
     
     // Fetch available dates for the filter dropdown
     const availableDatesRaw = await prisma.dailySales.groupBy({
@@ -113,29 +114,76 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    // Fetch trend data (last 31 available dates - 1 month)
-    const trendDates = [...availableDates].slice(0, 31).reverse();
-    const trendData = [];
+    // Fetch trend data
+    let trendData = [];
     
-    for (const d of trendDates) {
-      const sDay = new Date(`${d}T00:00:00.000Z`);
-      const eDay = new Date(`${d}T23:59:59.999Z`);
-      const daySales = await prisma.dailySales.findMany({
-        where: { date: { gte: sDay, lte: eDay } },
-        include: { product: true }
+    if (timeframe === "1M") {
+      const trendDates = [...availableDates].slice(0, 31).reverse();
+      if (trendDates.length > 0) {
+        const startDate = new Date(`${trendDates[0]}T00:00:00.000Z`);
+        const endDate = new Date(`${trendDates[trendDates.length - 1]}T23:59:59.999Z`);
+        
+        const allSales = await prisma.dailySales.findMany({
+          where: { date: { gte: startDate, lte: endDate } },
+          include: { product: true }
+        });
+
+        const salesByDay = new Map();
+        for (const ds of allSales) {
+          const day = ds.date.toISOString().split('T')[0];
+          if (!salesByDay.has(day)) salesByDay.set(day, []);
+          salesByDay.get(day).push(ds);
+        }
+
+        for (const d of trendDates) {
+          const daySales = salesByDay.get(d) || [];
+          let dayRev = 0;
+          let dayQty = 0;
+          
+          for (const ds of daySales) {
+            const isPromo = ds.product.hargaPromo !== null && ds.product.hargaPromo > 0;
+            const unitPrice = isPromo ? ds.product.hargaPromo! : (ds.product.hargaNormal || 0);
+            dayRev += unitPrice * ds.qtySold;
+            dayQty += ds.qtySold;
+          }
+          
+          const dateLabel = new Date(d).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
+          trendData.push({ date: dateLabel, fullDate: d, omzet: dayRev, qty: dayQty });
+        }
+      }
+    } else if (timeframe === "1Y" || timeframe === "ALL") {
+      const oneYearAgo = new Date();
+      if (timeframe === "1Y") {
+        oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+      } else {
+        oneYearAgo.setFullYear(2000); // ALL
+      }
+
+      const allSales = await prisma.dailySales.findMany({
+        where: { date: { gte: oneYearAgo } },
+        include: { product: true },
+        orderBy: { date: 'asc' }
       });
-      
-      let dayRev = 0;
-      let dayQty = 0;
-      for (const ds of daySales) {
+
+      const monthMap = new Map();
+      for (const ds of allSales) {
+        const d = new Date(ds.date);
+        const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        
+        if (!monthMap.has(monthKey)) {
+          const dateLabel = d.toLocaleDateString('id-ID', { month: 'short', year: 'numeric' });
+          monthMap.set(monthKey, { date: dateLabel, fullDate: monthKey, omzet: 0, qty: 0 });
+        }
+        
+        const m = monthMap.get(monthKey);
         const isPromo = ds.product.hargaPromo !== null && ds.product.hargaPromo > 0;
         const unitPrice = isPromo ? ds.product.hargaPromo! : (ds.product.hargaNormal || 0);
-        dayRev += unitPrice * ds.qtySold;
-        dayQty += ds.qtySold;
+        
+        m.omzet += unitPrice * ds.qtySold;
+        m.qty += ds.qtySold;
       }
       
-      const dateLabel = new Date(d).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
-      trendData.push({ date: dateLabel, fullDate: d, omzet: dayRev, qty: dayQty });
+      trendData = Array.from(monthMap.values());
     }
 
     return NextResponse.json({

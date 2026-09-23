@@ -41,6 +41,7 @@ export default function LaporanPenjualanPage() {
   const [selectedDate, setSelectedDate] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"SUMMARY" | "DETAILS">("SUMMARY");
+  const [timeframe, setTimeframe] = useState<"1M" | "1Y" | "ALL">("1M");
 
   // Modal State
   const [showPinModal, setShowPinModal] = useState(false);
@@ -55,10 +56,10 @@ export default function LaporanPenjualanPage() {
     setAlert({ isOpen: true, title, message, type });
   };
 
-  const fetchReport = async (dateStr: string) => {
+  const fetchReport = async (dateStr: string, tf: string) => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/admin/sales-report${dateStr ? `?date=${dateStr}` : ""}`);
+      const res = await fetch(`/api/admin/sales-report?date=${dateStr}&timeframe=${tf}`);
       const json = await res.json();
       if (json.success) {
         setData(json.data);
@@ -74,8 +75,8 @@ export default function LaporanPenjualanPage() {
   };
 
   useEffect(() => {
-    fetchReport(selectedDate);
-  }, [selectedDate]);
+    fetchReport(selectedDate, timeframe);
+  }, [selectedDate, timeframe]);
 
   const handleDateChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     setSelectedDate(e.target.value);
@@ -274,12 +275,34 @@ export default function LaporanPenjualanPage() {
             {activeTab === "SUMMARY" ? (
               <div className="flex flex-col lg:flex-row gap-8">
                 {/* Trend Chart Section */}
-                <div className="flex-1">
-                  <h2 className="font-bold text-slate-800 text-lg flex items-center gap-2 mb-2">
-                    <TrendingUp className="w-5 h-5 text-indigo-500" />
-                    Tren Penjualan (1 Bulan Terakhir)
-                  </h2>
-                  <p className="text-xs text-slate-500 mb-6">💡 Klik pada titik grafik untuk melihat rincian produk di hari tersebut.</p>
+                <div className="flex-1 overflow-hidden">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-2 gap-2">
+                    <h2 className="font-bold text-slate-800 text-lg flex items-center gap-2">
+                      <TrendingUp className="w-5 h-5 text-indigo-500" />
+                      Tren Penjualan ({timeframe === "1M" ? "Harian - 30 Hari" : timeframe === "1Y" ? "Bulanan - 1 Tahun" : "Seluruh Waktu"})
+                    </h2>
+                    <div className="flex items-center bg-slate-100 rounded-lg p-1 w-fit">
+                      <button 
+                        onClick={() => setTimeframe("1M")}
+                        className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors ${timeframe === "1M" ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                      >
+                        1 Bulan
+                      </button>
+                      <button 
+                        onClick={() => setTimeframe("1Y")}
+                        className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors ${timeframe === "1Y" ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                      >
+                        1 Tahun
+                      </button>
+                      <button 
+                        onClick={() => setTimeframe("ALL")}
+                        className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors ${timeframe === "ALL" ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                      >
+                        Semua
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-xs text-slate-500 mb-6">💡 Klik pada titik grafik untuk melihat rincian produk di periode tersebut.</p>
                   <div className="h-[300px] w-full cursor-pointer">
                     {data?.trendData && data.trendData.length > 0 ? (
                       <ResponsiveContainer width="100%" height="100%">
@@ -289,9 +312,9 @@ export default function LaporanPenjualanPage() {
                           onClick={(e: any) => {
                             if (e && e.activePayload && e.activePayload.length > 0) {
                               const clickedDate = e.activePayload[0].payload.fullDate;
-                              if (clickedDate) {
+                              // Hanya pindah tanggal jika dalam mode 1M (Harian)
+                              if (clickedDate && timeframe === "1M") {
                                 setSelectedDate(clickedDate);
-                                // Opsional: Beralih ke tab rincian otomatis
                                 setActiveTab("DETAILS");
                               }
                             }
