@@ -66,14 +66,14 @@ export async function GET(request: NextRequest) {
 
     const reportItems = salesData.map(sale => {
       const p = sale.product;
-      const isPromo = p.hargaPromo !== null && p.hargaPromo > 0;
+      const isPromo = (p.hargaPromo !== null && p.hargaPromo > 0) || p.discountType === 'BXGY';
       
       // Hitung harga satuan (Promo vs Normal)
       let unitPrice = 0;
       let status = "NORMAL";
       
       if (isPromo) {
-        unitPrice = p.hargaPromo!;
+        unitPrice = p.hargaPromo || p.hargaNormal || 0;
         status = "PROMO";
       } else {
         unitPrice = p.hargaNormal || 0;
@@ -141,8 +141,8 @@ export async function GET(request: NextRequest) {
           let dayQty = 0;
           
           for (const ds of daySales) {
-            const isPromo = ds.product.hargaPromo !== null && ds.product.hargaPromo > 0;
-            const unitPrice = isPromo ? ds.product.hargaPromo! : (ds.product.hargaNormal || 0);
+            const isPromo = (ds.product.hargaPromo !== null && ds.product.hargaPromo > 0) || ds.product.discountType === 'BXGY';
+            const unitPrice = isPromo ? (ds.product.hargaPromo || ds.product.hargaNormal || 0) : (ds.product.hargaNormal || 0);
             dayRev += unitPrice * ds.qtySold;
             dayQty += ds.qtySold;
           }
@@ -176,8 +176,8 @@ export async function GET(request: NextRequest) {
         }
         
         const m = monthMap.get(monthKey);
-        const isPromo = ds.product.hargaPromo !== null && ds.product.hargaPromo > 0;
-        const unitPrice = isPromo ? ds.product.hargaPromo! : (ds.product.hargaNormal || 0);
+        const isPromo = (ds.product.hargaPromo !== null && ds.product.hargaPromo > 0) || ds.product.discountType === 'BXGY';
+        const unitPrice = isPromo ? (ds.product.hargaPromo || ds.product.hargaNormal || 0) : (ds.product.hargaNormal || 0);
         
         m.omzet += unitPrice * ds.qtySold;
         m.qty += ds.qtySold;
