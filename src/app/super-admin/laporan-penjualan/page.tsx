@@ -180,10 +180,13 @@ export default function LaporanPenjualanPage() {
             onChange={handleDateChange}
             className="bg-transparent border-none text-sm font-bold text-slate-700 focus:ring-0 cursor-pointer pr-8"
           >
+            {selectedDate && selectedDate.length === 7 && (
+              <option value={selectedDate}>Data Bulan: {selectedDate}</option>
+            )}
             {data?.availableDates.map(date => (
               <option key={date} value={date}>Data PQ: {formatDate(date)}</option>
             ))}
-            {!data?.availableDates.includes(selectedDate) && selectedDate && (
+            {!data?.availableDates.includes(selectedDate) && selectedDate && selectedDate.length > 7 && (
               <option value={selectedDate}>Data PQ: {formatDate(selectedDate)}</option>
             )}
           </select>
@@ -312,8 +315,8 @@ export default function LaporanPenjualanPage() {
                           onClick={(e: any) => {
                             if (e && e.activePayload && e.activePayload.length > 0) {
                               const clickedDate = e.activePayload[0].payload.fullDate;
-                              // Hanya pindah tanggal jika dalam mode 1M (Harian)
-                              if (clickedDate && timeframe === "1M") {
+                              // Bisa pindah tanggal harian (YYYY-MM-DD) atau bulanan (YYYY-MM)
+                              if (clickedDate) {
                                 setSelectedDate(clickedDate);
                                 setActiveTab("DETAILS");
                               }

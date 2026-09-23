@@ -38,10 +38,24 @@ export async function GET(request: NextRequest) {
       targetDateStr = new Date().toISOString().split('T')[0];
     }
 
-    const startOfDay = new Date(`${targetDateStr}T00:00:00.000Z`);
-    const endOfDay = new Date(`${targetDateStr}T23:59:59.999Z`);
+    let startOfDay, endOfDay;
 
-    // Fetch the sales for the target date
+    // Check if targetDateStr is a month (YYYY-MM)
+    if (targetDateStr.length === 7) {
+      const year = parseInt(targetDateStr.split('-')[0]);
+      const month = parseInt(targetDateStr.split('-')[1]) - 1; // 0-indexed
+      startOfDay = new Date(year, month, 1);
+      endOfDay = new Date(year, month + 1, 0, 23, 59, 59, 999);
+      
+      // Fix timezone offset issues when filtering
+      startOfDay = new Date(startOfDay.getTime() - startOfDay.getTimezoneOffset() * 60000);
+      endOfDay = new Date(endOfDay.getTime() - endOfDay.getTimezoneOffset() * 60000);
+    } else {
+      startOfDay = new Date(`${targetDateStr}T00:00:00.000Z`);
+      endOfDay = new Date(`${targetDateStr}T23:59:59.999Z`);
+    }
+
+    // Fetch the sales for the target date or month
     const salesData = await prisma.dailySales.findMany({
       where: {
         date: {
