@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { ArrowLeft, UploadCloud, FileType, CheckCircle2, AlertTriangle } from "lucide-react";
+import { ArrowLeft, UploadCloud, FileType, CheckCircle2, AlertTriangle, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { PinModal } from "@/components/PinModal";
 import { AlertModal } from "@/components/AlertModal";
+import * as xlsx from "xlsx";
 
 export default function UpdateHargaPage() {
   const [files, setFiles] = useState<File[]>([]);
@@ -97,39 +98,73 @@ export default function UpdateHargaPage() {
   };
 
   const executeUpload = async () => {
+    if (files.length === 0) return;
     setStatus("uploading");
-    setProgress(30);
-    
-    const formData = new FormData();
-    files.forEach(file => {
-      formData.append("file", file);
-    });
-    formData.append("type", "UPDATE_PROMO");
+    setProgress(0);
+    setResultMsg("Membaca file Excel...");
 
     try {
-      const res = await fetch("/api/upload", {
-        method: "POST",
-        body: formData,
-      });
+      let allRows: any[] = [];
+      let mainFileName = files[0].name;
 
-      const data = await res.json();
-      setProgress(100);
-
-      if (res.ok && data.success) {
-        setStatus("success");
-        setResultMsg(data.message || "Harga berhasil diperbarui!");
-        fetchSyncHistory();
-      } else {
-        setStatus("error");
-        setResultMsg(data.error || "Gagal memproses file.");
-        setAlertState({ isOpen: true, title: "Upload Gagal", message: data.error || "Gagal memproses file.", type: "error" });
+      for (const file of files) {
+        const buffer = await file.arrayBuffer();
+        const workbook = xlsx.read(buffer, { type: "buffer", cellDates: false });
+        for (const sheetName of workbook.SheetNames) {
+          const ws = workbook.Sheets[sheetName];
+          const rawRows = xlsx.utils.sheet_to_json(ws, { defval: "" });
+          allRows = allRows.concat(rawRows);
+        }
       }
-    } catch (error) {
+
+      if (allRows.length === 0) {
+        setStatus("error");
+        setResultMsg("Semua file kosong atau tidak terbaca.");
+        setAlertState({ isOpen: true, title: "Gagal", message: "File kosong.", type: "error" });
+        return;
+      }
+
+      const CHUNK_SIZE = 500;
+      const totalChunks = Math.ceil(allRows.length / CHUNK_SIZE);
+      
+      for (let i = 0; i < totalChunks; i++) {
+        const chunk = allRows.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+        const progressPercentage = Math.round((i / totalChunks) * 100);
+        setProgress(progressPercentage);
+        setResultMsg(`Analisis Mendalam: Memproses ${i * CHUNK_SIZE} dari ${allRows.length} baris...`);
+
+        const payload = {
+          type: "UPDATE_PROMO",
+          fileName: mainFileName,
+          uploadDate: new Date().toISOString(),
+          isLastChunk: i === totalChunks - 1,
+          totalRecords: allRows.length,
+          rows: chunk
+        };
+
+        const res = await fetch("/api/upload/chunk", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        const data = await res.json();
+        
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || "Gagal memproses chunk promo");
+        }
+      }
+
+      setProgress(100);
+      setStatus("success");
+      setResultMsg(`Berhasil memproses dan mengunci ${allRows.length} data promo!`);
+      fetchSyncHistory();
+    } catch (error: any) {
       console.error(error);
       setProgress(100);
       setStatus("error");
       setResultMsg("Terjadi kesalahan saat mengunggah.");
-      setAlertState({ isOpen: true, title: "Kesalahan", message: "Terjadi kesalahan jaringan atau server saat mengunggah.", type: "error" });
+      setAlertState({ isOpen: true, title: "Kesalahan", message: error.message || "Terjadi kesalahan jaringan atau server.", type: "error" });
     }
   };
 
@@ -255,8 +290,8 @@ export default function UpdateHargaPage() {
             {status === "uploading" && (
               <div className="w-full max-w-xs">
                 <div className="flex justify-between text-xs font-bold text-slate-600 mb-2">
-                  <span>Sinkronisasi data harga...</span>
-                  <span>{progress}%</span>
+                  <span className="truncate flex-1 mr-2">{resultMsg || "Menganalisis..."}</span>
+                  <span className="w-8 text-right">{progress}%</span>
                 </div>
                 <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
                   <div 

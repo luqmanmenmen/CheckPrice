@@ -5,6 +5,7 @@ import { ArrowLeft, UploadCloud, FileType, CheckCircle2, AlertCircle, Loader2 } 
 import Link from "next/link";
 import { PinModal } from "@/components/PinModal";
 import { AlertModal } from "@/components/AlertModal";
+import * as xlsx from "xlsx";
 
 export default function UpdateProdukPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -83,36 +84,102 @@ export default function UpdateProdukPage() {
   const executeUpload = async () => {
     if (!file) return;
     setStatus("uploading");
-    setProgress(30); // Fake initial progress for better UX
+    setProgress(0);
+    setResultMsg("Membaca file Excel...");
     
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("type", "PQ_HARIAN");
-
     try {
-      const res = await fetch("/api/upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await res.json();
-      setProgress(100);
-
-      if (res.ok && data.success) {
-        setStatus("success");
-        setResultMsg(data.message || "Berhasil memproses master data SKU!");
-        fetchSyncHistory();
-      } else {
-        setStatus("error");
-        setResultMsg(data.error || "Gagal memproses file.");
-        setAlertState({ isOpen: true, title: "Upload Gagal", message: data.error || "Gagal memproses file.", type: "error" });
+      // 1. Baca file di Browser (Mencegah Vercel Timeout)
+      const buffer = await file.arrayBuffer();
+      const workbook = xlsx.read(buffer, { type: "buffer", cellDates: false });
+      
+      let allRows: any[] = [];
+      for (const sheetName of workbook.SheetNames) {
+        const ws = workbook.Sheets[sheetName];
+        const rawRows = xlsx.utils.sheet_to_json(ws, { defval: "" });
+        allRows = allRows.concat(rawRows);
       }
-    } catch (error) {
+
+      if (allRows.length === 0) {
+        setStatus("error");
+        setResultMsg("File Excel kosong atau tidak terbaca.");
+        setAlertState({ isOpen: true, title: "Gagal", message: "File kosong.", type: "error" });
+        return;
+      }
+
+      // Validasi format nama file
+      const fileNameUpper = file.name.toUpperCase();
+      const isValidFormat = /^POWER QUERY \d{1,2} [A-Z]+ \d{4}\.(CSV|XLSX)$/.test(fileNameUpper);
+      if (!isValidFormat) {
+        setStatus("error");
+        setResultMsg("Format nama file salah.");
+        setAlertState({ isOpen: true, title: "Format Salah", message: "Nama file harus mengikuti format 'POWER QUERY [TGL] [BULAN] [TAHUN]'", type: "error" });
+        return;
+      }
+
+      // 2. Kirim data per paket kecil (Chunking)
+      const CHUNK_SIZE = 500;
+      const totalChunks = Math.ceil(allRows.length / CHUNK_SIZE);
+      
+      let totalCreated = 0;
+      let totalUpdated = 0;
+      let totalFailed = 0;
+
+      for (let i = 0; i < totalChunks; i++) {
+        const chunk = allRows.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+        const progressPercentage = Math.round((i / totalChunks) * 100);
+        setProgress(progressPercentage);
+        setResultMsg(`Analisis Mendalam: Memproses ${i * CHUNK_SIZE} dari ${allRows.length} baris...`);
+
+        // Helper untuk ekstrak tanggal dari nama file
+        const extractDate = (filename: string) => {
+          const match = filename.toUpperCase().match(/POWER QUERY (\d{1,2}) ([A-Z]+) (\d{4})/);
+          if (match) {
+            const months: Record<string, number> = {
+              "JANUARI": 0, "JANUARY": 0, "JAN": 0, "FEBRUARI": 1, "FEB": 1,
+              "MARET": 2, "MARCH": 2, "MAR": 2, "APRIL": 3, "APR": 3,
+              "MEI": 4, "MAY": 4, "JUNI": 5, "JUN": 5, "JULI": 6, "JUL": 6,
+              "AGUSTUS": 7, "AUG": 7, "SEPTEMBER": 8, "SEP": 8,
+              "OKTOBER": 9, "OCT": 9, "NOVEMBER": 10, "NOV": 10, "DESEMBER": 11, "DEC": 11
+            };
+            const month = months[match[2]] !== undefined ? months[match[2]] : new Date().getMonth();
+            return new Date(parseInt(match[3]), month, parseInt(match[1]), 12, 0, 0);
+          }
+          return new Date();
+        };
+
+        const payload = {
+          type: "PQ_HARIAN",
+          fileName: file.name,
+          uploadDate: extractDate(file.name).toISOString(),
+          isLastChunk: i === totalChunks - 1,
+          totalRecords: allRows.length,
+          rows: chunk
+        };
+
+        const res = await fetch("/api/upload/chunk", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        const data = await res.json();
+        
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || "Gagal memproses chunk");
+        }
+      }
+
+      setProgress(100);
+      setStatus("success");
+      setResultMsg(`Berhasil menganalisis dan menyimpan ${allRows.length} baris data secara akurat!`);
+      fetchSyncHistory();
+
+    } catch (error: any) {
       console.error(error);
       setProgress(100);
       setStatus("error");
       setResultMsg("Terjadi kesalahan saat mengunggah.");
-      setAlertState({ isOpen: true, title: "Kesalahan", message: "Terjadi kesalahan jaringan atau server saat mengunggah.", type: "error" });
+      setAlertState({ isOpen: true, title: "Kesalahan", message: error.message || "Gagal menghubungi server.", type: "error" });
     }
   };
 
@@ -287,8 +354,8 @@ export default function UpdateProdukPage() {
             {status === "uploading" && (
               <div className="w-full max-w-xs">
                 <div className="flex justify-between text-xs font-bold text-slate-600 mb-2">
-                  <span>Memproses data...</span>
-                  <span>{progress}%</span>
+                  <span className="truncate flex-1 mr-2">{resultMsg || "Menganalisis..."}</span>
+                  <span className="w-8 text-right">{progress}%</span>
                 </div>
                 <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
                   <div 
