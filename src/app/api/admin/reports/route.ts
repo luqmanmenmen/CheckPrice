@@ -23,6 +23,8 @@ export async function GET(request: Request) {
     const search = searchParams.get('search') || '';
     const page = parseInt(searchParams.get('page') || '1');
     const limit = parseInt(searchParams.get('limit') || '20');
+    const dept = searchParams.get('dept');
+    const groupBy = searchParams.get('groupBy');
 
     const skip = (page - 1) * limit;
 
@@ -37,6 +39,10 @@ export async function GET(request: Request) {
           { article: { contains: search, mode: 'insensitive' } },
         ],
       };
+    }
+
+    if (dept) {
+      where = { ...where, dept };
     }
 
     // Find all articles that have a negative stock
@@ -123,6 +129,22 @@ export async function GET(request: Request) {
       } else {
         orderBy = { stok: 'desc' };
       }
+    }
+
+    if (groupBy === 'dept') {
+      const grouped = await prisma.product.groupBy({
+        by: ['dept'],
+        _count: { id: true },
+        where,
+        orderBy: { _count: { id: 'desc' } }
+      });
+      return NextResponse.json({
+        success: true,
+        data: grouped.map(g => ({ 
+          dept: g.dept || 'Tanpa Departemen', 
+          count: g._count.id 
+        }))
+      });
     }
 
     // Fetch data and count concurrently

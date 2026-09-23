@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { ArrowLeft, Search, TrendingUp, AlertCircle, Package } from "lucide-react";
+import { ArrowLeft, Search, TrendingUp, AlertCircle, Package, ChevronRight } from "lucide-react";
 import Link from "next/link";
 import useSWR from "swr";
 
@@ -12,6 +12,7 @@ export default function RekapPergerakanPage() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(1);
   const [filter, setFilter] = useState("all"); // all, fast, slow
+  const [selectedDept, setSelectedDept] = useState<string | null>(null);
 
   // Debounce search input
   useEffect(() => {
@@ -22,10 +23,20 @@ export default function RekapPergerakanPage() {
     return () => clearTimeout(timer);
   }, [search]);
 
-  const { data, error, isLoading } = useSWR(
-    `/api/admin/reports?type=pergerakan&filter=${filter}&search=${debouncedSearch}&page=${page}&limit=20`,
-    fetcher
-  );
+  const handleFilterChange = (newFilter: string) => {
+    setFilter(newFilter);
+    setPage(1);
+    setSelectedDept(null);
+    setSearch("");
+  };
+
+  const shouldGroup = (filter === "fast" || filter === "slow") && !selectedDept && !debouncedSearch;
+
+  const endpoint = shouldGroup
+    ? `/api/admin/reports?type=pergerakan&filter=${filter}&groupBy=dept`
+    : `/api/admin/reports?type=pergerakan&filter=${filter}&search=${debouncedSearch}&page=${page}&limit=20${selectedDept ? `&dept=${encodeURIComponent(selectedDept)}` : ''}`;
+
+  const { data, error, isLoading } = useSWR(endpoint, fetcher);
 
   const formatRupiah = (angka: number) => {
     return new Intl.NumberFormat("id-ID", {
@@ -51,31 +62,31 @@ export default function RekapPergerakanPage() {
       {/* Tabs */}
       <div className="bg-white p-1 rounded-xl flex shadow-sm border border-slate-200 overflow-x-auto">
         <button
-          onClick={() => { setFilter("all"); setPage(1); }}
+          onClick={() => handleFilterChange("all")}
           className={`flex-none px-4 py-2 text-sm font-bold rounded-lg transition-colors ${filter === "all" ? "bg-slate-800 text-white" : "text-slate-500 hover:bg-slate-100"}`}
         >
           Semua Data
         </button>
         <button
-          onClick={() => { setFilter("fast"); setPage(1); }}
+          onClick={() => handleFilterChange("fast")}
           className={`flex-none px-4 py-2 text-sm font-bold rounded-lg transition-colors ${filter === "fast" ? "bg-rose-500 text-white" : "text-slate-500 hover:bg-slate-100"}`}
         >
           🔥 Fast Move
         </button>
         <button
-          onClick={() => { setFilter("slow"); setPage(1); }}
+          onClick={() => handleFilterChange("slow")}
           className={`flex-none px-4 py-2 text-sm font-bold rounded-lg transition-colors ${filter === "slow" ? "bg-blue-500 text-white" : "text-slate-500 hover:bg-slate-100"}`}
         >
           🐢 Slow Move
         </button>
         <button
-          onClick={() => { setFilter("minus"); setPage(1); }}
+          onClick={() => handleFilterChange("minus")}
           className={`flex-none px-4 py-2 text-sm font-bold rounded-lg transition-colors ${filter === "minus" ? "bg-amber-500 text-white" : "text-slate-500 hover:bg-slate-100"}`}
         >
           ⚠️ Plus Minus
         </button>
         <button
-          onClick={() => { setFilter("kritis"); setPage(1); }}
+          onClick={() => handleFilterChange("kritis")}
           className={`flex-none px-4 py-2 text-sm font-bold rounded-lg transition-colors ${filter === "kritis" ? "bg-red-600 text-white" : "text-slate-500 hover:bg-slate-100"}`}
         >
           🚨 Stok Kritis
@@ -110,8 +121,39 @@ export default function RekapPergerakanPage() {
             <Package className="w-12 h-12 text-slate-300" />
             <p className="text-sm">Tidak ada produk ditemukan.</p>
           </div>
+        ) : shouldGroup ? (
+          <div className="grid grid-cols-1 p-2 gap-2 bg-slate-50">
+            <div className="px-2 py-2 mb-1">
+              <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Pilih Departemen</h2>
+            </div>
+            {data?.data?.map((g: any) => (
+              <button 
+                key={g.dept}
+                onClick={() => setSelectedDept(g.dept)}
+                className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-200 shadow-sm hover:border-blue-400 hover:shadow-md transition-all text-left group"
+              >
+                <div className="flex flex-col">
+                  <span className="font-bold text-slate-800">{g.dept}</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="px-3 py-1 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold group-hover:bg-blue-50 group-hover:text-blue-700 transition-colors">{g.count} item</span>
+                  <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-blue-500 transition-colors" />
+                </div>
+              </button>
+            ))}
+          </div>
         ) : (
           <div className="divide-y divide-slate-100">
+            {selectedDept && (
+              <div className="p-3 bg-slate-100 border-b border-slate-200 flex items-center justify-between sticky top-0 z-10">
+                <div className="flex items-center gap-2">
+                  <button onClick={() => { setSelectedDept(null); setPage(1); }} className="p-1.5 bg-white rounded-lg border border-slate-300 hover:bg-slate-50">
+                    <ArrowLeft className="w-4 h-4 text-slate-700" />
+                  </button>
+                  <span className="font-bold text-sm text-slate-800">Dept: {selectedDept}</span>
+                </div>
+              </div>
+            )}
             {filter === "minus" ? (
               Object.entries(data.data.reduce((acc: any, curr: any) => {
                 const article = curr.article || 'Tanpa Artikel';
