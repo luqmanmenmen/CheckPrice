@@ -56,9 +56,15 @@ export default function RekapStokPage() {
         </button>
         <button
           onClick={() => { setFilter("habis"); setPage(1); }}
-          className={`flex-1 py-2 text-sm font-bold rounded-lg transition-colors ${filter === "habis" ? "bg-red-500 text-white" : "text-slate-500 hover:bg-slate-100"}`}
+          className={`flex-1 py-2 text-[11px] sm:text-sm font-bold rounded-lg transition-colors ${filter === "habis" ? "bg-red-500 text-white" : "text-slate-500 hover:bg-slate-100"}`}
         >
-          ❌ Habis / Kosong
+          ❌ Kosong
+        </button>
+        <button
+          onClick={() => { setFilter("minus"); setPage(1); }}
+          className={`flex-1 py-2 text-[11px] sm:text-sm font-bold rounded-lg transition-colors ${filter === "minus" ? "bg-amber-500 text-white" : "text-slate-500 hover:bg-slate-100"}`}
+        >
+          ⚠️ Plus Minus
         </button>
       </div>
 
@@ -92,28 +98,56 @@ export default function RekapStokPage() {
           </div>
         ) : (
           <div className="divide-y divide-slate-100">
-            {data.data.map((product: any) => (
-              <div key={product.id} className="p-4 hover:bg-slate-50 transition-colors flex items-center justify-between gap-4">
-                <div className="flex-1">
-                  <h3 className="font-bold text-slate-800 text-sm leading-tight line-clamp-2">{product.description}</h3>
-                  <div className="flex items-center gap-2 mt-1.5">
-                    <p className="text-xs text-slate-500 font-mono bg-slate-100 px-1.5 py-0.5 rounded">{product.sku}</p>
-                    {product.brand && <p className="text-[10px] text-slate-400 uppercase">{product.brand}</p>}
+            {filter === "minus" ? (
+              Object.entries(data.data.reduce((acc: any, curr: any) => {
+                const article = curr.article || 'Tanpa Artikel';
+                if (!acc[article]) acc[article] = [];
+                acc[article].push(curr);
+                return acc;
+              }, {})).map(([article, items]: any) => (
+                <div key={article} className="p-4 bg-white border-b border-slate-200">
+                  <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">{article}</h3>
+                  <div className="flex flex-col gap-2">
+                    {items.map((item: any) => (
+                      <div key={item.id} className={`p-3 rounded-lg border ${item.stok < 0 ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200 shadow-sm'}`}>
+                         <div className="flex justify-between items-center gap-3">
+                           <div className="flex-1">
+                             <p className="font-bold text-sm text-slate-800 leading-tight">{item.description}</p>
+                             <p className="text-[10px] text-slate-500 font-mono mt-0.5">{item.sku}</p>
+                           </div>
+                           <div className={`px-3 py-1.5 rounded-lg text-lg font-black tracking-wider whitespace-nowrap ${item.stok < 0 ? 'text-red-700 bg-red-100' : 'text-green-700 bg-green-100'}`}>
+                             {item.stok > 0 ? '+' : ''}{item.stok}
+                           </div>
+                         </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
-                
-                <div className="flex flex-col items-end">
-                  <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-0.5">Sisa (EOH)</p>
-                  <div className={`px-3 py-1.5 rounded-lg text-base font-black ${
-                    product.stok > 10 ? 'bg-amber-100 text-amber-700' :
-                    product.stok > 0 ? 'bg-orange-100 text-orange-700' :
-                    'bg-red-100 text-red-700'
-                  }`}>
-                    {product.stok} <span className="text-[10px] font-bold uppercase opacity-80">pcs</span>
+              ))
+            ) : (
+              data.data.map((product: any) => (
+                <div key={product.id} className="p-4 hover:bg-slate-50 transition-colors flex items-center justify-between gap-4">
+                  <div className="flex-1">
+                    <h3 className="font-bold text-slate-800 text-sm leading-tight line-clamp-2">{product.description}</h3>
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <p className="text-xs text-slate-500 font-mono bg-slate-100 px-1.5 py-0.5 rounded">{product.sku}</p>
+                      {product.brand && <p className="text-[10px] text-slate-400 uppercase">{product.brand}</p>}
+                    </div>
+                  </div>
+                  
+                  <div className="flex flex-col items-end">
+                    <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-0.5">Sisa (EOH)</p>
+                    <div className={`px-3 py-1.5 rounded-lg text-base font-black ${
+                      product.stok > 10 ? 'bg-amber-100 text-amber-700' :
+                      product.stok > 0 ? 'bg-orange-100 text-orange-700' :
+                      'bg-red-100 text-red-700'
+                    }`}>
+                      {product.stok} <span className="text-[10px] font-bold uppercase opacity-80">pcs</span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         )}
       </div>

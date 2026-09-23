@@ -79,9 +79,18 @@ export async function GET(request: Request) {
       }
     } else if (type === 'stok') {
       if (filter === 'habis') {
-        where = { ...where, stok: { lte: 0 } };
+        where = { ...where, stok: { lte: 0 }, article: { notIn: minusArticlesArray } };
       } else if (filter === 'tersedia') {
-        where = { ...where, stok: { gt: 0 } };
+        where = { ...where, stok: { gt: 0 }, article: { notIn: minusArticlesArray } };
+      } else if (filter === 'minus') {
+        if (minusArticlesArray.length > 0) {
+          where = { ...where, article: { in: minusArticlesArray } }; 
+        } else {
+          where = { ...where, id: -1 };
+        }
+      } else {
+        // filter === 'all'
+        where = { ...where, article: { notIn: minusArticlesArray } };
       }
     }
 
@@ -106,7 +115,14 @@ export async function GET(request: Request) {
         { sales_mtd: 'desc' } // lalu terjual terbanyak
       ];
     } else if (type === 'stok') {
-      orderBy = { stok: 'desc' };
+      if (filter === 'minus') {
+        orderBy = [
+          { article: 'asc' },
+          { stok: 'asc' }
+        ];
+      } else {
+        orderBy = { stok: 'desc' };
+      }
     }
 
     // Fetch data and count concurrently
