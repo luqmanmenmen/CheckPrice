@@ -112,35 +112,63 @@ export default function RekapPergerakanPage() {
           </div>
         ) : (
           <div className="divide-y divide-slate-100">
-            {data.data.map((product: any) => (
-              <div key={product.id} className="p-4 hover:bg-slate-50 transition-colors">
-                <div className="flex justify-between items-start mb-2">
-                  <div>
-                    <h3 className="font-bold text-slate-800 text-sm leading-tight">{product.description}</h3>
-                    <p className="text-xs text-slate-500 font-mono mt-1">{product.sku}</p>
-                  </div>
-                  <div className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${
-                    product.sales_mtd > 5 ? 'bg-rose-100 text-rose-700' : 
-                    product.sales_mtd <= 2 ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'
-                  }`}>
-                    Terjual {product.sales_mtd}
-                  </div>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-2 mt-3 bg-slate-50 p-2 rounded-lg border border-slate-100">
-                  <div>
-                    <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Sisa Stok</p>
-                    <p className={`text-sm font-black ${product.stok <= 0 ? 'text-red-500' : 'text-slate-800'}`}>
-                      {product.stok} pcs
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Harga Normal</p>
-                    <p className="text-sm font-bold text-slate-800">{formatRupiah(product.hargaNormal)}</p>
+            {filter === "minus" ? (
+              Object.entries(data.data.reduce((acc: any, curr: any) => {
+                const article = curr.article || 'Tanpa Artikel';
+                if (!acc[article]) acc[article] = [];
+                acc[article].push(curr);
+                return acc;
+              }, {})).map(([article, items]: any) => (
+                <div key={article} className="p-4 bg-white border-b border-slate-200">
+                  <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">{article}</h3>
+                  <div className="flex flex-col gap-2">
+                    {items.map((item: any) => (
+                      <div key={item.id} className={`p-3 rounded-lg border ${item.stok < 0 ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200 shadow-sm'}`}>
+                         <div className="flex justify-between items-center gap-3">
+                           <div className="flex-1">
+                             <p className="font-bold text-sm text-slate-800 leading-tight">{item.description}</p>
+                             <p className="text-[10px] text-slate-500 font-mono mt-0.5">{item.sku}</p>
+                           </div>
+                           <div className={`px-3 py-1.5 rounded-lg text-lg font-black tracking-wider whitespace-nowrap ${item.stok < 0 ? 'text-red-700 bg-red-100' : 'text-green-700 bg-green-100'}`}>
+                             {item.stok > 0 ? '+' : ''}{item.stok}
+                           </div>
+                         </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
-              </div>
-            ))}
+              ))
+            ) : (
+              data.data.map((product: any) => (
+                <div key={product.id} className="p-4 hover:bg-slate-50 transition-colors">
+                  <div className="flex justify-between items-start mb-2">
+                    <div>
+                      <h3 className="font-bold text-slate-800 text-sm leading-tight">{product.description}</h3>
+                      <p className="text-xs text-slate-500 font-mono mt-1">{product.sku}</p>
+                    </div>
+                    <div className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${
+                      product.sales_mtd > 5 ? 'bg-rose-100 text-rose-700' : 
+                      product.sales_mtd <= 2 ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'
+                    }`}>
+                      Terjual {product.sales_mtd}
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-2 mt-3 bg-slate-50 p-2 rounded-lg border border-slate-100">
+                    <div>
+                      <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Sisa Stok</p>
+                      <p className={`text-sm font-black ${product.stok <= 0 ? 'text-red-500' : 'text-slate-800'}`}>
+                        {product.stok} pcs
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Harga Normal</p>
+                      <p className="text-sm font-bold text-slate-800">{formatRupiah(product.hargaNormal)}</p>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         )}
       </div>

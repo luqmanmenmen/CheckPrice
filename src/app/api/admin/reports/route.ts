@@ -27,6 +27,16 @@ export async function GET(request: Request) {
       };
     }
 
+    // Find all articles that have a negative stock
+    const minusStockProducts = await prisma.product.findMany({
+      where: { stok: { lt: 0 } },
+      select: { article: true }
+    });
+    
+    // Extract unique articles (some might be null)
+    const minusArticlesSet = new Set(minusStockProducts.map(p => p.article).filter(Boolean));
+    const minusArticlesArray = Array.from(minusArticlesSet) as string[];
+
     // Apply type specific filters
     if (type === 'promo') {
       where = {
@@ -37,9 +47,21 @@ export async function GET(request: Request) {
       if (filter === 'fast') {
         where = { ...where, sales_mtd: { gt: 5 } }; // terjual lebih dari 5 = fast move
       } else if (filter === 'slow') {
-        where = { ...where, sales_mtd: { lte: 2 }, stok: { gte: 0 } }; // terjual 0-2 dan bukan stok minus
+        where = { 
+          ...where, 
+          sales_mtd: { lte: 2 }, 
+          stok: { gte: 0 },
+          // Exclude products that are part of a plus-minus pair
+          article: { notIn: minusArticlesArray } 
+        }; 
       } else if (filter === 'minus') {
-        where = { ...where, stok: { lt: 0 } }; // khusus stok minus
+        // Instead of just stok < 0, we want ALL variants of an article that has a negative stock
+        if (minusArticlesArray.length > 0) {
+          where = { ...where, article: { in: minusArticlesArray } }; 
+        } else {
+          // If no minus products, force empty result
+          where = { ...where, id: -1 };
+        }
       } else if (filter === 'kritis') {
         where = { ...where, sales_mtd: { gte: 3 }, stok: { lte: 5, gte: 0 } }; // laku tapi stok menipis
       }
@@ -62,7 +84,10 @@ export async function GET(request: Request) {
         { stok: 'desc' }, // prioritas stok mati terbanyak
       ];
     } else if (type === 'pergerakan' && filter === 'minus') {
-      orderBy = { stok: 'asc' }; // stok paling minus di atas
+      orderBy = [
+        { article: 'asc' }, // Group by article logically
+        { stok: 'asc' }     // Put the minus one first
+      ];
     } else if (type === 'pergerakan' && filter === 'kritis') {
       orderBy = [
         { stok: 'asc' }, // urutkan dari stok yang paling mepet (0, 1, 2)

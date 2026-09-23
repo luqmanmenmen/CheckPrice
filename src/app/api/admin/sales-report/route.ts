@@ -48,6 +48,8 @@ export async function GET(request: NextRequest) {
     let totalPromoRevenue = 0;
     let totalQty = 0;
     let anomalyCount = 0;
+    
+    const categoryBreakdown: Record<string, { omzet: number, qty: number }> = {};
 
     const reportItems = salesData.map(sale => {
       const p = sale.product;
@@ -78,6 +80,13 @@ export async function GET(request: NextRequest) {
         totalPromoRevenue += itemTotal;
       }
       totalQty += sale.qtySold;
+      
+      const dept = p.dept || 'LAINNYA';
+      if (!categoryBreakdown[dept]) {
+        categoryBreakdown[dept] = { omzet: 0, qty: 0 };
+      }
+      categoryBreakdown[dept].omzet += itemTotal;
+      categoryBreakdown[dept].qty += sale.qtySold;
 
       return {
         id: sale.id,
@@ -92,6 +101,31 @@ export async function GET(request: NextRequest) {
       };
     });
 
+    // Fetch trend data (last 7 available dates)
+    const trendDates = [...availableDates].slice(0, 7).reverse();
+    const trendData = [];
+    
+    for (const d of trendDates) {
+      const sDay = new Date(`${d}T00:00:00.000Z`);
+      const eDay = new Date(`${d}T23:59:59.999Z`);
+      const daySales = await prisma.dailySales.findMany({
+        where: { date: { gte: sDay, lte: eDay } },
+        include: { product: true }
+      });
+      
+      let dayRev = 0;
+      let dayQty = 0;
+      for (const ds of daySales) {
+        const isPromo = ds.product.hargaPromo !== null && ds.product.hargaPromo > 0;
+        const unitPrice = isPromo ? ds.product.hargaPromo! : (ds.product.hargaNormal || 0);
+        dayRev += unitPrice * ds.qtySold;
+        dayQty += ds.qtySold;
+      }
+      
+      const dateLabel = new Date(d).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
+      trendData.push({ date: dateLabel, fullDate: d, omzet: dayRev, qty: dayQty });
+    }
+
     return NextResponse.json({
       success: true,
       data: {
@@ -103,6 +137,8 @@ export async function GET(request: NextRequest) {
           totalQty,
           anomalyCount,
         },
+        categoryBreakdown,
+        trendData,
         items: reportItems
       }
     });
