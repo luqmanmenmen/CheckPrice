@@ -70,21 +70,37 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       const result: any = await workerRef.current.recognize(canvas);
       const text = result.data.text.toUpperCase();
       
-      // LOGIKA CERDAS DARI USER: 
-      // 1. Buang SEMUA huruf/simbol/dash menjadi spasi
-      const cleanText = text.replace(/[^0-9]/g, ' ');
+      // LOGIKA CERDAS V3: Analisis Baris per Baris (Anti-Barcode)
+      const lines = text.split('\n');
+      const valid8Digits: string[] = [];
       
-      // 2. Pisahkan menjadi blok-blok angka murni
-      const numberBlocks = cleanText.split(/\s+/).filter(Boolean);
+      for (const line of lines) {
+          // 1. Buang semua huruf/simbol, ambil murni angkanya saja dalam baris ini
+          const digits = line.replace(/\D/g, '');
+          
+          // 2. FILTER ANTI-BARCODE: 
+          // Jika baris ini memiliki 12-14 angka, ini dipastikan barcode yang tersorot kamera! Abaikan.
+          if (digits.length >= 12 && digits.length <= 14) continue;
+          
+          // 3. FILTER ANTI-HARGA:
+          if (line.includes('RP') || digits === '129900') continue;
+          
+          // 4. TANGKAP SKU:
+          if (digits.length === 8) {
+              valid8Digits.push(digits);
+          } else if (digits.length > 8 && digits.length <= 22) {
+              // Jika Tesseract membaca "605-12218278 13472861" jadi 1 baris (19 angka)
+              // Maka kita potong dan ambil persis 8 angka paling belakangnya!
+              valid8Digits.push(digits.slice(-8));
+          }
+      }
       
-      // 3. Cari blok yang TEPAT berisi 8 digit angka
-      const skuCandidates = numberBlocks.filter((block: string) => block.length === 8);
-      
-      // 4. Ambil 8-digit TERAKHIR (karena biasanya di bawah 605-12218278)
-      if (skuCandidates.length > 0) {
-         const finalSku = skuCandidates[skuCandidates.length - 1];
-         handleSuccess(finalSku, "OCR (Angka 8-Digit)");
-         return;
+      // 5. Eksekusi SKU Terakhir
+      if (valid8Digits.length > 0) {
+          // Ambil kandidat terbawah (karena SKU selalu di bawah kode pabrik)
+          const finalSku = valid8Digits[valid8Digits.length - 1];
+          handleSuccess(finalSku, "OCR (Smart Line Filter)");
+          return;
       }
     } catch (err) {
       console.error("OCR Check Error", err);
