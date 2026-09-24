@@ -36,6 +36,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
   const [torchOn, setTorchOn] = useState(false);
   const [hasTorch, setHasTorch] = useState(false);
   const [foundSku, setFoundSku] = useState<string | null>(null);
+  const [scanFeedback, setScanFeedback] = useState<"idle" | "wrong_target">("idle");
 
   async function scanFrameForText() {
     if (isHandlingResult.current || !workerRef.current || !canvasRef.current || !scannerRef.current) return;
@@ -70,17 +71,27 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       const result: any = await workerRef.current.recognize(canvas);
       const text = result.data.text.toUpperCase();
       
-      // LOGIKA CERDAS V3: Analisis Baris per Baris (Anti-Barcode)
+      // LOGIKA CERDAS V3: Analisis Baris per Baris (Anti-Barcode & Anti-Artikel)
       const lines = text.split('\n');
       const valid8Digits: string[] = [];
+      let detectedWrong = false;
       
       for (const line of lines) {
+          // FILTER ANTI-ARTIKEL (KODE PABRIK): Misal "605-12218278" atau "605 12218278"
+          // Jika ada pola 3 angka + spasi/dash + 8 angka, kita buang langsung agar 12218278 tidak disangka SKU!
+          if (/\b\d{3}\s*[-]?\s*\d{8}\b/.test(line)) {
+              detectedWrong = true;
+              continue; 
+          }
+
           // 1. Buang semua huruf/simbol, ambil murni angkanya saja dalam baris ini
           const digits = line.replace(/\D/g, '');
           
           // 2. FILTER ANTI-BARCODE: 
-          // Jika baris ini memiliki 12-14 angka, ini dipastikan barcode yang tersorot kamera! Abaikan.
-          if (digits.length >= 12 && digits.length <= 14) continue;
+          if (digits.length >= 12 && digits.length <= 14) {
+              detectedWrong = true;
+              continue;
+          }
           
           // 3. FILTER ANTI-HARGA:
           if (line.includes('RP') || digits === '129900') continue;
@@ -89,18 +100,21 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
           if (digits.length === 8) {
               valid8Digits.push(digits);
           } else if (digits.length > 8 && digits.length <= 22) {
-              // Jika Tesseract membaca "605-12218278 13472861" jadi 1 baris (19 angka)
-              // Maka kita potong dan ambil persis 8 angka paling belakangnya!
               valid8Digits.push(digits.slice(-8));
           }
       }
       
       // 5. Eksekusi SKU Terakhir
       if (valid8Digits.length > 0) {
-          // Ambil kandidat terbawah (karena SKU selalu di bawah kode pabrik)
           const finalSku = valid8Digits[valid8Digits.length - 1];
           handleSuccess(finalSku, "OCR (Smart Line Filter)");
           return;
+      }
+      
+      // Jika salah fokus, berikan feedback merah
+      if (detectedWrong) {
+          setScanFeedback("wrong_target");
+          setTimeout(() => setScanFeedback("idle"), 800);
       }
     } catch (err) {
       console.error("OCR Check Error", err);
@@ -185,6 +199,10 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
             // Jika kebetulan barcodenya EAN-8 (tepat 8 digit), mungkin itu SKU, jadi kita izinkan.
             if (decodedText.length === 8) {
                 handleSuccess(decodedText, "BARCODE");
+            } else {
+                // Beri tahu UI bahwa kamera sedang nyasar ke barcode batang!
+                setScanFeedback("wrong_target");
+                setTimeout(() => setScanFeedback("idle"), 800);
             }
             // Selain 8 digit, hiraukan sama sekali!
           },
@@ -246,17 +264,27 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
   return (
     <div className="flex flex-col gap-3">
       {/* Kotak Scanner Utama */}
-      <div className="relative rounded-3xl overflow-hidden bg-slate-900 shadow-2xl border-4 border-slate-800">
+      <div className={`relative rounded-3xl overflow-hidden shadow-2xl border-4 transition-colors duration-300 ${
+         foundSku ? "border-green-500 bg-green-900" :
+         scanFeedback === "wrong_target" ? "border-red-500 bg-red-900" :
+         "border-slate-800 bg-slate-900"
+      }`}>
         
         {/* Kontainer html5-qrcode */}
         <div id="reader" className="w-full min-h-[300px] sm:min-h-[400px] bg-black"></div>
 
-        {/* Overlay Animasi Scan Grid ala Alfa Gift */}
+        {/* Overlay Animasi Scan Grid */}
         {!foundSku && (
           <div className="absolute inset-0 pointer-events-none z-10 overflow-hidden flex flex-col justify-start">
-            <div className="w-full h-[25%] bg-gradient-to-b from-transparent to-red-500/20 border-b-[3px] border-red-500 animate-scan-grid shadow-[0_10px_20px_rgba(239,68,68,0.3)] relative">
-               <div className="absolute inset-0 opacity-40" style={{
-                 backgroundImage: 'linear-gradient(rgba(239,68,68,1) 1px, transparent 1px), linear-gradient(90deg, rgba(239,68,68,1) 1px, transparent 1px)',
+            <div className={`w-full h-[25%] border-b-[3px] animate-scan-grid relative transition-colors duration-300 ${
+               scanFeedback === "wrong_target" 
+                 ? "bg-gradient-to-b from-transparent to-red-500/30 border-red-500 shadow-[0_10px_20px_rgba(239,68,68,0.4)]"
+                 : "bg-gradient-to-b from-transparent to-indigo-500/30 border-indigo-500 shadow-[0_10px_20px_rgba(99,102,241,0.4)]"
+             }`}>
+               <div className="absolute inset-0 opacity-40 transition-colors duration-300" style={{
+                 backgroundImage: scanFeedback === "wrong_target" 
+                   ? 'linear-gradient(rgba(239,68,68,1) 1px, transparent 1px), linear-gradient(90deg, rgba(239,68,68,1) 1px, transparent 1px)'
+                   : 'linear-gradient(rgba(99,102,241,1) 1px, transparent 1px), linear-gradient(90deg, rgba(99,102,241,1) 1px, transparent 1px)',
                  backgroundSize: '15px 15px'
                }}></div>
             </div>
