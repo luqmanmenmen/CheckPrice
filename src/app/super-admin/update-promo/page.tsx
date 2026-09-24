@@ -113,7 +113,12 @@ export default function UpdateHargaPage() {
         for (const sheetName of workbook.SheetNames) {
           const ws = workbook.Sheets[sheetName];
           const rawRows = xlsx.utils.sheet_to_json(ws, { defval: "" });
-          allRows = allRows.concat(rawRows);
+          const rowsWithSource = rawRows.map((r: any) => ({
+            ...r,
+            __SOURCE_FILE__: file.name,
+            __SOURCE_SHEET__: sheetName
+          }));
+          allRows = allRows.concat(rowsWithSource);
         }
       }
 

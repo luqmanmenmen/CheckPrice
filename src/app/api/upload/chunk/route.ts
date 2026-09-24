@@ -1,0 +1,620 @@
+import { NextRequest, NextResponse } from "next/server";
+import { PrismaClient } from "@prisma/client";
+import * as xlsx from "xlsx";
+import * as path from "path";
+import * as fs from "fs";
+import { verifyToken } from "@/lib/auth";
+
+const prisma = new PrismaClient();
+
+export const maxDuration = 60; // Izinkan proses upload hingga 60 detik (Mencegah Vercel 10s Timeout)
+
+// -------------------------------------------------------
+// Helper: parse Excel date serial OR string date
+// -------------------------------------------------------
+function parseExcelDate(value: any): string | null {
+  if (!value && value !== 0) return null;
+  if (typeof value === "number") {
+    try {
+      const parsed = xlsx.SSF.parse_date_code(value);
+      if (!parsed) return String(value);
+      return `${parsed.y}-${String(parsed.m).padStart(2, "0")}-${String(parsed.d).padStart(2, "0")}`;
+    } catch {
+      return String(value);
+    }
+  }
+  const str = String(value).trim();
+  return str || null;
+}
+
+// -------------------------------------------------------
+// Helper: safe float parse
+// -------------------------------------------------------
+function safeFloat(val: any): number {
+  if (val === null || val === undefined || val === "") return 0;
+  const n = parseFloat(String(val).replace(/[^0-9.-]/g, ""));
+  return isNaN(n) ? 0 : n;
+}
+
+// -------------------------------------------------------
+// REQUIRED: a sheet must have at least SKU + DESCRIPTION + HARGA NORMAL
+// -------------------------------------------------------
+// REQUIRED: a sheet must have at least SKU
+const REQUIRED_COLS = ["SKU"];
+
+// Mapping fleksibel nama kolom → nama standar kita
+// Agar sheet dengan variasi nama kolom tetap terbaca
+const COL_ALIASES: Record<string, string[]> = {
+  "SKU":          ["SKU", "KODE", "KODE PRODUK", "PRODUCT CODE", "CODE", "ID"],
+  "DESCRIPTION":  ["DESCRIPTION", "ITEM_DESCRIPTION", "ITEM DESCRIPTION", "NAMA", "NAMA PRODUK", "PRODUCT NAME", "DESC", "KETERANGAN", "DESKRIPSI", "ITEM_DESCRIP"],
+  "HARGA NORMAL": ["HARGA NORMAL", "HARGA", "NORMAL PRICE", "PRICE", "HARGA JUAL", "REGULAR PRICE", "HARGA POKOK"],
+  "HARGA PROMO":  ["HARGA PROMO", "PROMO PRICE", "PROMO", "HARGA DISKON", "DISC PRICE"],
+  "ARTICLE":      ["ARTICLE", "ARTIKEL", "BARCODE", "NO ARTIKEL", "PARENT_NAME", "PARENT NAME"],
+  "FROM DATE":    ["FROM DATE", "DARI TANGGAL", "START DATE", "TGL MULAI", "FROM"],
+  "TO DATE":      ["TO DATE", "SAMPAI TANGGAL", "END DATE", "TGL AKHIR", "TO", "BERLAKU SAMPAI"],
+  "DISKON":       ["DISKON", "DISCOUNT", "DISC", "POTONGAN"],
+  "DISCOUNT TYPE":["DISCOUNT TYPE", "TIPE DISKON", "JENIS DISKON"],
+  "BRAND":        ["BRAND", "MEREK", "MERK", "GROUP"],
+  "DEPT":         ["DEPT", "DEPARTMENT", "DIVISI", "KATEGORI", "CATEGORY"],
+  "ACARA":        ["ACARA", "EVENT", "PROMO NAME", "NAMA PROMO"],
+  "STOK":         ["STOK", "EOH_UNIT", "EOH UNIT", "EOH", "SISA STOK", "QTY", "STOK SISA"],
+  "SALES_MTD":    ["SALES_MTD", "MTD_SALES_UNIT", "MTD SALES UNIT", "SALES MTD", "MTD", "TERJUAL", "SALES"],
+};
+
+// Some sheets have column names with leading/trailing spaces like " HARGA NORMAL "
+// Normalize a row object so all keys are trimmed
+function normalizeKeys(row: any): any {
+  const out: any = {};
+  for (const key of Object.keys(row)) {
+    out[key.trim().toUpperCase()] = row[key];
+  }
+  return out;
+}
+
+// Remap keys from raw normalized row using alias mapping
+function remapKeys(row: any): any {
+  const out: any = { ...row };
+  for (const [standard, aliases] of Object.entries(COL_ALIASES)) {
+    if (standard in out) continue; // already has the standard key
+    for (const alias of aliases) {
+      if (alias in out) {
+        out[standard] = out[alias];
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+function sheetHasRequiredCols(remappedRow: any): boolean {
+  return REQUIRED_COLS.every((col) => col in remappedRow && remappedRow[col] !== undefined && remappedRow[col] !== "");
+}
+
+// -------------------------------------------------------
+// Parse a single data row into our Product shape
+// -------------------------------------------------------
+function parseRow(row: any) {
+  const sku = String(row["SKU"] ?? "").trim();
+  const article = row["ARTICLE"] !== undefined ? (String(row["ARTICLE"]).trim() || null) : undefined;
+  const description = row["DESCRIPTION"] !== undefined ? String(row["DESCRIPTION"]).trim() : undefined;
+  const acara = row["ACARA"] !== undefined ? (String(row["ACARA"]).trim() || null) : undefined;
+  const fromDate = row["FROM DATE"] !== undefined ? parseExcelDate(row["FROM DATE"]) : undefined;
+  const toDate = row["TO DATE"] !== undefined ? parseExcelDate(row["TO DATE"]) : undefined;
+  let hargaNormal = row["HARGA NORMAL"] !== undefined ? safeFloat(row["HARGA NORMAL"]) : undefined;
+  
+  // Smart Price Extraction untuk file Power Query (jika kolom harga tidak ada)
+  if (hargaNormal === undefined || hargaNormal === 0) {
+    const eohUnit = safeFloat(row["EOH_UNIT"]);
+    const eohRetail = safeFloat(row["EOH_RETAIL"]);
+    const ytdUnit = safeFloat(row["YTD_SALES_UNIT"]);
+    const ytdRetail = safeFloat(row["YTD_SALES_RETAIL"]);
+    const boyUnit = safeFloat(row["BOY_UNIT"]);
+    const boyRetail = safeFloat(row["BOY_RETAIL"]);
+
+    let basePrice = 0;
+    if (eohUnit > 0) basePrice = eohRetail / eohUnit;
+    else if (ytdUnit > 0) basePrice = ytdRetail / ytdUnit;
+    else if (boyUnit > 0) basePrice = boyRetail / boyUnit;
+
+    if (basePrice > 0) {
+      hargaNormal = Math.round(basePrice);
+    }
+  }
+  
+  const rawPromo = row["HARGA PROMO"];
+  let hargaPromo: number | null | undefined = undefined;
+  if (rawPromo !== undefined) {
+    const rawPromoStr = typeof rawPromo === "string" ? rawPromo.toUpperCase() : "";
+    const isTextPromo = rawPromoStr.includes("NORMAL") || rawPromoStr.match(/B\dG\d/) || rawPromoStr.includes("BXGY") || rawPromoStr === "";
+    
+    const hargaPromoRaw = isTextPromo ? null : safeFloat(rawPromo);
+    hargaPromo = hargaPromoRaw && hargaPromoRaw > 0 ? hargaPromoRaw : null;
+  }
+
+  const diskon = row["DISKON"] !== undefined ? (String(row["DISKON"]).trim() || null) : undefined;
+  const discountType = row["DISCOUNT TYPE"] !== undefined ? (String(row["DISCOUNT TYPE"]).trim() || null) : undefined;
+  const brand = row["BRAND"] !== undefined ? (String(row["BRAND"]).trim() || null) : undefined;
+  const dept = row["DEPT"] !== undefined ? (String(row["DEPT"]).trim() || null) : undefined;
+  
+  const stok = row["STOK"] !== undefined && row["STOK"] !== "" ? parseInt(row["STOK"]) || 0 : undefined;
+  const sales_mtd = row["SALES_MTD"] !== undefined && row["SALES_MTD"] !== "" ? parseInt(row["SALES_MTD"]) || 0 : undefined;
+  
+  const sourceFile = row["__SOURCE_FILE__"] !== undefined ? String(row["__SOURCE_FILE__"]) : undefined;
+  const sourceSheet = row["__SOURCE_SHEET__"] !== undefined ? String(row["__SOURCE_SHEET__"]) : undefined;
+
+  return {
+    sku,
+    article,
+    description,
+    acara,
+    fromDate,
+    toDate,
+    hargaNormal,
+    hargaPromo,
+    diskon,
+    discountType,
+    brand,
+    dept,
+    stok,
+    sales_mtd,
+    sourceFile,
+    sourceSheet,
+  };
+}
+
+// -------------------------------------------------------
+// Process one workbook (Buffer) → deduped product map
+//   Priority rule: PROMO record wins over NORMAL PRICE for same SKU
+// -------------------------------------------------------
+function processWorkbook(
+  buffer: Buffer, 
+  productMap: Map<string, ReturnType<typeof parseRow>> = new Map(),
+  fileName?: string
+): {
+  productMap: Map<string, ReturnType<typeof parseRow>>;
+  sheetLog: string[];
+} {
+  const workbook = xlsx.read(buffer, { type: "buffer", cellDates: false });
+  const sheetLog: string[] = [];
+
+  for (const sheetName of workbook.SheetNames) {
+    const ws = workbook.Sheets[sheetName];
+    const rawRows = xlsx.utils.sheet_to_json(ws, { defval: "" }) as any[];
+
+    if (rawRows.length === 0) {
+      sheetLog.push(`[EMPTY] ${sheetName}`);
+      continue;
+    }
+
+    // Normalize ALL rows to trim whitespace from column names, then remap aliases
+    const rows = rawRows.map(r => {
+      const normalized = remapKeys(normalizeKeys(r));
+      if (fileName) normalized["__SOURCE_FILE__"] = fileName;
+      normalized["__SOURCE_SHEET__"] = sheetName;
+      return normalized;
+    });
+
+    const firstRow = rows[0];
+    if (!sheetHasRequiredCols(firstRow)) {
+      const foundKeys = Object.keys(firstRow).slice(0, 8).join(", ");
+      sheetLog.push(`[SKIP] ${sheetName} — header tidak sesuai (found: ${foundKeys})`);
+      continue;
+    }
+
+    let added = 0;
+    let updated = 0;
+
+    for (const row of rows) {
+      const sku = String(row["SKU"] ?? "").trim();
+      if (!sku) continue;
+
+      const parsed = parseRow(row);
+      const existing = productMap.get(sku);
+
+      if (!existing) {
+        // New SKU → add
+        productMap.set(sku, parsed);
+        added++;
+      } else {
+        // Duplicate SKU in different sheet of same file
+        // Rule: Promo active wins over Normal Price
+        const existingIsPromo = (existing.hargaPromo !== null && existing.hargaPromo !== undefined && existing.hargaPromo > 0) || 
+                                (existing.diskon !== null && existing.diskon !== undefined);
+        const newIsPromo = (parsed.hargaPromo !== null && parsed.hargaPromo !== undefined && parsed.hargaPromo > 0) || 
+                           (parsed.diskon !== null && parsed.diskon !== undefined);
+
+        if (!existingIsPromo && newIsPromo) {
+          // Replace: new has promo, old doesn't
+          productMap.set(sku, parsed);
+          updated++;
+        }
+        // else: keep existing
+      }
+    }
+
+    sheetLog.push(`[OK] ${sheetName} — ${added} new, ${updated} updated`);
+  }
+
+  return { productMap, sheetLog };
+}
+
+// -------------------------------------------------------
+// Upsert a map of products to DB
+//   - SKU baru    → tambah semua data (create)
+//   - SKU lama    → hanya update harga & info promo (update)
+// -------------------------------------------------------
+async function upsertProducts(
+  productMap: Map<string, ReturnType<typeof parseRow>>,
+  uploadDate: Date = new Date(),
+  fileName: string | null = null
+): Promise<{ created: number; updated: number; failed: number }> {
+  let created = 0;
+  let updated = 0;
+  let failed = 0;
+
+  const allItems = Array.from(productMap.values());
+  const allSkus = allItems.map((item) => item.sku);
+
+  // 1. Ambil semua SKU yang sudah ada di database (Batch Query)
+  const existingProducts = await prisma.product.findMany({
+    where: { sku: { in: allSkus } },
+    select: { 
+      id: true, sku: true, stok: true,
+      hargaPromo: true, diskon: true, discountType: true, acara: true, fromDate: true, toDate: true
+    },
+  });
+  const existingProductMap = new Map(existingProducts.map((p) => [p.sku, p]));
+
+  const itemsToCreate = [];
+  const itemsToUpdate = [];
+
+  for (const item of allItems) {
+    if (existingProductMap.has(item.sku)) {
+      itemsToUpdate.push(item);
+    } else {
+      // New SKU → add with default fallback for missing required fields
+      const isPromo = item.hargaPromo !== undefined || item.diskon !== undefined || item.discountType !== undefined || item.acara !== undefined;
+      const explicitFileName = item.sourceFile && item.sourceSheet ? `${item.sourceFile} [Sheet: ${item.sourceSheet}]` : fileName;
+      
+      itemsToCreate.push({
+        ...item,
+        description: item.description ?? "-",
+        hargaNormal: item.hargaNormal ?? 0,
+        stok: item.stok ?? 0,
+        sales_mtd: item.sales_mtd ?? 0,
+        promoFileName: isPromo && explicitFileName ? explicitFileName : null,
+      });
+    }
+  }
+
+  // 2. Insert produk baru sekaligus (Bulk Insert)
+  if (itemsToCreate.length > 0) {
+    try {
+      // Chunking if array is too large, but 8000 is usually fine for createMany
+      const result = await prisma.product.createMany({
+        data: itemsToCreate,
+        skipDuplicates: true,
+      });
+      created = result.count;
+    } catch (err) {
+      console.error("Bulk create error", err);
+      failed += itemsToCreate.length;
+    }
+  }
+
+  // 3. Update produk lama (FAST Bulk Update Raw SQL)
+  if (itemsToUpdate.length > 0) {
+    const chunkSize = 1000; // Proses 1000 data sekaligus dalam 1 detik
+    
+    for (let i = 0; i < itemsToUpdate.length; i += chunkSize) {
+      const chunk = itemsToUpdate.slice(i, i + chunkSize);
+      
+      const values: any[] = [];
+      const rowPlaceholders: string[] = [];
+      let paramIndex = 1;
+      const dailySalesData: any[] = [];
+
+      for (const item of chunk) {
+        const existingInfo = existingProductMap.get(item.sku);
+        if (!existingInfo) continue;
+
+        // LOGIKA DELTA EOH
+        const oldStok = existingInfo.stok || 0;
+        let salesDelta = 0;
+        if (item.stok !== undefined && oldStok > 0 && item.stok < oldStok) {
+          salesDelta = oldStok - item.stok;
+        }
+
+        // Cek promo
+        let finalPromoToSave;
+        let finalDiskonToSave;
+        let finalDiscountTypeToSave;
+        let finalAcaraToSave;
+        let finalFromDateToSave;
+        let finalToDateToSave;
+
+        // Smart File Recognition: Determine if THIS ROW contains ANY promo-related data updates
+        const isPromoFile = item.hargaPromo !== undefined || 
+                            item.diskon !== undefined || 
+                            item.discountType !== undefined || 
+                            item.acara !== undefined;
+
+        if (!isPromoFile) {
+          // File Excel murni PQ Harian (tanpa kolom promo) -> Proteksi promo yang ada!
+          finalPromoToSave = existingInfo.hargaPromo;
+          finalDiskonToSave = existingInfo.diskon;
+          finalDiscountTypeToSave = existingInfo.discountType;
+          finalAcaraToSave = existingInfo.acara;
+          finalFromDateToSave = existingInfo.fromDate;
+          finalToDateToSave = existingInfo.toDate;
+        } else {
+          // File Excel memiliki kolom promo -> Terapkan COALESCE dan Layered Validity
+          
+          // Jika kolom ada tapi isinya kosong (""), parser mengembalikan null (Niat Menghapus).
+          // Jika kolom hilang dari header, parser mengembalikan undefined (Niat Mengabaikan / Mempertahankan).
+          const newHargaPromo = item.hargaPromo !== undefined ? item.hargaPromo : existingInfo.hargaPromo;
+          const newDiskon = item.diskon !== undefined ? item.diskon : existingInfo.diskon;
+          const newDiscountType = item.discountType !== undefined ? item.discountType : existingInfo.discountType;
+          const newAcara = item.acara !== undefined ? item.acara : existingInfo.acara;
+          const newFromDate = item.fromDate !== undefined ? item.fromDate : existingInfo.fromDate;
+          const newToDate = item.toDate !== undefined ? item.toDate : existingInfo.toDate;
+
+          // Validity Check: Apakah benar-benar ada promo aktif secara logis?
+          const isPromoActive = (newHargaPromo !== null && newHargaPromo > 0) || 
+                                (newDiskon !== null) || 
+                                (newDiscountType !== null);
+
+          let promoStillValid = false;
+          if (isPromoActive) {
+            if (newToDate) {
+              const toDateObj = new Date(newToDate);
+              toDateObj.setHours(23, 59, 59, 999);
+              promoStillValid = new Date() <= toDateObj;
+            } else {
+              promoStillValid = true; // Tidak ada tanggal akhir = Berlaku selamanya
+            }
+          }
+
+          finalPromoToSave = promoStillValid ? newHargaPromo : null;
+          finalDiskonToSave = promoStillValid ? newDiskon : null;
+          finalDiscountTypeToSave = promoStillValid ? newDiscountType : null;
+          finalAcaraToSave = promoStillValid ? newAcara : null;
+          finalFromDateToSave = promoStillValid ? newFromDate : null;
+          finalToDateToSave = promoStillValid ? newToDate : null;
+        }
+
+        const explicitFileName = item.sourceFile && item.sourceSheet ? `${item.sourceFile} [Sheet: ${item.sourceSheet}]` : fileName;
+        const finalPromoFileNameToSave = isPromoFile && explicitFileName ? explicitFileName : undefined;
+
+        rowPlaceholders.push(`($${paramIndex++}::text, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::int, $${paramIndex++}::int, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text)`);
+        
+        values.push(
+          item.sku,
+          item.hargaNormal !== undefined ? item.hargaNormal : null,
+          item.description !== undefined ? item.description : null,
+          item.article !== undefined ? item.article : null,
+          item.brand !== undefined ? item.brand : null,
+          item.dept !== undefined ? item.dept : null,
+          item.stok !== undefined ? item.stok : null,
+          salesDelta,
+          item.sales_mtd !== undefined ? item.sales_mtd : null,
+          finalPromoToSave,
+          finalDiskonToSave,
+          finalDiscountTypeToSave,
+          finalAcaraToSave,
+          finalFromDateToSave,
+          finalToDateToSave,
+          finalPromoFileNameToSave !== undefined ? finalPromoFileNameToSave : null
+        );
+
+        if (salesDelta > 0) {
+          dailySalesData.push({
+            productId: existingInfo.id,
+            date: uploadDate,
+            qtySold: salesDelta
+          });
+        }
+      }
+
+      if (rowPlaceholders.length > 0) {
+        try {
+          const query = `
+            UPDATE "Product" as p
+            SET 
+              "hargaNormal" = COALESCE(v."hargaNormal", p."hargaNormal"),
+              "description" = COALESCE(v."description", p."description"),
+              "article" = COALESCE(v."article", p."article"),
+              "brand" = COALESCE(v."brand", p."brand"),
+              "dept" = COALESCE(v."dept", p."dept"),
+              "stok" = COALESCE(v."stok", p."stok"),
+              "sales_mtd" = COALESCE(v."sales_mtd", p."sales_mtd" + v."salesDelta"),
+              "hargaPromo" = v."hargaPromo",
+              "diskon" = v."diskon",
+              "discountType" = v."discountType",
+              "acara" = v."acara",
+              "fromDate" = v."fromDate",
+              "toDate" = v."toDate",
+              "promoFileName" = COALESCE(v."promoFileName", p."promoFileName"),
+              "updatedAt" = CURRENT_TIMESTAMP
+            FROM (VALUES
+              ${rowPlaceholders.join(", ")}
+            ) AS v("sku", "hargaNormal", "description", "article", "brand", "dept", "stok", "salesDelta", "sales_mtd", "hargaPromo", "diskon", "discountType", "acara", "fromDate", "toDate", "promoFileName")
+            WHERE p."sku" = v."sku"
+          `;
+
+          await prisma.$executeRawUnsafe(query, ...values);
+          updated += rowPlaceholders.length;
+
+          if (dailySalesData.length > 0) {
+            await prisma.dailySales.createMany({
+              data: dailySalesData
+            });
+          }
+        } catch (err) {
+          console.error("Bulk raw update error", err);
+          failed += rowPlaceholders.length;
+        }
+      }
+    }
+  }
+
+  return { created, updated, failed };
+}
+
+// -------------------------------------------------------
+// POST: upload one or more Excel files via form
+// -------------------------------------------------------
+export async function POST(request: NextRequest) {
+  try {
+    const token = request.cookies.get("token")?.value;
+    const session = token ? await verifyToken(token) : null;
+    const userId = session?.userId;
+
+    const payload = await request.json();
+    const { type, rows, fileName, uploadDate, isLastChunk, totalRecords } = payload;
+
+    if (!rows || !Array.isArray(rows)) {
+      return NextResponse.json({ error: "Data baris (rows) tidak valid" }, { status: 400 });
+    }
+
+    if (rows.length === 0) {
+      return NextResponse.json({ success: true, message: "Tidak ada data untuk diproses" });
+    }
+
+    // 1. Convert raw JSON rows to ProductMap
+    const productMap = new Map<string, ReturnType<typeof parseRow>>();
+    
+    // Normalize and remap keys for all rows
+    const normalizedRows = rows.map(r => remapKeys(normalizeKeys(r)));
+
+    let added = 0;
+    let updated = 0;
+
+    for (const row of normalizedRows) {
+      const sku = String(row["SKU"] ?? "").trim();
+      if (!sku) continue;
+
+      const parsed = parseRow(row);
+      const existing = productMap.get(sku);
+
+      if (!existing) {
+        productMap.set(sku, parsed);
+        added++;
+      } else {
+        const existingIsPromo = (existing.hargaPromo !== null && existing.hargaPromo !== undefined && existing.hargaPromo > 0) || 
+                                (existing.diskon !== null && existing.diskon !== undefined);
+        const newIsPromo = (parsed.hargaPromo !== null && parsed.hargaPromo !== undefined && parsed.hargaPromo > 0) || 
+                           (parsed.diskon !== null && parsed.diskon !== undefined);
+
+        if (!existingIsPromo && newIsPromo) {
+          productMap.set(sku, parsed);
+          updated++;
+        }
+      }
+    }
+
+    // 2. Upsert to DB
+    const targetUploadDate = uploadDate ? new Date(uploadDate) : new Date();
+    const { created, updated: dbUpdated, failed } = await upsertProducts(productMap, targetUploadDate, fileName);
+
+    // 3. Log History if this is the last chunk
+    if (isLastChunk && userId && fileName) {
+      await prisma.syncHistory.create({
+        data: {
+          userId,
+          type: type || "UNKNOWN",
+          fileName: fileName,
+          status: failed > 0 && created === 0 && dbUpdated === 0 ? "FAILED" : "SUCCESS",
+          records: totalRecords || (created + dbUpdated),
+        }
+      });
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: `Chunk diproses: ${created} baru, ${dbUpdated} diupdate, ${failed} gagal.`,
+    });
+  } catch (error) {
+    console.error("Chunk upload error:", error);
+    return NextResponse.json({ error: "Terjadi kesalahan saat memproses chunk" }, { status: 500 });
+  }
+}
+
+// -------------------------------------------------------
+// GET: import otomatis dari folder D:\Website\SUKO
+// -------------------------------------------------------
+export async function GET() {
+  const SUKO_DIR = "D:\\Website\\SUKO";
+
+  try {
+    if (!fs.existsSync(SUKO_DIR)) {
+      return NextResponse.json(
+        { error: `Folder tidak ditemukan: ${SUKO_DIR}` },
+        { status: 404 }
+      );
+    }
+
+    const xlsxFiles = fs
+      .readdirSync(SUKO_DIR)
+      .filter(
+        (f) =>
+          f.endsWith(".xlsx") &&
+          !f.startsWith("~") &&       // skip Excel lock files
+          !f.startsWith("Summary")    // skip summary file
+      );
+
+    if (xlsxFiles.length === 0) {
+      return NextResponse.json(
+        { error: "Tidak ada file .xlsx di folder SUKO" },
+        { status: 404 }
+      );
+    }
+
+    // Step 1: Build a GLOBAL deduplicated product map across ALL files
+    // Same priority rule: if SKU seen before as promo, keep promo; else update.
+    const globalMap = new Map<string, ReturnType<typeof parseRow>>();
+    const allLogs: string[] = [];
+    const processedFiles: string[] = [];
+
+    for (const fileName of xlsxFiles) {
+      const filePath = path.join(SUKO_DIR, fileName);
+      const buffer = fs.readFileSync(filePath);
+      const { productMap, sheetLog } = processWorkbook(buffer, new Map(), fileName);
+
+      allLogs.push(`\n=== ${fileName} ===`);
+      allLogs.push(...sheetLog);
+      processedFiles.push(fileName);
+
+      // Merge file's productMap into globalMap
+      for (const [sku, item] of productMap) {
+        const existing = globalMap.get(sku);
+        if (!existing) {
+          globalMap.set(sku, item);
+        } else {
+          const existingIsPromo = existing.hargaPromo !== null && existing.hargaPromo !== undefined && existing.hargaPromo > 0;
+          const newIsPromo = item.hargaPromo !== null && item.hargaPromo !== undefined && item.hargaPromo > 0;
+          if (!existingIsPromo && newIsPromo) {
+            globalMap.set(sku, item);
+          }
+        }
+      }
+    }
+
+    // Step 2: Upsert all to DB
+    const { created, updated, failed } = await upsertProducts(globalMap, new Date(), "SUKO_SYNC_FOLDER");
+
+    return NextResponse.json({
+      success: true,
+      message: `Import selesai! ${processedFiles.length} file diproses. ${globalMap.size} SKU unik. ${created} produk baru, ${updated} harga diperbarui. Gagal: ${failed}.`,
+      totalUniqueSku: globalMap.size,
+      files: processedFiles,
+      logs: allLogs,
+    });
+  } catch (error) {
+    console.error("Import error:", error);
+    return NextResponse.json(
+      { error: "Terjadi kesalahan saat mengimpor folder SUKO" },
+      { status: 500 }
+    );
+  }
+}

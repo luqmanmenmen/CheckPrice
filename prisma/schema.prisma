@@ -21,6 +21,7 @@ model Product {
   hargaPromo    Float?
   diskon        String?
   discountType  String?
+  promoFileName String?
   brand         String?
   dept          String?
   stok          Int      @default(0)

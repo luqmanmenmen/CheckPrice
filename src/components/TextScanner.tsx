@@ -51,13 +51,18 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Set ukuran canvas
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    // 1. CROP ke Kotak Scan (300x150) agar tidak membaca barcode di luar kotak & 10x lebih cepat!
+    const cropWidth = 300;
+    const cropHeight = 150;
+    const startX = (video.videoWidth - cropWidth) / 2;
+    const startY = (video.videoHeight - cropHeight) / 2;
+
+    canvas.width = cropWidth;
+    canvas.height = cropHeight;
 
     // Filter kontras tinggi untuk membantu OCR baca teks
     ctx.filter = 'grayscale(100%) contrast(300%) brightness(120%)';
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(video, startX, startY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
     ctx.filter = 'none';
 
     try {
@@ -65,33 +70,21 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       const result: any = await workerRef.current.recognize(canvas);
       const text = result.data.text.toUpperCase();
       
-      // LOGIKA CERDAS: Incar tepat 8 angka berjejer (contoh: 13472861)
-      // Kita pisahkan berdasarkan spasi/baris baru agar tidak mengambil sebagian angka dari kode seperti 605-12218278
-      const words = text.split(/\s+/);
-      let found8Digit = null;
-      for (const w of words) {
-         if (/^\d{8}$/.test(w)) {
-             found8Digit = w;
-             break;
-         }
-      }
+      // LOGIKA CERDAS DARI USER: 
+      // 1. Buang SEMUA huruf/simbol/dash menjadi spasi
+      const cleanText = text.replace(/[^0-9]/g, ' ');
       
-      if (found8Digit) {
-         handleSuccess(found8Digit, "OCR (Angka 8-Digit)");
+      // 2. Pisahkan menjadi blok-blok angka murni
+      const numberBlocks = cleanText.split(/\s+/).filter(Boolean);
+      
+      // 3. Cari blok yang TEPAT berisi 8 digit angka
+      const skuCandidates = numberBlocks.filter(block => block.length === 8);
+      
+      // 4. Ambil 8-digit TERAKHIR (karena biasanya di bawah 605-12218278)
+      if (skuCandidates.length > 0) {
+         const finalSku = skuCandidates[skuCandidates.length - 1];
+         handleSuccess(finalSku, "OCR (Angka 8-Digit)");
          return;
-      }
-
-      // Fallback: Kode artikel (Kombinasi Huruf & Angka, 6-15 char)
-      const articleMatch = text.match(/[A-Z0-9-]{6,15}/g);
-      if (articleMatch) {
-         for (const candidate of articleMatch) {
-            // Pastikan mengandung angka dan valid
-            if (/[0-9]/.test(candidate) && candidate.length > 5 && !/^\d{13}$/.test(candidate)) { // hindari salah tangkap EAN13 sebagai teks
-               // handleSuccess(candidate, "OCR (Kode Artikel)");
-               // Kita tahan dulu yang ini agar tidak false positive, prioritas ke 8 digit.
-               // Tapi bisa diaktifkan jika diperlukan.
-            }
-         }
       }
     } catch (err) {
       console.error("OCR Check Error", err);

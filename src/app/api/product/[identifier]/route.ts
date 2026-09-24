@@ -100,7 +100,20 @@ export async function GET(
 
     product = await checkAndCleanPromo(product);
 
-    return NextResponse.json({ data: product });
+    let siblings: any[] = [];
+    if (product && product.description) {
+      const parts = product.description.split(":");
+      if (parts.length > 1) {
+        const parentName = parts[0].trim();
+        const allSiblings = await db.product.findMany({
+          where: { description: { startsWith: parentName + ":" } },
+          orderBy: { description: 'asc' }
+        });
+        siblings = await Promise.all(allSiblings.map(checkAndCleanPromo));
+      }
+    }
+
+    return NextResponse.json({ data: product, siblings });
   } catch (error) {
     console.error("Error fetching product:", error);
     return NextResponse.json(

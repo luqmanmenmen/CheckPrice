@@ -32,16 +32,96 @@ type ProductData = {
   brand: string | null;
   dept: string | null;
   stok: number;
+  promoFileName: string | null;
 };
 
 // Parse the description to get a clean product name
-function parseDescription(desc: string): { name: string; details: string } {
+function parseDescription(desc: string): { name: string; variants: string[] } {
   const parts = desc.split(":");
-  if (parts.length <= 1) return { name: desc, details: "" };
-  // First part before colon (or first two parts) = name, rest = details
+  if (parts.length <= 1) return { name: desc, variants: [] };
   const name = parts[0].trim();
-  const details = parts.slice(1).join(" | ").trim();
-  return { name, details };
+  const variants = parts.slice(1).map(p => p.trim()).filter(Boolean);
+  return { name, variants };
+}
+
+// Fungsi bantu untuk mengurutkan ukuran baju/celana secara logis
+function sortSizes(a: string, b: string): number {
+  const sizeOrder = ["XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL", "3XL", "4XL", "5XL", "ALL SIZE", "ALLSIZE"];
+  const aIdx = sizeOrder.indexOf(a.toUpperCase());
+  const bIdx = sizeOrder.indexOf(b.toUpperCase());
+
+  // Keduanya ada di daftar ukuran
+  if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
+  // Jika hanya satu yang ada, prioritaskan yang ada
+  if (aIdx !== -1) return -1;
+  if (bIdx !== -1) return 1;
+
+  // Coba urutkan sebagai angka (misal ukuran celana: 28, 30, 32)
+  const aNum = parseFloat(a);
+  const bNum = parseFloat(b);
+  if (!isNaN(aNum) && !isNaN(bNum)) return aNum - bNum;
+
+  // Fallback pengurutan abjad
+  return a.localeCompare(b);
+}
+
+// Fungsi bantu untuk memetakan nama warna ke data hex & kontras
+function getColorData(colorName: string): { hex: string, isDark: boolean } | null {
+  const c = colorName.toUpperCase().trim();
+  const colorMap: Record<string, string> = {
+    // A
+    "ALMOND": "#EFDECD", "AQUA": "#00FFFF",
+    // B
+    "BANANA": "#FFE135", "BEIGE": "#F5F5DC", "BLA": "#000000", "BLAC": "#000000", "BLACK": "#000000",
+    "BLUSH": "#DE5D83", "BRILLIANT BLUE": "#3399FF", "BROWN SUGAR": "#AF6E4D",
+    // C
+    "CACTUS GREEN": "#5F7161", "CERAMIC": "#F0EDE5", "CHA": "#36454F", "CHAR": "#36454F", "CHARCOAL": "#36454F",
+    "CHRISTMAS GREEN": "#006400", "CLASSIC BLUE": "#0F4C81", "CLASSIC GREEN": "#008000", "CLASSIC ORANGE": "#FFA500",
+    "CLASSIC RED": "#FF0000", "CLASSIC YELLOW": "#FFFF00", "COBALT BLUE": "#0047AB", "CORAL": "#FF7F50",
+    // D
+    "DARK BROWN": "#654321", "DARK DENIM": "#2C3E50", "DARK GREEN": "#006400", "DARK GREY": "#A9A9A9", "DARK JADE": "#007A5E",
+    "DEEP BROWN": "#5C4033", "DEEP CHOCO": "#411900", "DEEP OLIVE": "#556B2F", "DUSTY PINK": "#DCAE96",
+    // E
+    "EGGPLANT": "#614051", "EMERALD GRE": "#50C878", "EMERALD GREEN": "#50C878",
+    // F - G
+    "FOREST GREEN": "#228B22", "FROST GREY": "#D3D3D3", "GOLD": "#FFD700", "GOLDEN BROWN": "#996515",
+    "GOLDEN DEEP": "#CC9900", "GRASS GREEN": "#7CFC00",
+    // H - K
+    "HAWAIIAN OCEAN": "#008B8B", "INDIGO BLUE": "#4B0082", "JADE": "#00A86B", "KHAKI": "#C3B091",
+    // L
+    "LIGHT BLUE": "#ADD8E6", "LIGHT BROWN": "#B5651D", "LIGHT COOL": "#D1E8E2", "LIGHT CORAL": "#F08080",
+    "LIGHT DENIM": "#748AA6", "LIGHT GREEN": "#90EE90", "LIGHT GREY": "#D3D3D3", "LIGHT NEUTRAL": "#F5F5DC",
+    "LIGHT RED": "#FFCCCB", "LILAC": "#C8A2C8", "LIME": "#BFFF00",
+    // M
+    "MANDARIN ORANGE": "#F28C28", "MAROON": "#800000", "MEDIUM DENIM": "#5E86C1", "MEDIUM OLIVE": "#6B8E23",
+    "MEDIUM WARM": "#D2B48C", "MISTY DARK BLUE": "#4A5D73", "MISTY DARK BROWN": "#5C4A3D", "MISTY DARK GREY": "#696969",
+    "MISTY LIGHT BLUE": "#ADD8E6", "MISTY LIGHT BROWN": "#D2B48C", "MISTY LIGHT GREY": "#E5E4E2",
+    "MISTY LIGHT KHAKI": "#F0E68C", "MISTY MEDIUM BROWN": "#8B4513", "MOCHA GRAY": "#705C53", "MUSTARD": "#FFDB58",
+    // N - O
+    "NAV": "#000080", "NAVY": "#000080", "NAVY BLUE": "#000080", "NEON GREEN": "#39FF14", "NEON YELLOW": "#FFFF33",
+    "NEUTRAL": "#F5F5DC", "OFF WHITE": "#FAF9F6", "OLIVE": "#808000",
+    // P
+    "PAS": "#AEC6CF", "PASTEL BLUE": "#AEC6CF", "PASTEL GREEN": "#77DD77", "PASTEL GREY": "#CFCFC4",
+    "PASTEL LAVENDER": "#B19CD9", "PASTEL ORANGE": "#FFB347", "PASTEL PINK": "#FFD1DC", "PASTEL PURPLE": "#B39EB5",
+    "PASTEL YELLOW": "#FDFD96", "PEPPERMINT": "#D2E8E3", "PINK LEMONADE": "#EEA2AD",
+    // R - S
+    "ROSE GOLD": "#B76E79", "RUSTIC BROWN": "#784A32", "RUSTIC GOLD": "#C89D3C", "RUSTIC ORANGE": "#E86F28",
+    "SALMON": "#FA8072", "SAND": "#C2B280", "SILVER": "#C0C0C0", "SUNSHINE YELLOW": "#FFFD37",
+    // T - Z
+    "TAUPE GREY": "#8B8589", "TEAL": "#008080", "TERRACOTTA": "#E2725B", "TURQOUISE": "#40E0D0", "VANILLA": "#F3E5AB",
+    "WHI": "#FFFFFF", "WHIT": "#FFFFFF", "WHITE": "#FFFFFF", "WINE": "#722F37", "WOOD BROWN": "#8B5A2B"
+  };
+  
+  const hex = colorMap[c];
+  if (!hex) return null;
+  
+  // Hitung luminance YIQ untuk menentukan warna text (hitam/putih)
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const yiq = ((r * 299) + (g * 587) + (b * 114)) / 1000;
+  
+  return { hex, isDark: yiq < 140 };
 }
 
 function formatRupiah(angka: number) {
@@ -64,6 +144,7 @@ export default function Home() {
   const [manualInput, setManualInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [product, setProduct] = useState<ProductData | null>(null);
+  const [siblings, setSiblings] = useState<ProductData[]>([]);
   const [productsList, setProductsList] = useState<ProductData[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -237,11 +318,14 @@ export default function Home() {
     setError("");
     if (page === 1) {
       setProduct(null);
+      setSiblings([]);
       setProductsList([]);
     }
 
     try {
-      const res = await fetch(`/api/product/${encodeURIComponent(trimmed)}?page=${page}`);
+      const res = await fetch(`/api/product/${encodeURIComponent(trimmed)}?page=${page}`, {
+        cache: 'no-store'
+      });
       
       // If a newer search was initiated while we were waiting, ignore this response
       if (searchCounterRef.current !== currentSearch) return;
@@ -256,6 +340,7 @@ export default function Home() {
           setTotalPages(data.meta?.totalPages || 1);
         } else {
           setProduct(data.data);
+          setSiblings(data.siblings || []);
           setProductsList([]);
         }
         if (scanMode !== "none") setScanMode("none");
@@ -330,6 +415,7 @@ export default function Home() {
   const handleClear = () => {
     setManualInput("");
     setProduct(null);
+    setSiblings([]);
     setProductsList([]);
     setError("");
     inputRef.current?.focus();
@@ -689,7 +775,7 @@ export default function Home() {
           <h2 className="text-sm font-bold text-slate-500 uppercase mb-3">Pilih Produk:</h2>
           <div className="flex flex-col gap-2">
             {productsList.map((p) => {
-              const { name, details } = parseDescription(p.description);
+              const { name, variants } = parseDescription(p.description);
               return (
                 <button
                   key={p.id}
@@ -700,7 +786,15 @@ export default function Home() {
                   className="text-left p-3 border rounded-xl hover:bg-blue-50 hover:border-blue-200 transition-colors"
                 >
                   <p className="font-bold text-slate-800">{name}</p>
-                  {details && <p className="text-xs text-slate-500 truncate">{details}</p>}
+                  {variants.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {variants.map((v, i) => (
+                        <span key={i} className="text-[10px] font-medium bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded border border-slate-200">
+                          {v}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   <div className="flex gap-2 mt-2">
                     <span className="text-[10px] font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-600">SKU: {p.sku}</span>
                     <span className="text-[10px] font-bold text-blue-600">{formatRupiah(p.hargaPromo || p.hargaNormal)}</span>
@@ -737,7 +831,29 @@ export default function Home() {
 
       {/* Product Card */}
       {product && !loading && (() => {
-        const { name, details } = parseDescription(product.description);
+        const { name, variants } = parseDescription(product.description);
+
+        // Group siblings by Size (variant 1), then map Colors (variant 0)
+        const variantsGroupedBySize: Record<string, any[]> = {};
+        if (siblings && siblings.length > 0) {
+          siblings.forEach(s => {
+            const parsed = parseDescription(s.description);
+            if (parsed.variants.length >= 2) {
+              const color = parsed.variants[0];
+              const size = parsed.variants[1];
+              if (!variantsGroupedBySize[size]) variantsGroupedBySize[size] = [];
+              variantsGroupedBySize[size].push({
+                sku: s.sku,
+                color,
+                stok: s.stok,
+                hargaNormal: s.hargaNormal,
+                hargaPromo: s.hargaPromo,
+                isCurrent: s.sku === product.sku
+              });
+            }
+          });
+        }
+
         return (
           <div className="bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden animate-in slide-in-from-bottom-6 duration-400">
 
@@ -759,8 +875,44 @@ export default function Home() {
               {/* Product Name */}
               <div>
                 <h2 className="text-xl font-bold text-slate-800 leading-snug">{name}</h2>
-                {details && (
-                  <p className="text-sm text-slate-500 mt-1">{details}</p>
+                {(variants.length > 0 || product.brand || product.dept) && (
+                  <div className="flex flex-wrap gap-2 mt-2.5">
+                    {variants.slice(0, 2).map((v, i) => {
+                      const label = i === 0 ? "Warna" : "Ukuran";
+                      return (
+                        <div key={i} className="flex items-center overflow-hidden rounded-md border border-indigo-100 bg-indigo-50/50">
+                          <span className="bg-indigo-100/80 px-2 py-1 text-[10px] font-bold text-indigo-800 uppercase tracking-wider border-r border-indigo-100">
+                            {label}
+                          </span>
+                          <span className="px-2.5 py-1 text-xs font-semibold text-indigo-950">
+                            {v}
+                          </span>
+                        </div>
+                      );
+                    })}
+                    
+                    {product.brand && (
+                      <div className="flex items-center overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+                        <span className="bg-slate-200/80 px-2 py-1 text-[10px] font-bold text-slate-700 uppercase tracking-wider border-r border-slate-200">
+                          Group
+                        </span>
+                        <span className="px-2.5 py-1 text-xs font-semibold text-slate-800">
+                          {product.brand}
+                        </span>
+                      </div>
+                    )}
+
+                    {product.dept && (
+                      <div className="flex items-center overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+                        <span className="bg-slate-200/80 px-2 py-1 text-[10px] font-bold text-slate-700 uppercase tracking-wider border-r border-slate-200">
+                          Dept
+                        </span>
+                        <span className="px-2.5 py-1 text-xs font-semibold text-slate-800">
+                          {product.dept}
+                        </span>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -774,11 +926,6 @@ export default function Home() {
                   <span className="flex items-center gap-1 bg-blue-50 text-blue-700 text-xs font-mono px-2.5 py-1.5 rounded-lg">
                     <Layers className="w-3.5 h-3.5" />
                     {product.article}
-                  </span>
-                )}
-                {product.brand && (
-                  <span className="bg-slate-800 text-white text-xs font-bold px-2.5 py-1.5 rounded-lg uppercase tracking-wide">
-                    {product.brand}
                   </span>
                 )}
                 {isPromoExpired && (
@@ -828,6 +975,76 @@ export default function Home() {
                 </div>
               </div>
 
+              {/* Matrix Varian Produk (Siblings) */}
+              {Object.keys(variantsGroupedBySize).length > 0 && (
+                <div className="bg-white rounded-xl p-4 border border-slate-200 mt-2 shadow-sm">
+                  <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
+                    <Layers className="w-4 h-4 text-indigo-500" />
+                    Ketersediaan Stok Varian Lain
+                  </h3>
+                  <div className="flex flex-col gap-3">
+                    {Object.entries(variantsGroupedBySize)
+                      .sort((a, b) => sortSizes(a[0], b[0]))
+                      .map(([size, items]) => (
+                      <div key={size} className="flex items-center gap-2 sm:gap-3 border-b border-slate-100 pb-3 last:border-0 last:pb-0">
+                        <div className="w-10 h-10 shrink-0 bg-slate-100 rounded-lg flex items-center justify-center border font-black text-slate-700 text-sm">
+                          {size}
+                        </div>
+                        <div className="flex-1 flex gap-2.5 overflow-x-auto sm:overflow-visible sm:flex-wrap pb-2 sm:pb-0 snap-x">
+                          {items.map((item, idx) => {
+                            const cData = getColorData(item.color);
+                            const bgStyle = cData ? { backgroundColor: cData.hex } : {};
+                            
+                            // Tentukan kelas berdasarkan apakah warna dikenali & apakah terpilih (current)
+                            let buttonClass = `flex flex-col border rounded-lg px-3 py-2.5 min-w-[125px] sm:min-w-[100px] shrink-0 snap-start text-left transition-all active:scale-95 border-black/10 `;
+                            if (item.isCurrent) {
+                              buttonClass += cData 
+                                ? 'ring-2 ring-indigo-500 ring-offset-2 ' 
+                                : 'bg-indigo-50 border-indigo-400 ring-1 ring-indigo-400 ';
+                            } else {
+                              buttonClass += cData 
+                                ? 'hover:ring-2 hover:ring-slate-300 ' 
+                                : 'bg-white hover:bg-slate-50 hover:border-indigo-200 ';
+                            }
+
+                            // Tentukan warna teks
+                            const titleColor = cData 
+                              ? (cData.isDark ? 'text-white' : 'text-slate-900')
+                              : (item.isCurrent ? 'text-indigo-800' : 'text-slate-600');
+                              
+                            const subColor = cData
+                              ? (cData.isDark ? 'text-white/70' : 'text-slate-500')
+                              : 'text-slate-400';
+
+                            return (
+                              <button
+                                key={idx}
+                                onClick={() => {
+                                  setManualInput(item.sku);
+                                  searchProduct(item.sku);
+                                }}
+                                style={bgStyle}
+                                className={buttonClass}
+                              >
+                                <span className={`text-[11px] font-bold uppercase truncate w-full mb-1 ${titleColor}`} title={item.color}>
+                                  {item.color}
+                                </span>
+                                <div className="flex items-center justify-between mt-0.5">
+                                  <span className={`text-[10px] font-mono ${subColor}`}>{item.sku.slice(-4)}</span>
+                                  <span className={`text-xs font-black ${item.stok > 0 ? (cData && cData.isDark ? 'text-green-300' : 'text-green-600') : (cData && cData.isDark ? 'text-red-300' : 'text-red-500')}`}>
+                                    {item.stok}
+                                  </span>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Aksi Gudang */}
               <div className="flex flex-col gap-2 mt-2">
                 <p className="text-xs font-bold text-slate-500 uppercase">Masukkan ke Keranjang</p>
@@ -872,6 +1089,12 @@ export default function Home() {
                     <div className={`flex items-center gap-1.5 text-xs mt-1 ${isPromoExpired ? 'text-red-700' : 'text-amber-700'}`}>
                       <CalendarRange className="w-3.5 h-3.5" />
                       <span>{formatDate(product.fromDate)} – {formatDate(product.toDate)}</span>
+                    </div>
+                  )}
+                  {product.promoFileName && (
+                    <div className="flex items-start gap-1.5 text-[10px] mt-2 pt-2 border-t border-amber-200/50 text-amber-700/70">
+                      <span className="font-bold uppercase shrink-0">SUMBER FILE:</span>
+                      <span className="font-mono break-all">{product.promoFileName}</span>
                     </div>
                   )}
                 </div>
