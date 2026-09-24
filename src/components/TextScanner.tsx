@@ -78,7 +78,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       const numberBlocks = cleanText.split(/\s+/).filter(Boolean);
       
       // 3. Cari blok yang TEPAT berisi 8 digit angka
-      const skuCandidates = numberBlocks.filter(block => block.length === 8);
+      const skuCandidates = numberBlocks.filter((block: string) => block.length === 8);
       
       // 4. Ambil 8-digit TERAKHIR (karena biasanya di bawah 605-12218278)
       if (skuCandidates.length > 0) {
