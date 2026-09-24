@@ -3,6 +3,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Tesseract from "tesseract.js";
 import { Html5Qrcode, Html5QrcodeSupportedFormats, Html5QrcodeScannerState } from "html5-qrcode";
 import { Loader2, Flashlight, FlashlightOff, Maximize, CheckCircle2 } from "lucide-react";
 
@@ -28,8 +29,8 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const scannerRef = useRef<Html5Qrcode | null>(null);
+  const workerRef = useRef<Tesseract.Worker | null>(null);
   const isHandlingResult = useRef(false);
-  const isScanningFrame = useRef(false); // Mencegah request tumpuk ke API
 
   const [status, setStatus] = useState("Memulai Kamera & AI...");
   const [torchOn, setTorchOn] = useState(false);
@@ -38,10 +39,12 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
   const [scanFeedback, setScanFeedback] = useState<"idle" | "wrong_target">("idle");
 
   async function scanFrameForText() {
-    // Cegah request TrOCR bertumpuk (tunggu response sebelumnya selesai)
-    if (isHandlingResult.current || isScanningFrame.current || !canvasRef.current || !scannerRef.current) return;
+    if (isHandlingResult.current || !workerRef.current || !canvasRef.current || !scannerRef.current) return;
+    
+    // Pastikan scanner sedang jalan
     if (scannerRef.current.getState() !== Html5QrcodeScannerState.SCANNING) return;
 
+    // Ambil elemen video yang dibuat oleh html5-qrcode
     const video = document.querySelector("#reader video") as HTMLVideoElement;
     if (!video || video.readyState !== video.HAVE_ENOUGH_DATA) return;
 
@@ -49,77 +52,76 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // 1. CROP ke Kotak Scan tengah (300x150 px)
+    // 1. CROP ke Kotak Scan (300x150)
     const cropWidth = 300;
     const cropHeight = 150;
     const startX = (video.videoWidth - cropWidth) / 2;
     const startY = (video.videoHeight - cropHeight) / 2;
 
-    // 2. UPSCALE 2x — TrOCR butuh gambar yang tidak terlalu kecil
+    // 2. UPSCALE 2x (Tesseract butuh teks lebih besar agar tidak salah baca 6 jadi 8)
     const scale = 2;
     canvas.width = cropWidth * scale;
     canvas.height = cropHeight * scale;
 
-    ctx.filter = 'grayscale(100%) contrast(140%) brightness(110%)';
+    // Filter gambar diperhalus (jangan 300% karena membuat angka 6 jadi tebal tertutup menyerupai 8)
+    ctx.filter = 'grayscale(100%) contrast(150%) brightness(110%)';
+    
+    // Gambar ke canvas dengan ukuran diperbesar 2x
     ctx.drawImage(video, startX, startY, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
     ctx.filter = 'none';
 
-    // 3. Konversi canvas ke base64 JPEG dan kirim ke API TrOCR
-    const base64Image = canvas.toDataURL("image/jpeg", 0.85);
-
-    isScanningFrame.current = true;
     try {
-      const res = await fetch("/api/ocr", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: base64Image }),
-      });
-
-      if (!res.ok) throw new Error(`OCR API error: ${res.status}`);
-      const { text } = await res.json();
-
-      if (!text) return;
-
-      // 4. FILTER CERDAS — sama seperti sebelumnya
-      const lines: string[] = text.split('\n');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result: any = await workerRef.current.recognize(canvas);
+      const text = result.data.text.toUpperCase();
+      
+      // LOGIKA CERDAS V3: Analisis Baris per Baris (Anti-Barcode & Anti-Artikel)
+      const lines = text.split('\n');
       const valid8Digits: string[] = [];
       let detectedWrong = false;
-
+      
       for (const line of lines) {
-        // Filter Anti-Artikel (pola 3 angka + 8 angka = kode pabrik)
-        if (/\b\d{3}\s*[-]?\s*\d{8}\b/.test(line)) {
-          detectedWrong = true;
-          continue;
-        }
-        const digits = line.replace(/\D/g, '');
-        // Filter Anti-Barcode (12-14 digit)
-        if (digits.length >= 12 && digits.length <= 14) {
-          detectedWrong = true;
-          continue;
-        }
-        // Filter Anti-Harga
-        if (line.includes('RP') || digits === '129900') continue;
-        // Tangkap SKU 8 Digit
-        if (digits.length === 8) {
-          valid8Digits.push(digits);
-        } else if (digits.length > 8 && digits.length <= 22) {
-          valid8Digits.push(digits.slice(-8));
-        }
-      }
+          // FILTER ANTI-ARTIKEL (KODE PABRIK): Misal "605-12218278" atau "605 12218278"
+          // Jika ada pola 3 angka + spasi/dash + 8 angka, kita buang langsung agar 12218278 tidak disangka SKU!
+          if (/\b\d{3}\s*[-]?\s*\d{8}\b/.test(line)) {
+              detectedWrong = true;
+              continue; 
+          }
 
+          // 1. Buang semua huruf/simbol, ambil murni angkanya saja dalam baris ini
+          const digits = line.replace(/\D/g, '');
+          
+          // 2. FILTER ANTI-BARCODE: 
+          if (digits.length >= 12 && digits.length <= 14) {
+              detectedWrong = true;
+              continue;
+          }
+          
+          // 3. FILTER ANTI-HARGA:
+          if (line.includes('RP') || digits === '129900') continue;
+          
+          // 4. TANGKAP SKU:
+          if (digits.length === 8) {
+              valid8Digits.push(digits);
+          } else if (digits.length > 8 && digits.length <= 22) {
+              valid8Digits.push(digits.slice(-8));
+          }
+      }
+      
+      // 5. Eksekusi SKU Terakhir
       if (valid8Digits.length > 0) {
-        handleSuccess(valid8Digits[valid8Digits.length - 1], "TrOCR");
-        return;
+          const finalSku = valid8Digits[valid8Digits.length - 1];
+          handleSuccess(finalSku, "OCR (Smart Line Filter)");
+          return;
       }
-
+      
+      // Jika salah fokus, berikan feedback merah
       if (detectedWrong) {
-        setScanFeedback("wrong_target");
-        setTimeout(() => setScanFeedback("idle"), 800);
+          setScanFeedback("wrong_target");
+          setTimeout(() => setScanFeedback("idle"), 800);
       }
     } catch (err) {
-      console.error("TrOCR Error:", err);
-    } finally {
-      isScanningFrame.current = false;
+      console.error("OCR Check Error", err);
     }
   }
 
@@ -165,7 +167,15 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
     const initAll = async () => {
       try {
-        // Init Barcode Scanner (html5-qrcode) 
+        // 1. Init Tesseract (OCR)
+        setStatus("Memuat Engine Teks (OCR)...");
+        const worker = await Tesseract.createWorker("eng");
+        await worker.setParameters({
+          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789- '
+        });
+        if (isMounted) workerRef.current = worker;
+
+        // 2. Init Barcode Scanner
         setStatus("Memulai Kamera...");
         const html5QrCode = new Html5Qrcode("reader", {
           verbose: false,
@@ -207,7 +217,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
         if (!isMounted) return;
 
-        setStatus("Mencari SKU via TrOCR...");
+        setStatus("Mencari Barcode & Angka 8-Digit...");
 
         // Check if torch is supported
         setTimeout(() => {
@@ -220,8 +230,8 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
           }
         }, 1000);
 
-        // Interval lebih jarang (3 detik) karena TrOCR = request ke server, bukan lokal
-        intervalRef.current = setInterval(scanFrameForText, 3000);
+        // 3. Start OCR Interval (Fallback)
+        intervalRef.current = setInterval(scanFrameForText, 1500);
 
       } catch (err) {
         console.error("Init Error:", err);
@@ -234,6 +244,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     return () => {
       isMounted = false;
       if (intervalRef.current) clearInterval(intervalRef.current);
+      if (workerRef.current) workerRef.current.terminate();
       if (scannerRef.current && scannerRef.current.getState() !== Html5QrcodeScannerState.NOT_STARTED) {
         scannerRef.current.stop().catch(console.error);
       }
