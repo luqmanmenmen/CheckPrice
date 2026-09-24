@@ -180,7 +180,13 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
           },
           (decodedText) => {
             // Barcode Callback
-            handleSuccess(decodedText, "BARCODE");
+            // Permintaan USER: Abaikan barcode (batang), fokus murni ke SKU via OCR!
+            // Barcode retail biasanya 13 digit (EAN-13), kita abaikan saja.
+            // Jika kebetulan barcodenya EAN-8 (tepat 8 digit), mungkin itu SKU, jadi kita izinkan.
+            if (decodedText.length === 8) {
+                handleSuccess(decodedText, "BARCODE");
+            }
+            // Selain 8 digit, hiraukan sama sekali!
           },
           () => {
             // Error Callback (ignore, happens every frame)
