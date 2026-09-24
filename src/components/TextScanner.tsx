@@ -52,18 +52,22 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // 1. CROP ke Kotak Scan (300x150) agar tidak membaca barcode di luar kotak & 10x lebih cepat!
+    // 1. CROP ke Kotak Scan (300x150)
     const cropWidth = 300;
     const cropHeight = 150;
     const startX = (video.videoWidth - cropWidth) / 2;
     const startY = (video.videoHeight - cropHeight) / 2;
 
-    canvas.width = cropWidth;
-    canvas.height = cropHeight;
+    // 2. UPSCALE 2x (Tesseract butuh teks lebih besar agar tidak salah baca 6 jadi 8)
+    const scale = 2;
+    canvas.width = cropWidth * scale;
+    canvas.height = cropHeight * scale;
 
-    // Filter kontras tinggi untuk membantu OCR baca teks
-    ctx.filter = 'grayscale(100%) contrast(300%) brightness(120%)';
-    ctx.drawImage(video, startX, startY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+    // Filter gambar diperhalus (jangan 300% karena membuat angka 6 jadi tebal tertutup menyerupai 8)
+    ctx.filter = 'grayscale(100%) contrast(150%) brightness(110%)';
+    
+    // Gambar ke canvas dengan ukuran diperbesar 2x
+    ctx.drawImage(video, startX, startY, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
     ctx.filter = 'none';
 
     try {
