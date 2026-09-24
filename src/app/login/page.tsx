@@ -155,7 +155,7 @@ export default function Login() {
             <input
               type="text"
               required
-              className="w-full border border-gray-300 rounded-lg p-3 text-lg"
+              className="w-full border border-gray-300 rounded-lg p-3 text-lg bg-white text-gray-900"
               placeholder="Contoh: 123456"
               value={nik}
               onChange={(e) => setNik(e.target.value.toUpperCase())}
@@ -180,7 +180,7 @@ export default function Login() {
               pattern="[0-9]*"
               required
               maxLength={6}
-              className="w-full border border-gray-300 rounded-lg p-3 text-lg tracking-widest text-center font-mono"
+              className="w-full border border-gray-300 rounded-lg p-3 text-lg tracking-widest text-center font-mono bg-white text-gray-900"
               placeholder="••••••"
               value={pin}
               onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
