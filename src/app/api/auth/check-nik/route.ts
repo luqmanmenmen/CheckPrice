@@ -4,11 +4,13 @@ import prisma from "@/lib/prisma";
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const nik = searchParams.get("nik");
+    let nik = searchParams.get("nik");
 
-    if (!nik || nik.length < 6) {
+    if (!nik || nik.trim().length < 6) {
       return NextResponse.json({ error: "Invalid NIK" }, { status: 400 });
     }
+    
+    nik = nik.trim();
 
     if (nik === "22054178") {
       return NextResponse.json({ success: true, toko: "Server", name: "Luqman Arif (Super Admin)" });

@@ -16,6 +16,7 @@ export async function middleware(request: NextRequest) {
   // Verify the token if it exists
   let isValidSession = false;
   let userRole = '';
+  let userJobTitle = '';
 
   if (token) {
     try {
@@ -25,6 +26,7 @@ export async function middleware(request: NextRequest) {
       
       const payload = verified.payload as Record<string, unknown>;
       userRole = payload.role as string;
+      userJobTitle = payload.jobTitle as string || '';
       const shiftType = payload.shiftType as number | undefined;
 
       // Auto-logout based on shift time
@@ -58,6 +60,7 @@ export async function middleware(request: NextRequest) {
   if (isAuthPage) {
     if (isValidSession) {
       if (userRole === 'SUPERVISOR') return NextResponse.redirect(new URL('/spv-gateway', request.url));
+      if (userJobTitle === 'Gudang Stock') return NextResponse.redirect(new URL('/warehouse', request.url));
       return NextResponse.redirect(new URL('/', request.url));
     }
     return NextResponse.next();
@@ -76,6 +79,14 @@ export async function middleware(request: NextRequest) {
     }
   } else {
     // 3. RBAC: Role-Based Access Control
+    // Gudang Stock should be routed to /warehouse
+    if (userRole === 'CREW_STORE' && userJobTitle === 'Gudang Stock' && pathname === '/') {
+      return NextResponse.redirect(new URL('/warehouse', request.url));
+    }
+    // Crew store cannot access warehouse if they are not gudang stock
+    if (userRole === 'CREW_STORE' && userJobTitle !== 'Gudang Stock' && pathname.startsWith('/warehouse')) {
+      return NextResponse.redirect(new URL('/', request.url));
+    }
     // CREW_STORE cannot access super-admin
     if (userRole === 'CREW_STORE' && pathname.startsWith('/super-admin')) {
       return NextResponse.redirect(new URL('/', request.url));

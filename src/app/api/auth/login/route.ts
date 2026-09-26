@@ -4,11 +4,14 @@ import { signToken } from "@/lib/auth";
 
 export async function POST(req: NextRequest) {
   try {
-    const { nik, pin, shift, jobTitle } = await req.json();
+    let { nik, pin, shift, jobTitle } = await req.json();
 
     if (!nik || !pin || !jobTitle) {
       return NextResponse.json({ error: "NIK, PIN, dan Posisi wajib diisi" }, { status: 400 });
     }
+    
+    nik = nik.trim();
+    pin = pin.trim();
 
     let role = "CREW_STORE";
 
