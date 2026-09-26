@@ -15,11 +15,14 @@ export async function middleware(request: NextRequest) {
 
   // Verify the token if it exists
   let isValidSession = false;
+  let userRole = '';
+
   if (token) {
     try {
       const secret = getJwtSecretKey();
-      await jwtVerify(token, secret);
+      const verified = await jwtVerify(token, secret);
       isValidSession = true;
+      userRole = (verified.payload as Record<string, unknown>).role as string;
     } catch (e) {
       isValidSession = false;
     }
@@ -28,11 +31,14 @@ export async function middleware(request: NextRequest) {
   // 1. Redirect logged-in users away from /login
   if (isAuthPage) {
     if (isValidSession) {
+      if (userRole === 'WAREHOUSE') return NextResponse.redirect(new URL('/warehouse', request.url));
+      if (userRole === 'SUPER_ADMIN') return NextResponse.redirect(new URL('/super-admin', request.url));
       return NextResponse.redirect(new URL('/', request.url));
     }
     return NextResponse.next();
   }
 
+  // 2. Protect all other pages (except API, static files, and public assets)
   // 2. Protect all other pages (except API, static files, and public assets)
   if (!isValidSession) {
     if (
@@ -42,6 +48,20 @@ export async function middleware(request: NextRequest) {
       !pathname.startsWith('/favicon.ico')
     ) {
        return NextResponse.redirect(new URL('/login', request.url));
+    }
+  } else {
+    // 3. RBAC: Role-Based Access Control
+    // WAREHOUSE role should be routed to /warehouse
+    if (userRole === 'WAREHOUSE' && pathname === '/') {
+      return NextResponse.redirect(new URL('/warehouse', request.url));
+    }
+    // SA role cannot access warehouse or super-admin
+    if (userRole === 'SA' && (pathname.startsWith('/warehouse') || pathname.startsWith('/super-admin'))) {
+      return NextResponse.redirect(new URL('/', request.url));
+    }
+    // SUPER_ADMIN role should be routed to /super-admin
+    if (userRole === 'SUPER_ADMIN' && !pathname.startsWith('/super-admin') && !pathname.startsWith('/api/')) {
+      return NextResponse.redirect(new URL('/super-admin', request.url));
     }
   }
 
