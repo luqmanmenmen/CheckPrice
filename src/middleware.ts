@@ -32,7 +32,7 @@ export async function middleware(request: NextRequest) {
   if (isAuthPage) {
     if (isValidSession) {
       if (userRole === 'WAREHOUSE') return NextResponse.redirect(new URL('/warehouse', request.url));
-      if (userRole === 'SUPER_ADMIN') return NextResponse.redirect(new URL('/super-admin', request.url));
+      if (userRole === 'SUPER_ADMIN') return NextResponse.redirect(new URL('/spv-gateway', request.url));
       return NextResponse.redirect(new URL('/', request.url));
     }
     return NextResponse.next();
@@ -60,10 +60,7 @@ export async function middleware(request: NextRequest) {
     if (userRole === 'SA' && (pathname.startsWith('/warehouse') || pathname.startsWith('/super-admin'))) {
       return NextResponse.redirect(new URL('/', request.url));
     }
-    // SUPER_ADMIN role should be routed to /super-admin
-    if (userRole === 'SUPER_ADMIN' && !pathname.startsWith('/super-admin') && !pathname.startsWith('/api/')) {
-      return NextResponse.redirect(new URL('/super-admin', request.url));
-    }
+    // SUPER_ADMIN (SUPERVISOR) has full access, no restriction needed!
   }
 
   return NextResponse.next();

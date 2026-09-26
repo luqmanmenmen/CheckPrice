@@ -90,6 +90,8 @@ export default function Login() {
         } else {
           if (data.role === "WAREHOUSE") {
             router.replace("/warehouse");
+          } else if (data.role === "SUPER_ADMIN") {
+            router.replace("/spv-gateway");
           } else {
             router.replace("/");
           }
@@ -124,6 +126,8 @@ export default function Login() {
       if (res.ok) {
         if (loginRole === "WAREHOUSE") {
           router.replace("/warehouse");
+        } else if (loginRole === "SUPER_ADMIN") {
+          router.replace("/spv-gateway");
         } else {
           router.replace("/");
         }

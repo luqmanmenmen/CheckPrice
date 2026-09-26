@@ -159,10 +159,10 @@ export default function UsersManagement() {
             <div>
               <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Hak Akses Tetap</label>
               <select value={role} onChange={e => setRole(e.target.value)} className="w-full p-2.5 rounded-lg border focus:ring-2 focus:ring-blue-500 outline-none bg-white">
-                <option value="SA">Karyawan Biasa (SPG/Gudang)</option>
-                <option value="SUPER_ADMIN">Super Admin</option>
+                <option value="SA">CREW STORE (Karyawan Toko/Gudang)</option>
+                <option value="SUPER_ADMIN">SUPERVISOR (Spv / Leader)</option>
               </select>
-              <p className="text-[10px] text-slate-400 mt-1">Catatan: Posisi spesifik (Cashier/Fitter/Gudang) akan dipilih karyawan saat Login.</p>
+              <p className="text-[10px] text-slate-400 mt-1">Catatan: Posisi spesifik akan dipilih karyawan saat Login.</p>
             </div>
             
             <div className="md:col-span-2 mt-2">
@@ -200,8 +200,8 @@ export default function UsersManagement() {
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Hak Akses Tetap</label>
                 <select value={editingUser.role} onChange={e => setEditingUser({...editingUser, role: e.target.value})} className="w-full p-2.5 rounded-lg border focus:ring-2 focus:ring-indigo-500 outline-none bg-white">
-                  <option value="SA">Karyawan Biasa (SPG/Gudang)</option>
-                  <option value="SUPER_ADMIN">Super Admin</option>
+                  <option value="SA">CREW STORE</option>
+                  <option value="SUPER_ADMIN">SUPERVISOR</option>
                 </select>
               </div>
               <div className="md:col-span-2 mt-4 flex gap-3">
@@ -249,7 +249,7 @@ export default function UsersManagement() {
                   </td>
                   <td className="p-4">
                     <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${user.role === 'SUPER_ADMIN' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
-                      {user.role}
+                      {user.role === 'SUPER_ADMIN' ? 'SUPERVISOR' : user.role === 'SA' ? 'CREW STORE' : user.role}
                     </span>
                   </td>
                   <td className="p-4 text-xs text-slate-500">
