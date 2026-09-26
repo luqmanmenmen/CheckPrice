@@ -29,8 +29,8 @@ export async function middleware(request: NextRequest) {
       userJobTitle = payload.jobTitle as string || '';
       const shiftType = payload.shiftType as number | undefined;
 
-      // Auto-logout based on shift time
-      if (shiftType) {
+      // Auto-logout based on shift time - ONLY FOR CREW STORE
+      if (shiftType && userRole !== 'SUPERVISOR') {
         // Get current hour in Jakarta time (WIB)
         const now = new Date();
         const jakartaStr = now.toLocaleString("en-US", { timeZone: "Asia/Jakarta", hour12: false });
@@ -41,7 +41,7 @@ export async function middleware(request: NextRequest) {
 
         // Shift 1: Pagi (09:00 - 17:00)
         if (shiftType === 1) {
-          // Jika di luar jam 08:00 - 17:59 (kasih toleransi login jam 8, dan logout tepat jam 17+)
+          // Jika di luar jam 08:00 - 17:59
           if (hour >= 17 || hour < 8) isValidSession = false;
         } 
         // Shift 2: Siang (14:30 - 23:00)
