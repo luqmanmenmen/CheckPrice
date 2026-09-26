@@ -33,7 +33,9 @@ export async function POST(req: NextRequest) {
       user = await prisma.user.update({
         where: { id: user.id },
         data: { 
+          // @ts-ignore - Ignore stale prisma types in IDE
           ...(user.role !== "SUPERVISOR" && user.role !== role ? { role: role as any } : {}),
+          // @ts-ignore
           sessionId
         }
       });
