@@ -29,6 +29,11 @@ type SalesData = {
     totalPromoRevenue: number;
     totalQty: number;
     anomalyCount: number;
+    totalOmzetPOS: number;    // Omzet aktual dari POS (MTD_SALES_RETAIL)
+    ytd_sales_unit: number;   // Penjualan tahun ini (unit)
+    ytd_omzet: number;        // Omzet tahun ini (Rp)
+    mtd_omzet_pos: number;    // Omzet MTD dari seluruh produk (Rp)
+    nilai_inventori: number;  // Nilai stok saat ini (Rp)
   };
   categoryBreakdown: Record<string, { omzet: number; qty: number }>;
   trendData: { date: string; fullDate: string; omzet: number; qty: number }[];
@@ -200,17 +205,22 @@ export default function LaporanPenjualanPage() {
         </div>
       ) : (
         <>
-          {/* Executive Metric Cards - Redesigned for Large Numbers */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-gradient-to-br from-slate-900 to-slate-800 p-6 rounded-3xl shadow-xl shadow-slate-200 relative overflow-hidden group col-span-1 md:col-span-2 flex flex-col justify-center">
+          {/* Executive Metric Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {/* Total Omzet — Full width hero card */}
+            <div className="bg-gradient-to-br from-slate-900 to-slate-800 p-6 rounded-3xl shadow-xl relative overflow-hidden group col-span-2 flex flex-col justify-center">
               <div className="absolute -right-10 -top-10 w-40 h-40 bg-white/5 rounded-full blur-3xl group-hover:bg-white/10 transition-all"></div>
               <div className="flex items-center gap-3 mb-2">
                 <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center backdrop-blur-md">
                   <DollarSign className="w-6 h-6 text-emerald-400" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-slate-300 text-sm tracking-wide uppercase">Total Omzet</h3>
-                  <p className="text-xs text-slate-400">Keseluruhan pendapatan pada tanggal ini</p>
+                  <h3 className="font-bold text-slate-300 text-sm tracking-wide uppercase">Total Omzet Hari Ini</h3>
+                  <p className="text-xs text-slate-400">
+                    {data?.summary.totalOmzetPOS && data.summary.totalOmzetPOS > 0
+                      ? '✅ Dari data POS (akurat)'
+                      : '⚡ Estimasi dari harga × qty'}
+                  </p>
                 </div>
               </div>
               <p className="text-4xl sm:text-5xl lg:text-6xl font-black text-white tracking-tighter mt-2 truncate" title={formatCurrency(data?.summary.totalRevenue || 0)}>
@@ -218,25 +228,56 @@ export default function LaporanPenjualanPage() {
               </p>
             </div>
 
-            <div className="flex flex-col gap-4">
-              <div className="bg-gradient-to-br from-amber-500 to-amber-600 p-5 rounded-3xl shadow-lg relative overflow-hidden flex-1">
-                <div className="absolute -right-4 -bottom-4 w-24 h-24 bg-white/20 rounded-full blur-2xl"></div>
-                <h3 className="font-bold text-amber-50 text-xs tracking-wide uppercase mb-1">Omzet Promo</h3>
-                <p className="text-2xl font-black text-white tracking-tight truncate" title={formatCurrency(data?.summary.totalPromoRevenue || 0)}>
-                  {formatCurrency(data?.summary.totalPromoRevenue || 0)}
-                </p>
+            {/* Omzet Promo */}
+            <div className="bg-gradient-to-br from-amber-500 to-amber-600 p-5 rounded-3xl shadow-lg relative overflow-hidden">
+              <div className="absolute -right-4 -bottom-4 w-24 h-24 bg-white/20 rounded-full blur-2xl"></div>
+              <h3 className="font-bold text-amber-50 text-xs tracking-wide uppercase mb-1">Omzet Promo</h3>
+              <p className="text-2xl font-black text-white tracking-tight truncate" title={formatCurrency(data?.summary.totalPromoRevenue || 0)}>
+                {formatCurrency(data?.summary.totalPromoRevenue || 0)}
+              </p>
+              <p className="text-xs text-amber-100 mt-1">Dari barang diskon/promo</p>
+            </div>
+
+            {/* Barang Terjual */}
+            <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200 flex flex-col justify-between">
+              <h3 className="font-bold text-slate-400 text-xs tracking-wide uppercase mb-1">Barang Terjual</h3>
+              <p className="text-2xl font-black text-slate-800 tracking-tight">
+                {(data?.summary.totalQty || 0).toLocaleString('id-ID')} <span className="text-sm text-slate-500 font-bold">pcs</span>
+              </p>
+              <div className="flex items-center justify-between mt-2">
+                <p className="text-xs text-slate-400">Hari ini</p>
+                <Package className="w-5 h-5 text-blue-400" />
               </div>
-              <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200 flex-1 flex justify-between items-center">
-                <div>
-                  <h3 className="font-bold text-slate-400 text-xs tracking-wide uppercase mb-1">Barang Terjual</h3>
-                  <p className="text-2xl font-black text-slate-800 tracking-tight">
-                    {data?.summary.totalQty.toLocaleString('id-ID') || 0} <span className="text-sm text-slate-500 font-bold">pcs</span>
-                  </p>
-                </div>
-                <div className="w-12 h-12 rounded-2xl bg-blue-50 flex items-center justify-center">
-                  <Package className="w-6 h-6 text-blue-500" />
-                </div>
-              </div>
+            </div>
+
+            {/* Omzet MTD dari PQ (sumber teratas) */}
+            <div className="bg-gradient-to-br from-emerald-500 to-teal-600 p-5 rounded-3xl shadow-lg relative overflow-hidden">
+              <div className="absolute -right-4 -bottom-4 w-24 h-24 bg-white/20 rounded-full blur-2xl"></div>
+              <h3 className="font-bold text-emerald-50 text-xs tracking-wide uppercase mb-1">Omzet MTD (POS)</h3>
+              <p className="text-xl font-black text-white tracking-tight truncate" title={formatCurrency(data?.summary.mtd_omzet_pos || 0)}>
+                {formatCompactCurrency(data?.summary.mtd_omzet_pos || 0)}
+              </p>
+              <p className="text-xs text-emerald-100 mt-1">Langsung dari kasir bulan ini</p>
+            </div>
+
+            {/* Omzet YTD */}
+            <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-5 rounded-3xl shadow-lg relative overflow-hidden">
+              <div className="absolute -right-4 -bottom-4 w-24 h-24 bg-white/20 rounded-full blur-2xl"></div>
+              <h3 className="font-bold text-indigo-100 text-xs tracking-wide uppercase mb-1">Omzet YTD</h3>
+              <p className="text-xl font-black text-white tracking-tight truncate" title={formatCurrency(data?.summary.ytd_omzet || 0)}>
+                {formatCompactCurrency(data?.summary.ytd_omzet || 0)}
+              </p>
+              <p className="text-xs text-indigo-200 mt-1">{(data?.summary.ytd_sales_unit || 0).toLocaleString('id-ID')} pcs tahun ini</p>
+            </div>
+
+            {/* Nilai Inventori */}
+            <div className="bg-gradient-to-br from-rose-500 to-pink-600 p-5 rounded-3xl shadow-lg relative overflow-hidden">
+              <div className="absolute -right-4 -bottom-4 w-24 h-24 bg-white/20 rounded-full blur-2xl"></div>
+              <h3 className="font-bold text-rose-100 text-xs tracking-wide uppercase mb-1">Nilai Stok</h3>
+              <p className="text-xl font-black text-white tracking-tight truncate" title={formatCurrency(data?.summary.nilai_inventori || 0)}>
+                {formatCompactCurrency(data?.summary.nilai_inventori || 0)}
+              </p>
+              <p className="text-xs text-rose-200 mt-1">Nilai inventori saat ini</p>
             </div>
           </div>
 

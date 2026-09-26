@@ -75,6 +75,7 @@ export async function GET(request: NextRequest) {
     let totalPromoRevenue = 0;
     let totalQty = 0;
     let anomalyCount = 0;
+    let totalOmzetPOS = 0; // Omzet akurat langsung dari POS (MTD_SALES_RETAIL delta)
     
     const categoryBreakdown: Record<string, { omzet: number, qty: number }> = {};
 
@@ -205,6 +206,13 @@ export async function GET(request: NextRequest) {
       categoryBreakdown[dept].omzet += itemTotal;
       categoryBreakdown[dept].qty += sale.qtySold;
 
+      // Tambahkan omzet POS jika tersedia
+      const posOmzet = (sale as any).omzet || 0;
+      if (posOmzet > 0) {
+        totalOmzetPOS += posOmzet;
+        categoryBreakdown[dept].omzet = (categoryBreakdown[dept].omzet - itemTotal) + posOmzet;
+      }
+
       return {
         id: sale.id,
         sku: p.sku,
@@ -215,8 +223,11 @@ export async function GET(request: NextRequest) {
         unitPrice: unitPrice,
         status: status,
         itemTotal: itemTotal,
+        omzetPOS: (sale as any).omzet || 0,
       };
     });
+
+    const finalTotalRevenue = totalOmzetPOS > 0 ? totalOmzetPOS : totalRevenue;
 
     // Fetch trend data
     let trendData = [];
@@ -246,6 +257,8 @@ export async function GET(request: NextRequest) {
           
           for (const ds of daySales) {
             const p = ds.product;
+            const posOmzet = (ds as any).omzet || 0;
+            if (posOmzet > 0) { dayRev += posOmzet; dayQty += ds.qtySold; continue; }
             const isPromo = (p.hargaPromo !== null && p.hargaPromo > 0) || p.discountType !== null || p.diskon !== null;
             let itemRev = (p.hargaNormal || 0) * ds.qtySold;
             
@@ -303,6 +316,8 @@ export async function GET(request: NextRequest) {
         
         const m = monthMap.get(monthKey);
         const p = ds.product;
+        const posOmzet = (ds as any).omzet || 0;
+        if (posOmzet > 0) { m.omzet += posOmzet; m.qty += ds.qtySold; continue; }
         const isPromo = (p.hargaPromo !== null && p.hargaPromo > 0) || p.discountType !== null || p.diskon !== null;
         let itemRev = (p.hargaNormal || 0) * ds.qtySold;
         
@@ -338,10 +353,11 @@ export async function GET(request: NextRequest) {
         targetDate: targetDateStr,
         availableDates,
         summary: {
-          totalRevenue,
+          totalRevenue: finalTotalRevenue !== undefined ? finalTotalRevenue : totalRevenue,
           totalPromoRevenue,
           totalQty,
           anomalyCount,
+          totalOmzetPOS,
         },
         categoryBreakdown,
         trendData,

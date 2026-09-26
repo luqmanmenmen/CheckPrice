@@ -24,9 +24,16 @@ model Product {
   promoFileName String?
   brand         String?
   dept          String?
-  stok          Int      @default(0)
-  sales_mtd     Int      @default(0)
-  sales_wtd     Int      @default(0)
+  stok          Int      @default(0)   // EOH_UNIT — stok saat ini (unit)
+  eoh_retail    Float    @default(0)   // EOH_RETAIL — nilai stok saat ini (Rp)
+  sales_mtd     Int      @default(0)   // MTD_SALES_UNIT — terjual bulan ini (unit)
+  sales_mtd_retail Float @default(0)  // MTD_SALES_RETAIL — omzet bulan ini langsung dari POS (Rp)
+  sales_wtd     Int      @default(0)   // WTD_SALES_UNIT — terjual minggu ini (unit)
+  sales_wtd_retail Float @default(0)  // WTD_SALES_RETAIL — omzet minggu ini (Rp)
+  sales_ytd     Int      @default(0)   // YTD_SALES_UNIT — terjual tahun ini (unit)
+  sales_ytd_retail Float @default(0)  // YTD_SALES_RETAIL — omzet tahun ini (Rp) — sumber kebenaran tertinggi
+  boy_unit      Int      @default(0)   // BOY_UNIT — stok awal tahun (unit)
+  boy_retail    Float    @default(0)   // BOY_RETAIL — nilai stok awal tahun (Rp)
   poSuggestions PoSuggestion[]
   dailySales    DailySales[]
   updatedAt     DateTime @updatedAt
@@ -39,6 +46,7 @@ model DailySales {
   product   Product  @relation(fields: [productId], references: [id])
   date      DateTime
   qtySold   Int
+  omzet     Float    @default(0)  // Omzet aktual dari POS (MTD_SALES_RETAIL delta harian)
   createdAt DateTime @default(now())
 
   @@unique([productId, date]) // Only one record per product per day

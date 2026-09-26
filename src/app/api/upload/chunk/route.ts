@@ -45,20 +45,29 @@ const REQUIRED_COLS = ["SKU"];
 // Mapping fleksibel nama kolom → nama standar kita
 // Agar sheet dengan variasi nama kolom tetap terbaca
 const COL_ALIASES: Record<string, string[]> = {
-  "SKU":          ["SKU", "KODE", "KODE PRODUK", "PRODUCT CODE", "CODE", "ID"],
-  "DESCRIPTION":  ["DESCRIPTION", "ITEM_DESCRIPTION", "ITEM DESCRIPTION", "NAMA", "NAMA PRODUK", "PRODUCT NAME", "DESC", "KETERANGAN", "DESKRIPSI", "ITEM_DESCRIP"],
-  "HARGA NORMAL": ["HARGA NORMAL", "HARGA", "NORMAL PRICE", "PRICE", "HARGA JUAL", "REGULAR PRICE", "HARGA POKOK"],
-  "HARGA PROMO":  ["HARGA PROMO", "PROMO PRICE", "PROMO", "HARGA DISKON", "DISC PRICE"],
-  "ARTICLE":      ["ARTICLE", "ARTIKEL", "BARCODE", "NO ARTIKEL", "PARENT_NAME", "PARENT NAME"],
-  "FROM DATE":    ["FROM DATE", "DARI TANGGAL", "START DATE", "TGL MULAI", "FROM"],
-  "TO DATE":      ["TO DATE", "SAMPAI TANGGAL", "END DATE", "TGL AKHIR", "TO", "BERLAKU SAMPAI"],
-  "DISKON":       ["DISKON", "DISCOUNT", "DISC", "POTONGAN"],
-  "DISCOUNT TYPE":["DISCOUNT TYPE", "TIPE DISKON", "JENIS DISKON"],
-  "BRAND":        ["BRAND", "MEREK", "MERK", "GROUP"],
-  "DEPT":         ["DEPT", "DEPARTMENT", "DIVISI", "KATEGORI", "CATEGORY"],
-  "ACARA":        ["ACARA", "EVENT", "PROMO NAME", "NAMA PROMO"],
-  "STOK":         ["STOK", "EOH_UNIT", "EOH UNIT", "EOH", "SISA STOK", "QTY", "STOK SISA"],
-  "SALES_MTD":    ["SALES_MTD", "MTD_SALES_UNIT", "MTD SALES UNIT", "SALES MTD", "MTD", "TERJUAL", "SALES"],
+  "SKU":              ["SKU", "KODE", "KODE PRODUK", "PRODUCT CODE", "CODE", "ID"],
+  "DESCRIPTION":      ["DESCRIPTION", "ITEM_DESCRIPTION", "ITEM DESCRIPTION", "NAMA", "NAMA PRODUK", "PRODUCT NAME", "DESC", "KETERANGAN", "DESKRIPSI", "ITEM_DESCRIP"],
+  "HARGA NORMAL":     ["HARGA NORMAL", "HARGA", "NORMAL PRICE", "PRICE", "HARGA JUAL", "REGULAR PRICE", "HARGA POKOK"],
+  "HARGA PROMO":      ["HARGA PROMO", "PROMO PRICE", "PROMO", "HARGA DISKON", "DISC PRICE"],
+  "ARTICLE":          ["ARTICLE", "ARTIKEL", "BARCODE", "NO ARTIKEL", "PARENT_NAME", "PARENT NAME"],
+  "FROM DATE":        ["FROM DATE", "DARI TANGGAL", "START DATE", "TGL MULAI", "FROM"],
+  "TO DATE":          ["TO DATE", "SAMPAI TANGGAL", "END DATE", "TGL AKHIR", "TO", "BERLAKU SAMPAI"],
+  "DISKON":           ["DISKON", "DISCOUNT", "DISC", "POTONGAN"],
+  "DISCOUNT TYPE":    ["DISCOUNT TYPE", "TIPE DISKON", "JENIS DISKON"],
+  "BRAND":            ["BRAND", "MEREK", "MERK", "GROUP"],
+  "DEPT":             ["DEPT", "DEPARTMENT", "DIVISI", "KATEGORI", "CATEGORY"],
+  "ACARA":            ["ACARA", "EVENT", "PROMO NAME", "NAMA PROMO"],
+  // Stok & Sales
+  "STOK":             ["STOK", "EOH_UNIT", "EOH UNIT", "EOH", "SISA STOK", "STOK SISA"],
+  "EOH_RETAIL":       ["EOH_RETAIL", "EOH RETAIL", "NILAI STOK", "STOCK VALUE"],
+  "SALES_MTD":        ["SALES_MTD", "MTD_SALES_UNIT", "MTD SALES UNIT", "SALES MTD", "MTD", "TERJUAL", "SALES"],
+  "SALES_MTD_RETAIL": ["SALES_MTD_RETAIL", "MTD_SALES_RETAIL", "MTD SALES RETAIL", "OMZET MTD", "OMZET BULAN INI"],
+  "SALES_WTD":        ["SALES_WTD", "WTD_SALES_UNIT", "WTD SALES UNIT", "SALES WTD", "WTD"],
+  "SALES_WTD_RETAIL": ["SALES_WTD_RETAIL", "WTD_SALES_RETAIL", "WTD SALES RETAIL", "OMZET WTD"],
+  "SALES_YTD":        ["SALES_YTD", "YTD_SALES_UNIT", "YTD SALES UNIT", "SALES YTD", "YTD"],
+  "SALES_YTD_RETAIL": ["SALES_YTD_RETAIL", "YTD_SALES_RETAIL", "YTD SALES RETAIL", "OMZET YTD", "OMZET TAHUN INI"],
+  "BOY_UNIT":         ["BOY_UNIT", "BOY UNIT", "STOK AWAL TAHUN"],
+  "BOY_RETAIL":       ["BOY_RETAIL", "BOY RETAIL", "NILAI STOK AWAL TAHUN"],
 };
 
 // Some sheets have column names with leading/trailing spaces like " HARGA NORMAL "
@@ -100,65 +109,63 @@ function parseRow(row: any) {
   const acara = row["ACARA"] !== undefined ? (String(row["ACARA"]).trim() || null) : undefined;
   const fromDate = row["FROM DATE"] !== undefined ? parseExcelDate(row["FROM DATE"]) : undefined;
   const toDate = row["TO DATE"] !== undefined ? parseExcelDate(row["TO DATE"]) : undefined;
+
+  // ---- STOK & SALES (semua kolom PQ yang penting) ----
+  const stok             = row["STOK"]             !== undefined && row["STOK"]             !== "" ? parseInt(row["STOK"])             || 0 : undefined;
+  const eoh_retail       = row["EOH_RETAIL"]       !== undefined && row["EOH_RETAIL"]       !== "" ? safeFloat(row["EOH_RETAIL"])             : undefined;
+  const sales_mtd        = row["SALES_MTD"]        !== undefined && row["SALES_MTD"]        !== "" ? parseInt(row["SALES_MTD"])        || 0 : undefined;
+  const sales_mtd_retail = row["SALES_MTD_RETAIL"] !== undefined && row["SALES_MTD_RETAIL"] !== "" ? safeFloat(row["SALES_MTD_RETAIL"])       : undefined;
+  const sales_wtd        = row["SALES_WTD"]        !== undefined && row["SALES_WTD"]        !== "" ? parseInt(row["SALES_WTD"])        || 0 : undefined;
+  const sales_wtd_retail = row["SALES_WTD_RETAIL"] !== undefined && row["SALES_WTD_RETAIL"] !== "" ? safeFloat(row["SALES_WTD_RETAIL"])       : undefined;
+  const sales_ytd        = row["SALES_YTD"]        !== undefined && row["SALES_YTD"]        !== "" ? parseInt(row["SALES_YTD"])        || 0 : undefined;
+  const sales_ytd_retail = row["SALES_YTD_RETAIL"] !== undefined && row["SALES_YTD_RETAIL"] !== "" ? safeFloat(row["SALES_YTD_RETAIL"])       : undefined;
+  const boy_unit         = row["BOY_UNIT"]         !== undefined && row["BOY_UNIT"]         !== "" ? parseInt(row["BOY_UNIT"])         || 0 : undefined;
+  const boy_retail       = row["BOY_RETAIL"]       !== undefined && row["BOY_RETAIL"]       !== "" ? safeFloat(row["BOY_RETAIL"])             : undefined;
+
+  // ---- HARGA NORMAL ----
   let hargaNormal = row["HARGA NORMAL"] !== undefined ? safeFloat(row["HARGA NORMAL"]) : undefined;
-  
-  // Smart Price Extraction untuk file Power Query (jika kolom harga tidak ada)
-  if (hargaNormal === undefined || hargaNormal === 0) {
-    const eohUnit = safeFloat(row["EOH_UNIT"]);
-    const eohRetail = safeFloat(row["EOH_RETAIL"]);
-    const ytdUnit = safeFloat(row["YTD_SALES_UNIT"]);
-    const ytdRetail = safeFloat(row["YTD_SALES_RETAIL"]);
-    const boyUnit = safeFloat(row["BOY_UNIT"]);
-    const boyRetail = safeFloat(row["BOY_RETAIL"]);
+
+  // Smart Price Extraction dari data PQ jika kolom harga eksplisit tidak ada
+  if ((hargaNormal === undefined || hargaNormal === 0) && eoh_retail !== undefined) {
+    const eohUnit = stok || 0;
+    const ytdUnit = sales_ytd || 0;
+    const boyUnit = boy_unit || 0;
 
     let basePrice = 0;
-    if (eohUnit > 0) basePrice = eohRetail / eohUnit;
-    else if (ytdUnit > 0) basePrice = ytdRetail / ytdUnit;
-    else if (boyUnit > 0) basePrice = boyRetail / boyUnit;
+    if (eohUnit > 0 && eoh_retail! > 0) basePrice = eoh_retail! / eohUnit;
+    else if (ytdUnit > 0 && sales_ytd_retail! > 0) basePrice = sales_ytd_retail! / ytdUnit;
+    else if (boyUnit > 0 && boy_retail! > 0) basePrice = boy_retail! / boyUnit;
 
-    if (basePrice > 0) {
-      hargaNormal = Math.round(basePrice);
-    }
+    if (basePrice > 0) hargaNormal = Math.round(basePrice);
   }
-  
+
+  // ---- HARGA PROMO ----
   const rawPromo = row["HARGA PROMO"];
   let hargaPromo: number | null | undefined = undefined;
   if (rawPromo !== undefined) {
     const rawPromoStr = typeof rawPromo === "string" ? rawPromo.toUpperCase() : "";
     const isTextPromo = rawPromoStr.includes("NORMAL") || rawPromoStr.match(/B\dG\d/) || rawPromoStr.includes("BXGY") || rawPromoStr === "";
-    
     const hargaPromoRaw = isTextPromo ? null : safeFloat(rawPromo);
     hargaPromo = hargaPromoRaw && hargaPromoRaw > 0 ? hargaPromoRaw : null;
   }
 
-  const diskon = row["DISKON"] !== undefined ? (String(row["DISKON"]).trim() || null) : undefined;
-  const discountType = row["DISCOUNT TYPE"] !== undefined ? (String(row["DISCOUNT TYPE"]).trim() || null) : undefined;
-  const brand = row["BRAND"] !== undefined ? (String(row["BRAND"]).trim() || null) : undefined;
-  const dept = row["DEPT"] !== undefined ? (String(row["DEPT"]).trim() || null) : undefined;
-  
-  const stok = row["STOK"] !== undefined && row["STOK"] !== "" ? parseInt(row["STOK"]) || 0 : undefined;
-  const sales_mtd = row["SALES_MTD"] !== undefined && row["SALES_MTD"] !== "" ? parseInt(row["SALES_MTD"]) || 0 : undefined;
-  
-  const sourceFile = row["__SOURCE_FILE__"] !== undefined ? String(row["__SOURCE_FILE__"]) : undefined;
+  const diskon       = row["DISKON"]         !== undefined ? (String(row["DISKON"]).trim()        || null) : undefined;
+  const discountType = row["DISCOUNT TYPE"]  !== undefined ? (String(row["DISCOUNT TYPE"]).trim() || null) : undefined;
+  const brand        = row["BRAND"]          !== undefined ? (String(row["BRAND"]).trim()         || null) : undefined;
+  const dept         = row["DEPT"]           !== undefined ? (String(row["DEPT"]).trim()          || null) : undefined;
+
+  const sourceFile  = row["__SOURCE_FILE__"]  !== undefined ? String(row["__SOURCE_FILE__"])  : undefined;
   const sourceSheet = row["__SOURCE_SHEET__"] !== undefined ? String(row["__SOURCE_SHEET__"]) : undefined;
 
   return {
-    sku,
-    article,
-    description,
-    acara,
-    fromDate,
-    toDate,
-    hargaNormal,
-    hargaPromo,
-    diskon,
-    discountType,
-    brand,
-    dept,
-    stok,
-    sales_mtd,
-    sourceFile,
-    sourceSheet,
+    sku, article, description, acara, fromDate, toDate,
+    hargaNormal, hargaPromo, diskon, discountType, brand, dept,
+    stok, eoh_retail,
+    sales_mtd, sales_mtd_retail,
+    sales_wtd, sales_wtd_retail,
+    sales_ytd, sales_ytd_retail,
+    boy_unit, boy_retail,
+    sourceFile, sourceSheet,
   };
 }
 
@@ -260,6 +267,7 @@ async function upsertProducts(
     where: { sku: { in: allSkus } },
     select: { 
       id: true, sku: true, stok: true,
+      sales_mtd_retail: true,
       hargaPromo: true, diskon: true, discountType: true, acara: true, fromDate: true, toDate: true
     },
   });
@@ -278,10 +286,18 @@ async function upsertProducts(
       
       itemsToCreate.push({
         ...item,
-        description: item.description ?? "-",
-        hargaNormal: item.hargaNormal ?? 0,
-        stok: item.stok ?? 0,
-        sales_mtd: item.sales_mtd ?? 0,
+        description:       item.description       ?? "-",
+        hargaNormal:       item.hargaNormal        ?? 0,
+        stok:              item.stok               ?? 0,
+        eoh_retail:        item.eoh_retail         ?? 0,
+        sales_mtd:         item.sales_mtd          ?? 0,
+        sales_mtd_retail:  item.sales_mtd_retail   ?? 0,
+        sales_wtd:         item.sales_wtd          ?? 0,
+        sales_wtd_retail:  item.sales_wtd_retail   ?? 0,
+        sales_ytd:         item.sales_ytd          ?? 0,
+        sales_ytd_retail:  item.sales_ytd_retail   ?? 0,
+        boy_unit:          item.boy_unit           ?? 0,
+        boy_retail:        item.boy_retail         ?? 0,
         promoFileName: isPromo && explicitFileName ? explicitFileName : null,
       });
     }
@@ -386,18 +402,31 @@ async function upsertProducts(
         const explicitFileName = item.sourceFile && item.sourceSheet ? `${item.sourceFile} [Sheet: ${item.sourceSheet}]` : fileName;
         const finalPromoFileNameToSave = isPromoFile && explicitFileName ? explicitFileName : undefined;
 
-        rowPlaceholders.push(`($${paramIndex++}::text, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::int, $${paramIndex++}::int, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text)`);
+        // Hitung delta omzet MTD retail (untuk dailySales.omzet)
+        const oldMtdRetail = (existingInfo as any).sales_mtd_retail || 0;
+        const newMtdRetail = item.sales_mtd_retail !== undefined ? item.sales_mtd_retail : 0;
+        const omzetDelta = newMtdRetail > oldMtdRetail ? newMtdRetail - oldMtdRetail : 0;
+
+        rowPlaceholders.push(`($${paramIndex++}::text, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text)`);
         
         values.push(
           item.sku,
-          item.hargaNormal !== undefined ? item.hargaNormal : null,
-          item.description !== undefined ? item.description : null,
-          item.article !== undefined ? item.article : null,
-          item.brand !== undefined ? item.brand : null,
-          item.dept !== undefined ? item.dept : null,
-          item.stok !== undefined ? item.stok : null,
-          salesDelta,
-          item.sales_mtd !== undefined ? item.sales_mtd : null,
+          item.hargaNormal        !== undefined ? item.hargaNormal        : null,
+          item.description        !== undefined ? item.description        : null,
+          item.article            !== undefined ? item.article            : null,
+          item.brand              !== undefined ? item.brand              : null,
+          item.dept               !== undefined ? item.dept               : null,
+          item.stok               !== undefined ? item.stok               : null,
+          item.eoh_retail         !== undefined ? item.eoh_retail         : null,
+          item.sales_mtd          !== undefined ? item.sales_mtd          : null,
+          item.sales_mtd_retail   !== undefined ? item.sales_mtd_retail   : null,
+          item.sales_wtd          !== undefined ? item.sales_wtd          : null,
+          item.sales_wtd_retail   !== undefined ? item.sales_wtd_retail   : null,
+          item.sales_ytd          !== undefined ? item.sales_ytd          : null,
+          item.sales_ytd_retail   !== undefined ? item.sales_ytd_retail   : null,
+          item.boy_unit           !== undefined ? item.boy_unit           : null,
+          item.boy_retail         !== undefined ? item.boy_retail         : null,
+          omzetDelta,
           finalPromoToSave,
           finalDiskonToSave,
           finalDiscountTypeToSave,
@@ -407,12 +436,14 @@ async function upsertProducts(
           finalPromoFileNameToSave !== undefined ? finalPromoFileNameToSave : null
         );
 
+        // Gunakan sales_mtd sebagai qty, dan omzetDelta sebagai omzet aktual dari POS
         const qtyToRecord = item.sales_mtd !== undefined && item.sales_mtd !== null ? item.sales_mtd : salesDelta;
         if (qtyToRecord !== 0) {
           dailySalesData.push({
             productId: existingInfo.id,
             date: uploadDate,
-            qtySold: qtyToRecord
+            qtySold: qtyToRecord,
+            omzet: omzetDelta,
           });
         }
       }
@@ -422,24 +453,32 @@ async function upsertProducts(
           const query = `
             UPDATE "Product" as p
             SET 
-              "hargaNormal" = COALESCE(v."hargaNormal", p."hargaNormal"),
-              "description" = COALESCE(v."description", p."description"),
-              "article" = COALESCE(v."article", p."article"),
-              "brand" = COALESCE(v."brand", p."brand"),
-              "dept" = COALESCE(v."dept", p."dept"),
-              "stok" = COALESCE(v."stok", p."stok"),
-              "sales_mtd" = COALESCE(v."sales_mtd", p."sales_mtd" + v."salesDelta"),
-              "hargaPromo" = v."hargaPromo",
-              "diskon" = v."diskon",
-              "discountType" = v."discountType",
-              "acara" = v."acara",
-              "fromDate" = v."fromDate",
-              "toDate" = v."toDate",
-              "promoFileName" = COALESCE(v."promoFileName", p."promoFileName"),
-              "updatedAt" = CURRENT_TIMESTAMP
+              "hargaNormal"      = COALESCE(v."hargaNormal",      p."hargaNormal"),
+              "description"      = COALESCE(v."description",      p."description"),
+              "article"          = COALESCE(v."article",          p."article"),
+              "brand"            = COALESCE(v."brand",            p."brand"),
+              "dept"             = COALESCE(v."dept",             p."dept"),
+              "stok"             = COALESCE(v."stok",             p."stok"),
+              "eoh_retail"       = COALESCE(v."eoh_retail",       p."eoh_retail"),
+              "sales_mtd"        = COALESCE(v."sales_mtd",        p."sales_mtd"),
+              "sales_mtd_retail" = COALESCE(v."sales_mtd_retail", p."sales_mtd_retail"),
+              "sales_wtd"        = COALESCE(v."sales_wtd",        p."sales_wtd"),
+              "sales_wtd_retail" = COALESCE(v."sales_wtd_retail", p."sales_wtd_retail"),
+              "sales_ytd"        = COALESCE(v."sales_ytd",        p."sales_ytd"),
+              "sales_ytd_retail" = COALESCE(v."sales_ytd_retail", p."sales_ytd_retail"),
+              "boy_unit"         = COALESCE(v."boy_unit",         p."boy_unit"),
+              "boy_retail"       = COALESCE(v."boy_retail",       p."boy_retail"),
+              "hargaPromo"       = v."hargaPromo",
+              "diskon"           = v."diskon",
+              "discountType"     = v."discountType",
+              "acara"            = v."acara",
+              "fromDate"         = v."fromDate",
+              "toDate"           = v."toDate",
+              "promoFileName"    = COALESCE(v."promoFileName",    p."promoFileName"),
+              "updatedAt"        = CURRENT_TIMESTAMP
             FROM (VALUES
               ${rowPlaceholders.join(", ")}
-            ) AS v("sku", "hargaNormal", "description", "article", "brand", "dept", "stok", "salesDelta", "sales_mtd", "hargaPromo", "diskon", "discountType", "acara", "fromDate", "toDate", "promoFileName")
+            ) AS v("sku", "hargaNormal", "description", "article", "brand", "dept", "stok", "eoh_retail", "sales_mtd", "sales_mtd_retail", "sales_wtd", "sales_wtd_retail", "sales_ytd", "sales_ytd_retail", "boy_unit", "boy_retail", "omzetDelta", "hargaPromo", "diskon", "discountType", "acara", "fromDate", "toDate", "promoFileName")
             WHERE p."sku" = v."sku"
           `;
 
