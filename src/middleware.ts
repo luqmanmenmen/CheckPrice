@@ -44,6 +44,7 @@ export async function middleware(request: NextRequest) {
     if (
       !pathname.startsWith('/api') && 
       !pathname.startsWith('/_next') &&
+      !pathname.startsWith('/assets') &&
       !pathname.startsWith('/suko-logo.png') &&
       !pathname.startsWith('/favicon.ico')
     ) {
@@ -69,5 +70,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|suko-logo.png|api/auth/login|api/auth/check-nik).*)'],
+  matcher: ['/((?!_next/static|_next/image|assets|favicon.ico|suko-logo.png|api/auth/login|api/auth/check-nik).*)'],
 };
