@@ -65,7 +65,8 @@ export async function POST(req: NextRequest) {
       // @ts-ignore
       toko: user.toko,
       jobTitle,
-      sessionId
+      sessionId,
+      shiftType: shift ? parseInt(shift, 10) : undefined
     });
 
     const response = NextResponse.json({ success: true, role: user.role });

@@ -227,6 +227,7 @@ export default function UsersManagement() {
                 <th className="p-4">PIN</th>
                 <th className="p-4">Toko</th>
                 <th className="p-4">Hak Akses</th>
+                <th className="p-4">Status</th>
                 <th className="p-4">Terdaftar</th>
                 <th className="p-4 text-right">Aksi</th>
               </tr>
@@ -251,6 +252,19 @@ export default function UsersManagement() {
                     <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${user.role === 'SUPER_ADMIN' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
                       {user.role === 'SUPER_ADMIN' ? 'SUPERVISOR' : user.role === 'SA' ? 'CREW STORE' : user.role}
                     </span>
+                  </td>
+                  <td className="p-4">
+                    {user.status === 'ACTIVE' ? (
+                      <span className="flex items-center gap-1 text-xs font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                        Aktif
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-xs font-bold text-slate-400 bg-slate-50 px-2.5 py-1 rounded-full border border-slate-200">
+                        <span className="w-2 h-2 rounded-full bg-slate-300"></span>
+                        Offline
+                      </span>
+                    )}
                   </td>
                   <td className="p-4 text-xs text-slate-500">
                     {new Date(user.createdAt).toLocaleDateString('id-ID', {day: 'numeric', month: 'short', year: 'numeric'})}

@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const users = await prisma.user.findMany({
+    const rawUsers = await prisma.user.findMany({
       orderBy: { createdAt: "desc" },
       select: {
         id: true,
@@ -26,8 +26,18 @@ export async function GET(req: NextRequest) {
         // @ts-ignore
         toko: true,
         createdAt: true,
+        shifts: {
+          where: { endTime: null },
+          take: 1,
+          select: { id: true }
+        }
       }
     });
+
+    const users = rawUsers.map((u: any) => ({
+      ...u,
+      status: u.shifts.length > 0 ? u.status : "OFFLINE" // If no active shift, they are offline
+    }));
 
     return NextResponse.json({ success: true, users });
   } catch (error) {

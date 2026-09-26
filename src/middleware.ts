@@ -22,7 +22,29 @@ export async function middleware(request: NextRequest) {
       const secret = getJwtSecretKey();
       const verified = await jwtVerify(token, secret);
       isValidSession = true;
-      userRole = (verified.payload as Record<string, unknown>).role as string;
+      
+      const payload = verified.payload as Record<string, unknown>;
+      userRole = payload.role as string;
+      const shiftType = payload.shiftType as number | undefined;
+
+      // Auto-logout based on shift time
+      if (shiftType) {
+        // Get current hour in Jakarta time (WIB)
+        const now = new Date();
+        const jakartaStr = now.toLocaleString("en-US", { timeZone: "Asia/Jakarta", hour12: false });
+        // jakartaStr looks like "9/27/2026, 00:29:43"
+        const hourMatch = jakartaStr.match(/ (\d+):/);
+        const hour = hourMatch ? parseInt(hourMatch[1], 10) : now.getUTCHours() + 7;
+
+        if (shiftType === 1) {
+          // Shift 1: 09:00 - 17:00. Force logout if hour >= 17 or < 8
+          if (hour >= 17 || hour < 8) isValidSession = false;
+        } else if (shiftType === 2) {
+          // Shift 2: 14:30 - 23:00. Force logout if hour >= 23 or < 14
+          if (hour >= 23 || hour < 14) isValidSession = false;
+        }
+      }
+
     } catch (e) {
       isValidSession = false;
     }
