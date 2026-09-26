@@ -11,15 +11,11 @@ export async function GET(
     const { identifier } = await params;
     const cleaned = identifier.trim();
     let product;
-    // 1. Exact match by SKU, Barcode, or Article
+    // 1. Exact match by SKU or Barcode
     product = await db.product.findFirst({ where: { sku: cleaned } });
     
     if (!product && cleaned) {
       product = await db.product.findFirst({ where: { barcode: cleaned } });
-    }
-
-    if (!product && cleaned) {
-      product = await db.product.findFirst({ where: { article: cleaned } });
     }
 
     // Helper to auto-remove promo if expired
@@ -52,22 +48,31 @@ export async function GET(
       return p;
     };
 
-    // 2. Try searching by name (description)
+    // 2. Try searching by name (description, brand, dept)
     if (!product && cleaned) {
       const { searchParams } = new URL(request.url);
       const page = parseInt(searchParams.get('page') || '1', 10);
-      const limit = 10;
+      const limit = 20;
       const skip = (page - 1) * limit;
+
+      const searchTerms = cleaned.split(/\s+/).filter(Boolean);
+      const AND = searchTerms.map(term => ({
+        OR: [
+          { description: { contains: term, mode: 'insensitive' as const } },
+          { dept: { contains: term, mode: 'insensitive' as const } },
+          { brand: { contains: term, mode: 'insensitive' as const } }
+        ]
+      }));
 
       const [nameMatches, total] = await Promise.all([
         db.product.findMany({
-          where: { description: { contains: cleaned, mode: 'insensitive' } },
+          where: { AND },
           skip,
           take: limit,
           orderBy: { description: 'asc' }
         }),
         db.product.count({
-          where: { description: { contains: cleaned, mode: 'insensitive' } }
+          where: { AND }
         })
       ]);
       
@@ -101,15 +106,23 @@ export async function GET(
     product = await checkAndCleanPromo(product);
 
     let siblings: any[] = [];
-    if (product && product.description) {
-      const parts = product.description.split(":");
-      if (parts.length > 1) {
-        const parentName = parts[0].trim();
+    if (product) {
+      if (product.article) {
         const allSiblings = await db.product.findMany({
-          where: { description: { startsWith: parentName + ":" } },
+          where: { article: product.article },
           orderBy: { description: 'asc' }
         });
         siblings = await Promise.all(allSiblings.map(checkAndCleanPromo));
+      } else if (product.description) {
+        const parts = product.description.split(":");
+        if (parts.length > 1) {
+          const parentName = parts[0].trim();
+          const allSiblings = await db.product.findMany({
+            where: { description: { startsWith: parentName + ":" } },
+            orderBy: { description: 'asc' }
+          });
+          siblings = await Promise.all(allSiblings.map(checkAndCleanPromo));
+        }
       }
     }
 

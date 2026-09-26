@@ -78,20 +78,107 @@ export async function GET(request: NextRequest) {
     
     const categoryBreakdown: Record<string, { omzet: number, qty: number }> = {};
 
+    // --- SUPER ALGORITHM: BXGY BALANCING (PROBABILISTIC) ---
+    // Karena kita tidak memiliki data struk (invoice-level), kita kumpulkan semua barang
+    // yang terjual dalam 1 acara BXGY yang sama di hari/bulan ini.
+    // Kita urutkan dari harga termurah, dan potong gratis (G) untuk setiap kelipatan (B+G).
+    const bxgyGroups: Record<string, any[]> = {};
+    salesData.forEach(sale => {
+      const p = sale.product;
+      if (p.discountType === 'BXGY' && p.acara) {
+        if (!bxgyGroups[p.acara]) bxgyGroups[p.acara] = [];
+        
+        // Tentukan harga dasar (basePrice) jika ada promo tumpuk (misal BXGY + Harga Coret/Diskon)
+        let basePrice = p.hargaNormal || 0;
+        if (p.hargaPromo && p.hargaPromo > 0) {
+          basePrice = p.hargaPromo;
+        } else if (p.diskon && p.diskon.includes('%') && p.hargaNormal) {
+          const pct = parseFloat(p.diskon);
+          if (!isNaN(pct)) basePrice = p.hargaNormal - (p.hargaNormal * (pct / 100));
+        } else if (p.diskon && !p.diskon.includes('%') && p.hargaNormal) {
+          const amt = parseFloat(p.diskon.replace(/\D/g, ''));
+          if (!isNaN(amt) && amt > 0) basePrice = p.hargaNormal - amt;
+        }
+
+        // Expand berdasarkan qtySold agar bisa disort per unit
+        for (let i = 0; i < sale.qtySold; i++) {
+          bxgyGroups[p.acara].push({
+            sku: p.sku,
+            harga: basePrice,
+            saleId: sale.id
+          });
+        }
+      }
+    });
+
+    const skuBxgyRevenue: Record<string, number> = {};
+    
+    for (const [acara, items] of Object.entries(bxgyGroups)) {
+      // Parse B[X]G[Y] (misal: B2G1, B1G1)
+      let b = 1, g = 1; // Default
+      const match = acara.match(/B(\d+)\s*G(\d+)/i);
+      if (match) {
+        b = parseInt(match[1]);
+        g = parseInt(match[2]);
+      }
+      
+      // Sort dari termurah ke termahal (karena kasir otomatis menggratiskan barang termurah)
+      items.sort((a, b) => a.harga - b.harga);
+      
+      const totalItems = items.length;
+      const totalBundles = Math.floor(totalItems / (b + g));
+      const freeCount = totalBundles * g;
+      
+      items.forEach((item, index) => {
+        const isFree = index < freeCount;
+        const effectivePrice = isFree ? 0 : item.harga;
+        
+        if (!skuBxgyRevenue[item.sku]) skuBxgyRevenue[item.sku] = 0;
+        skuBxgyRevenue[item.sku] += effectivePrice;
+      });
+    }
+    // --- END BXGY ALGORITHM ---
+
     const reportItems = salesData.map(sale => {
       const p = sale.product;
-      const isPromo = (p.hargaPromo !== null && p.hargaPromo > 0) || p.discountType === 'BXGY';
+      const isPromo = (p.hargaPromo !== null && p.hargaPromo > 0) || p.discountType !== null || p.diskon !== null;
       
       // Hitung harga satuan (Promo vs Normal)
       let unitPrice = 0;
+      let itemTotal = 0;
       let status = "NORMAL";
       
       if (isPromo) {
-        unitPrice = p.hargaPromo || p.hargaNormal || 0;
         status = "PROMO";
+        if (p.hargaPromo && p.hargaPromo > 0) {
+          unitPrice = p.hargaPromo;
+        } else if (p.diskon && p.diskon.includes('%') && p.hargaNormal) {
+          const pct = parseFloat(p.diskon);
+          if (!isNaN(pct)) {
+            unitPrice = p.hargaNormal - (p.hargaNormal * (pct / 100));
+          } else {
+            unitPrice = p.hargaNormal;
+          }
+        } else if (p.diskon && !p.diskon.includes('%') && p.hargaNormal) {
+          const amt = parseFloat(p.diskon.replace(/\D/g, ''));
+          if (!isNaN(amt) && amt > 0) {
+            unitPrice = p.hargaNormal - amt;
+          } else {
+            unitPrice = p.hargaNormal;
+          }
+        } else if (p.discountType === 'BXGY') {
+          // Pakai hasil dari algoritma balancing
+          itemTotal = skuBxgyRevenue[p.sku] || 0;
+          unitPrice = sale.qtySold > 0 ? itemTotal / sale.qtySold : 0;
+        } else {
+          // Fallback untuk hargaPromo lupa diisi
+          unitPrice = p.hargaNormal || 0;
+          itemTotal = unitPrice * sale.qtySold;
+        }
       } else {
         unitPrice = p.hargaNormal || 0;
         status = "NORMAL";
+        itemTotal = unitPrice * sale.qtySold;
       }
 
       // Deteksi anomali: barang laku tapi harga normal = 0
@@ -99,8 +186,6 @@ export async function GET(request: NextRequest) {
         status = "NO_PRICE";
         anomalyCount++;
       }
-
-      const itemTotal = unitPrice * sale.qtySold;
       
       totalRevenue += itemTotal;
       if (status === "PROMO") {
@@ -155,9 +240,30 @@ export async function GET(request: NextRequest) {
           let dayQty = 0;
           
           for (const ds of daySales) {
-            const isPromo = (ds.product.hargaPromo !== null && ds.product.hargaPromo > 0) || ds.product.discountType === 'BXGY';
-            const unitPrice = isPromo ? (ds.product.hargaPromo || ds.product.hargaNormal || 0) : (ds.product.hargaNormal || 0);
-            dayRev += unitPrice * ds.qtySold;
+            const p = ds.product;
+            const isPromo = (p.hargaPromo !== null && p.hargaPromo > 0) || p.discountType !== null || p.diskon !== null;
+            let itemRev = (p.hargaNormal || 0) * ds.qtySold;
+            
+            if (isPromo) {
+               if (p.discountType === 'BXGY') {
+                 // Untuk grafik trend, kita pakai estimasi proporsional cepat jika data struk tidak ada
+                 // Misal B2G1 = 3 barang bayar 2 (diskon ~33.3%)
+                 let b = 1, g = 1;
+                 const match = p.acara ? p.acara.match(/B(\d+)\s*G(\d+)/i) : null;
+                 if (match) { b = parseInt(match[1]); g = parseInt(match[2]); }
+                 const discountFactor = b / (b + g); // probabilitas rata-rata
+                 itemRev = (p.hargaNormal || 0) * ds.qtySold * discountFactor;
+               } else if (p.hargaPromo && p.hargaPromo > 0) {
+                 itemRev = p.hargaPromo * ds.qtySold;
+               } else if (p.diskon && p.diskon.includes('%') && p.hargaNormal) {
+                 const pct = parseFloat(p.diskon);
+                 if (!isNaN(pct)) itemRev = (p.hargaNormal - (p.hargaNormal * (pct / 100))) * ds.qtySold;
+               } else if (p.diskon && p.discountType === 'AMOUNT' && p.hargaNormal) {
+                 const amt = parseFloat(p.diskon.replace(/\D/g, ''));
+                 if (!isNaN(amt) && amt > 0) itemRev = (p.hargaNormal - amt) * ds.qtySold;
+               }
+            }
+            dayRev += itemRev;
             dayQty += ds.qtySold;
           }
           
@@ -190,10 +296,29 @@ export async function GET(request: NextRequest) {
         }
         
         const m = monthMap.get(monthKey);
-        const isPromo = (ds.product.hargaPromo !== null && ds.product.hargaPromo > 0) || ds.product.discountType === 'BXGY';
-        const unitPrice = isPromo ? (ds.product.hargaPromo || ds.product.hargaNormal || 0) : (ds.product.hargaNormal || 0);
+        const p = ds.product;
+        const isPromo = (p.hargaPromo !== null && p.hargaPromo > 0) || p.discountType !== null || p.diskon !== null;
+        let itemRev = (p.hargaNormal || 0) * ds.qtySold;
         
-        m.omzet += unitPrice * ds.qtySold;
+        if (isPromo) {
+           if (p.discountType === 'BXGY') {
+               let b = 1, g = 1;
+               const match = p.acara ? p.acara.match(/B(\d+)\s*G(\d+)/i) : null;
+               if (match) { b = parseInt(match[1]); g = parseInt(match[2]); }
+               const discountFactor = b / (b + g);
+               itemRev = (p.hargaNormal || 0) * ds.qtySold * discountFactor;
+           } else if (p.hargaPromo && p.hargaPromo > 0) {
+               itemRev = p.hargaPromo * ds.qtySold;
+           } else if (p.diskon && p.diskon.includes('%') && p.hargaNormal) {
+               const pct = parseFloat(p.diskon);
+               if (!isNaN(pct)) itemRev = (p.hargaNormal - (p.hargaNormal * (pct / 100))) * ds.qtySold;
+           } else if (p.diskon && p.discountType === 'AMOUNT' && p.hargaNormal) {
+               const amt = parseFloat(p.diskon.replace(/\D/g, ''));
+               if (!isNaN(amt) && amt > 0) itemRev = (p.hargaNormal - amt) * ds.qtySold;
+           }
+        }
+        
+        m.omzet += itemRev;
         m.qty += ds.qtySold;
       }
       

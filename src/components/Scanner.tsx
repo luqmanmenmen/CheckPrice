@@ -10,6 +10,8 @@ interface ScannerProps {
 
 export default function Scanner({ onScanSuccess, onScanError }: ScannerProps) {
   const scannerRef = useRef<Html5Qrcode | null>(null);
+  const isHandlingResult = useRef(false);
+  const blacklistedSkus = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     scannerRef.current = new Html5Qrcode("reader");
@@ -19,7 +21,21 @@ export default function Scanner({ onScanSuccess, onScanError }: ScannerProps) {
     scannerRef.current.start(
       { facingMode: "environment" },
       config,
-      (decodedText) => {
+      async (decodedText) => {
+        if (isHandlingResult.current || blacklistedSkus.current.has(decodedText)) return;
+        isHandlingResult.current = true;
+        
+        try {
+          const res = await fetch(`/api/product/${decodedText}`);
+          if (!res.ok) {
+            blacklistedSkus.current.add(decodedText);
+            isHandlingResult.current = false;
+            return;
+          }
+        } catch (e) {
+          // Ignore network errors
+        }
+
         onScanSuccess(decodedText);
       },
       (errorMessage) => {

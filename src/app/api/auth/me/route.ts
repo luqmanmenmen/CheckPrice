@@ -12,8 +12,14 @@ export async function GET(req: NextRequest) {
 
     const dbUser = await prisma.user.findUnique({
       where: { id: session.userId },
-      select: { status: true }
+      select: { status: true, sessionId: true }
     });
+
+    if (dbUser?.sessionId !== session.sessionId) {
+      const response = NextResponse.json({ user: null });
+      response.cookies.set("token", "", { maxAge: 0, path: "/" });
+      return response;
+    }
 
     return NextResponse.json({ user: { ...session, status: dbUser?.status || "ACTIVE" } });
   } catch (error) {

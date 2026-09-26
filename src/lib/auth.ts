@@ -6,6 +6,7 @@ interface SessionPayload {
   name: string;
   nik: string;
   jobTitle?: string;
+  sessionId?: string;
 }
 
 const getJwtSecretKey = () => {

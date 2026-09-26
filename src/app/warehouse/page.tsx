@@ -23,6 +23,16 @@ type Ticket = {
   hargaNormal?: number;
 };
 
+// Parse the description to get a clean product name and its variants (color/size)
+function parseDescription(desc: string): { name: string; variants: string[] } {
+  if (!desc) return { name: "", variants: [] };
+  const parts = desc.split(":");
+  if (parts.length <= 1) return { name: desc, variants: [] };
+  const name = parts[0].trim();
+  const variants = parts.slice(1).map(p => p.trim()).filter(Boolean);
+  return { name, variants };
+}
+
 export default function WarehouseDashboard() {
   const [user, setUser] = useState<any>(null);
   const [togglingStatus, setTogglingStatus] = useState(false);
@@ -321,9 +331,27 @@ export default function WarehouseDashboard() {
                               {ticket.type === "REQUEST" ? "Request Barang" : "Cek Stok"}
                             </span>
                             <h4 className="font-black text-lg text-slate-800 mt-1.5">{ticket.sku}</h4>
-                            <p className="text-sm font-bold text-slate-600 max-w-full leading-tight">{ticket.productName}</p>
+                            
+                            {(() => {
+                              const { name, variants } = parseDescription(ticket.productName || "");
+                              return (
+                                <div className="mt-1">
+                                  <p className="text-sm font-bold text-slate-600 max-w-full leading-tight">{name}</p>
+                                  {variants.length > 0 && (
+                                    <div className="flex flex-wrap gap-1.5 mt-2">
+                                      {variants.map((v, i) => (
+                                        <span key={i} className="text-xs font-black bg-blue-100 text-blue-800 px-2 py-1 rounded-md border border-blue-200 shadow-sm uppercase">
+                                          {v}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })()}
+
                             {ticket.hargaNormal && ticket.hargaNormal > 0 ? (
-                                <p className="text-xs font-semibold text-blue-600 mt-0.5">Rp {ticket.hargaNormal.toLocaleString('id-ID')}</p>
+                                <p className="text-xs font-semibold text-blue-600 mt-1.5">Rp {ticket.hargaNormal.toLocaleString('id-ID')}</p>
                             ) : null}
                             {ticket.qty && <p className="text-sm font-semibold text-slate-500 mt-1">Qty: {ticket.qty}</p>}
                           </div>

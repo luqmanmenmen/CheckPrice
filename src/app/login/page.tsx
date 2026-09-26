@@ -15,6 +15,11 @@ export default function Login() {
   const [toko, setToko] = useState("");
   const [checkingNik, setCheckingNik] = useState(false);
   
+  const [showChangePin, setShowChangePin] = useState(false);
+  const [newPin, setNewPin] = useState("");
+  const [loginRole, setLoginRole] = useState("");
+  const [changingPin, setChangingPin] = useState(false);
+  
   // Client-side only states for random positions
   const [mounted, setMounted] = useState(false);
   const [stars, setStars] = useState<{ x: number; y: number; delay: string }[]>([]);
@@ -79,10 +84,15 @@ export default function Login() {
 
       const data = await res.json();
       if (res.ok) {
-        if (data.role === "WAREHOUSE") {
-          router.push("/warehouse");
+        if (pin === "123456") {
+          setLoginRole(data.role);
+          setShowChangePin(true);
         } else {
-          router.push("/");
+          if (data.role === "WAREHOUSE") {
+            router.replace("/warehouse");
+          } else {
+            router.replace("/");
+          }
         }
       } else {
         setError(data.error || "Gagal login");
@@ -91,6 +101,39 @@ export default function Login() {
       setError("Terjadi kesalahan jaringan");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleChangePin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newPin.length < 4) {
+      setError("PIN baru minimal 4 angka");
+      return;
+    }
+    
+    setChangingPin(true);
+    setError("");
+    try {
+      const res = await fetch("/api/auth/change-pin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newPin })
+      });
+      
+      const data = await res.json();
+      if (res.ok) {
+        if (loginRole === "WAREHOUSE") {
+          router.replace("/warehouse");
+        } else {
+          router.replace("/");
+        }
+      } else {
+        setError(data.error || "Gagal mengubah PIN");
+      }
+    } catch (err) {
+      setError("Terjadi kesalahan jaringan");
+    } finally {
+      setChangingPin(false);
     }
   };
 
@@ -107,11 +150,52 @@ export default function Login() {
 
       <div className="flex-grow shrink-0 min-h-[2rem]"></div>
 
-      <div className="relative z-20 mx-auto bg-white/95 backdrop-blur-xl p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/40 shrink-0">
-        <div className="text-center mb-8 flex flex-col items-center">
-          <img src="/suko-logo.png" alt="SUKO Logo" className="h-20 mb-4 object-contain drop-shadow-md" />
-          <p className="text-gray-500 text-sm font-medium">Masuk untuk memulai shift Anda</p>
+      {showChangePin ? (
+        <div className="relative z-20 mx-auto bg-white/95 backdrop-blur-xl p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/40 shrink-0 animate-in zoom-in-95 duration-300">
+          <div className="text-center mb-6">
+            <h2 className="text-xl font-black text-slate-800">Ubah PIN Default</h2>
+            <p className="text-sm text-slate-500 mt-2">Demi keamanan, silakan ganti PIN Anda sebelum melanjutkan.</p>
+          </div>
+          
+          {error && (
+            <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm mb-4 text-center">
+              {error}
+            </div>
+          )}
+
+          <form onSubmit={handleChangePin} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">PIN Baru</label>
+              <input
+                type="password"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                required
+                maxLength={6}
+                className="w-full border border-gray-300 rounded-lg p-3 text-lg tracking-widest text-center font-mono bg-white text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                placeholder="••••••"
+                value={newPin}
+                onChange={(e) => setNewPin(e.target.value.replace(/\D/g, ''))}
+                autoFocus
+              />
+              <p className="text-xs text-slate-400 mt-2 text-center">Gunakan kombinasi angka yang mudah diingat.</p>
+            </div>
+            
+            <button
+              type="submit"
+              disabled={changingPin || newPin.length < 4}
+              className="w-full bg-gradient-to-r from-green-600 to-emerald-600 text-white font-black py-4 rounded-xl mt-6 shadow-lg shadow-green-500/30 hover:shadow-green-500/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {changingPin ? "MENYIMPAN..." : "SIMPAN & LANJUTKAN"}
+            </button>
+          </form>
         </div>
+      ) : (
+        <div className="relative z-20 mx-auto bg-white/95 backdrop-blur-xl p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/40 shrink-0">
+          <div className="text-center mb-8 flex flex-col items-center">
+            <img src="/suko-logo.png" alt="SUKO Logo" className="h-20 mb-4 object-contain drop-shadow-md" />
+            <p className="text-gray-500 text-sm font-medium">Masuk untuk memulai shift Anda</p>
+          </div>
 
         {error && (
           <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm mb-4 text-center">
@@ -198,6 +282,7 @@ export default function Login() {
           </button>
         </form>
       </div>
+      )}
 
       <div className="flex-grow shrink-0 min-h-[4rem]"></div>
 

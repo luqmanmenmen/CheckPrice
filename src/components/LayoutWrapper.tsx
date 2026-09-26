@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect } from "react";
+
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { Package, UploadCloud } from "lucide-react";
@@ -13,6 +15,13 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   const { data } = useSWR("/api/auth/me", fetcher);
   
   const isSuperAdmin = data?.user?.role === "SUPER_ADMIN";
+
+  // Redirect to login if session is invalidated (e.g. login from another device)
+  useEffect(() => {
+    if (!isAuth && data && !data.user) {
+      window.location.href = "/login";
+    }
+  }, [isAuth, data]);
 
   if (isAuth) {
     return (

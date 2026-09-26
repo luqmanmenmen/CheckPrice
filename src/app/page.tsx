@@ -162,6 +162,8 @@ export default function Home() {
   const [qty, setQty] = useState(1);
   const [activeTab, setActiveTab] = useState<"REQUEST" | "STOCK_CHECK" | "ORDERS">("REQUEST");
   const [cart, setCart] = useState<any[]>([]);
+  const [continuousMode, setContinuousMode] = useState(false);
+  const [lastScanMode, setLastScanMode] = useState<"none" | "barcode" | "text">("none");
   const [user, setUser] = useState<{name: string, nik: string, role: string, status?: string, jobTitle?: string} | null>(null);
   const [togglingStatus, setTogglingStatus] = useState(false);
 
@@ -362,6 +364,7 @@ export default function Home() {
     setManualInput(result);
     searchProduct(result);
     setScanMode("none");
+    setLastScanMode("barcode");
   };
 
   const handleTextScanSuccess = (sku: string) => {
@@ -370,6 +373,7 @@ export default function Home() {
       searchProduct(sku);
     }
     setScanMode("none");
+    setLastScanMode("text");
   };
 
   const addToCart = (type: string, qty: number, size: string) => {
@@ -385,7 +389,13 @@ export default function Home() {
     }]);
     setProduct(null);
     setManualInput("");
+    setQty(1);
     showToast(`Berhasil ditambahkan ke daftar. Total: ${cart.length + 1}`);
+    if (continuousMode && lastScanMode !== "none") {
+      setScanMode(lastScanMode);
+    } else {
+      setLastScanMode("none");
+    }
   };
 
   const submitCart = async () => {
@@ -418,6 +428,8 @@ export default function Home() {
     setSiblings([]);
     setProductsList([]);
     setError("");
+    setQty(1);
+    setLastScanMode("none");
     inputRef.current?.focus();
   };
 
@@ -722,7 +734,10 @@ export default function Home() {
               )}
               {!manualInput && (
                 <button 
-                  onClick={() => setScanMode(scanMode === "text" ? "none" : "text")}
+                  onClick={() => {
+                    setScanMode(scanMode === "text" ? "none" : "text");
+                    setLastScanMode("text");
+                  }}
                   className={`text-slate-400 hover:text-indigo-600 transition-colors ${scanMode === "text" ? "text-indigo-600" : ""}`}
                 >
                   <ScanText className="w-5 h-5" />
@@ -780,8 +795,8 @@ export default function Home() {
                 <button
                   key={p.id}
                   onClick={() => {
-                    setProduct(p);
-                    setProductsList([]);
+                    setManualInput(p.sku);
+                    searchProduct(p.sku);
                   }}
                   className="text-left p-3 border rounded-xl hover:bg-blue-50 hover:border-blue-200 transition-colors"
                 >
@@ -795,9 +810,12 @@ export default function Home() {
                       ))}
                     </div>
                   )}
-                  <div className="flex gap-2 mt-2">
+                  <div className="flex gap-2 mt-2 items-center">
                     <span className="text-[10px] font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-600">SKU: {p.sku}</span>
                     <span className="text-[10px] font-bold text-blue-600">{formatRupiah(p.hargaPromo || p.hargaNormal)}</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${p.stok > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                      Stok: {p.stok}
+                    </span>
                   </div>
                 </button>
               );
@@ -923,9 +941,9 @@ export default function Home() {
                   SKU: {product.sku}
                 </span>
                 {product.article && (
-                  <span className="flex items-center gap-1 bg-blue-50 text-blue-700 text-xs font-mono px-2.5 py-1.5 rounded-lg">
-                    <Layers className="w-3.5 h-3.5" />
-                    {product.article}
+                  <span className="flex items-center gap-1.5 bg-blue-100 text-blue-800 text-xs font-black font-mono px-3 py-1.5 rounded-lg border border-blue-200 shadow-sm" title="Artikel Induk (Group)">
+                    <Layers className="w-3.5 h-3.5 opacity-70" />
+                    ARTIKEL: {product.article}
                   </span>
                 )}
                 {isPromoExpired && (
@@ -1046,17 +1064,43 @@ export default function Home() {
               )}
 
               {/* Aksi Gudang */}
-              <div className="flex flex-col gap-2 mt-2">
-                <p className="text-xs font-bold text-slate-500 uppercase">Masukkan ke Keranjang</p>
-                <div className="flex gap-2">
+              <div className="flex flex-col gap-3 mt-4 bg-slate-50 p-4 rounded-xl border border-slate-100">
+                <div className="flex justify-between items-center">
+                  <p className="text-xs font-bold text-slate-500 uppercase">Masukkan ke Keranjang</p>
+                  
+                  <div className="flex items-center gap-3">
+                    {/* Continuous Toggle */}
+                    <label className="flex items-center gap-1.5 cursor-pointer" title="Otomatis buka kamera setelah ditambahkan">
+                      <input 
+                        type="checkbox" 
+                        className="w-3.5 h-3.5 text-blue-600 rounded border-gray-300 focus:ring-blue-500" 
+                        checked={continuousMode}
+                        onChange={(e) => setContinuousMode(e.target.checked)}
+                      />
+                      <span className="text-[10px] font-bold text-slate-500 uppercase">Scan Lanjut</span>
+                    </label>
+
+                    <div className="h-4 w-px bg-slate-300"></div>
+
+                    {/* Qty Selector */}
+                    <div className="flex items-center gap-2 bg-white px-2 py-1 rounded-lg border shadow-sm">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase">QTY:</span>
+                      <button onClick={() => setQty(Math.max(1, qty - 1))} className="w-6 h-6 flex items-center justify-center bg-slate-100 text-slate-600 rounded hover:bg-slate-200 font-bold">-</button>
+                      <span className="text-sm font-black text-slate-700 w-6 text-center">{qty}</span>
+                      <button onClick={() => setQty(qty + 1)} className="w-6 h-6 flex items-center justify-center bg-slate-100 text-slate-600 rounded hover:bg-slate-200 font-bold">+</button>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="flex gap-2 mt-1">
                   {activeTab === "REQUEST" && (
-                    <button onClick={() => addToCart("REQUEST", 1, "")} className="w-full bg-blue-100 text-blue-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-blue-200 active:scale-95 transition-all">
-                      <HandHelping className="w-4 h-4" /> Request Barang Ini
+                    <button onClick={() => addToCart("REQUEST", qty, "")} className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 hover:bg-blue-700 shadow-md active:scale-95 transition-all">
+                      <HandHelping className="w-5 h-5" /> Request Barang
                     </button>
                   )}
                   {activeTab === "STOCK_CHECK" && (
-                    <button onClick={() => addToCart("STOCK_CHECK", 1, "")} className="w-full bg-indigo-100 text-indigo-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-indigo-200 active:scale-95 transition-all">
-                      <MessageSquare className="w-4 h-4" /> Tanya Stok Barang Ini
+                    <button onClick={() => addToCart("STOCK_CHECK", qty, "")} className="w-full bg-indigo-600 text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 hover:bg-indigo-700 shadow-md active:scale-95 transition-all">
+                      <MessageSquare className="w-5 h-5" /> Tanya Stok
                     </button>
                   )}
                 </div>

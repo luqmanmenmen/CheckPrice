@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import useSWR from "swr";
-import { Trash2, Plus, UserPlus, Store } from "lucide-react";
+import { Trash2, Plus, UserPlus, Store, Edit, X } from "lucide-react";
 import { AlertModal } from "@/components/AlertModal";
 
 const fetcher = (url: string) => fetch(url).then(res => res.json());
@@ -17,6 +17,7 @@ export default function UsersManagement() {
   const [toko, setToko] = useState("");
   const [role, setRole] = useState("SA");
   const [showAddForm, setShowAddForm] = useState(false);
+  const [editingUser, setEditingUser] = useState<any>(null);
 
   // Modal State
   const [alert, setAlert] = useState<{ isOpen: boolean; title: string; message: string; type: "success" | "error" | "warning"; onConfirm?: () => void }>({
@@ -51,6 +52,32 @@ export default function UsersManagement() {
         mutate();
       } else {
         showAlert("Gagal", resData.error || "Gagal menambahkan karyawan", "error");
+      }
+    } catch (err) {
+      showAlert("Error", "Terjadi kesalahan jaringan", "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEditUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    
+    try {
+      const res = await fetch("/api/admin/users", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: editingUser.id, name: editingUser.name, pin: editingUser.pin, toko: editingUser.toko, role: editingUser.role })
+      });
+      
+      const resData = await res.json();
+      if (res.ok) {
+        showAlert("Berhasil", `Data Karyawan ${editingUser.name} berhasil diperbarui!`, "success");
+        setEditingUser(null);
+        mutate();
+      } else {
+        showAlert("Gagal", resData.error || "Gagal memperbarui karyawan", "error");
       }
     } catch (err) {
       showAlert("Error", "Terjadi kesalahan jaringan", "error");
@@ -147,6 +174,49 @@ export default function UsersManagement() {
         </div>
       )}
 
+      {editingUser && (
+        <div className="fixed inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white p-6 rounded-2xl shadow-2xl w-full max-w-xl animate-in zoom-in-95 duration-200">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-lg font-bold text-slate-700 flex items-center gap-2"><Edit className="w-5 h-5 text-indigo-600"/> Edit Karyawan ({editingUser.nik})</h2>
+              <button onClick={() => setEditingUser(null)} className="text-slate-400 hover:text-slate-600 bg-slate-100 p-1.5 rounded-full"><X className="w-5 h-5"/></button>
+            </div>
+            <form onSubmit={handleEditUser} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Nama Lengkap</label>
+                <input type="text" required value={editingUser.name} onChange={e => setEditingUser({...editingUser, name: e.target.value})} className="w-full p-2.5 rounded-lg border focus:ring-2 focus:ring-indigo-500 outline-none" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">PIN (Password)</label>
+                <input type="text" required value={editingUser.pin} onChange={e => setEditingUser({...editingUser, pin: e.target.value})} className="w-full p-2.5 rounded-lg border focus:ring-2 focus:ring-indigo-500 outline-none font-mono" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Penempatan Toko</label>
+                <div className="relative">
+                  <Store className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input type="text" required value={editingUser.toko || ""} onChange={e => setEditingUser({...editingUser, toko: e.target.value})} className="w-full pl-9 p-2.5 rounded-lg border focus:ring-2 focus:ring-indigo-500 outline-none" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Hak Akses Tetap</label>
+                <select value={editingUser.role} onChange={e => setEditingUser({...editingUser, role: e.target.value})} className="w-full p-2.5 rounded-lg border focus:ring-2 focus:ring-indigo-500 outline-none bg-white">
+                  <option value="SA">Karyawan Biasa (SPG/Gudang)</option>
+                  <option value="SUPER_ADMIN">Super Admin</option>
+                </select>
+              </div>
+              <div className="md:col-span-2 mt-4 flex gap-3">
+                <button disabled={loading} type="submit" className="bg-indigo-600 text-white font-bold py-3 px-6 rounded-xl hover:bg-indigo-700 transition-colors flex-1 disabled:opacity-50">
+                  {loading ? "Menyimpan..." : "Update Data"}
+                </button>
+                <button type="button" onClick={() => setEditingUser(null)} className="bg-slate-100 text-slate-700 font-bold py-3 px-6 rounded-xl hover:bg-slate-200 transition-colors">
+                  Batal
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
@@ -154,6 +224,7 @@ export default function UsersManagement() {
               <tr>
                 <th className="p-4">NIK</th>
                 <th className="p-4">Nama</th>
+                <th className="p-4">PIN</th>
                 <th className="p-4">Toko</th>
                 <th className="p-4">Hak Akses</th>
                 <th className="p-4">Terdaftar</th>
@@ -165,6 +236,7 @@ export default function UsersManagement() {
                 <tr key={user.id} className="hover:bg-slate-50 transition-colors">
                   <td className="p-4 font-mono font-bold text-slate-700">{user.nik}</td>
                   <td className="p-4 font-bold text-slate-800">{user.name}</td>
+                  <td className="p-4 font-mono text-slate-500 bg-slate-50 rounded-lg px-2">{user.pin}</td>
                   <td className="p-4">
                     {user.toko ? (
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-indigo-50 text-indigo-700 font-semibold text-xs border border-indigo-100">
@@ -184,6 +256,13 @@ export default function UsersManagement() {
                     {new Date(user.createdAt).toLocaleDateString('id-ID', {day: 'numeric', month: 'short', year: 'numeric'})}
                   </td>
                   <td className="p-4 text-right">
+                    <button 
+                      onClick={() => setEditingUser(user)}
+                      className="text-indigo-500 hover:text-indigo-700 p-2 hover:bg-indigo-50 rounded-lg transition-colors mr-1"
+                      title="Edit Pengguna"
+                    >
+                      <Edit className="w-4 h-4" />
+                    </button>
                     <button 
                       onClick={() => confirmDelete(user.id, user.name)}
                       className="text-red-500 hover:text-red-700 p-2 hover:bg-red-50 rounded-lg transition-colors"

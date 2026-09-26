@@ -31,6 +31,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const workerRef = useRef<Tesseract.Worker | null>(null);
   const isHandlingResult = useRef(false);
+  const blacklistedSkus = useRef<Set<string>>(new Set());
 
   const [status, setStatus] = useState("Memulai Kamera & AI...");
   const [torchOn, setTorchOn] = useState(false);
@@ -111,8 +112,12 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       // 5. Eksekusi SKU Terakhir
       if (valid8Digits.length > 0) {
           const finalSku = valid8Digits[valid8Digits.length - 1];
-          handleSuccess(finalSku, "OCR (Smart Line Filter)");
-          return;
+          if (!blacklistedSkus.current.has(finalSku)) {
+              handleSuccess(finalSku, "OCR (Smart Line Filter)");
+              return;
+          } else {
+              detectedWrong = true;
+          }
       }
       
       // Jika salah fokus, berikan feedback merah
@@ -125,9 +130,26 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     }
   }
 
-  function handleSuccess(sku: string, source: string) {
-    if (isHandlingResult.current) return;
+  async function handleSuccess(sku: string, source: string) {
+    if (isHandlingResult.current || blacklistedSkus.current.has(sku)) return;
     isHandlingResult.current = true;
+    
+    setStatus(`Mengecek SKU ${sku} di database...`);
+
+    try {
+      const res = await fetch(`/api/product/${sku}`);
+      if (!res.ok) {
+        // Invalid SKU! Blacklist and continue scanning
+        blacklistedSkus.current.add(sku);
+        setScanFeedback("wrong_target");
+        setStatus(`SKU ${sku} tidak valid, mencari lagi...`);
+        setTimeout(() => setScanFeedback("idle"), 800);
+        isHandlingResult.current = false;
+        return;
+      }
+    } catch (e) {
+      // Ignore network errors here, let the main page handle it
+    }
     
     setFoundSku(sku);
     setStatus(`Berhasil ditemukan: ${sku} via ${source}`);
@@ -135,7 +157,6 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     // Ambil snapshot
     let snapshot = undefined;
     if (canvasRef.current) {
-        // Gambar video terkini ke kanvas (tanpa filter) untuk snapshot bersih
         const video = document.querySelector("#reader video") as HTMLVideoElement;
         if (video) {
            const ctx = canvasRef.current.getContext("2d");
@@ -156,7 +177,6 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
        scannerRef.current.stop().catch(console.error);
     }
 
-    // Jeda sedikit agar UI terlihat berubah menjadi centang hijau
     setTimeout(() => {
        onScanResult(sku, { text: sku, bbox: dummyBbox, rawText: source }, snapshot);
     }, 800);
@@ -201,7 +221,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
             // Permintaan USER: Abaikan barcode (batang), fokus murni ke SKU via OCR!
             // Barcode retail biasanya 13 digit (EAN-13), kita abaikan saja.
             // Jika kebetulan barcodenya EAN-8 (tepat 8 digit), mungkin itu SKU, jadi kita izinkan.
-            if (decodedText.length === 8) {
+            if (decodedText.length >= 4) { // Biarkan 4-13 digit dicek
                 handleSuccess(decodedText, "BARCODE");
             } else {
                 // Beri tahu UI bahwa kamera sedang nyasar ke barcode batang!

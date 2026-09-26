@@ -52,6 +52,7 @@ model User {
   role      Role     @default(SA)
   status    UserStatus @default(ACTIVE)
   toko      String?
+  sessionId String?
   shifts    Shift[]
   tickets   Ticket[]
   syncHistory SyncHistory[]

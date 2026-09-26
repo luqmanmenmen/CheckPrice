@@ -22,6 +22,7 @@ export async function GET(req: NextRequest) {
         name: true,
         role: true,
         status: true,
+        pin: true,
         // @ts-ignore
         toko: true,
         createdAt: true,
@@ -100,5 +101,39 @@ export async function DELETE(req: NextRequest) {
   } catch (error) {
     console.error("Delete user error:", error);
     return NextResponse.json({ error: "Gagal menghapus pengguna, mungkin memiliki data relasi (Shift/Tiket)" }, { status: 500 });
+  }
+}
+
+export async function PUT(req: NextRequest) {
+  try {
+    const token = req.cookies.get("token")?.value;
+    if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    
+    const session = await verifyToken(token);
+    if (!session || session.role !== "SUPER_ADMIN") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    const { id, name, pin, toko, role } = await req.json();
+
+    if (!id || !name || !pin) {
+      return NextResponse.json({ error: "ID, Nama, dan PIN wajib diisi" }, { status: 400 });
+    }
+
+    const user = await prisma.user.update({
+      where: { id },
+      data: {
+        name,
+        pin,
+        // @ts-ignore
+        toko: toko || null,
+        role: role || "SA",
+      }
+    });
+
+    return NextResponse.json({ success: true, user });
+  } catch (error) {
+    console.error("Edit user error:", error);
+    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }
 }
