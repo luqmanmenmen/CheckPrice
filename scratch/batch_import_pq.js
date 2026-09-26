@@ -121,20 +121,23 @@ async function main() {
           boy_unit: boy_u, boy_retail: boy_r,
         });
         // Tambah ke map sebagai baseline untuk file berikutnya
-        productMap.set(sku, { id: -1, prevMtdRetail: mtd_r });
+        productMap.set(sku, { id: -1, prevMtdRetail: mtd_r, prevMtdQty: mtd_u });
         continue;
       }
 
       // Delta omzet harian
-      const prevMtd = existing.prevMtdRetail || 0;
-      const omzetDelta = mtd_r > prevMtd ? mtd_r - prevMtd : 0;
+      const prevMtdRetail = existing.prevMtdRetail || 0;
+      const omzetDelta = mtd_r > prevMtdRetail ? mtd_r - prevMtdRetail : 0;
+      
+      const prevMtdQty = existing.prevMtdQty || 0;
+      const qtyDelta = mtd_u > prevMtdQty ? mtd_u - prevMtdQty : 0;
 
       // DailySales (hanya kalau ada penjualan)
-      if (mtd_u > 0) {
+      if (qtyDelta > 0) {
         dailySales.push({
           productId: existing.id,
           date: uploadDate,
-          qtySold: mtd_u,
+          qtySold: qtyDelta,
           omzet: omzetDelta,
         });
       }

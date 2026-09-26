@@ -407,6 +407,11 @@ async function upsertProducts(
         const newMtdRetail = item.sales_mtd_retail !== undefined ? item.sales_mtd_retail : 0;
         const omzetDelta = newMtdRetail > oldMtdRetail ? newMtdRetail - oldMtdRetail : 0;
 
+        // Hitung delta QTY (sales_mtd)
+        const oldMtdQty = (existingInfo as any).sales_mtd || 0;
+        const newMtdQty = item.sales_mtd !== undefined && item.sales_mtd !== null ? item.sales_mtd : 0;
+        const qtyDelta = newMtdQty > oldMtdQty ? newMtdQty - oldMtdQty : 0;
+
         rowPlaceholders.push(`($${paramIndex++}::text, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text)`);
         
         values.push(
@@ -436,13 +441,12 @@ async function upsertProducts(
           finalPromoFileNameToSave !== undefined ? finalPromoFileNameToSave : null
         );
 
-        // Gunakan sales_mtd sebagai qty, dan omzetDelta sebagai omzet aktual dari POS
-        const qtyToRecord = item.sales_mtd !== undefined && item.sales_mtd !== null ? item.sales_mtd : salesDelta;
-        if (qtyToRecord !== 0) {
+        // Gunakan qtyDelta untuk mencatat qty yang sebenarnya terjual HARI INI
+        if (qtyDelta !== 0) {
           dailySalesData.push({
             productId: existingInfo.id,
             date: uploadDate,
-            qtySold: qtyToRecord,
+            qtySold: qtyDelta,
             omzet: omzetDelta,
           });
         }
