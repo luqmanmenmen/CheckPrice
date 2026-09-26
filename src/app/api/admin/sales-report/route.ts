@@ -177,6 +177,9 @@ export async function GET(request: NextRequest) {
           unitPrice = p.hargaNormal || 0;
           itemTotal = unitPrice * sale.qtySold;
         }
+        if (p.discountType !== 'BXGY') {
+          itemTotal = unitPrice * sale.qtySold;
+        }
       } else {
         unitPrice = p.hargaNormal || 0;
         status = "NORMAL";
