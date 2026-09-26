@@ -57,7 +57,7 @@ model User {
   nik       String   @unique
   pin       String
   name      String
-  role      Role     @default(SA)
+  role      Role     @default(CREW_STORE)
   status    UserStatus @default(ACTIVE)
   toko      String?
   sessionId String?
@@ -74,9 +74,8 @@ enum UserStatus {
 }
 
 enum Role {
-  SA           // Cashier, Fitter, Entrance, Runner all grouped under SA (Sales Area) who can request
-  WAREHOUSE    // Warehouse staff who fulfill requests
-  SUPER_ADMIN  // Master control
+  SUPERVISOR
+  CREW_STORE
 }
 
 model Shift {

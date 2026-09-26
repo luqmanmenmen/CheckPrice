@@ -32,15 +32,19 @@ export async function middleware(request: NextRequest) {
         // Get current hour in Jakarta time (WIB)
         const now = new Date();
         const jakartaStr = now.toLocaleString("en-US", { timeZone: "Asia/Jakarta", hour12: false });
-        // jakartaStr looks like "9/27/2026, 00:29:43"
-        const hourMatch = jakartaStr.match(/ (\d+):/);
-        const hour = hourMatch ? parseInt(hourMatch[1], 10) : now.getUTCHours() + 7;
+        // jakartaStr looks like "9/27/2026, 00:29:43" or "9/27/2026, 24:29:43"
+        const hourMatch = jakartaStr.match(/ (24|\d+):/);
+        let hour = hourMatch ? parseInt(hourMatch[1], 10) : now.getUTCHours() + 7;
+        if (hour === 24) hour = 0; // Fix edge case for 24:00
 
+        // Shift 1: Pagi (09:00 - 17:00)
         if (shiftType === 1) {
-          // Shift 1: 09:00 - 17:00. Force logout if hour >= 17 or < 8
+          // Jika di luar jam 08:00 - 17:59 (kasih toleransi login jam 8, dan logout tepat jam 17+)
           if (hour >= 17 || hour < 8) isValidSession = false;
-        } else if (shiftType === 2) {
-          // Shift 2: 14:30 - 23:00. Force logout if hour >= 23 or < 14
+        } 
+        // Shift 2: Siang (14:30 - 23:00)
+        else if (shiftType === 2) {
+          // Jika di luar jam 14:00 - 23:59
           if (hour >= 23 || hour < 14) isValidSession = false;
         }
       }
@@ -53,15 +57,13 @@ export async function middleware(request: NextRequest) {
   // 1. Redirect logged-in users away from /login
   if (isAuthPage) {
     if (isValidSession) {
-      if (userRole === 'WAREHOUSE') return NextResponse.redirect(new URL('/warehouse', request.url));
-      if (userRole === 'SUPER_ADMIN') return NextResponse.redirect(new URL('/spv-gateway', request.url));
+      if (userRole === 'SUPERVISOR') return NextResponse.redirect(new URL('/spv-gateway', request.url));
       return NextResponse.redirect(new URL('/', request.url));
     }
     return NextResponse.next();
   }
 
-  // 2. Protect all other pages (except API, static files, and public assets)
-  // 2. Protect all other pages (except API, static files, and public assets)
+  // 2. Protect all other pages
   if (!isValidSession) {
     if (
       !pathname.startsWith('/api') && 
@@ -74,15 +76,11 @@ export async function middleware(request: NextRequest) {
     }
   } else {
     // 3. RBAC: Role-Based Access Control
-    // WAREHOUSE role should be routed to /warehouse
-    if (userRole === 'WAREHOUSE' && pathname === '/') {
-      return NextResponse.redirect(new URL('/warehouse', request.url));
-    }
-    // SA role cannot access warehouse or super-admin
-    if (userRole === 'SA' && (pathname.startsWith('/warehouse') || pathname.startsWith('/super-admin'))) {
+    // CREW_STORE cannot access super-admin
+    if (userRole === 'CREW_STORE' && pathname.startsWith('/super-admin')) {
       return NextResponse.redirect(new URL('/', request.url));
     }
-    // SUPER_ADMIN (SUPERVISOR) has full access, no restriction needed!
+    // SUPERVISOR has full access, no restriction needed!
   }
 
   return NextResponse.next();

@@ -14,7 +14,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   const isAuth = pathname?.startsWith("/login");
   const { data } = useSWR("/api/auth/me", fetcher);
   
-  const isSuperAdmin = data?.user?.role === "SUPER_ADMIN";
+  const isSuperAdmin = data?.user?.role === "SUPERVISOR";
 
   // Redirect to login if session is invalidated (e.g. login from another device)
   useEffect(() => {

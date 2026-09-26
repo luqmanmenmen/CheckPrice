@@ -80,7 +80,7 @@ export default function SuperAdminDashboard() {
             <Activity className="w-4 h-4 text-green-600" />
           </div>
           <span className="text-2xl font-black text-slate-800">
-            {users.filter(u => u.status === 'ACTIVE' && u.role !== 'SUPER_ADMIN').length}
+            {users.filter(u => u.status === 'ACTIVE' && u.role !== 'SUPERVISOR').length}
           </span>
           <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Staf Aktif</span>
         </div>
@@ -89,7 +89,7 @@ export default function SuperAdminDashboard() {
             <PauseCircle className="w-4 h-4 text-amber-600" />
           </div>
           <span className="text-2xl font-black text-slate-800">
-            {users.filter(u => u.status === 'BREAK' && u.role !== 'SUPER_ADMIN').length}
+            {users.filter(u => u.status === 'BREAK' && u.role !== 'SUPERVISOR').length}
           </span>
           <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Sedang Rehat</span>
         </div>
@@ -244,15 +244,15 @@ export default function SuperAdminDashboard() {
           <div className="p-8 flex justify-center">
             <div className="w-6 h-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin"></div>
           </div>
-        ) : filteredUsers.filter(u => u.role !== 'SUPER_ADMIN' && u.status !== 'INACTIVE').length === 0 ? (
+        ) : filteredUsers.filter(u => u.role !== 'SUPERVISOR' && u.status !== 'INACTIVE').length === 0 ? (
           <div className="p-8 text-center text-slate-500 text-sm">Tidak ada staff yang sedang bertugas.</div>
         ) : (
           <div className="divide-y divide-slate-100">
-            {filteredUsers.filter(u => u.role !== 'SUPER_ADMIN' && u.status !== 'INACTIVE').map((user) => (
+            {filteredUsers.filter(u => u.role !== 'SUPERVISOR' && u.status !== 'INACTIVE').map((user) => (
               <div key={user.id} className="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
                 <div className="flex flex-col">
                   <span className="font-bold text-slate-800 text-sm">{user.name}</span>
-                  <span className="text-xs text-slate-500 font-medium">{user.nik} &bull; {user.role === 'SA' ? 'Sales Area' : 'Gudang'}</span>
+                  <span className="text-xs text-slate-500 font-medium">{user.nik} &bull; {user.role === 'CREW_STORE' ? 'Sales Area' : 'Gudang'}</span>
                 </div>
                 <div>
                   <div className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border flex items-center gap-1 ${

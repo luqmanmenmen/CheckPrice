@@ -88,9 +88,7 @@ export default function Login() {
           setLoginRole(data.role);
           setShowChangePin(true);
         } else {
-          if (data.role === "WAREHOUSE") {
-            router.replace("/warehouse");
-          } else if (data.role === "SUPER_ADMIN") {
+          if (data.role === "SUPERVISOR") {
             router.replace("/spv-gateway");
           } else {
             router.replace("/");
@@ -124,9 +122,7 @@ export default function Login() {
       
       const data = await res.json();
       if (res.ok) {
-        if (loginRole === "WAREHOUSE") {
-          router.replace("/warehouse");
-        } else if (loginRole === "SUPER_ADMIN") {
+        if (loginRole === "SUPERVISOR") {
           router.replace("/spv-gateway");
         } else {
           router.replace("/");
@@ -212,10 +208,8 @@ export default function Login() {
             <label className="block text-sm font-medium text-gray-700 mb-2">Posisi / Role</label>
             <div className="grid grid-cols-2 gap-3">
               {[
-                { name: "Cashier", icon: ShoppingCart },
-                { name: "Fitter", icon: Shirt },
-                { name: "Runner", icon: Footprints },
-                { name: "Gudang Stock", icon: Package },
+                { name: "Supervisor", icon: Footprints },
+                { name: "Crew Store", icon: ShoppingCart },
               ].map((role) => {
                 const Icon = role.icon;
                 const isSelected = jobTitle === role.name;

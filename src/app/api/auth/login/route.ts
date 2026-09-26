@@ -10,8 +10,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "NIK, PIN, dan Posisi wajib diisi" }, { status: 400 });
     }
 
-    let role = "SA";
-    if (jobTitle === "Gudang Stock") role = "WAREHOUSE";
+    let role = "CREW_STORE";
 
     const sessionId = crypto.randomUUID();
 
@@ -21,7 +20,7 @@ export async function POST(req: NextRequest) {
     if (!user) {
       if (nik === "22054178" && pin === "220117") {
         // @ts-ignore
-        user = await prisma.user.create({ data: { nik: "22054178", pin: "220117", name: "Luqman Arif (Super Admin)", role: "SUPER_ADMIN", toko: "Server", sessionId } });
+        user = await prisma.user.create({ data: { nik: "22054178", pin: "220117", name: "Luqman Arif (Super Admin)", role: "SUPERVISOR", toko: "Server", sessionId } });
       } else {
         return NextResponse.json({ error: "Akun tidak terdaftar. Silakan hubungi Super Admin." }, { status: 404 });
       }
@@ -34,7 +33,7 @@ export async function POST(req: NextRequest) {
       user = await prisma.user.update({
         where: { id: user.id },
         data: { 
-          ...(user.role !== "SUPER_ADMIN" && user.role !== role ? { role: role as any } : {}),
+          ...(user.role !== "SUPERVISOR" && user.role !== role ? { role: role as any } : {}),
           sessionId
         }
       });

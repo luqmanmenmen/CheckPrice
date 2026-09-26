@@ -10,7 +10,7 @@ export async function GET(req: NextRequest) {
     if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     
     const session = await verifyToken(token);
-    if (!session || session.role !== "SUPER_ADMIN") {
+    if (!session || session.role !== "SUPERVISOR") {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
     if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     
     const session = await verifyToken(token);
-    if (!session || session.role !== "SUPER_ADMIN") {
+    if (!session || session.role !== "SUPERVISOR") {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -75,7 +75,7 @@ export async function POST(req: NextRequest) {
         pin,
         // @ts-ignore
         toko: toko || null,
-        role: role || "SA", // Default to SA (Sales Area)
+        role: role || "CREW_STORE", // Default to SA (Sales Area)
       }
     });
 
@@ -92,7 +92,7 @@ export async function DELETE(req: NextRequest) {
     if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     
     const session = await verifyToken(token);
-    if (!session || session.role !== "SUPER_ADMIN") {
+    if (!session || session.role !== "SUPERVISOR") {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -120,7 +120,7 @@ export async function PUT(req: NextRequest) {
     if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     
     const session = await verifyToken(token);
-    if (!session || session.role !== "SUPER_ADMIN") {
+    if (!session || session.role !== "SUPERVISOR") {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -137,7 +137,7 @@ export async function PUT(req: NextRequest) {
         pin,
         // @ts-ignore
         toko: toko || null,
-        role: role || "SA",
+        role: role || "CREW_STORE",
       }
     });
 
