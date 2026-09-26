@@ -407,11 +407,12 @@ async function upsertProducts(
           finalPromoFileNameToSave !== undefined ? finalPromoFileNameToSave : null
         );
 
-        if (salesDelta > 0) {
+        const qtyToRecord = item.sales_mtd !== undefined && item.sales_mtd !== null ? item.sales_mtd : salesDelta;
+        if (qtyToRecord !== 0) {
           dailySalesData.push({
             productId: existingInfo.id,
             date: uploadDate,
-            qtySold: salesDelta
+            qtySold: qtyToRecord
           });
         }
       }

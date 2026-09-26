@@ -96,7 +96,8 @@ export async function GET(request: NextRequest) {
           const pct = parseFloat(p.diskon);
           if (!isNaN(pct)) basePrice = p.hargaNormal - (p.hargaNormal * (pct / 100));
         } else if (p.diskon && !p.diskon.includes('%') && p.hargaNormal) {
-          const amt = parseFloat(p.diskon.replace(/\D/g, ''));
+          const numericPart = p.diskon.replace(/\D/g, '');
+          const amt = numericPart ? parseFloat(numericPart) : 0;
           if (!isNaN(amt) && amt > 0) basePrice = p.hargaNormal - amt;
         }
 
@@ -160,7 +161,8 @@ export async function GET(request: NextRequest) {
             unitPrice = p.hargaNormal;
           }
         } else if (p.diskon && !p.diskon.includes('%') && p.hargaNormal) {
-          const amt = parseFloat(p.diskon.replace(/\D/g, ''));
+          const numericPart = p.diskon.replace(/\D/g, '');
+          const amt = numericPart ? parseFloat(numericPart) : 0;
           if (!isNaN(amt) && amt > 0) {
             unitPrice = p.hargaNormal - amt;
           } else {
@@ -259,7 +261,8 @@ export async function GET(request: NextRequest) {
                  const pct = parseFloat(p.diskon);
                  if (!isNaN(pct)) itemRev = (p.hargaNormal - (p.hargaNormal * (pct / 100))) * ds.qtySold;
                } else if (p.diskon && p.discountType === 'AMOUNT' && p.hargaNormal) {
-                 const amt = parseFloat(p.diskon.replace(/\D/g, ''));
+                 const numericPart = p.diskon.replace(/\D/g, '');
+          const amt = numericPart ? parseFloat(numericPart) : 0;
                  if (!isNaN(amt) && amt > 0) itemRev = (p.hargaNormal - amt) * ds.qtySold;
                }
             }
@@ -313,7 +316,8 @@ export async function GET(request: NextRequest) {
                const pct = parseFloat(p.diskon);
                if (!isNaN(pct)) itemRev = (p.hargaNormal - (p.hargaNormal * (pct / 100))) * ds.qtySold;
            } else if (p.diskon && p.discountType === 'AMOUNT' && p.hargaNormal) {
-               const amt = parseFloat(p.diskon.replace(/\D/g, ''));
+               const numericPart = p.diskon.replace(/\D/g, '');
+          const amt = numericPart ? parseFloat(numericPart) : 0;
                if (!isNaN(amt) && amt > 0) itemRev = (p.hargaNormal - amt) * ds.qtySold;
            }
         }
