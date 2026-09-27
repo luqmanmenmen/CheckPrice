@@ -19,6 +19,12 @@ export async function POST(req: NextRequest) {
             data: { endTime: new Date() }
           });
         }
+        
+        // Update user status to BREAK when logging out
+        await prisma.user.update({
+          where: { id: session.userId },
+          data: { status: "BREAK", sessionId: null }
+        });
       }
     }
 
