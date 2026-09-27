@@ -14,13 +14,15 @@ class SukoDatabase extends Dexie {
     name: string;
     color: string;
     size: string;
-    price: number;
+    hargaNormal: number;
+    hargaPromo: number | null;
+    toDate: string | null;
   }, string>;
 
   constructor() {
     super("SukoScannerDB");
-    this.version(1).stores({
-      products: 'sku, name, color, size, price' 
+    this.version(2).stores({
+      products: 'sku, name, color, size, hargaNormal, hargaPromo, toDate' 
     });
   }
 }

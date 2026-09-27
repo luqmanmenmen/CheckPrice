@@ -24,22 +24,14 @@ export async function GET() {
       const color = parts[1]?.trim() || "";
       const size = parts[2]?.trim() || "";
       
-      let price = p.hargaNormal;
-      // Cek promo aktif
-      if (p.hargaPromo && p.hargaPromo > 0 && p.toDate) {
-         const toDateObj = new Date(p.toDate);
-         toDateObj.setHours(23, 59, 59, 999);
-         if (new Date() <= toDateObj) {
-            price = p.hargaPromo;
-         }
-      }
-
       return {
         sku: p.sku,
         name,
         color,
         size,
-        price
+        hargaNormal: p.hargaNormal,
+        hargaPromo: p.hargaPromo,
+        toDate: p.toDate ? p.toDate.toISOString() : null
       };
     });
 
