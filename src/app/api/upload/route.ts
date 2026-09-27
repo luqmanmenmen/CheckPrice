@@ -446,7 +446,8 @@ async function upsertProducts(
 
           if (dailySalesData.length > 0) {
             await prisma.dailySales.createMany({
-              data: dailySalesData
+              data: dailySalesData,
+              skipDuplicates: true
             });
           }
         } catch (err) {

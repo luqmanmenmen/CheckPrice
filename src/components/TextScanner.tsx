@@ -4,123 +4,152 @@
 
 import { useEffect, useRef, useState } from "react";
 import Tesseract from "tesseract.js";
-import { Html5Qrcode, Html5QrcodeSupportedFormats, Html5QrcodeScannerState } from "html5-qrcode";
-import { Loader2, Flashlight, FlashlightOff, Maximize, CheckCircle2 } from "lucide-react";
+import { Loader2, Flashlight, FlashlightOff, CheckCircle2, DownloadCloud } from "lucide-react";
+import Dexie from "dexie";
+
+// --- Setup Dexie Database ---
+class SukoDatabase extends Dexie {
+  products!: Dexie.Table<{
+    sku: string;
+    name: string;
+    color: string;
+    size: string;
+    price: number;
+  }, string>;
+
+  constructor() {
+    super("SukoScannerDB");
+    this.version(1).stores({
+      products: 'sku, name, color, size, price' 
+    });
+  }
+}
+
+const db = new SukoDatabase();
 
 interface TextScannerProps {
-  onScanResult: (sku: string, detected: DetectedSku, snapshot?: string) => void;
-}
-
-export interface BoundingBox {
-  x0: number;
-  y0: number;
-  x1: number;
-  y1: number;
-}
-
-export interface DetectedSku {
-  text: string;
-  bbox: BoundingBox;
-  size?: string;
-  rawText?: string;
+  onScanResult: (sku: string, detected: any, snapshot?: string) => void;
 }
 
 export default function TextScanner({ onScanResult }: TextScannerProps) {
+  const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
-  const scannerRef = useRef<Html5Qrcode | null>(null);
+  const debugCanvasRef = useRef<HTMLCanvasElement>(null);
   const workerRef = useRef<Tesseract.Worker | null>(null);
   const isHandlingResult = useRef(false);
   const blacklistedSkus = useRef<Set<string>>(new Set());
+  const streamRef = useRef<MediaStream | null>(null);
 
   const [status, setStatus] = useState("Memulai Kamera & AI...");
   const [torchOn, setTorchOn] = useState(false);
   const [hasTorch, setHasTorch] = useState(false);
   const [foundSku, setFoundSku] = useState<string | null>(null);
   const [scanFeedback, setScanFeedback] = useState<"idle" | "wrong_target">("idle");
+  const [isSyncing, setIsSyncing] = useState(false);
 
-  async function scanFrameForText() {
-    if (isHandlingResult.current || !workerRef.current || !canvasRef.current || !scannerRef.current) return;
-    
-    // Pastikan scanner sedang jalan
-    if (scannerRef.current.getState() !== Html5QrcodeScannerState.SCANNING) return;
+  // Background Sync Data
+  useEffect(() => {
+    async function syncData() {
+      const count = await db.products.count();
+      if (count < 1000) { // If DB is empty or incomplete
+        setIsSyncing(true);
+        try {
+          const res = await fetch('/api/export-products');
+          const result = await res.json();
+          if (result.success && result.data) {
+            await db.products.clear();
+            await db.products.bulkPut(result.data);
+          }
+        } catch (e) {
+          console.error("Failed to sync offline DB", e);
+        }
+        setIsSyncing(false);
+      }
+    }
+    syncData();
+  }, []);
 
-    // Ambil elemen video yang dibuat oleh html5-qrcode
-    const video = document.querySelector("#reader video") as HTMLVideoElement;
-    if (!video || video.readyState !== video.HAVE_ENOUGH_DATA) return;
+  // Main Processing Loop
+  async function processFrame() {
+    if (isHandlingResult.current || !workerRef.current || !videoRef.current || !canvasRef.current) return;
+    const video = videoRef.current;
+    if (video.paused || video.ended || video.readyState !== video.HAVE_ENOUGH_DATA) return;
 
     const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return;
 
-    // 1. CROP ke Kotak Scan (300x150)
-    const cropWidth = 300;
-    const cropHeight = 150;
-    const startX = (video.videoWidth - cropWidth) / 2;
-    const startY = (video.videoHeight - cropHeight) / 2;
-
-    // 2. UPSCALE 2x (Tesseract butuh teks lebih besar agar tidak salah baca 6 jadi 8)
-    const scale = 2;
-    canvas.width = cropWidth * scale;
-    canvas.height = cropHeight * scale;
-
-    // Filter gambar diperhalus (jangan 300% karena membuat angka 6 jadi tebal tertutup menyerupai 8)
-    ctx.filter = 'grayscale(100%) contrast(150%) brightness(110%)';
+    // Ukuran Video aktual
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
     
-    // Gambar ke canvas dengan ukuran diperbesar 2x
-    ctx.drawImage(video, startX, startY, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
-    ctx.filter = 'none';
+    // ROI Box (Tengah)
+    const roiWidth = vw * 0.8;
+    const roiHeight = Math.max(vh * 0.15, 60); // min 60px height
+    const startX = (vw - roiWidth) / 2;
+    const startY = (vh - roiHeight) / 2;
+
+    canvas.width = roiWidth;
+    canvas.height = roiHeight;
+
+    // Draw frame ROI to canvas
+    ctx.drawImage(video, startX, startY, roiWidth, roiHeight, 0, 0, roiWidth, roiHeight);
+
+    // Binarization (Hitam Putih Murni) berdasarkan rata-rata cahaya (Luminance)
+    const imageData = ctx.getImageData(0, 0, roiWidth, roiHeight);
+    const data = imageData.data;
+    let totalLuminance = 0;
+
+    for (let i = 0; i < data.length; i += 4) {
+        const lum = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2]; 
+        totalLuminance += lum;
+    }
+    const avgLuminance = totalLuminance / (roiWidth * roiHeight);
+    const threshold = avgLuminance * 0.85; // Sedikit lebih gelap dari rata-rata agar tinta hitam terpisah jelas
+
+    for (let i = 0; i < data.length; i += 4) {
+        const lum = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
+        const value = lum < threshold ? 0 : 255; 
+        data[i] = data[i+1] = data[i+2] = value;
+    }
+    ctx.putImageData(imageData, 0, 0);
+
+    // Optional debug view
+    if (debugCanvasRef.current) {
+        const dctx = debugCanvasRef.current.getContext("2d");
+        if (dctx) {
+            debugCanvasRef.current.width = roiWidth;
+            debugCanvasRef.current.height = roiHeight;
+            dctx.putImageData(imageData, 0, 0);
+        }
+    }
 
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result: any = await workerRef.current.recognize(canvas);
-      const text = result.data.text.toUpperCase();
+      const result = await workerRef.current.recognize(canvas);
+      const lines = result.data.text.split('\n').map(l => l.replace(/\s+/g, '').trim()).filter(Boolean);
       
-      // LOGIKA CERDAS V3: Analisis Baris per Baris (Anti-Barcode & Anti-Artikel)
-      const lines = text.split('\n');
-      const valid8Digits: string[] = [];
+      let validSku = null;
       let detectedWrong = false;
-      
-      for (const line of lines) {
-          // FILTER ANTI-ARTIKEL (KODE PABRIK): Misal "605-12218278" atau "605 12218278"
-          // Jika ada pola 3 angka + spasi/dash + 8 angka, kita buang langsung agar 12218278 tidak disangka SKU!
-          if (/\b\d{3}\s*[-]?\s*\d{8}\b/.test(line)) {
-              detectedWrong = true;
-              continue; 
-          }
 
-          // 1. Buang semua huruf/simbol, ambil murni angkanya saja dalam baris ini
-          const digits = line.replace(/\D/g, '');
-          
-          // 2. FILTER ANTI-BARCODE: 
-          if (digits.length >= 12 && digits.length <= 14) {
-              detectedWrong = true;
-              continue;
+      for (const text of lines) {
+          if (text.length >= 12 && text.length <= 14) {
+             detectedWrong = true; continue; // It's probably a barcode!
           }
-          
-          // 3. FILTER ANTI-HARGA:
-          if (line.includes('RP') || digits === '129900') continue;
-          
-          // 4. TANGKAP SKU:
-          if (digits.length === 8) {
-              valid8Digits.push(digits);
-          } else if (digits.length > 8 && digits.length <= 22) {
-              valid8Digits.push(digits.slice(-8));
+          if (text.length === 8 && /^\d{8}$/.test(text)) {
+              if (blacklistedSkus.current.has(text)) {
+                 detectedWrong = true;
+              } else {
+                 validSku = text;
+                 break;
+              }
           }
       }
-      
-      // 5. Eksekusi SKU Terakhir
-      if (valid8Digits.length > 0) {
-          const finalSku = valid8Digits[valid8Digits.length - 1];
-          if (!blacklistedSkus.current.has(finalSku)) {
-              handleSuccess(finalSku, "OCR (Smart Line Filter)");
-              return;
-          } else {
-              detectedWrong = true;
-          }
+
+      if (validSku) {
+          handleSuccess(validSku);
+          return;
       }
-      
-      // Jika salah fokus, berikan feedback merah
+
       if (detectedWrong) {
           setScanFeedback("wrong_target");
           setTimeout(() => setScanFeedback("idle"), 800);
@@ -128,134 +157,100 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     } catch (err) {
       console.error("OCR Check Error", err);
     }
+
+    // Continue loop
+    setTimeout(() => {
+        if (!isHandlingResult.current) {
+            requestAnimationFrame(processFrame);
+        }
+    }, 100);
   }
 
-  async function handleSuccess(sku: string, source: string) {
-    if (isHandlingResult.current || blacklistedSkus.current.has(sku)) return;
+  async function handleSuccess(sku: string) {
+    if (isHandlingResult.current) return;
     isHandlingResult.current = true;
     
-    setStatus(`Mengecek SKU ${sku} di database...`);
+    setStatus(`Memverifikasi SKU ${sku}...`);
 
     try {
-      const res = await fetch(`/api/product/${sku}`);
-      if (!res.ok) {
-        // Invalid SKU! Blacklist and continue scanning
+      // 100% Offline check via IndexedDB (0.01 detik!)
+      const product = await db.products.get(sku);
+      
+      if (!product) {
         blacklistedSkus.current.add(sku);
         setScanFeedback("wrong_target");
-        setStatus(`SKU ${sku} tidak valid, mencari lagi...`);
+        setStatus(`SKU ${sku} tidak ada, mencari lagi...`);
         setTimeout(() => setScanFeedback("idle"), 800);
         isHandlingResult.current = false;
+        setTimeout(() => requestAnimationFrame(processFrame), 100);
         return;
       }
     } catch (e) {
-      // Ignore network errors here, let the main page handle it
+      console.error("DB Check error", e);
     }
     
     setFoundSku(sku);
-    setStatus(`Berhasil ditemukan: ${sku} via ${source}`);
+    setStatus(`Berhasil ditemukan: ${sku}`);
     
-    // Ambil snapshot
     let snapshot = undefined;
-    if (canvasRef.current) {
-        const video = document.querySelector("#reader video") as HTMLVideoElement;
-        if (video) {
-           const ctx = canvasRef.current.getContext("2d");
-           if (ctx) {
-              canvasRef.current.width = video.videoWidth;
-              canvasRef.current.height = video.videoHeight;
-              ctx.drawImage(video, 0, 0, canvasRef.current.width, canvasRef.current.height);
-              snapshot = canvasRef.current.toDataURL("image/jpeg", 0.6);
-           }
+    if (videoRef.current && canvasRef.current) {
+        const ctx = canvasRef.current.getContext("2d");
+        if (ctx) {
+            canvasRef.current.width = videoRef.current.videoWidth;
+            canvasRef.current.height = videoRef.current.videoHeight;
+            ctx.drawImage(videoRef.current, 0, 0, canvasRef.current.width, canvasRef.current.height);
+            snapshot = canvasRef.current.toDataURL("image/jpeg", 0.6);
         }
     }
 
-    const dummyBbox = { x0: 0, y0: 0, x1: 0, y1: 0 };
-    
-    // Hentikan proses
-    if (intervalRef.current) clearInterval(intervalRef.current);
-    if (scannerRef.current && scannerRef.current.getState() === Html5QrcodeScannerState.SCANNING) {
-       scannerRef.current.stop().catch(console.error);
+    // Hentikan proses & kamera
+    if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
     }
 
     setTimeout(() => {
-       onScanResult(sku, { text: sku, bbox: dummyBbox, rawText: source }, snapshot);
+       onScanResult(sku, { text: sku, bbox: {x0:0,y0:0,x1:0,y1:0}, rawText: sku }, snapshot);
     }, 800);
   }
 
   useEffect(() => {
     let isMounted = true;
+    let localStream: MediaStream | null = null;
 
     const initAll = async () => {
       try {
-        // 1. Init Tesseract (OCR)
-        setStatus("Memuat Engine Teks (OCR)...");
+        setStatus("Memuat AI Scanner Tercepat...");
         const worker = await Tesseract.createWorker("eng");
         await worker.setParameters({
-          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789- '
+          tessedit_char_whitelist: '0123456789',
+          tessedit_pageseg_mode: Tesseract.PSM.SINGLE_LINE,
         });
         if (isMounted) workerRef.current = worker;
 
-        // 2. Init Barcode Scanner
-        setStatus("Memulai Kamera...");
-        const html5QrCode = new Html5Qrcode("reader", {
-          verbose: false,
-          formatsToSupport: [
-            Html5QrcodeSupportedFormats.EAN_13,
-            Html5QrcodeSupportedFormats.EAN_8,
-            Html5QrcodeSupportedFormats.CODE_128,
-            Html5QrcodeSupportedFormats.UPC_A,
-            Html5QrcodeSupportedFormats.UPC_E,
-          ]
+        setStatus("Membuka Kamera...");
+        localStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }
         });
-        scannerRef.current = html5QrCode;
+        
+        if (isMounted && videoRef.current) {
+            streamRef.current = localStream;
+            videoRef.current.srcObject = localStream;
+            videoRef.current.onloadedmetadata = () => {
+                videoRef.current?.play();
+                setStatus("Arahkan SKU ke garis merah");
+                requestAnimationFrame(processFrame);
+            };
 
-        await html5QrCode.start(
-          { facingMode: "environment" },
-          {
-            fps: 10,
-            qrbox: { width: 300, height: 150 },
-            aspectRatio: 1.0,
-          },
-          (decodedText) => {
-            // Barcode Callback
-            // Permintaan USER: Abaikan barcode (batang), fokus murni ke SKU via OCR!
-            // Barcode retail biasanya 13 digit (EAN-13), kita abaikan saja.
-            // Jika kebetulan barcodenya EAN-8 (tepat 8 digit), mungkin itu SKU, jadi kita izinkan.
-            if (decodedText.length >= 4) { // Biarkan 4-13 digit dicek
-                handleSuccess(decodedText, "BARCODE");
-            } else {
-                // Beri tahu UI bahwa kamera sedang nyasar ke barcode batang!
-                setScanFeedback("wrong_target");
-                setTimeout(() => setScanFeedback("idle"), 800);
+            // Check Torch
+            const track = localStream.getVideoTracks()[0];
+            if (track) {
+                const capabilities = track.getCapabilities() as any;
+                if (capabilities.torch) setHasTorch(true);
             }
-            // Selain 8 digit, hiraukan sama sekali!
-          },
-          () => {
-            // Error Callback (ignore, happens every frame)
-          }
-        );
-
-        if (!isMounted) return;
-
-        setStatus("Mencari Barcode & Angka 8-Digit...");
-
-        // Check if torch is supported
-        setTimeout(() => {
-          if (scannerRef.current?.getState() === Html5QrcodeScannerState.SCANNING) {
-            const track = scannerRef.current.getRunningTrackCameraCapabilities();
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            if (track && (track as any).torchFeature()?.isSupported()) {
-              setHasTorch(true);
-            }
-          }
-        }, 1000);
-
-        // 3. Start OCR Interval (Fallback)
-        intervalRef.current = setInterval(scanFrameForText, 1500);
-
+        }
       } catch (err) {
         console.error("Init Error:", err);
-        if (isMounted) setStatus("Gagal memuat kamera/AI. Pastikan izin kamera diberikan.");
+        if (isMounted) setStatus("Gagal memuat kamera. Pastikan izin kamera diberikan.");
       }
     };
 
@@ -263,62 +258,61 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
     return () => {
       isMounted = false;
-      if (intervalRef.current) clearInterval(intervalRef.current);
       if (workerRef.current) workerRef.current.terminate();
-      if (scannerRef.current && scannerRef.current.getState() !== Html5QrcodeScannerState.NOT_STARTED) {
-        scannerRef.current.stop().catch(console.error);
+      if (streamRef.current) {
+          streamRef.current.getTracks().forEach(track => track.stop());
       }
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleTorch = async () => {
-    if (!scannerRef.current || scannerRef.current.getState() !== Html5QrcodeScannerState.SCANNING) return;
-    try {
-      await scannerRef.current.applyVideoConstraints({
-        advanced: [{ torch: !torchOn } as any]
-      });
-      setTorchOn(!torchOn);
-    } catch (err) {
-      console.error("Failed to toggle torch", err);
+    if (!streamRef.current) return;
+    const track = streamRef.current.getVideoTracks()[0];
+    if (track) {
+        try {
+            await track.applyConstraints({
+                advanced: [{ torch: !torchOn } as any]
+            });
+            setTorchOn(!torchOn);
+        } catch (err) {
+            console.error("Failed to toggle torch", err);
+        }
     }
   };
 
-
-
   return (
     <div className="flex flex-col gap-3">
-      {/* Kotak Scanner Utama */}
-      <div className={`relative rounded-3xl overflow-hidden shadow-2xl border-4 transition-colors duration-300 ${
-         foundSku ? "border-green-500 bg-green-900" :
-         scanFeedback === "wrong_target" ? "border-red-500 bg-red-900" :
-         "border-slate-800 bg-slate-900"
+      {/* Container Video Utama */}
+      <div className={`relative rounded-3xl overflow-hidden shadow-2xl border-4 transition-colors duration-300 bg-black ${
+         foundSku ? "border-green-500" :
+         scanFeedback === "wrong_target" ? "border-red-500" :
+         "border-slate-800"
       }`}>
         
-        {/* Kontainer html5-qrcode */}
-        <div id="reader" className="w-full min-h-[300px] sm:min-h-[400px] bg-black"></div>
+        <video 
+           ref={videoRef} 
+           playsInline 
+           muted 
+           autoPlay 
+           className="w-full min-h-[300px] sm:min-h-[400px] object-cover" 
+        />
 
-        {/* Overlay Animasi Scan Grid */}
+        {/* Kotak ROI (Overlay Tengah) */}
         {!foundSku && (
-          <div className="absolute inset-0 pointer-events-none z-10 overflow-hidden flex flex-col justify-start">
-            <div className={`w-full h-[25%] border-b-[3px] animate-scan-grid relative transition-colors duration-300 ${
-               scanFeedback === "wrong_target" 
-                 ? "bg-gradient-to-b from-transparent to-red-500/30 border-red-500 shadow-[0_10px_20px_rgba(239,68,68,0.4)]"
-                 : "bg-gradient-to-b from-transparent to-indigo-500/30 border-indigo-500 shadow-[0_10px_20px_rgba(99,102,241,0.4)]"
-             }`}>
-               <div className="absolute inset-0 opacity-40 transition-colors duration-300" style={{
-                 backgroundImage: scanFeedback === "wrong_target" 
-                   ? 'linear-gradient(rgba(239,68,68,1) 1px, transparent 1px), linear-gradient(90deg, rgba(239,68,68,1) 1px, transparent 1px)'
-                   : 'linear-gradient(rgba(99,102,241,1) 1px, transparent 1px), linear-gradient(90deg, rgba(99,102,241,1) 1px, transparent 1px)',
-                 backgroundSize: '15px 15px'
-               }}></div>
-            </div>
+          <div className="absolute top-1/2 left-[10%] right-[10%] h-[15%] min-h-[60px] -translate-y-1/2 border-2 border-indigo-500 shadow-[0_0_0_9999px_rgba(0,0,0,0.6)] z-10 flex flex-col items-center justify-center pointer-events-none">
+             {/* Garis Merah Laser */}
+             <div className="w-full h-[1px] bg-red-500/80 absolute top-1/2 -translate-y-1/2 shadow-[0_0_10px_rgba(239,68,68,0.8)]"></div>
+             {scanFeedback === "wrong_target" && (
+                 <div className="absolute inset-0 bg-red-500/30 animate-pulse"></div>
+             )}
           </div>
         )}
 
-        {/* Hidden Canvas untuk OCR */}
+        {/* Hidden Canvas OCR & Debug */}
         <canvas ref={canvasRef} className="hidden" />
+        <canvas ref={debugCanvasRef} className="absolute bottom-2 right-2 w-24 h-8 border border-white/30 rounded object-contain bg-black z-20 hidden" />
 
-        {/* Tombol Flash (Bila didukung) */}
+        {/* Tombol Flash */}
         {hasTorch && !foundSku && (
            <button 
              onClick={toggleTorch}
@@ -327,52 +321,40 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
               {torchOn ? <Flashlight className="w-5 h-5 text-yellow-400" /> : <FlashlightOff className="w-5 h-5" />}
            </button>
         )}
-
       </div>
       
-      {/* Indikator Status Bawah (dipindah ke luar kamera agar tidak menutupi area scan) */}
+      {/* Indikator Status */}
       <div className="flex justify-center z-10 w-full mt-2">
-        <div className="bg-white/95 backdrop-blur-xl shadow-lg rounded-2xl p-4 w-full text-center border border-slate-200 flex flex-col items-center gap-2 transform transition-all duration-300">
+        <div className="bg-white/95 backdrop-blur-xl shadow-lg rounded-2xl p-4 w-full text-center border border-slate-200 flex flex-col items-center gap-2 transform transition-all duration-300 relative">
+          
+          {isSyncing && (
+             <div className="absolute -top-3 right-4 bg-indigo-100 text-indigo-700 text-[9px] font-bold px-2 py-0.5 rounded-full border border-indigo-200 flex items-center gap-1 shadow-sm">
+                <DownloadCloud className="w-3 h-3 animate-pulse" /> Sync Database
+             </div>
+          )}
+
           {foundSku ? (
             <>
                <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mb-1">
                   <CheckCircle2 className="w-7 h-7 text-green-600" />
                </div>
                <p className="font-black text-xl text-slate-800">{foundSku}</p>
-               <p className="text-xs text-green-600 font-bold">Memproses...</p>
+               <p className="text-xs text-green-600 font-bold">Memuat Detail...</p>
             </>
           ) : (
             <>
-               <div className="flex items-center gap-2 text-blue-600 font-bold mb-1">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Menganalisis...</span>
+               <div className={`flex items-center gap-2 font-bold mb-1 ${scanFeedback === 'wrong_target' ? 'text-red-600' : 'text-blue-600'}`}>
+                  <Loader2 className={`w-4 h-4 ${scanFeedback === 'wrong_target' ? '' : 'animate-spin'}`} />
+                  <span>{scanFeedback === 'wrong_target' ? 'Salah Fokus!' : 'Memindai SKU...'}</span>
                </div>
-               <p className="text-xs text-slate-600 font-medium">
-                 Arahkan ke <strong className="text-slate-800">Garis Barcode</strong> atau <strong className="text-slate-800">Angka SKU (8 Digit)</strong>
+               <p className="text-xs text-slate-600 font-medium leading-tight">
+                 Arahkan <strong className="text-slate-800">Angka SKU (8 Digit)</strong> persis ke garis merah
                </p>
                <p className="text-[10px] text-slate-400 mt-1">{status}</p>
             </>
           )}
         </div>
       </div>
-      
-      {/* CSS untuk memoles UI bawaan html5-qrcode */}
-      <style dangerouslySetInnerHTML={{__html: `
-        #reader { border: none !important; }
-        #reader video { object-fit: cover !important; }
-        #reader__dashboard_section_csr { display: none !important; }
-        #reader__dashboard_section_swaplink { display: none !important; }
-        #reader__scan_region { background: black !important; }
-
-        @keyframes scan-grid {
-          0% { transform: translateY(-100%); }
-          50% { transform: translateY(400%); }
-          100% { transform: translateY(-100%); }
-        }
-        .animate-scan-grid {
-          animation: scan-grid 2.5s ease-in-out infinite;
-        }
-      `}} />
     </div>
   );
 }

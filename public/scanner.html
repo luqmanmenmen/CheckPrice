@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Offline SKU Scanner</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Icons -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    
+    <!-- Dexie.js (IndexedDB) -->
+    <script src="https://unpkg.com/dexie@3.2.4/dist/dexie.js"></script>
+    
+    <!-- PapaParse (CSV Parser) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    
+    <!-- Tesseract.js (OCR) -->
+    <script src="https://unpkg.com/tesseract.js@5.0.3/dist/tesseract.min.js"></script>
+
+    <style>
+        body { overscroll-behavior-y: contain; }
+        .roi-box {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 80%;
+            height: 60px;
+            border: 3px solid #10b981;
+            border-radius: 8px;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6);
+            z-index: 10;
+        }
+        .roi-line {
+            position: absolute;
+            top: 50%;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: rgba(239, 68, 68, 0.5);
+            transform: translateY(-50%);
+        }
+        #video-preview {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 font-sans h-screen flex flex-col overflow-hidden">
+
+    <!-- Header -->
+    <header class="bg-white shadow-sm p-4 flex justify-between items-center shrink-0 z-20 relative">
+        <h1 class="font-bold text-lg text-gray-800"><i class="fa-solid fa-barcode text-emerald-500 mr-2"></i>SUKO Scanner</h1>
+        <div class="flex gap-2">
+            <span id="status-badge" class="px-2 py-1 bg-yellow-100 text-yellow-700 text-xs font-bold rounded-full border border-yellow-200">
+                <i class="fa-solid fa-spinner fa-spin mr-1"></i> Memuat
+            </span>
+            <span id="db-badge" class="px-2 py-1 bg-blue-100 text-blue-700 text-xs font-bold rounded-full border border-blue-200 hidden">
+                <i class="fa-solid fa-database mr-1"></i> <span id="db-count">0</span>
+            </span>
+        </div>
+    </header>
+
+    <!-- Scanner View -->
+    <main class="flex-1 relative flex flex-col bg-black">
+        
+        <!-- Video Container -->
+        <div class="relative flex-1 overflow-hidden" id="scanner-container">
+            <video id="video-preview" autoplay playsinline muted></video>
+            <div class="roi-box">
+                <div class="roi-line"></div>
+                <div class="absolute -top-7 left-0 right-0 text-center text-white text-xs font-bold drop-shadow-md">
+                    Arahkan SKU ke dalam kotak
+                </div>
+            </div>
+            
+            <!-- Hidden Canvas for Processing -->
+            <canvas id="capture-canvas" class="hidden"></canvas>
+            <!-- Preview Threshold (For debugging, can hide later) -->
+            <canvas id="debug-canvas" class="absolute bottom-4 right-4 w-32 h-10 border border-emerald-500 rounded bg-white object-contain z-20"></canvas>
+        </div>
+
+        <!-- Controls & Input (Overlay di bawah) -->
+        <div class="bg-white rounded-t-3xl p-5 shadow-[0_-10px_20px_rgba(0,0,0,0.1)] z-20 shrink-0">
+            
+            <div class="flex gap-2 mb-4">
+                <input type="number" id="sku-input" placeholder="Masukkan SKU manual..." 
+                    class="flex-1 bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-xl focus:ring-emerald-500 focus:border-emerald-500 block p-3 font-bold text-center tracking-widest shadow-inner">
+                <button id="btn-search" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-5 rounded-xl shadow-md transition-colors active:scale-95">
+                    <i class="fa-solid fa-magnifying-glass"></i>
+                </button>
+            </div>
+
+            <!-- Result Card -->
+            <div id="result-card" class="hidden border border-gray-200 rounded-xl p-4 bg-gray-50 mb-2 transition-all">
+                <!-- Injected via JS -->
+            </div>
+
+            <!-- Import Data Button -->
+            <div class="flex justify-between items-center mt-2">
+                <button id="btn-import" class="text-xs text-gray-500 hover:text-blue-600 font-medium">
+                    <i class="fa-solid fa-file-import mr-1"></i> Import Master Data (CSV)
+                </button>
+                <input type="file" id="csv-file" accept=".csv" class="hidden">
+                <p id="ocr-status" class="text-xs text-emerald-600 font-bold hidden"><i class="fa-solid fa-bolt text-yellow-400"></i> OCR Aktif</p>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // --- 1. SETUP INDEXEDDB ---
+        const db = new Dexie("SukoScannerDB");
+        db.version(1).stores({
+            products: 'sku, name, color, size, price' // SKU as primary key
+        });
+
+        // Elements
+        const video = document.getElementById('video-preview');
+        const captureCanvas = document.getElementById('capture-canvas');
+        const debugCanvas = document.getElementById('debug-canvas');
+        const skuInput = document.getElementById('sku-input');
+        const btnSearch = document.getElementById('btn-search');
+        const resultCard = document.getElementById('result-card');
+        const statusBadge = document.getElementById('status-badge');
+        const dbBadge = document.getElementById('db-badge');
+        const dbCount = document.getElementById('db-count');
+        const csvFileInput = document.getElementById('csv-file');
+        const ocrStatus = document.getElementById('ocr-status');
+
+        let worker = null;
+        let isProcessing = false;
+        let stream = null;
+
+        // Formatter Rupiah
+        const formatRp = (angka) => {
+            return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(angka);
+        };
+
+        // Update DB Count UI
+        async function updateDbCount() {
+            const count = await db.products.count();
+            dbCount.innerText = count.toLocaleString();
+            if (count > 0) dbBadge.classList.remove('hidden');
+        }
+
+        // --- 2. IMPORT MASTER DATA ---
+        document.getElementById('btn-import').addEventListener('click', () => csvFileInput.click());
+        csvFileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            statusBadge.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> Importing...';
+            statusBadge.className = "px-2 py-1 bg-blue-100 text-blue-700 text-xs font-bold rounded-full border border-blue-200";
+
+            Papa.parse(file, {
+                header: true,
+                skipEmptyLines: true,
+                complete: async (results) => {
+                    try {
+                        const data = results.data.map(row => ({
+                            sku: row.sku || row.SKU || row.KODE,
+                            name: row.name || row.NAME || row.NAMA,
+                            color: row.color || row.COLOR || row.WARNA,
+                            size: row.size || row.SIZE || row.UKURAN,
+                            price: parseFloat(row.price || row.PRICE || row.HARGA) || 0
+                        })).filter(item => item.sku); // Pastikan SKU ada
+
+                        await db.products.clear();
+                        await db.products.bulkPut(data);
+                        
+                        alert(`Berhasil import ${data.length} produk ke database offline!`);
+                        updateDbCount();
+                        
+                        statusBadge.innerHTML = '<i class="fa-solid fa-wifi mr-1"></i> Offline Ready';
+                        statusBadge.className = "px-2 py-1 bg-green-100 text-green-700 text-xs font-bold rounded-full border border-green-200";
+                    } catch (err) {
+                        alert("Gagal import: " + err.message);
+                    }
+                }
+            });
+        });
+
+        // --- 3. INIT CAMERA & OCR ---
+        async function initApp() {
+            await updateDbCount();
+
+            // Check network status initially
+            if (navigator.onLine) {
+                statusBadge.innerHTML = '<i class="fa-solid fa-cloud-arrow-down mr-1"></i> Mendownload AI...';
+            } else {
+                statusBadge.innerHTML = '<i class="fa-solid fa-wifi mr-1"></i> Offline Ready';
+                statusBadge.className = "px-2 py-1 bg-green-100 text-green-700 text-xs font-bold rounded-full border border-green-200";
+            }
+
+            try {
+                // Initialize Tesseract Worker
+                worker = await Tesseract.createWorker("eng");
+                await worker.setParameters({
+                    tessedit_char_whitelist: '0123456789', // HANYA ANGKA
+                    tessedit_pageseg_mode: Tesseract.PSM.SINGLE_LINE, // PSM 7: Satu baris teks
+                });
+                ocrStatus.classList.remove('hidden');
+
+                if (navigator.onLine) {
+                    statusBadge.innerHTML = '<i class="fa-solid fa-check-circle mr-1"></i> Online & Ready';
+                    statusBadge.className = "px-2 py-1 bg-emerald-100 text-emerald-700 text-xs font-bold rounded-full border border-emerald-200";
+                }
+
+                // Start Camera
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }
+                });
+                video.srcObject = stream;
+                
+                // Mulai loop OCR jika video sudah jalan
+                video.onloadedmetadata = () => {
+                    video.play();
+                    requestAnimationFrame(processFrame);
+                };
+
+            } catch (err) {
+                console.error(err);
+                alert("Error inisialisasi: " + err.message);
+            }
+        }
+
+        // --- 4. PREPROCESSING & OCR LOOP ---
+        async function processFrame() {
+            if (!worker || isProcessing || video.paused || video.ended) {
+                requestAnimationFrame(processFrame);
+                return;
+            }
+
+            isProcessing = true;
+
+            // Setup Canvas
+            const ctx = captureCanvas.getContext('2d', { willReadFrequently: true });
+            const debugCtx = debugCanvas.getContext('2d');
+            
+            // Ukuran Video aktual
+            const vw = video.videoWidth;
+            const vh = video.videoHeight;
+            
+            // Ukuran ROI (Kotak) relatif terhadap video
+            // Lebar 80%, tinggi sekitar 60px. Kita hitung proporsinya
+            const roiWidth = vw * 0.8;
+            const roiHeight = vh * 0.15; // Sekitar 15% dari tinggi video untuk satu baris
+            const startX = (vw - roiWidth) / 2;
+            const startY = (vh - roiHeight) / 2;
+
+            // Set canvas size ke ROI saja (CROPPING)
+            captureCanvas.width = roiWidth;
+            captureCanvas.height = roiHeight;
+            debugCanvas.width = roiWidth;
+            debugCanvas.height = roiHeight;
+
+            // Draw hanya area ROI ke canvas
+            ctx.drawImage(video, startX, startY, roiWidth, roiHeight, 0, 0, roiWidth, roiHeight);
+
+            // Binarization (Thresholding)
+            const imageData = ctx.getImageData(0, 0, roiWidth, roiHeight);
+            const data = imageData.data;
+            let totalLuminance = 0;
+
+            // Hitung rata-rata luminance untuk threshold dinamis
+            for (let i = 0; i < data.length; i += 4) {
+                const r = data[i], g = data[i+1], b = data[i+2];
+                // Luma formula
+                const lum = 0.299 * r + 0.587 * g + 0.114 * b; 
+                totalLuminance += lum;
+            }
+            const avgLuminance = totalLuminance / (roiWidth * roiHeight);
+            // Threshold diset sedikit di bawah rata-rata agar teks (hitam) tertangkap
+            const threshold = avgLuminance * 0.85; 
+
+            // Terapkan threshold hitam-putih mutlak
+            for (let i = 0; i < data.length; i += 4) {
+                const r = data[i], g = data[i+1], b = data[i+2];
+                const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+                const value = lum < threshold ? 0 : 255; // Hitam atau Putih
+                data[i] = data[i+1] = data[i+2] = value;
+            }
+            
+            ctx.putImageData(imageData, 0, 0);
+            debugCtx.putImageData(imageData, 0, 0); // Tampilkan di debug view
+
+            try {
+                // Proses OCR HANYA pada crop gambar yang sudah Binarized
+                const result = await worker.recognize(captureCanvas);
+                const text = result.data.text.replace(/\s+/g, '').trim(); // Buang spasi
+                
+                // Cek apakah hasil adalah SKU 8 digit
+                if (text.length === 8 && /^\d{8}$/.test(text)) {
+                    skuInput.value = text;
+                    await lookupSKU(text);
+                    // Jeda sebentar agar tidak kedip-kedip terus
+                    await new Promise(r => setTimeout(r, 1000));
+                }
+
+            } catch (err) {
+                console.error("OCR Error:", err);
+            }
+
+            isProcessing = false;
+            // Loop terus menerus secepat mungkin
+            requestAnimationFrame(processFrame);
+        }
+
+        // --- 5. LOKUP KE INDEXEDDB (100% OFFLINE) ---
+        async function lookupSKU(sku) {
+            if (!sku) return;
+            
+            resultCard.classList.remove('hidden');
+            resultCard.innerHTML = `<div class="text-center py-2"><i class="fa-solid fa-spinner fa-spin text-emerald-500 text-2xl"></i></div>`;
+
+            try {
+                const product = await db.products.get(sku);
+                
+                if (product) {
+                    resultCard.innerHTML = `
+                        <div class="flex justify-between items-start border-b border-gray-200 pb-2 mb-2">
+                            <div>
+                                <h3 class="font-bold text-gray-800 leading-tight">${product.name}</h3>
+                                <p class="text-xs text-gray-500 font-medium">SKU: ${product.sku}</p>
+                            </div>
+                            <span class="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-1 rounded border border-emerald-200">DITEMUKAN</span>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2 text-sm mb-2">
+                            <div>
+                                <p class="text-gray-500 text-[10px] font-bold uppercase">Warna</p>
+                                <p class="font-medium">${product.color || '-'}</p>
+                            </div>
+                            <div>
+                                <p class="text-gray-500 text-[10px] font-bold uppercase">Size</p>
+                                <p class="font-medium">${product.size || '-'}</p>
+                            </div>
+                        </div>
+                        <div class="mt-2 bg-emerald-50 border border-emerald-100 rounded-lg p-2 text-center">
+                            <p class="text-gray-500 text-[10px] font-bold uppercase">Harga</p>
+                            <p class="text-xl font-black text-emerald-700">${formatRp(product.price)}</p>
+                        </div>
+                    `;
+                    resultCard.className = "border-2 border-emerald-400 rounded-xl p-4 bg-emerald-50 mb-2 transition-all shadow-md";
+                } else {
+                    resultCard.innerHTML = `
+                        <div class="text-center py-3">
+                            <i class="fa-solid fa-triangle-exclamation text-red-500 text-3xl mb-2"></i>
+                            <h3 class="font-bold text-gray-800">SKU Tidak Ditemukan</h3>
+                            <p class="text-xs text-gray-500 mt-1">SKU <strong>${sku}</strong> tidak ada di database lokal.</p>
+                        </div>
+                    `;
+                    resultCard.className = "border-2 border-red-400 rounded-xl p-4 bg-red-50 mb-2 transition-all shadow-md";
+                }
+            } catch (err) {
+                resultCard.innerHTML = `<p class="text-red-500 text-sm"><i class="fa-solid fa-bug"></i> Error: ${err.message}</p>`;
+            }
+        }
+
+        // Event Listener Manual Search
+        btnSearch.addEventListener('click', () => lookupSKU(skuInput.value));
+        skuInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') lookupSKU(skuInput.value);
+        });
+
+        // Event Listener Offline/Online
+        window.addEventListener('offline', () => {
+            statusBadge.innerHTML = '<i class="fa-solid fa-wifi mr-1"></i> Offline Mode';
+            statusBadge.className = "px-2 py-1 bg-gray-100 text-gray-700 text-xs font-bold rounded-full border border-gray-300";
+        });
+        window.addEventListener('online', () => {
+            statusBadge.innerHTML = '<i class="fa-solid fa-check-circle mr-1"></i> Online';
+            statusBadge.className = "px-2 py-1 bg-emerald-100 text-emerald-700 text-xs font-bold rounded-full border border-emerald-200";
+        });
+
+        // Run Init
+        initApp();
+    </script>
+</body>
+</html>
