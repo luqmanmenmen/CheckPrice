@@ -23,6 +23,7 @@ export async function POST(req: NextRequest) {
         // Update user status to OFFLINE when logging out
         await prisma.user.update({
           where: { id: session.userId },
+          // @ts-ignore - Prisma generate EPERM on Windows
           data: { status: "OFFLINE", sessionId: null }
         });
       }

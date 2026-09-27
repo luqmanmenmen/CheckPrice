@@ -68,6 +68,7 @@ export async function GET(req: NextRequest) {
           // Ubah status user ke OFFLINE
           await prisma.user.update({
              where: { id: u.id },
+             // @ts-ignore - Prisma generate EPERM on Windows
              data: { status: "OFFLINE", sessionId: null }
           });
         }
