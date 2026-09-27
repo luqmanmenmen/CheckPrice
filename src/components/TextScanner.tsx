@@ -95,19 +95,23 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       const text = result.data.text.toUpperCase();
       
       // LOGIKA CERDAS V3: Analisis Baris per Baris (Anti-Barcode & Anti-Artikel)
-      const lines = text.split('\n');
+      // Pecah teks berdasarkan newline atau spasi yang terlalu lebar (karena kadang nyambung jadi satu baris)
+      const lines = text.replace(/\s{2,}/g, '\n').split('\n');
       const valid8Digits: string[] = [];
       let detectedWrong = false;
       
       for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          
           // FILTER ANTI-ARTIKEL (KODE PABRIK): Misal "605-12218278" atau "605 12218278"
-          if (/\b\d{3}\s*[-]?\s*\d{8}\b/.test(line)) {
+          if (/\b\d{3}\s*[-]?\s*\d{8}\b/.test(trimmed)) {
               detectedWrong = true;
               continue; 
           }
 
           // 1. Buang semua huruf/simbol, ambil murni angkanya saja dalam baris ini
-          const digits = line.replace(/\D/g, '');
+          const digits = trimmed.replace(/\D/g, '');
           
           // 2. FILTER ANTI-BARCODE: 
           if (digits.length >= 12 && digits.length <= 14) {
@@ -116,7 +120,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
           }
           
           // 3. FILTER ANTI-HARGA:
-          if (line.includes('RP') || digits === '129900') continue;
+          if (trimmed.includes('RP') || digits === '129900') continue;
           
           // 4. TANGKAP SKU:
           if (digits.length === 8) {
@@ -126,6 +130,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
           }
       }
 
+      // 5. Eksekusi SKU Terakhir yang Valid
       let validSku = null;
       if (valid8Digits.length > 0) {
           const finalSku = valid8Digits[valid8Digits.length - 1];
@@ -213,8 +218,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
         setStatus("Memuat AI Scanner Tercepat...");
         const worker = await Tesseract.createWorker("eng");
         await worker.setParameters({
-          tessedit_char_whitelist: '0123456789',
-          tessedit_pageseg_mode: Tesseract.PSM.SINGLE_LINE,
+          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789- '
         });
         if (isMounted) workerRef.current = worker;
 
