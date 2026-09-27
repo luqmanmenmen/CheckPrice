@@ -146,7 +146,8 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
           return;
       }
 
-      if (detectedWrong) {
+      // Jika membaca *sesuatu* tapi bukan SKU, beri feedback merah
+      if (detectedWrong || lines.length > 0) {
           setScanFeedback("wrong_target");
           setTimeout(() => setScanFeedback("idle"), 800);
       }
@@ -292,13 +293,22 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
            className="w-full min-h-[300px] sm:min-h-[400px] object-cover" 
         />
 
-        {/* Kotak ROI (Overlay Tengah) */}
+        {/* Kotak ROI (Overlay Tengah) bergaya Alfagift */}
         {!foundSku && (
-          <div className="absolute top-1/2 left-[10%] right-[10%] h-[15%] min-h-[60px] -translate-y-1/2 border-2 border-indigo-500 shadow-[0_0_0_9999px_rgba(0,0,0,0.6)] z-10 flex flex-col items-center justify-center pointer-events-none">
-             {/* Garis Merah Laser Animasi */}
-             <div className="w-full h-[2px] bg-red-500 absolute top-0 shadow-[0_0_12px_rgba(239,68,68,1)] animate-scan z-20"></div>
+          <div className="absolute top-1/2 left-[10%] right-[10%] h-[15%] min-h-[60px] -translate-y-1/2 shadow-[0_0_0_9999px_rgba(0,0,0,0.6)] z-10 pointer-events-none overflow-hidden">
+             
+             {/* 4 Sudut Merah (Corners) */}
+             <div className={`absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 transition-colors duration-300 ${scanFeedback === 'wrong_target' ? 'border-red-600' : 'border-red-500'} rounded-tl-lg`}></div>
+             <div className={`absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 transition-colors duration-300 ${scanFeedback === 'wrong_target' ? 'border-red-600' : 'border-red-500'} rounded-tr-lg`}></div>
+             <div className={`absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 transition-colors duration-300 ${scanFeedback === 'wrong_target' ? 'border-red-600' : 'border-red-500'} rounded-bl-lg`}></div>
+             <div className={`absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 transition-colors duration-300 ${scanFeedback === 'wrong_target' ? 'border-red-600' : 'border-red-500'} rounded-br-lg`}></div>
+
+             {/* Garis Merah Laser Animasi dengan Gradient (Kaya Scanner Beneran) */}
+             <div className="w-full h-[4px] bg-gradient-to-b from-transparent via-red-500 to-transparent absolute top-0 shadow-[0_0_15px_rgba(239,68,68,1)] animate-scan z-20"></div>
+             
+             {/* Efek Flash Merah saat Gagal Deteksi */}
              {scanFeedback === "wrong_target" && (
-                 <div className="absolute inset-0 bg-red-500/30 animate-pulse"></div>
+                 <div className="absolute inset-0 bg-red-500/20 animate-pulse z-10"></div>
              )}
           </div>
         )}
