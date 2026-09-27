@@ -29,8 +29,14 @@ class SukoDatabase extends Dexie {
 
 const db = new SukoDatabase();
 
+export interface DetectedSku {
+  text: string;
+  bbox: { x0: number; y0: number; x1: number; y1: number };
+  rawText: string;
+}
+
 interface TextScannerProps {
-  onScanResult: (sku: string, detected: any, snapshot?: string) => void;
+  onScanResult: (sku: string, detected: DetectedSku, snapshot?: string) => void;
 }
 
 export default function TextScanner({ onScanResult }: TextScannerProps) {
