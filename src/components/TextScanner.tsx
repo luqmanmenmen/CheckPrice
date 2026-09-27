@@ -51,14 +51,23 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
   useEffect(() => {
     async function syncData() {
       const count = await db.products.count();
-      if (count < 1000) { // If DB is empty or incomplete
-        setIsSyncing(true);
+      const lastSync = localStorage.getItem("suko_last_sync");
+      const now = Date.now();
+      
+      // Sync jika: DB kosong ATAU sudah lewat 15 menit sejak sync terakhir
+      const needsUpdate = count < 1000 || !lastSync || (now - parseInt(lastSync)) > 15 * 60 * 1000;
+
+      if (needsUpdate) { 
+        // Jika data kosong, tampilkan indikator loading yang mencolok
+        if (count < 1000) setIsSyncing(true); 
+        
         try {
           const res = await fetch('/api/export-products');
           const result = await res.json();
           if (result.success && result.data) {
             await db.products.clear();
             await db.products.bulkPut(result.data);
+            localStorage.setItem("suko_last_sync", now.toString());
           }
         } catch (e) {
           console.error("Failed to sync offline DB", e);
