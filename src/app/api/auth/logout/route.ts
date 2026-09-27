@@ -20,10 +20,10 @@ export async function POST(req: NextRequest) {
           });
         }
         
-        // Update user status to BREAK when logging out
+        // Update user status to OFFLINE when logging out
         await prisma.user.update({
           where: { id: session.userId },
-          data: { status: "BREAK", sessionId: null }
+          data: { status: "OFFLINE", sessionId: null }
         });
       }
     }

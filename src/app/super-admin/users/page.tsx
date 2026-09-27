@@ -8,6 +8,9 @@ const fetcher = (url: string) => fetch(url).then(res => res.json());
 
 export default function UsersManagement() {
   const { data, error, mutate } = useSWR("/api/admin/users", fetcher);
+  const { data: meData } = useSWR("/api/auth/me", fetcher);
+  const isTopBoss = meData?.user?.nik === "22054178";
+
   const [loading, setLoading] = useState(false);
   
   // Form State
@@ -125,12 +128,14 @@ export default function UsersManagement() {
           <h1 className="text-2xl font-black text-slate-800">Manajemen Karyawan</h1>
           <p className="text-sm text-slate-500 mt-1">Kelola akses, PIN default, dan penempatan toko karyawan.</p>
         </div>
-        <button 
-          onClick={() => setShowAddForm(!showAddForm)}
-          className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-5 rounded-xl shadow-sm flex items-center gap-2 text-sm transition-colors"
-        >
-          {showAddForm ? "Batal Tambah" : <><UserPlus className="w-4 h-4" /> Tambah Karyawan</>}
-        </button>
+        {isTopBoss && (
+          <button 
+            onClick={() => setShowAddForm(!showAddForm)}
+            className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-5 rounded-xl shadow-sm flex items-center gap-2 text-sm transition-colors"
+          >
+            {showAddForm ? "Batal Tambah" : <><UserPlus className="w-4 h-4" /> Tambah Karyawan</>}
+          </button>
+        )}
       </div>
 
       {showAddForm && (
@@ -229,7 +234,7 @@ export default function UsersManagement() {
                 <th className="p-4">Hak Akses</th>
                 <th className="p-4">Status</th>
                 <th className="p-4">Terdaftar</th>
-                <th className="p-4 text-right">Aksi</th>
+                {isTopBoss && <th className="p-4 text-right">Aksi</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -259,6 +264,11 @@ export default function UsersManagement() {
                         <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
                         Aktif
                       </span>
+                    ) : user.status === 'BREAK' ? (
+                      <span className="flex items-center gap-1 text-xs font-bold text-orange-600 bg-orange-50 px-2.5 py-1 rounded-full border border-orange-200">
+                        <span className="w-2 h-2 rounded-full bg-orange-500"></span>
+                        Rehat
+                      </span>
                     ) : (
                       <span className="flex items-center gap-1 text-xs font-bold text-slate-400 bg-slate-50 px-2.5 py-1 rounded-full border border-slate-200">
                         <span className="w-2 h-2 rounded-full bg-slate-300"></span>
@@ -269,22 +279,24 @@ export default function UsersManagement() {
                   <td className="p-4 text-xs text-slate-500">
                     {new Date(user.createdAt).toLocaleDateString('id-ID', {day: 'numeric', month: 'short', year: 'numeric'})}
                   </td>
-                  <td className="p-4 text-right">
-                    <button 
-                      onClick={() => setEditingUser(user)}
-                      className="text-indigo-500 hover:text-indigo-700 p-2 hover:bg-indigo-50 rounded-lg transition-colors mr-1"
-                      title="Edit Pengguna"
-                    >
-                      <Edit className="w-4 h-4" />
-                    </button>
-                    <button 
-                      onClick={() => confirmDelete(user.id, user.name)}
-                      className="text-red-500 hover:text-red-700 p-2 hover:bg-red-50 rounded-lg transition-colors"
-                      title="Hapus Pengguna"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </td>
+                  {isTopBoss && (
+                    <td className="p-4 text-right">
+                      <button 
+                        onClick={() => setEditingUser(user)}
+                        className="text-indigo-500 hover:text-indigo-700 p-2 hover:bg-indigo-50 rounded-lg transition-colors mr-1"
+                        title="Edit Pengguna"
+                      >
+                        <Edit className="w-4 h-4" />
+                      </button>
+                      <button 
+                        onClick={() => confirmDelete(user.id, user.name)}
+                        className="text-red-500 hover:text-red-700 p-2 hover:bg-red-50 rounded-lg transition-colors"
+                        title="Hapus Pengguna"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
               {users.length === 0 && (

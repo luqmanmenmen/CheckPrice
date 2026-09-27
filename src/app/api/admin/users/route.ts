@@ -65,10 +65,10 @@ export async function GET(req: NextRequest) {
              where: { id: activeShift.id },
              data: { endTime: new Date() }
           });
-          // Ubah status user ke BREAK
+          // Ubah status user ke OFFLINE
           await prisma.user.update({
              where: { id: u.id },
-             data: { status: "BREAK", sessionId: null }
+             data: { status: "OFFLINE", sessionId: null }
           });
         }
       }
