@@ -56,12 +56,6 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
             </Link>
           </div>
           <nav className="flex gap-4 items-center">
-            {isSyncing && (
-              <div className="flex items-center gap-1 text-[10px] bg-indigo-50 text-indigo-700 px-2 py-1 rounded-full font-bold border border-indigo-100">
-                <svg className="w-3 h-3 animate-pulse" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
-                Sync Data...
-              </div>
-            )}
             {isSuperAdmin && (
               <Link href="/super-admin" className="flex flex-col items-center text-xs text-slate-500 hover:text-blue-600">
                 <UploadCloud className="w-5 h-5 mb-1" />
@@ -71,6 +65,26 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
           </nav>
         </div>
       </header>
+      
+      {/* Full Screen Download Overlay if Syncing */}
+      {isSyncing && (
+        <div className="fixed inset-0 z-[200] bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center px-4">
+          <div className="bg-white p-6 rounded-3xl shadow-2xl border border-slate-100 flex flex-col items-center max-w-xs w-full text-center animate-in zoom-in-95 duration-300">
+             <div className="relative mb-4">
+                <div className="absolute inset-0 border-4 border-slate-100 rounded-full"></div>
+                <div className="w-16 h-16 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <UploadCloud className="w-6 h-6 text-indigo-600 animate-pulse" />
+                </div>
+             </div>
+             <h3 className="font-black text-lg text-slate-800 mb-1">Mengunduh Data Baru</h3>
+             <p className="text-sm text-slate-500 font-medium leading-tight">
+               Mohon tunggu sebentar, sistem sedang memperbarui stok dan harga...
+             </p>
+          </div>
+        </div>
+      )}
+
       <main className="flex-1 max-w-7xl mx-auto w-full p-0 lg:p-8 bg-white shadow-sm min-h-[calc(100vh-64px-60px)] flex flex-col">
         {children}
       </main>
