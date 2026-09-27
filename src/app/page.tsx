@@ -549,7 +549,13 @@ export default function Home() {
                   </div>
                 </div>
               </div>
-              <div className="flex flex-col items-end">
+              <div className="flex flex-col items-end gap-2">
+                {user.jobTitle === 'Gudang Stock' && (
+                  <Link href="/warehouse" className="text-[10px] bg-indigo-900/50 hover:bg-indigo-900/80 border border-indigo-500/30 text-indigo-100 px-3 py-1.5 rounded-full flex items-center gap-1.5 transition-colors font-medium">
+                    <Package2 className="w-3.5 h-3.5" />
+                    Beralih ke Gudang
+                  </Link>
+                )}
                 <div className="scale-80 origin-top-right">
                   <AnimatedLogoutButton onLogout={handleLogoutClick} />
                 </div>

@@ -229,6 +229,16 @@ export async function GET(request: NextRequest) {
 
     const finalTotalRevenue = totalOmzetPOS > 0 ? totalOmzetPOS : totalRevenue;
 
+    // Fetch aggregate POS data directly from Product table
+    const productAggregates = await prisma.product.aggregate({
+      _sum: {
+        sales_mtd_retail: true,
+        sales_ytd_retail: true,
+        sales_ytd: true,
+        eoh_retail: true
+      }
+    });
+
     // Fetch trend data
     let trendData = [];
     
@@ -250,7 +260,18 @@ export async function GET(request: NextRequest) {
           salesByDay.get(day).push(ds);
         }
 
-        for (const d of trendDates) {
+        // Generate contiguous days from startDate to endDate to show 0 on missing days
+        const startDay = new Date(startDate);
+        const endDay = new Date(endDate);
+        const contiguousDays = [];
+        let curr = new Date(startDay);
+        while (curr <= endDay) {
+          const localCurr = new Date(curr.getTime() - curr.getTimezoneOffset() * 60000);
+          contiguousDays.push(localCurr.toISOString().split('T')[0]);
+          curr.setDate(curr.getDate() + 1);
+        }
+
+        for (const d of contiguousDays) {
           const daySales = salesByDay.get(d) || [];
           let dayRev = 0;
           let dayQty = 0;
@@ -264,12 +285,10 @@ export async function GET(request: NextRequest) {
             
             if (isPromo) {
                if (p.discountType === 'BXGY') {
-                 // Untuk grafik trend, kita pakai estimasi proporsional cepat jika data struk tidak ada
-                 // Misal B2G1 = 3 barang bayar 2 (diskon ~33.3%)
                  let b = 1, g = 1;
                  const match = p.acara ? p.acara.match(/B(\d+)\s*G(\d+)/i) : null;
                  if (match) { b = parseInt(match[1]); g = parseInt(match[2]); }
-                 const discountFactor = b / (b + g); // probabilitas rata-rata
+                 const discountFactor = b / (b + g);
                  itemRev = (p.hargaNormal || 0) * ds.qtySold * discountFactor;
                } else if (p.hargaPromo && p.hargaPromo > 0) {
                  itemRev = p.hargaPromo * ds.qtySold;
@@ -278,7 +297,7 @@ export async function GET(request: NextRequest) {
                  if (!isNaN(pct)) itemRev = (p.hargaNormal - (p.hargaNormal * (pct / 100))) * ds.qtySold;
                } else if (p.diskon && p.discountType === 'AMOUNT' && p.hargaNormal) {
                  const numericPart = p.diskon.replace(/\D/g, '');
-          const amt = numericPart ? parseFloat(numericPart) : 0;
+                 const amt = numericPart ? parseFloat(numericPart) : 0;
                  if (!isNaN(amt) && amt > 0) itemRev = (p.hargaNormal - amt) * ds.qtySold;
                }
             }
@@ -358,6 +377,10 @@ export async function GET(request: NextRequest) {
           totalQty,
           anomalyCount,
           totalOmzetPOS,
+          mtd_omzet_pos: productAggregates._sum.sales_mtd_retail || 0,
+          ytd_sales_unit: productAggregates._sum.sales_ytd || 0,
+          ytd_omzet: productAggregates._sum.sales_ytd_retail || 0,
+          nilai_inventori: productAggregates._sum.eoh_retail || 0,
         },
         categoryBreakdown,
         trendData,

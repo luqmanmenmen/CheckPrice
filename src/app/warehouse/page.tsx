@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useMemo } from "react";
-import { UserCircle2, CheckCircle2, XCircle, Clock, ChevronDown, ChevronUp, PackageOpen } from "lucide-react";
+import { UserCircle2, CheckCircle2, XCircle, Clock, ChevronDown, ChevronUp, PackageOpen, Search } from "lucide-react";
 import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
 import PullToRefresh from "@/components/PullToRefresh";
 import Link from "next/link";
@@ -250,7 +250,11 @@ export default function WarehouseDashboard() {
                 </div>
               </div>
             </div>
-            <div className="flex flex-col items-end">
+            <div className="flex flex-col items-end gap-2">
+              <Link href="/" className="text-[10px] bg-indigo-900/50 hover:bg-indigo-900/80 border border-indigo-500/30 text-indigo-100 px-3 py-1.5 rounded-full flex items-center gap-1.5 transition-colors font-medium">
+                <Search className="w-3.5 h-3.5" />
+                Cek Harga / Lokasi
+              </Link>
               <div className="scale-80 origin-top-right">
                 <AnimatedLogoutButton onLogout={handleLogoutClick} />
               </div>

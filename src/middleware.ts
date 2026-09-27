@@ -79,10 +79,7 @@ export async function middleware(request: NextRequest) {
     }
   } else {
     // 3. RBAC: Role-Based Access Control
-    // Gudang Stock should be routed to /warehouse
-    if (userRole === 'CREW_STORE' && userJobTitle === 'Gudang Stock' && pathname === '/') {
-      return NextResponse.redirect(new URL('/warehouse', request.url));
-    }
+    // Gudang Stock should be able to access both /warehouse and /
     // Crew store cannot access warehouse if they are not gudang stock
     if (userRole === 'CREW_STORE' && userJobTitle !== 'Gudang Stock' && pathname.startsWith('/warehouse')) {
       return NextResponse.redirect(new URL('/', request.url));

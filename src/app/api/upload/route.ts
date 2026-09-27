@@ -138,6 +138,10 @@ function parseRow(row: any) {
   
   const stok = row["STOK"] !== undefined && row["STOK"] !== "" ? parseInt(row["STOK"]) || 0 : undefined;
   const sales_mtd = row["SALES_MTD"] !== undefined && row["SALES_MTD"] !== "" ? parseInt(row["SALES_MTD"]) || 0 : undefined;
+  const sales_mtd_retail = row["MTD_SALES_RETAIL"] !== undefined ? safeFloat(row["MTD_SALES_RETAIL"]) : undefined;
+  const sales_ytd = row["YTD_SALES_UNIT"] !== undefined ? parseInt(row["YTD_SALES_UNIT"]) || 0 : undefined;
+  const sales_ytd_retail = row["YTD_SALES_RETAIL"] !== undefined ? safeFloat(row["YTD_SALES_RETAIL"]) : undefined;
+  const eoh_retail = row["EOH_RETAIL"] !== undefined ? safeFloat(row["EOH_RETAIL"]) : undefined;
 
   return {
     sku,
@@ -154,6 +158,10 @@ function parseRow(row: any) {
     dept,
     stok,
     sales_mtd,
+    sales_mtd_retail,
+    sales_ytd,
+    sales_ytd_retail,
+    eoh_retail,
   };
 }
 
@@ -267,6 +275,10 @@ async function upsertProducts(
         hargaNormal: item.hargaNormal ?? 0,
         stok: item.stok ?? 0,
         sales_mtd: item.sales_mtd ?? 0,
+        sales_mtd_retail: item.sales_mtd_retail ?? 0,
+        sales_ytd: item.sales_ytd ?? 0,
+        sales_ytd_retail: item.sales_ytd_retail ?? 0,
+        eoh_retail: item.eoh_retail ?? 0,
       });
     }
   }
@@ -367,7 +379,7 @@ async function upsertProducts(
           finalToDateToSave = promoStillValid ? newToDate : null;
         }
 
-        rowPlaceholders.push(`($${paramIndex++}::text, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::int, $${paramIndex++}::int, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text)`);
+        rowPlaceholders.push(`($${paramIndex++}::text, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::int, $${paramIndex++}::int, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::double precision, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text)`);
         
         values.push(
           item.sku,
@@ -379,6 +391,10 @@ async function upsertProducts(
           item.stok !== undefined ? item.stok : null,
           salesDelta,
           item.sales_mtd !== undefined ? item.sales_mtd : null,
+          item.sales_mtd_retail !== undefined ? item.sales_mtd_retail : null,
+          item.sales_ytd !== undefined ? item.sales_ytd : null,
+          item.sales_ytd_retail !== undefined ? item.sales_ytd_retail : null,
+          item.eoh_retail !== undefined ? item.eoh_retail : null,
           finalPromoToSave,
           finalDiskonToSave,
           finalDiscountTypeToSave,
@@ -408,6 +424,10 @@ async function upsertProducts(
               "dept" = COALESCE(v."dept", p."dept"),
               "stok" = COALESCE(v."stok", p."stok"),
               "sales_mtd" = COALESCE(v."sales_mtd", p."sales_mtd" + v."salesDelta"),
+              "sales_mtd_retail" = COALESCE(v."sales_mtd_retail", p."sales_mtd_retail"),
+              "sales_ytd" = COALESCE(v."sales_ytd", p."sales_ytd"),
+              "sales_ytd_retail" = COALESCE(v."sales_ytd_retail", p."sales_ytd_retail"),
+              "eoh_retail" = COALESCE(v."eoh_retail", p."eoh_retail"),
               "hargaPromo" = v."hargaPromo",
               "diskon" = v."diskon",
               "discountType" = v."discountType",
@@ -417,7 +437,7 @@ async function upsertProducts(
               "updatedAt" = CURRENT_TIMESTAMP
             FROM (VALUES
               ${rowPlaceholders.join(", ")}
-            ) AS v("sku", "hargaNormal", "description", "article", "brand", "dept", "stok", "salesDelta", "sales_mtd", "hargaPromo", "diskon", "discountType", "acara", "fromDate", "toDate")
+            ) AS v("sku", "hargaNormal", "description", "article", "brand", "dept", "stok", "salesDelta", "sales_mtd", "sales_mtd_retail", "sales_ytd", "sales_ytd_retail", "eoh_retail", "hargaPromo", "diskon", "discountType", "acara", "fromDate", "toDate")
             WHERE p."sku" = v."sku"
           `;
 
