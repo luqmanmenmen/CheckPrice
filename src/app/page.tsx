@@ -762,17 +762,27 @@ export default function Home() {
 
       </div>
 
-      {/* Scanner Views */}
-      {scanMode === "barcode" && (
-        <div className="animate-in slide-in-from-top-4 duration-300">
-          <Scanner onScanSuccess={handleBarcodeSuccess} />
-          <p className="text-center text-xs text-slate-500 mt-2">Arahkan kamera ke barcode garis</p>
-        </div>
-      )}
-      
-      {scanMode === "text" && (
-        <div className="animate-in slide-in-from-top-4 duration-300">
-          <TextScanner onScanResult={handleTextScanSuccess} />
+      {/* Full Screen Scanner Views */}
+      {scanMode !== "none" && (
+        <div className="fixed inset-0 z-[100] bg-black flex flex-col animate-in fade-in zoom-in-95 duration-300">
+          <div className="flex justify-between items-center p-4 bg-slate-900 text-white shadow-md z-10">
+            <h3 className="font-bold">{scanMode === "barcode" ? "Scan Barcode" : "Scan Teks (SKU)"}</h3>
+            <button onClick={() => setScanMode("none")} className="p-2 bg-slate-800 rounded-full hover:bg-slate-700 transition-colors">
+              <X className="w-6 h-6 text-white" />
+            </button>
+          </div>
+          <div className="flex-1 relative overflow-hidden bg-black flex items-center justify-center">
+            {scanMode === "barcode" ? (
+               <div className="w-full h-full max-w-2xl mx-auto flex flex-col justify-center px-4">
+                  <Scanner onScanSuccess={handleBarcodeSuccess} />
+                  <p className="text-center text-sm font-bold text-slate-300 mt-6 absolute bottom-12 w-full left-0">Arahkan kamera ke barcode garis</p>
+               </div>
+            ) : (
+               <div className="w-full h-full max-w-2xl mx-auto flex flex-col justify-center px-4">
+                 <TextScanner onScanResult={handleTextScanSuccess} />
+               </div>
+            )}
+          </div>
         </div>
       )}
 
