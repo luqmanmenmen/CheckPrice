@@ -49,34 +49,44 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
   const [scanFeedback, setScanFeedback] = useState<"idle" | "wrong_target">("idle");
   const [isSyncing, setIsSyncing] = useState(false);
 
-  // Background Sync Data
+  // Background Sync Data (Smart Version Check)
   useEffect(() => {
     async function syncData() {
-      const count = await db.products.count();
-      const lastSync = localStorage.getItem("suko_last_sync");
-      const now = Date.now();
-      
-      // Sync jika: DB kosong ATAU sudah lewat 15 menit sejak sync terakhir
-      const needsUpdate = count < 1000 || !lastSync || (now - parseInt(lastSync)) > 15 * 60 * 1000;
-
-      if (needsUpdate) { 
-        // Jika data kosong, tampilkan indikator loading yang mencolok
-        if (count < 1000) setIsSyncing(true); 
+      try {
+        const count = await db.products.count();
+        const localVersion = localStorage.getItem("suko_server_version");
         
-        try {
-          const res = await fetch('/api/export-products');
-          const result = await res.json();
-          if (result.success && result.data) {
-            await db.products.clear();
-            await db.products.bulkPut(result.data);
-            localStorage.setItem("suko_last_sync", now.toString());
+        // Cek ke server apakah ada update PQ/Promo terbaru (Sangat cepat < 50ms)
+        const checkRes = await fetch('/api/check-update');
+        const checkData = await checkRes.json();
+        
+        if (checkData.success) {
+          const serverVersion = checkData.lastUpdate.toString();
+          
+          // Jika versi server lebih baru dari versi HP, atau DB di HP kosong, wajib download "makanan matang"
+          if (localVersion !== serverVersion || count < 1000) {
+            
+            // Tampilkan indikator loading jika ini adalah download pertama kali (kosong)
+            if (count < 1000) setIsSyncing(true);
+            
+            const res = await fetch('/api/export-products');
+            const result = await res.json();
+            
+            if (result.success && result.data) {
+              await db.products.clear();
+              await db.products.bulkPut(result.data);
+              localStorage.setItem("suko_server_version", serverVersion);
+              console.log("Offline Database Updated to version:", serverVersion);
+            }
           }
-        } catch (e) {
-          console.error("Failed to sync offline DB", e);
         }
+      } catch (e) {
+        console.error("Failed to sync offline DB", e);
+      } finally {
         setIsSyncing(false);
       }
     }
+    
     syncData();
   }, []);
 

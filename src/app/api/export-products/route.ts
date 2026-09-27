@@ -31,7 +31,7 @@ export async function GET() {
         size,
         hargaNormal: p.hargaNormal,
         hargaPromo: p.hargaPromo,
-        toDate: p.toDate ? p.toDate.toISOString() : null
+        toDate: p.toDate || null
       };
     });
 
