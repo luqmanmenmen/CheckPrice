@@ -57,11 +57,12 @@ async function main() {
   // Ambil semua produk dari DB (id + sku + prevMtdRetail)
   console.log('🔄 Load produk dari DB...');
   const allProducts = await prisma.product.findMany({
-    select: { id: true, sku: true, sales_mtd_retail: true }
+    select: { id: true, sku: true, sales_mtd_retail: true, sales_mtd: true }
   });
   const productMap = new Map(allProducts.map(p => [p.sku, {
     id: p.id,
-    prevMtdRetail: p.sales_mtd_retail || 0
+    prevMtdRetail: 0,
+    prevMtdQty: 0
   }]));
   console.log(`  ✅ ${productMap.size} produk di DB\n`);
 
@@ -142,14 +143,17 @@ async function main() {
         });
       }
 
+      // Update map baseline untuk file berikutnya
+      existing.prevMtdRetail = mtd_r;
+      existing.prevMtdQty = mtd_u;
+
       // Update row untuk bulk SQL
       updateRows.push([
         sku, hargaNormal || null, desc || null, article, brand, dept,
         stok, eoh_retail, mtd_u, mtd_r, wtd_u, wtd_r, ytd_u, ytd_r, boy_u, boy_r
       ]);
 
-      // Update baseline untuk file berikutnya
-      productMap.set(sku, { id: existing.id, prevMtdRetail: mtd_r });
+      // Map sudah di-update by reference di atas
     }
 
     console.log(`  → ${updateRows.length} update, ${newSkus.length} SKU baru, ${dailySales.length} DailySales`);

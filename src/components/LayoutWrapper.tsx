@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import { usePathname } from "next/navigation";
 import Link from "next/link";
@@ -20,6 +20,16 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   useEffect(() => {
     if (!isAuth && data && !data.user) {
       window.location.href = "/login";
+    }
+  }, [isAuth, data]);
+
+  // Global Background Auto-Sync for Offline DB
+  const [isSyncing, setIsSyncing] = useState(false);
+  useEffect(() => {
+    if (!isAuth && data?.user) {
+      import("@/lib/offlineDb").then(({ syncOfflineDatabase }) => {
+        syncOfflineDatabase(setIsSyncing);
+      });
     }
   }, [isAuth, data]);
 
@@ -45,7 +55,13 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
               <img src="/suko-logo.png" alt="SUKO" className="h-12 object-contain" />
             </Link>
           </div>
-          <nav className="flex gap-4">
+          <nav className="flex gap-4 items-center">
+            {isSyncing && (
+              <div className="flex items-center gap-1 text-[10px] bg-indigo-50 text-indigo-700 px-2 py-1 rounded-full font-bold border border-indigo-100">
+                <svg className="w-3 h-3 animate-pulse" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+                Sync Data...
+              </div>
+            )}
             {isSuperAdmin && (
               <Link href="/super-admin" className="flex flex-col items-center text-xs text-slate-500 hover:text-blue-600">
                 <UploadCloud className="w-5 h-5 mb-1" />

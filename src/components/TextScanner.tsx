@@ -5,29 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import Tesseract from "tesseract.js";
 import { Loader2, Flashlight, FlashlightOff, CheckCircle2, DownloadCloud } from "lucide-react";
-import Dexie from "dexie";
-
-// --- Setup Dexie Database ---
-class SukoDatabase extends Dexie {
-  products!: Dexie.Table<{
-    sku: string;
-    name: string;
-    color: string;
-    size: string;
-    hargaNormal: number;
-    hargaPromo: number | null;
-    toDate: string | null;
-  }, string>;
-
-  constructor() {
-    super("SukoScannerDB");
-    this.version(2).stores({
-      products: 'sku, name, color, size, hargaNormal, hargaPromo, toDate' 
-    });
-  }
-}
-
-const db = new SukoDatabase();
+import { db } from "@/lib/offlineDb";
 
 export interface DetectedSku {
   text: string;
@@ -55,46 +33,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
   const [scanFeedback, setScanFeedback] = useState<"idle" | "wrong_target">("idle");
   const [isSyncing, setIsSyncing] = useState(false);
 
-  // Background Sync Data (Smart Version Check)
-  useEffect(() => {
-    async function syncData() {
-      try {
-        const count = await db.products.count();
-        const localVersion = localStorage.getItem("suko_server_version");
-        
-        // Cek ke server apakah ada update PQ/Promo terbaru (Sangat cepat < 50ms)
-        const checkRes = await fetch('/api/check-update');
-        const checkData = await checkRes.json();
-        
-        if (checkData.success) {
-          const serverVersion = checkData.lastUpdate.toString();
-          
-          // Jika versi server lebih baru dari versi HP, atau DB di HP kosong, wajib download "makanan matang"
-          if (localVersion !== serverVersion || count < 1000) {
-            
-            // Tampilkan indikator loading jika ini adalah download pertama kali (kosong)
-            if (count < 1000) setIsSyncing(true);
-            
-            const res = await fetch('/api/export-products');
-            const result = await res.json();
-            
-            if (result.success && result.data) {
-              await db.products.clear();
-              await db.products.bulkPut(result.data);
-              localStorage.setItem("suko_server_version", serverVersion);
-              console.log("Offline Database Updated to version:", serverVersion);
-            }
-          }
-        }
-      } catch (e) {
-        console.error("Failed to sync offline DB", e);
-      } finally {
-        setIsSyncing(false);
-      }
-    }
-    
-    syncData();
-  }, []);
+
 
   // Main Processing Loop
   async function processFrame() {
@@ -153,22 +92,47 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
     try {
       const result = await workerRef.current.recognize(canvas);
-      const lines = result.data.text.split('\n').map(l => l.replace(/\s+/g, '').trim()).filter(Boolean);
+      const text = result.data.text.toUpperCase();
       
-      let validSku = null;
+      // LOGIKA CERDAS V3: Analisis Baris per Baris (Anti-Barcode & Anti-Artikel)
+      const lines = text.split('\n');
+      const valid8Digits: string[] = [];
       let detectedWrong = false;
-
-      for (const text of lines) {
-          if (text.length >= 12 && text.length <= 14) {
-             detectedWrong = true; continue; // It's probably a barcode!
+      
+      for (const line of lines) {
+          // FILTER ANTI-ARTIKEL (KODE PABRIK): Misal "605-12218278" atau "605 12218278"
+          if (/\b\d{3}\s*[-]?\s*\d{8}\b/.test(line)) {
+              detectedWrong = true;
+              continue; 
           }
-          if (text.length === 8 && /^\d{8}$/.test(text)) {
-              if (blacklistedSkus.current.has(text)) {
-                 detectedWrong = true;
-              } else {
-                 validSku = text;
-                 break;
-              }
+
+          // 1. Buang semua huruf/simbol, ambil murni angkanya saja dalam baris ini
+          const digits = line.replace(/\D/g, '');
+          
+          // 2. FILTER ANTI-BARCODE: 
+          if (digits.length >= 12 && digits.length <= 14) {
+              detectedWrong = true;
+              continue;
+          }
+          
+          // 3. FILTER ANTI-HARGA:
+          if (line.includes('RP') || digits === '129900') continue;
+          
+          // 4. TANGKAP SKU:
+          if (digits.length === 8) {
+              valid8Digits.push(digits);
+          } else if (digits.length > 8 && digits.length <= 22) {
+              valid8Digits.push(digits.slice(-8));
+          }
+      }
+
+      let validSku = null;
+      if (valid8Digits.length > 0) {
+          const finalSku = valid8Digits[valid8Digits.length - 1];
+          if (blacklistedSkus.current.has(finalSku)) {
+              detectedWrong = true;
+          } else {
+              validSku = finalSku;
           }
       }
 

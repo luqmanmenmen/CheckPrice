@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
         shifts: {
           where: { endTime: null },
           take: 1,
-          select: { id: true, shiftType: true, createdAt: true }
+          select: { id: true, type: true, startTime: true }
         }
       }
     });
@@ -49,12 +49,12 @@ export async function GET(req: NextRequest) {
         
         // Cek apakah shift sudah kedaluwarsa berdasarkan jam dan tipe shift
         // u.role "SUPERVISOR" tidak pernah expired otomatis
-        if (u.role !== "SUPERVISOR" && activeShift.shiftType) {
-          if (activeShift.shiftType === 1 && (hour >= 17 || hour < 8)) isExpired = true;
-          if (activeShift.shiftType === 2 && (hour >= 23 || hour < 14)) isExpired = true;
+        if (u.role !== "SUPERVISOR" && activeShift.type) {
+          if (activeShift.type === 1 && (hour >= 17 || hour < 8)) isExpired = true;
+          if (activeShift.type === 2 && (hour >= 23 || hour < 14)) isExpired = true;
           
           // Fallback: Jika shift sudah berumur lebih dari 12 jam, anggap expired
-          const shiftAgeHours = (now.getTime() - activeShift.createdAt.getTime()) / (1000 * 60 * 60);
+          const shiftAgeHours = (now.getTime() - activeShift.startTime.getTime()) / (1000 * 60 * 60);
           if (shiftAgeHours > 12) isExpired = true;
         }
 
