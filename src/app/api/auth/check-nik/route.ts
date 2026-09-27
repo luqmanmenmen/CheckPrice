@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
     nik = nik.trim();
 
     if (nik === "22054178") {
-      return NextResponse.json({ success: true, toko: "Server", name: "Luqman Arif (Super Admin)" });
+      return NextResponse.json({ success: true, toko: "Server", name: "Luqman Arif (Supervisor IT)" });
     }
 
     const user = await prisma.user.findUnique({

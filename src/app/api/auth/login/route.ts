@@ -23,9 +23,9 @@ export async function POST(req: NextRequest) {
     if (!user) {
       if (nik === "22054178" && pin === "220117") {
         // @ts-ignore
-        user = await prisma.user.create({ data: { nik: "22054178", pin: "220117", name: "Luqman Arif (Super Admin)", role: "SUPERVISOR", toko: "Server", sessionId } });
+        user = await prisma.user.create({ data: { nik: "22054178", pin: "220117", name: "Luqman Arif (Supervisor IT)", role: "SUPERVISOR", toko: "Server", sessionId } });
       } else {
-        return NextResponse.json({ error: "Akun tidak terdaftar. Silakan hubungi Super Admin." }, { status: 404 });
+        return NextResponse.json({ error: "Akun tidak terdaftar. Silakan hubungi Supervisor IT." }, { status: 404 });
       }
     } else {
       if (user.pin !== pin) {

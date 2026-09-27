@@ -536,7 +536,7 @@ export default function LaporanPenjualanPage() {
         isOpen={showPinModal}
         onClose={() => setShowPinModal(false)}
         onSubmit={exportPDF}
-        title="Otorisasi Super Admin"
+        title="Otorisasi Supervisor IT"
         description="Masukkan PIN (220117) untuk mengekspor laporan penjualan."
       />
 
