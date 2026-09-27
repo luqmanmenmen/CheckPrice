@@ -29,14 +29,54 @@ export async function GET(req: NextRequest) {
         shifts: {
           where: { endTime: null },
           take: 1,
-          select: { id: true }
+          select: { id: true, shiftType: true, createdAt: true }
         }
       }
     });
 
-    const users = rawUsers.map((u: any) => ({
-      ...u,
-      status: u.shifts.length > 0 ? u.status : "OFFLINE" // If no active shift, they are offline
+    const now = new Date();
+    const jakartaStr = now.toLocaleString("en-US", { timeZone: "Asia/Jakarta", hour12: false });
+    const hourMatch = jakartaStr.match(/ (24|\d+):/);
+    let hour = hourMatch ? parseInt(hourMatch[1], 10) : now.getUTCHours() + 7;
+    if (hour === 24) hour = 0;
+
+    const users = await Promise.all(rawUsers.map(async (u: any) => {
+      let isOffline = u.shifts.length === 0;
+      
+      if (!isOffline) {
+        const activeShift = u.shifts[0];
+        let isExpired = false;
+        
+        // Cek apakah shift sudah kedaluwarsa berdasarkan jam dan tipe shift
+        // u.role "SUPERVISOR" tidak pernah expired otomatis
+        if (u.role !== "SUPERVISOR" && activeShift.shiftType) {
+          if (activeShift.shiftType === 1 && (hour >= 17 || hour < 8)) isExpired = true;
+          if (activeShift.shiftType === 2 && (hour >= 23 || hour < 14)) isExpired = true;
+          
+          // Fallback: Jika shift sudah berumur lebih dari 12 jam, anggap expired
+          const shiftAgeHours = (now.getTime() - activeShift.createdAt.getTime()) / (1000 * 60 * 60);
+          if (shiftAgeHours > 12) isExpired = true;
+        }
+
+        if (isExpired) {
+          isOffline = true;
+          // Auto-close shift di database
+          await prisma.shift.update({
+             where: { id: activeShift.id },
+             data: { endTime: new Date() }
+          });
+          // Ubah status user ke BREAK
+          await prisma.user.update({
+             where: { id: u.id },
+             data: { status: "BREAK", sessionId: null }
+          });
+        }
+      }
+
+      return {
+        ...u,
+        status: isOffline ? "OFFLINE" : u.status
+      };
     }));
 
     return NextResponse.json({ success: true, users });
