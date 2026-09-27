@@ -295,8 +295,8 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
         {/* Kotak ROI (Overlay Tengah) */}
         {!foundSku && (
           <div className="absolute top-1/2 left-[10%] right-[10%] h-[15%] min-h-[60px] -translate-y-1/2 border-2 border-indigo-500 shadow-[0_0_0_9999px_rgba(0,0,0,0.6)] z-10 flex flex-col items-center justify-center pointer-events-none">
-             {/* Garis Merah Laser */}
-             <div className="w-full h-[1px] bg-red-500/80 absolute top-1/2 -translate-y-1/2 shadow-[0_0_10px_rgba(239,68,68,0.8)]"></div>
+             {/* Garis Merah Laser Animasi */}
+             <div className="w-full h-[2px] bg-red-500 absolute top-0 shadow-[0_0_12px_rgba(239,68,68,1)] animate-scan z-20"></div>
              {scanFeedback === "wrong_target" && (
                  <div className="absolute inset-0 bg-red-500/30 animate-pulse"></div>
              )}
