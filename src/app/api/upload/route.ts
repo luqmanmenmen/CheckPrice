@@ -59,6 +59,12 @@ const COL_ALIASES: Record<string, string[]> = {
   "ACARA":        ["ACARA", "EVENT", "PROMO NAME", "NAMA PROMO"],
   "STOK":         ["STOK", "EOH_UNIT", "EOH UNIT", "EOH", "SISA STOK", "QTY", "STOK SISA"],
   "SALES_MTD":    ["SALES_MTD", "MTD_SALES_UNIT", "MTD SALES UNIT", "SALES MTD", "MTD", "TERJUAL", "SALES"],
+  "MTD_SALES_RETAIL": ["MTD_SALES_RETAIL", "MTD SALES RETAIL"],
+  "YTD_SALES_UNIT": ["YTD_SALES_UNIT", "YTD SALES UNIT", "SUM OF YTD_SALES_UNIT"],
+  "YTD_SALES_RETAIL": ["YTD_SALES_RETAIL", "YTD SALES RETAIL", "SUM OF YTD_SALES_RETAIL"],
+  "EOH_RETAIL": ["EOH_RETAIL", "EOH RETAIL", "SUM OF EOH_RETAIL"],
+  "BOY_UNIT": ["BOY_UNIT", "BOY UNIT", "SUM OF BOY_UNIT"],
+  "BOY_RETAIL": ["BOY_RETAIL", "BOY RETAIL", "SUM OF BOY_RETAIL"]
 };
 
 // Some sheets have column names with leading/trailing spaces like " HARGA NORMAL "
@@ -181,10 +187,44 @@ function processWorkbook(
 
   for (const sheetName of workbook.SheetNames) {
     const ws = workbook.Sheets[sheetName];
-    const rawRows = xlsx.utils.sheet_to_json(ws, { defval: "" }) as any[];
+    
+    // Dynamic Header Detection (untuk membaca file PQ berformat Pivot)
+    const rawData = xlsx.utils.sheet_to_json(ws, { header: 1, defval: "" }) as any[][];
+
+    if (rawData.length === 0) {
+      sheetLog.push(`[EMPTY] ${sheetName}`);
+      continue;
+    }
+
+    let headerRowIndex = 0;
+    const skuAliases = ["SKU", "KODE", "KODE PRODUK", "PRODUCT CODE", "CODE", "ID"];
+    for (let i = 0; i < Math.min(20, rawData.length); i++) {
+      const rowArr = rawData[i].map(c => String(c).trim().toUpperCase());
+      if (rowArr.some(cell => skuAliases.includes(cell))) {
+        headerRowIndex = i;
+        break;
+      }
+    }
+
+    const headers = rawData[headerRowIndex].map(h => String(h).trim());
+    const rawRows = [];
+    for (let i = headerRowIndex + 1; i < rawData.length; i++) {
+      const rowArr = rawData[i];
+      if (rowArr.length === 0 || (rowArr.length === 1 && !rowArr[0])) continue;
+      
+      const rowObj: any = {};
+      let hasData = false;
+      for (let j = 0; j < headers.length; j++) {
+        if (headers[j]) {
+          rowObj[headers[j]] = rowArr[j] !== undefined ? rowArr[j] : "";
+          if (rowArr[j] !== "" && rowArr[j] !== undefined) hasData = true;
+        }
+      }
+      if (hasData) rawRows.push(rowObj);
+    }
 
     if (rawRows.length === 0) {
-      sheetLog.push(`[EMPTY] ${sheetName}`);
+      sheetLog.push(`[EMPTY] ${sheetName} (No data rows)`);
       continue;
     }
 
