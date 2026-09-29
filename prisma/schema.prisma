@@ -24,6 +24,9 @@ model Product {
   promoFileName String?
   brand         String?
   dept          String?
+  color         String?
+  size          String?
+  lastPurchaseDate String?
   stok          Int      @default(0)   // EOH_UNIT — stok saat ini (unit)
   eoh_retail    Float    @default(0)   // EOH_RETAIL — nilai stok saat ini (Rp)
   sales_mtd     Int      @default(0)   // MTD_SALES_UNIT — terjual bulan ini (unit)
@@ -34,6 +37,9 @@ model Product {
   sales_ytd_retail Float @default(0)  // YTD_SALES_RETAIL — omzet tahun ini (Rp) — sumber kebenaran tertinggi
   boy_unit      Int      @default(0)   // BOY_UNIT — stok awal tahun (unit)
   boy_retail    Float    @default(0)   // BOY_RETAIL — nilai stok awal tahun (Rp)
+  bom_unit      Int      @default(0)
+  day_sales_unit Int     @default(0)
+  day_sales_retail Float @default(0)
   poSuggestions PoSuggestion[]
   dailySales    DailySales[]
   updatedAt     DateTime @updatedAt

@@ -64,7 +64,13 @@ const COL_ALIASES: Record<string, string[]> = {
   "YTD_SALES_RETAIL": ["YTD_SALES_RETAIL", "YTD SALES RETAIL", "SUM OF YTD_SALES_RETAIL"],
   "EOH_RETAIL": ["EOH_RETAIL", "EOH RETAIL", "SUM OF EOH_RETAIL"],
   "BOY_UNIT": ["BOY_UNIT", "BOY UNIT", "SUM OF BOY_UNIT"],
-  "BOY_RETAIL": ["BOY_RETAIL", "BOY RETAIL", "SUM OF BOY_RETAIL"]
+  "BOY_RETAIL": ["BOY_RETAIL", "BOY RETAIL", "SUM OF BOY_RETAIL"],
+  "COLOR": ["COLOR", "WARNA"],
+  "SIZE": ["SIZE", "UKURAN"],
+  "LAST_PURCHASE_DATE": ["LAST_PURCHASE_DATE", "LAST PURCHASE DATE", "TGL BELI"],
+  "BOM_UNIT": ["BOM UNIT", "BOM_UNIT", "SUM OF BOY_UNIT", "SUM OF BOY_RE_BOM UNIT"],
+  "DAY_SALES_UNIT": ["DAY SALES UNIT", "DAY_SALES_UNIT"],
+  "DAY_SALES_RETAIL": ["DAY SALES RETAIL", "DAY_SALES_RETAIL"]
 };
 
 // Some sheets have column names with leading/trailing spaces like " HARGA NORMAL "
@@ -149,6 +155,13 @@ function parseRow(row: any) {
   const sales_ytd_retail = row["YTD_SALES_RETAIL"] !== undefined ? safeFloat(row["YTD_SALES_RETAIL"]) : undefined;
   const eoh_retail = row["EOH_RETAIL"] !== undefined ? safeFloat(row["EOH_RETAIL"]) : undefined;
 
+  const color = row["COLOR"] !== undefined ? (String(row["COLOR"]).trim() || null) : undefined;
+  const size = row["SIZE"] !== undefined ? (String(row["SIZE"]).trim() || null) : undefined;
+  const lastPurchaseDate = row["LAST_PURCHASE_DATE"] !== undefined ? (String(row["LAST_PURCHASE_DATE"]).trim() || null) : undefined;
+  const bom_unit = row["BOM_UNIT"] !== undefined && row["BOM_UNIT"] !== "" ? parseInt(row["BOM_UNIT"]) || 0 : undefined;
+  const day_sales_unit = row["DAY_SALES_UNIT"] !== undefined && row["DAY_SALES_UNIT"] !== "" ? parseInt(row["DAY_SALES_UNIT"]) || 0 : undefined;
+  const day_sales_retail = row["DAY_SALES_RETAIL"] !== undefined ? safeFloat(row["DAY_SALES_RETAIL"]) : undefined;
+
   return {
     sku,
     article,
@@ -168,6 +181,12 @@ function parseRow(row: any) {
     sales_ytd,
     sales_ytd_retail,
     eoh_retail,
+    color,
+    size,
+    lastPurchaseDate,
+    bom_unit,
+    day_sales_unit,
+    day_sales_retail,
   };
 }
 
@@ -319,6 +338,12 @@ async function upsertProducts(
         sales_ytd: item.sales_ytd ?? 0,
         sales_ytd_retail: item.sales_ytd_retail ?? 0,
         eoh_retail: item.eoh_retail ?? 0,
+        color: item.color ?? null,
+        size: item.size ?? null,
+        lastPurchaseDate: item.lastPurchaseDate ?? null,
+        bom_unit: item.bom_unit ?? 0,
+        day_sales_unit: item.day_sales_unit ?? 0,
+        day_sales_retail: item.day_sales_retail ?? 0,
       });
     }
   }
@@ -462,12 +487,18 @@ async function upsertProducts(
               "article" = COALESCE(v."article", p."article"),
               "brand" = COALESCE(v."brand", p."brand"),
               "dept" = COALESCE(v."dept", p."dept"),
+              "color" = COALESCE(v."color", p."color"),
+              "size" = COALESCE(v."size", p."size"),
+              "lastPurchaseDate" = COALESCE(v."lastPurchaseDate", p."lastPurchaseDate"),
               "stok" = COALESCE(v."stok", p."stok"),
               "sales_mtd" = COALESCE(v."sales_mtd", p."sales_mtd" + v."salesDelta"),
               "sales_mtd_retail" = COALESCE(v."sales_mtd_retail", p."sales_mtd_retail"),
               "sales_ytd" = COALESCE(v."sales_ytd", p."sales_ytd"),
               "sales_ytd_retail" = COALESCE(v."sales_ytd_retail", p."sales_ytd_retail"),
               "eoh_retail" = COALESCE(v."eoh_retail", p."eoh_retail"),
+              "bom_unit" = COALESCE(v."bom_unit", p."bom_unit"),
+              "day_sales_unit" = COALESCE(v."day_sales_unit", p."day_sales_unit"),
+              "day_sales_retail" = COALESCE(v."day_sales_retail", p."day_sales_retail"),
               "hargaPromo" = v."hargaPromo",
               "diskon" = v."diskon",
               "discountType" = v."discountType",
@@ -477,7 +508,7 @@ async function upsertProducts(
               "updatedAt" = CURRENT_TIMESTAMP
             FROM (VALUES
               ${rowPlaceholders.join(", ")}
-            ) AS v("sku", "hargaNormal", "description", "article", "brand", "dept", "stok", "salesDelta", "sales_mtd", "sales_mtd_retail", "sales_ytd", "sales_ytd_retail", "eoh_retail", "hargaPromo", "diskon", "discountType", "acara", "fromDate", "toDate")
+            ) AS v("sku", "hargaNormal", "description", "article", "brand", "dept", "color", "size", "lastPurchaseDate", "stok", "salesDelta", "sales_mtd", "sales_mtd_retail", "sales_ytd", "sales_ytd_retail", "eoh_retail", "hargaPromo", "diskon", "discountType", "acara", "fromDate", "toDate", "bom_unit", "day_sales_unit", "day_sales_retail")
             WHERE p."sku" = v."sku"
           `;
 
