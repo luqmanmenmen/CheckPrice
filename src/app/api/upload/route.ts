@@ -476,7 +476,7 @@ async function upsertProducts(
           finalToDateToSave = promoStillValid ? newToDate : null;
         }
 
-        rowPlaceholders.push(`($${paramIndex++}::text, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::int, $${paramIndex++}::int, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::double precision, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text)`);
+        rowPlaceholders.push(`($${paramIndex++}::text, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::int, $${paramIndex++}::int, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::double precision, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::int, $${paramIndex++}::int, $${paramIndex++}::double precision)`);
         
         values.push(
           item.sku,
@@ -485,6 +485,9 @@ async function upsertProducts(
           item.article !== undefined ? item.article : null,
           item.brand !== undefined ? item.brand : null,
           item.dept !== undefined ? item.dept : null,
+          item.color !== undefined ? item.color : null,
+          item.size !== undefined ? item.size : null,
+          item.lastPurchaseDate !== undefined ? item.lastPurchaseDate : null,
           item.stok !== undefined ? item.stok : null,
           salesDelta,
           item.sales_mtd !== undefined ? item.sales_mtd : null,
@@ -497,7 +500,10 @@ async function upsertProducts(
           finalDiscountTypeToSave,
           finalAcaraToSave,
           finalFromDateToSave,
-          finalToDateToSave
+          finalToDateToSave,
+          item.bom_unit !== undefined ? item.bom_unit : null,
+          item.day_sales_unit !== undefined ? item.day_sales_unit : null,
+          item.day_sales_retail !== undefined ? item.day_sales_retail : null
         );
 
         if (salesDelta > 0) {
