@@ -133,18 +133,36 @@ function parseRow(row: any) {
     }
   }
   
+  // Promo detection: use DISCOUNT TYPE as primary signal
   const rawPromo = row["HARGA PROMO"];
-  let hargaPromo: number | null | undefined = undefined;
-  if (rawPromo !== undefined) {
-    const rawPromoStr = typeof rawPromo === "string" ? rawPromo.toUpperCase() : "";
-    const isTextPromo = rawPromoStr.includes("NORMAL") || rawPromoStr.match(/B\dG\d/) || rawPromoStr.includes("BXGY") || rawPromoStr === "";
-    
-    const hargaPromoRaw = isTextPromo ? null : safeFloat(rawPromo);
-    hargaPromo = hargaPromoRaw && hargaPromoRaw > 0 ? hargaPromoRaw : null;
-  }
+  const rawDiscountType = row["DISCOUNT TYPE"] !== undefined ? String(row["DISCOUNT TYPE"]).trim().toUpperCase() : "";
+  const rawDiskonVal = row["DISKON"] !== undefined ? String(row["DISKON"]).trim() : "";
+  const rawPromoStr = rawPromo !== undefined ? String(rawPromo).trim().toUpperCase() : "";
 
-  const diskon = row["DISKON"] !== undefined ? (String(row["DISKON"]).trim() || null) : undefined;
+  let hargaPromo: number | null | undefined = undefined;
+  let diskon: string | null | undefined = undefined;
   const discountType = row["DISCOUNT TYPE"] !== undefined ? (String(row["DISCOUNT TYPE"]).trim() || null) : undefined;
+
+  if (rawPromo !== undefined || row["DISCOUNT TYPE"] !== undefined) {
+    if (rawDiscountType === "SPECIAL PRICE" || rawDiscountType === "SHARP PRICE") {
+      // Harga tajam → save numeric hargaPromo
+      const v = safeFloat(rawPromo);
+      hargaPromo = v > 0 ? v : null;
+      diskon = "SP";
+    } else if (rawDiscountType === "BXGY" || rawPromoStr.match(/^B\dG\d/) || rawPromoStr === "B2G1" || rawPromoStr === "B1G1") {
+      // Promo tipe BXGY/B2G1/B1G1 → no flat price, tapi tetap promo
+      hargaPromo = null;
+      diskon = rawPromoStr || rawDiskonVal || "BXGY";
+    } else if (rawDiskonVal && rawDiskonVal !== "0" && !isNaN(parseFloat(rawDiskonVal))) {
+      // Diskon amount/persen
+      hargaPromo = null;
+      diskon = rawDiskonVal;
+    } else {
+      // NORMAL PRICE = no promo
+      hargaPromo = null;
+      diskon = undefined; // undefined = jangan ubah nilai yang sudah ada di DB
+    }
+  }
   const brand = row["BRAND"] !== undefined ? (String(row["BRAND"]).trim() || null) : undefined;
   const dept = row["DEPT"] !== undefined ? (String(row["DEPT"]).trim() || null) : undefined;
   
