@@ -376,7 +376,8 @@ async function upsertProducts(
               dailySalesData.push({
                 productId: pid,
                 date: uploadDate,
-                qtySold: dsUnit
+                qtySold: dsUnit,
+                omzet: item.day_sales_retail || 0
               });
             }
           }
@@ -493,10 +494,18 @@ async function upsertProducts(
         );
 
         if (salesDelta > 0) {
+          // Hitung delta retail jika tidak ada day_sales_retail
+          let omzetDelta = item.day_sales_retail || 0;
+          if (omzetDelta === 0 && item.sales_mtd_retail !== undefined && existingInfo.sales_mtd_retail !== undefined) {
+            const retailDeltaCalc = item.sales_mtd_retail - existingInfo.sales_mtd_retail;
+            if (retailDeltaCalc > 0) omzetDelta = retailDeltaCalc;
+          }
+
           dailySalesData.push({
             productId: existingInfo.id,
             date: uploadDate,
-            qtySold: salesDelta
+            qtySold: salesDelta,
+            omzet: omzetDelta
           });
         }
       }
