@@ -33,11 +33,12 @@ export async function POST(req: NextRequest) {
     // 1. Hapus semua DailySales
     const deletedSales = await prisma.dailySales.deleteMany({});
 
-    // 2. Reset sales_mtd dan sales_wtd semua produk ke 0
+    // 2. Reset sales_mtd, sales_mtd_retail, dan sales_wtd semua produk ke 0
     await prisma.product.updateMany({
       data: {
         sales_mtd: 0,
         sales_wtd: 0,
+        sales_mtd_retail: 0
       }
     });
 
