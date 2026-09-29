@@ -315,7 +315,8 @@ async function upsertProducts(
     where: { sku: { in: allSkus } },
     select: { 
       id: true, sku: true, stok: true,
-      hargaPromo: true, diskon: true, discountType: true, acara: true, fromDate: true, toDate: true
+      hargaPromo: true, diskon: true, discountType: true, acara: true, fromDate: true, toDate: true,
+      sales_mtd: true, sales_mtd_retail: true
     },
   });
   const existingProductMap = new Map(existingProducts.map((p) => [p.sku, p]));
@@ -404,11 +405,17 @@ async function upsertProducts(
         const existingInfo = existingProductMap.get(item.sku);
         if (!existingInfo) continue;
 
-        // LOGIKA DELTA EOH
+        // LOGIKA DELTA EOH & MTD
         const oldStok = existingInfo.stok || 0;
         let salesDelta = item.day_sales_unit || 0; // Prioritaskan kolom day_sales_unit jika ada
+        
+        if (salesDelta === 0 && item.sales_mtd !== undefined && existingInfo.sales_mtd !== undefined) {
+          const mtdDeltaCalc = item.sales_mtd - existingInfo.sales_mtd;
+          if (mtdDeltaCalc > 0) salesDelta = mtdDeltaCalc; // Fallback ke selisih MTD
+        }
+        
         if (salesDelta === 0 && item.stok !== undefined && oldStok > 0 && item.stok < oldStok) {
-          salesDelta = oldStok - item.stok; // Fallback ke selisih stok jika tidak ada day_sales
+          salesDelta = oldStok - item.stok; // Fallback terakhir ke selisih stok
         }
 
         // Cek promo
