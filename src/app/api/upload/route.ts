@@ -322,6 +322,7 @@ async function upsertProducts(
 
   const itemsToCreate = [];
   const itemsToUpdate = [];
+  const dailySalesData: any[] = []; // Global array for all DailySales to insert
 
   for (const item of allItems) {
     if (existingProductMap.has(item.sku)) {
@@ -357,6 +358,30 @@ async function upsertProducts(
         skipDuplicates: true,
       });
       created = result.count;
+
+      // Ambil ID produk yang baru dibuat untuk DailySales
+      const skusToFetch = itemsToCreate.filter(i => (i.day_sales_unit || i.sales_mtd || 0) > 0).map(i => i.sku);
+      if (skusToFetch.length > 0) {
+        const newProducts = await prisma.product.findMany({
+          where: { sku: { in: skusToFetch } },
+          select: { id: true, sku: true }
+        });
+        const newSkuToId = new Map(newProducts.map(p => [p.sku, p.id]));
+        
+        for (const item of itemsToCreate) {
+          const dsUnit = item.day_sales_unit || item.sales_mtd || 0;
+          if (dsUnit > 0) {
+            const pid = newSkuToId.get(item.sku);
+            if (pid) {
+              dailySalesData.push({
+                productId: pid,
+                date: uploadDate,
+                qtySold: dsUnit
+              });
+            }
+          }
+        }
+      }
     } catch (err) {
       console.error("Bulk create error", err);
       failed += itemsToCreate.length;
@@ -373,7 +398,6 @@ async function upsertProducts(
       const values: any[] = [];
       const rowPlaceholders: string[] = [];
       let paramIndex = 1;
-      const dailySalesData: any[] = [];
 
       for (const item of chunk) {
         const existingInfo = existingProductMap.get(item.sku);
@@ -381,9 +405,9 @@ async function upsertProducts(
 
         // LOGIKA DELTA EOH
         const oldStok = existingInfo.stok || 0;
-        let salesDelta = 0;
-        if (item.stok !== undefined && oldStok > 0 && item.stok < oldStok) {
-          salesDelta = oldStok - item.stok;
+        let salesDelta = item.day_sales_unit || 0; // Prioritaskan kolom day_sales_unit jika ada
+        if (salesDelta === 0 && item.stok !== undefined && oldStok > 0 && item.stok < oldStok) {
+          salesDelta = oldStok - item.stok; // Fallback ke selisih stok jika tidak ada day_sales
         }
 
         // Cek promo
@@ -514,18 +538,23 @@ async function upsertProducts(
 
           await prisma.$executeRawUnsafe(query, ...values);
           updated += rowPlaceholders.length;
-
-          if (dailySalesData.length > 0) {
-            await prisma.dailySales.createMany({
-              data: dailySalesData,
-              skipDuplicates: true
-            });
-          }
         } catch (err) {
           console.error("Bulk raw update error", err);
           failed += rowPlaceholders.length;
         }
       }
+    }
+  }
+
+  // 4. Insert ALL DailySales data
+  if (dailySalesData.length > 0) {
+    try {
+      await prisma.dailySales.createMany({
+        data: dailySalesData,
+        skipDuplicates: true
+      });
+    } catch (err) {
+      console.error("Bulk create DailySales error", err);
     }
   }
 
