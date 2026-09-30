@@ -43,12 +43,43 @@ export async function GET(request: NextRequest) {
       }
     });
 
-    const [totalProducts, totalWithPromo] = await Promise.all([
+    const [totalProducts, totalWithPromo, promoAgg, latestSync] = await Promise.all([
       prisma.product.count(),
       prisma.product.count({
         where: { OR: [{ hargaPromo: { not: null } }, { diskon: { not: null } }] }
+      }),
+      // Omzet dari barang yang sedang promo (DAY_SALES_RETAIL dari produk berpromo)
+      prisma.product.aggregate({
+        where: { OR: [{ hargaPromo: { not: null } }, { diskon: { not: null } }] },
+        _sum: { day_sales_retail: true, day_sales_unit: true }
+      }),
+      // Tanggal file PQ terakhir dari nama file SyncHistory
+      prisma.syncHistory.findFirst({
+        where: { type: "PQ_HARIAN" },
+        orderBy: { createdAt: "desc" },
+        select: { fileName: true, createdAt: true }
       })
     ]);
+
+    // Extract tanggal dari nama file PQ (e.g., "POWER QUERY 29 SEPTEMBER 2026.csv")
+    let pqDateLabel = todayStr;
+    if (latestSync?.fileName) {
+      const match = latestSync.fileName.match(/(\d{1,2})\s+([A-Z]+)\s+(\d{4})/i);
+      if (match) {
+        const MONTHS: Record<string, string> = {
+          JANUARI:'01',FEBRUARI:'02',MARET:'03',APRIL:'04',MEI:'05',JUNI:'06',
+          JULI:'07',AGUSTUS:'08',SEPTEMBER:'09',OKTOBER:'10',NOVEMBER:'11',DESEMBER:'12',
+          JANUARY:'01',FEBRUARY:'02',MARCH:'03',MAY:'05',JUNE:'06',JULY:'07',
+          AUGUST:'08',OCTOBER:'10',NOVEMBER:'11',DECEMBER:'12'
+        };
+        const m = MONTHS[match[2].toUpperCase()] || '01';
+        pqDateLabel = `${match[3]}-${m}-${match[1].padStart(2,'0')}`;
+      }
+    }
+    const pqUploadTime = latestSync?.createdAt
+      ? new Date(latestSync.createdAt).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' })
+      : '-';
+
 
     // 2. CATEGORY BREAKDOWN per Department (MTD)
     const deptBreakdown = await prisma.product.groupBy({
@@ -178,12 +209,16 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       success: true,
       data: {
-        targetDate: todayStr,
-        availableDates: [todayStr],
+        targetDate: pqDateLabel,
+        pqUploadTime,
+        pqFileName: latestSync?.fileName || null,
+        availableDates: [pqDateLabel],
         summary: {
           // Cards utama
           omzet_hari_ini:  agg._sum.day_sales_retail  || 0,
           qty_hari_ini:    agg._sum.day_sales_unit     || 0,
+          omzet_promo:     promoAgg._sum.day_sales_retail || 0,
+          qty_promo:       promoAgg._sum.day_sales_unit   || 0,
           mtd_omzet:       agg._sum.sales_mtd_retail  || 0,
           mtd_qty:         agg._sum.sales_mtd          || 0,
           ytd_omzet:       agg._sum.sales_ytd_retail  || 0,
@@ -192,14 +227,15 @@ export async function GET(request: NextRequest) {
           total_stok:      agg._sum.stok               || 0,
           total_produk:    totalProducts,
           total_promo:     totalWithPromo,
-          // Legacy keys (backward compat dengan ReportClient lama)
-          totalRevenue:    agg._sum.day_sales_retail   || 0, // Show today revenue on dashboard
+          // Legacy keys (backward compat)
+          totalRevenue:    agg._sum.day_sales_retail   || 0,
           totalQty:        agg._sum.day_sales_unit      || 0,
           totalOmzetPOS:   agg._sum.sales_mtd_retail   || 0,
           mtd_omzet_pos:   agg._sum.sales_mtd_retail   || 0,
           ytd_sales_unit:  agg._sum.sales_ytd           || 0,
           anomalyCount:    0,
         },
+
         categoryBreakdown,
         trendData,
         topFast,
