@@ -17,17 +17,25 @@ export default function UpdateHargaPage() {
   const [showPinModal, setShowPinModal] = useState<{isOpen: boolean, action: "upload" | "reset" | null}>({isOpen: false, action: null});
   const [alertState, setAlertState] = useState<{isOpen: boolean; title: string; message: string; type: "error" | "success" | "warning"}>({isOpen: false, title: "", message: "", type: "error"});
   const [isResetting, setIsResetting] = useState(false);
+  const [historyList, setHistoryList] = useState<any[]>([]);
+  const [currentUserNik, setCurrentUserNik] = useState<string | null>(null);
+  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
 
   const fetchSyncHistory = async () => {
     try {
-      const res = await fetch("/api/admin/sync-history");
+      const res = await fetch("/api/admin/sync-history?limit=10&type=UPDATE_PROMO");
       const data = await res.json();
-      if (data.success && data.data) {
-        const userName = data.data.user ? `${data.data.user.nik} - ${data.data.user.name}` : "Sistem";
+      if (data.success && data.data && data.data.length > 0) {
+        const latest = data.data[0];
+        const userName = latest.user ? `${latest.user.nik} - ${latest.user.name}` : "Sistem";
         setLastSync({
           name: userName,
-          date: data.data.fileName || new Date(data.data.createdAt).toLocaleString("id-ID", { dateStyle: 'medium', timeStyle: 'short' })
+          date: latest.fileName ? `${latest.fileName.split(" | ").length} File` : new Date(latest.createdAt).toLocaleString("id-ID", { dateStyle: 'medium', timeStyle: 'short' })
         });
+        setHistoryList(data.data);
+      } else if (data.success && data.data) {
+        setHistoryList([]);
+        setLastSync(null);
       }
     } catch (e) {
       console.error(e);
@@ -36,6 +44,9 @@ export default function UpdateHargaPage() {
 
   useEffect(() => {
     fetchSyncHistory();
+    fetch("/api/auth/me").then(res => res.json()).then(data => {
+      if (data.user) setCurrentUserNik(data.user.nik);
+    }).catch(() => {});
   }, []);
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -141,7 +152,7 @@ export default function UpdateHargaPage() {
 
         const payload = {
           type: "UPDATE_PROMO",
-          fileName: mainFileName,
+          fileName: files.map(f => f.name).join(" | "),
           uploadDate: new Date().toISOString(),
           isLastChunk: i === totalChunks - 1,
           totalRecords: allRows.length,
@@ -335,6 +346,70 @@ export default function UpdateHargaPage() {
           </>
         )}
       </div>
+
+      {/* Riwayat Upload (Hanya untuk 22054178) */}
+      {currentUserNik === "22054178" && historyList.length > 0 && (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mt-6">
+          <div className="p-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+            <h3 className="font-bold text-slate-800 text-sm">Riwayat Upload Promo</h3>
+            <span className="text-[10px] bg-emerald-100 text-emerald-600 px-2 py-0.5 rounded font-bold">{historyList.length} Folder</span>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {historyList.map((hist, idx) => {
+              const fileNames = hist.fileName ? hist.fileName.split(" | ") : ["File"];
+              const fileCount = fileNames.length;
+              const isExpanded = expandedHistoryId === hist.id;
+              
+              return (
+                <div key={hist.id || idx} className="flex flex-col hover:bg-slate-50 transition-colors">
+                  <div 
+                    className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer"
+                    onClick={() => setExpandedHistoryId(isExpanded ? null : hist.id)}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${hist.status === 'SUCCESS' ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'}`}>
+                        <FileType className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <p className="font-bold text-slate-700 text-sm">Update Promo {new Date(hist.createdAt).toLocaleDateString("id-ID")}</p>
+                        <p className="text-[10px] text-slate-500 mt-0.5 flex gap-2">
+                          <span>{new Date(hist.createdAt).toLocaleTimeString("id-ID", { hour: '2-digit', minute: '2-digit' })}</span>
+                          <span>&bull;</span>
+                          <span>{hist.user ? `${hist.user.nik} - ${hist.user.name}` : 'Sistem'}</span>
+                        </p>
+                        <div className="flex gap-2 mt-1">
+                          <p className="text-[10px] text-emerald-600 font-bold inline-block bg-emerald-50 px-1.5 py-0.5 rounded">{fileCount} File Didalamnya</p>
+                          {hist.status === 'SUCCESS' ? (
+                            <p className="text-[10px] text-emerald-600 font-bold inline-block bg-emerald-50 px-1.5 py-0.5 rounded">{hist.records} baris diproses</p>
+                          ) : (
+                            <p className="text-[10px] text-rose-600 font-bold inline-block bg-rose-50 px-1.5 py-0.5 rounded">Gagal diproses</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {isExpanded && (
+                    <div className="px-4 pb-4 pt-1 bg-slate-50/50">
+                      <div className="pl-11 border-l-2 border-slate-200 ml-5 py-2">
+                        <p className="text-xs font-bold text-slate-600 mb-2">Daftar File:</p>
+                        <ul className="space-y-1.5">
+                          {fileNames.map((name: string, i: number) => (
+                            <li key={i} className="text-xs text-slate-500 flex items-center gap-2">
+                              <span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span>
+                              {name}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <PinModal 
         isOpen={showPinModal.isOpen} 
