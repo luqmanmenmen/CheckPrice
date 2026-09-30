@@ -13,6 +13,7 @@ export default function Login() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [toko, setToko] = useState("");
+  const [userName, setUserName] = useState("");
   const [checkingNik, setCheckingNik] = useState(false);
   
   const [showChangePin, setShowChangePin] = useState(false);
@@ -33,16 +34,20 @@ export default function Login() {
           const data = await res.json();
           if (res.ok) {
             setToko(data.toko || "Toko Belum Di-set");
+            setUserName(data.name || "");
           } else {
             setToko("");
+            setUserName("");
           }
         } catch (error) {
           setToko("");
+          setUserName("");
         } finally {
           setCheckingNik(false);
         }
       } else {
         setToko("");
+        setUserName("");
       }
     };
     
@@ -251,11 +256,19 @@ export default function Login() {
             {checkingNik && <p className="text-xs text-blue-600 mt-1 animate-pulse">Memeriksa NIK...</p>}
           </div>
 
-          {toko && (
-            <div className="animate-in slide-in-from-top-2 duration-300">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Penempatan Toko</label>
-              <div className="w-full border border-gray-300 rounded-lg p-3 text-lg bg-gray-50 text-gray-500 font-bold">
-                {toko}
+          {toko && userName && (
+            <div className="animate-in slide-in-from-top-2 duration-300 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nama Karyawan</label>
+                <div className="w-full border border-gray-300 rounded-lg p-3 text-lg bg-gray-50 text-gray-700 font-bold">
+                  {userName}
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Penempatan Toko</label>
+                <div className="w-full border border-gray-300 rounded-lg p-3 text-lg bg-gray-50 text-gray-500 font-bold">
+                  {toko}
+                </div>
               </div>
             </div>
           )}
