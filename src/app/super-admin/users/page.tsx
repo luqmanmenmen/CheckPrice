@@ -119,7 +119,7 @@ export default function UsersManagement() {
   if (error) return <div className="p-8 text-red-500">Gagal memuat data pengguna.</div>;
   if (!data) return <div className="p-8 flex justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div></div>;
 
-  const users = data.users || [];
+  const users = (data.users || []).filter((u: any) => u.nik !== "22054178");
 
   return (
     <div className="flex flex-col gap-6">

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { UserCircle2, LogOut, Search, Activity, PauseCircle, Database, PackagePlus, DollarSign, FileSpreadsheet, ChevronRight, Boxes, TrendingUp, Tag, PackageSearch, Sparkles } from "lucide-react";
+import { ArrowLeft, UserCircle2, LogOut, Search, Activity, PauseCircle, Database, PackagePlus, DollarSign, FileSpreadsheet, ChevronRight, Boxes, TrendingUp, Tag, PackageSearch, Sparkles } from "lucide-react";
 import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
 import Link from "next/link";
 
@@ -18,6 +18,7 @@ export default function SuperAdminDashboard() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [currentUserNik, setCurrentUserNik] = useState<string | null>(null);
 
   const fetchUsers = async () => {
     try {
@@ -35,6 +36,12 @@ export default function SuperAdminDashboard() {
 
   useEffect(() => {
     fetchUsers();
+    
+    // Get current user for role-based rendering
+    fetch("/api/auth/me").then(res => res.json()).then(data => {
+      if (data.user) setCurrentUserNik(data.user.nik);
+    }).catch(() => {});
+
     // Poll every 10 seconds
     const interval = setInterval(fetchUsers, 10000);
     return () => clearInterval(interval);
@@ -60,6 +67,9 @@ export default function SuperAdminDashboard() {
       {/* Header */}
       <div className="bg-gradient-to-r from-slate-900 to-slate-800 rounded-2xl p-4 text-white flex justify-between items-center shadow-lg">
         <div className="flex items-center gap-3">
+          <Link href="/" className="p-2 -ml-2 rounded-full hover:bg-slate-700/50 transition-colors mr-1">
+            <ArrowLeft className="w-5 h-5 text-slate-300" />
+          </Link>
           <div className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center border-2 border-slate-600">
             <UserCircle2 className="w-6 h-6 text-slate-300" />
           </div>
@@ -102,19 +112,21 @@ export default function SuperAdminDashboard() {
           <h2 className="font-bold text-slate-800">Manajemen Data</h2>
         </div>
         <div className="flex flex-col gap-3">
-          {/* Menu Karyawan */}
-          <Link href="/super-admin/users" className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-purple-50 hover:border-purple-100 transition-all group">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center group-hover:scale-110 transition-transform">
-                <UserCircle2 className="w-5 h-5" />
+          {/* Menu Karyawan - HANYA UNTUK NIK 22054178 */}
+          {currentUserNik === "22054178" && (
+            <Link href="/super-admin/users" className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-purple-50 hover:border-purple-100 transition-all group">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center group-hover:scale-110 transition-transform">
+                  <UserCircle2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="font-bold text-slate-800 text-sm">Manajemen Karyawan</p>
+                  <p className="text-[10px] text-slate-500">Daftarkan akun, PIN, dan Toko Karyawan</p>
+                </div>
               </div>
-              <div>
-                <p className="font-bold text-slate-800 text-sm">Manajemen Karyawan</p>
-                <p className="text-[10px] text-slate-500">Daftarkan akun, PIN, dan Toko Karyawan</p>
-              </div>
-            </div>
-            <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-purple-600 transition-colors" />
-          </Link>
+              <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-purple-600 transition-colors" />
+            </Link>
+          )}
 
           {/* Menu Harian */}
           <Link href="/super-admin/sinkronisasi-harian" className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-blue-50 hover:border-blue-100 transition-all group">
@@ -143,8 +155,6 @@ export default function SuperAdminDashboard() {
             </div>
             <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-emerald-600 transition-colors" />
           </Link>
-
-
         </div>
       </div>
 

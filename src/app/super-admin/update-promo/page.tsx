@@ -23,9 +23,10 @@ export default function UpdateHargaPage() {
       const res = await fetch("/api/admin/sync-history");
       const data = await res.json();
       if (data.success && data.data) {
+        const userName = data.data.user ? `${data.data.user.nik} - ${data.data.user.name}` : "Sistem";
         setLastSync({
-          name: data.data.user?.name || "Sistem",
-          date: new Date(data.data.createdAt).toLocaleString("id-ID", { dateStyle: 'medium', timeStyle: 'short' })
+          name: userName,
+          date: data.data.fileName || new Date(data.data.createdAt).toLocaleString("id-ID", { dateStyle: 'medium', timeStyle: 'short' })
         });
       }
     } catch (e) {

@@ -25,9 +25,10 @@ export default function UpdateProdukPage() {
       const data = await res.json();
       if (data.success && data.data && data.data.length > 0) {
         const latest = data.data[0];
+        const userName = latest.user ? `${latest.user.nik} - ${latest.user.name}` : "Sistem";
         setLastSync({
-          name: latest.user?.name || "Sistem",
-          date: new Date(latest.createdAt).toLocaleString("id-ID", { dateStyle: 'medium', timeStyle: 'short' })
+          name: userName,
+          date: latest.fileName || new Date(latest.createdAt).toLocaleString("id-ID", { dateStyle: 'medium', timeStyle: 'short' })
         });
         setHistoryList(data.data);
       } else if (data.success && data.data) {
