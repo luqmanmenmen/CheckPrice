@@ -141,6 +141,30 @@ export default function UpdateHargaPage() {
         return;
       }
 
+      // 1.5 Upload fisik file ke Vercel Blob
+      let uploadedBlobUrl = null;
+      try {
+        setResultMsg("Menyimpan fisik file promo ke Cloud Storage...");
+        const blobUrls = await Promise.all(
+          files.map(async (f) => {
+            const formData = new FormData();
+            formData.append("file", f);
+            const res = await fetch("/api/upload/file", { method: "POST", body: formData });
+            if (res.ok) {
+              const data = await res.json();
+              return data.url;
+            }
+            return null;
+          })
+        );
+        const validUrls = blobUrls.filter(Boolean);
+        if (validUrls.length > 0) {
+          uploadedBlobUrl = validUrls.join(",");
+        }
+      } catch (err) {
+        console.error("Gagal upload promo ke Blob", err);
+      }
+
       const CHUNK_SIZE = 500;
       const totalChunks = Math.ceil(allRows.length / CHUNK_SIZE);
       
@@ -153,6 +177,7 @@ export default function UpdateHargaPage() {
         const payload = {
           type: "UPDATE_PROMO",
           fileName: files.map(f => f.name).join(" | "),
+          fileUrl: uploadedBlobUrl,
           uploadDate: new Date().toISOString(),
           isLastChunk: i === totalChunks - 1,
           totalRecords: allRows.length,

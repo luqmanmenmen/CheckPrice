@@ -126,6 +126,22 @@ export default function UpdateProdukPage() {
         return;
       }
 
+      // 1.5 Upload fisik file ke Vercel Blob
+      let uploadedBlobUrl = null;
+      try {
+        setResultMsg("Menyimpan file ke Cloud Storage...");
+        const formData = new FormData();
+        formData.append("file", file);
+        const uploadRes = await fetch("/api/upload/file", { method: "POST", body: formData });
+        if (uploadRes.ok) {
+          const uploadData = await uploadRes.json();
+          uploadedBlobUrl = uploadData.url;
+        }
+      } catch (err) {
+        console.error("Gagal upload ke Blob", err);
+        // Tetap lanjut walaupun Blob gagal
+      }
+
       // 2. Kirim data per paket kecil (Chunking)
       const CHUNK_SIZE = 500;
       const totalChunks = Math.ceil(allRows.length / CHUNK_SIZE);
@@ -160,6 +176,7 @@ export default function UpdateProdukPage() {
         const payload = {
           type: "PQ_HARIAN",
           fileName: file.name,
+          fileUrl: uploadedBlobUrl,
           uploadDate: extractDate(file.name).toISOString(),
           isLastChunk: i === totalChunks - 1,
           totalRecords: allRows.length,
