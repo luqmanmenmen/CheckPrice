@@ -121,6 +121,9 @@ function parseRow(row: any) {
   const sales_ytd_retail = row["SALES_YTD_RETAIL"] !== undefined && row["SALES_YTD_RETAIL"] !== "" ? safeFloat(row["SALES_YTD_RETAIL"])       : undefined;
   const boy_unit         = row["BOY_UNIT"]         !== undefined && row["BOY_UNIT"]         !== "" ? parseInt(row["BOY_UNIT"])         || 0 : undefined;
   const boy_retail       = row["BOY_RETAIL"]       !== undefined && row["BOY_RETAIL"]       !== "" ? safeFloat(row["BOY_RETAIL"])             : undefined;
+  const bom_unit         = row["BOM_UNIT"]         !== undefined && row["BOM_UNIT"]         !== "" ? parseInt(row["BOM_UNIT"])         || 0 : undefined;
+  const day_sales_unit   = row["DAY_SALES_UNIT"]   !== undefined && row["DAY_SALES_UNIT"]   !== "" ? parseInt(row["DAY_SALES_UNIT"])   || 0 : undefined;
+  const day_sales_retail = row["DAY_SALES_RETAIL"] !== undefined && row["DAY_SALES_RETAIL"] !== "" ? safeFloat(row["DAY_SALES_RETAIL"])       : undefined;
 
   // ---- HARGA NORMAL ----
   let hargaNormal = row["HARGA NORMAL"] !== undefined ? safeFloat(row["HARGA NORMAL"]) : undefined;
@@ -165,6 +168,7 @@ function parseRow(row: any) {
     sales_wtd, sales_wtd_retail,
     sales_ytd, sales_ytd_retail,
     boy_unit, boy_retail,
+    bom_unit, day_sales_unit, day_sales_retail,
     sourceFile, sourceSheet,
   };
 }

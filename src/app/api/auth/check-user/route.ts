@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ 
       success: true, 
       name: user.name,
-      penempatan: user.penempatan || "SUKO" 
+      toko: user.toko || "SUKO" 
     });
   } catch (err) {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
           ...(user.role !== "SUPERVISOR" && user.role !== role ? { role: role as any } : {}),
           // @ts-ignore
           sessionId,
-          status: "ONLINE" // @ts-ignore
+          status: "ACTIVE" // @ts-ignore
         }
       });
     }
