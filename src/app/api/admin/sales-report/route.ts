@@ -48,9 +48,14 @@ export async function GET(request: NextRequest) {
       prisma.product.count({
         where: { OR: [{ hargaPromo: { not: null } }, { diskon: { not: null } }] }
       }),
-      // Omzet dari barang yang sedang promo (DAY_SALES_RETAIL dari produk berpromo)
+      // Omzet dari barang yang sedang promo (hargaPromo > 0 atau diskon valid bukan '0')
       prisma.product.aggregate({
-        where: { OR: [{ hargaPromo: { not: null } }, { diskon: { not: null } }] },
+        where: {
+          OR: [
+            { hargaPromo: { not: null, gt: 0 } },
+            { diskon: { not: null, notIn: ['0', '', 'NORMAL'] } }
+          ]
+        },
         _sum: { day_sales_retail: true, day_sales_unit: true }
       }),
       // Tanggal file PQ terakhir dari nama file SyncHistory
