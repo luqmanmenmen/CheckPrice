@@ -18,6 +18,7 @@ export default function UpdateProdukPage() {
   const [historyList, setHistoryList] = useState<any[]>([]);
   const [isResetting, setIsResetting] = useState(false);
   const [alertState, setAlertState] = useState<{isOpen: boolean; title: string; message: string; type: "error" | "success" | "warning"}>({isOpen: false, title: "", message: "", type: "error"});
+  const [currentUserNik, setCurrentUserNik] = useState<string | null>(null);
 
   const fetchSyncHistory = async () => {
     try {
@@ -42,6 +43,9 @@ export default function UpdateProdukPage() {
 
   useEffect(() => {
     fetchSyncHistory();
+    fetch("/api/auth/me").then(res => res.json()).then(data => {
+      if (data.user) setCurrentUserNik(data.user.nik);
+    }).catch(() => {});
   }, []);
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -401,8 +405,8 @@ export default function UpdateProdukPage() {
         )}
       </div>
 
-      {/* Riwayat Upload */}
-      {historyList.length > 0 && (
+      {/* Riwayat Upload (Hanya untuk 22054178) */}
+      {currentUserNik === "22054178" && historyList.length > 0 && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
           <div className="p-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
             <h3 className="font-bold text-slate-800 text-sm">Riwayat Upload Terakhir</h3>
@@ -416,11 +420,11 @@ export default function UpdateProdukPage() {
                     <FileType className="w-4 h-4" />
                   </div>
                   <div>
-                    <p className="font-bold text-slate-700 text-sm">{hist.fileName}</p>
+                    <p className="font-bold text-slate-700 text-sm">{hist.fileName || "File"}</p>
                     <p className="text-[10px] text-slate-500 mt-0.5 flex gap-2">
                       <span>{new Date(hist.createdAt).toLocaleString("id-ID")}</span>
                       <span>&bull;</span>
-                      <span>{hist.user?.name || 'Sistem'}</span>
+                      <span>{hist.user ? `${hist.user.nik} - ${hist.user.name}` : 'Sistem'}</span>
                     </p>
                     {hist.status === 'SUCCESS' ? (
                       <p className="text-[10px] text-green-600 font-bold mt-1 inline-block bg-green-50 px-1.5 py-0.5 rounded">{hist.records} baris diproses</p>
