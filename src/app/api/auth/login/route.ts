@@ -4,7 +4,7 @@ import { signToken } from "@/lib/auth";
 
 export async function POST(req: NextRequest) {
   try {
-    let { nik, pin, shift, jobTitle } = await req.json();
+    let { nik, pin, shift, jobTitle, force } = await req.json();
 
     if (!nik || !pin || !jobTitle) {
       return NextResponse.json({ error: "NIK, PIN, dan Posisi wajib diisi" }, { status: 400 });
@@ -32,6 +32,15 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "PIN salah" }, { status: 401 });
       }
       
+      // Jika user sudah punya sessionId dan force belum true, kembalikan status conflict (409)
+      // @ts-ignore
+      if (user.sessionId && !force) {
+        return NextResponse.json({ 
+          error: "Sesi Aktif Ditemukan", 
+          isAlreadyLoggedIn: true 
+        }, { status: 409 });
+      }
+      
       // Update role if changed (unless they are super admin) and update sessionId
       user = await prisma.user.update({
         where: { id: user.id },
@@ -39,7 +48,8 @@ export async function POST(req: NextRequest) {
           // @ts-ignore - Ignore stale prisma types in IDE
           ...(user.role !== "SUPERVISOR" && user.role !== role ? { role: role as any } : {}),
           // @ts-ignore
-          sessionId
+          sessionId,
+          status: "ONLINE" // @ts-ignore
         }
       });
     }

@@ -312,6 +312,40 @@ async function upsertProducts(
         skipDuplicates: true,
       });
       created = result.count;
+
+      // Hasilkan DailySales untuk produk baru yang memiliki sales > 0
+      const newSkus = itemsToCreate.filter(i => (i.day_sales_unit || i.sales_mtd || 0) > 0).map(i => i.sku);
+      if (newSkus.length > 0) {
+        const newlyInserted = await prisma.product.findMany({
+          where: { sku: { in: newSkus } },
+          select: { id: true, sku: true }
+        });
+        const skuToId = new Map(newlyInserted.map(p => [p.sku, p.id]));
+        
+        const newDailySales = [];
+        for (const item of itemsToCreate) {
+          const qty = item.day_sales_unit || item.sales_mtd || 0;
+          if (qty > 0) {
+            const pid = skuToId.get(item.sku);
+            if (pid) {
+              newDailySales.push({
+                productId: pid,
+                date: uploadDate,
+                qtySold: qty,
+                omzet: item.day_sales_retail || item.sales_mtd_retail || 0
+              });
+            }
+          }
+        }
+        
+        if (newDailySales.length > 0) {
+          await prisma.dailySales.createMany({
+            data: newDailySales,
+            skipDuplicates: true
+          });
+        }
+      }
+
     } catch (err) {
       console.error("Bulk create error", err);
       failed += itemsToCreate.length;

@@ -75,6 +75,44 @@ export default function Login() {
 
   const router = useRouter();
 
+  const [showForceLoginModal, setShowForceLoginModal] = useState(false);
+
+  const handleForceLogin = async () => {
+    setShowForceLoginModal(false);
+    setLoading(true);
+    setError("");
+
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nik, pin, shift, jobTitle, force: true })
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        if (pin === "123456") {
+          setLoginRole(data.role);
+          setShowChangePin(true);
+        } else {
+          if (data.role === "SUPERVISOR") {
+            router.replace("/spv-gateway");
+          } else if (jobTitle === "Gudang Stock") {
+            router.replace("/warehouse");
+          } else {
+            router.replace("/");
+          }
+        }
+      } else {
+        setError(data.error || "Gagal login");
+      }
+    } catch (err) {
+      setError("Terjadi kesalahan jaringan");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -88,6 +126,13 @@ export default function Login() {
       });
 
       const data = await res.json();
+      
+      if (res.status === 409 && data.isAlreadyLoggedIn) {
+        setShowForceLoginModal(true);
+        setLoading(false);
+        return;
+      }
+      
       if (res.ok) {
         if (pin === "123456") {
           setLoginRole(data.role);
@@ -306,6 +351,38 @@ export default function Login() {
       <div className="text-center text-xs font-bold text-white/50 tracking-wide z-10 drop-shadow-sm pb-4">
         Powered by Luqmen 😼🕶️
       </div>
+
+      {/* Modal Force Login */}
+      {showForceLoginModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 shadow-2xl max-w-sm w-full animate-[spring_.5s]">
+            <div className="w-12 h-12 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mb-4">
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+            </div>
+            <h2 className="text-xl font-bold text-slate-800 mb-2">Sesi Masih Aktif!</h2>
+            <p className="text-sm text-slate-500 mb-6 leading-relaxed">
+              Akun ini terdeteksi sedang aktif (login) di perangkat lain. Apakah Anda ingin mengakhiri sesi di perangkat tersebut dan memindahkan login ke perangkat ini?
+            </p>
+            
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setShowForceLoginModal(false)}
+                className="flex-1 h-12 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-all"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleForceLogin}
+                className="flex-1 h-12 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl shadow-lg shadow-rose-200 transition-all"
+              >
+                Ya, Lanjutkan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
