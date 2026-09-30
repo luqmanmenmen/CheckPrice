@@ -17,6 +17,7 @@ export default function UpdateProdukPage() {
   const [pinModalState, setPinModalState] = useState<{isOpen: boolean, action: "upload" | "reset" | null}>({isOpen: false, action: null});
   const [historyList, setHistoryList] = useState<any[]>([]);
   const [isResetting, setIsResetting] = useState(false);
+  const [isReprocessing, setIsReprocessing] = useState(false);
   const [alertState, setAlertState] = useState<{isOpen: boolean; title: string; message: string; type: "error" | "success" | "warning"}>({isOpen: false, title: "", message: "", type: "error"});
   const [currentUserNik, setCurrentUserNik] = useState<string | null>(null);
 
@@ -265,6 +266,25 @@ export default function UpdateProdukPage() {
     }
   };
 
+  const handleReprocessFromBlob = async () => {
+    if (!confirm("Proses ulang data dari file PQ yang sudah ada di Blob? Ini akan menghitung ulang omzet harian & DailySales.")) return;
+    setIsReprocessing(true);
+    try {
+      const res = await fetch("/api/upload/reprocess-from-blob", { method: "POST" });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setAlertState({ isOpen: true, title: "✅ Berhasil!", message: data.message, type: "success" });
+        fetchSyncHistory();
+      } else {
+        setAlertState({ isOpen: true, title: "Gagal", message: data.error || "Gagal re-proses.", type: "error" });
+      }
+    } catch (err: any) {
+      setAlertState({ isOpen: true, title: "Kesalahan Jaringan", message: err.message || "Terjadi kesalahan.", type: "error" });
+    } finally {
+      setIsReprocessing(false);
+    }
+  };
+
   const handlePinSubmit = (pin: string) => {
     const { action } = pinModalState;
     setPinModalState({ isOpen: false, action: null });
@@ -295,6 +315,15 @@ export default function UpdateProdukPage() {
         >
           <AlertCircle className="w-3.5 h-3.5" />
           Reset Semua
+        </button>
+        <button
+          onClick={handleReprocessFromBlob}
+          disabled={isReprocessing}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors disabled:opacity-50"
+          title="Proses ulang data dari file PQ yang sudah ada di Blob (tanpa upload ulang)"
+        >
+          {isReprocessing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
+          {isReprocessing ? "Memproses..." : "Proses Ulang Blob"}
         </button>
       </div>
 
