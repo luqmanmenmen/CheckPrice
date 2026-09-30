@@ -259,36 +259,6 @@ export default function Login() {
 
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Posisi / Role</label>
-            <div className="grid grid-cols-2 gap-3">
-              {[
-                { name: "Cashier", icon: ShoppingCart },
-                { name: "Fitter", icon: Shirt },
-                { name: "Runner", icon: Footprints },
-                { name: "Gudang Stock", icon: Package },
-              ].map((role) => {
-                const Icon = role.icon;
-                const isSelected = jobTitle === role.name;
-                return (
-                  <button
-                    key={role.name}
-                    type="button"
-                    onClick={() => setJobTitle(role.name)}
-                    className={`flex flex-col items-center justify-center p-3 rounded-xl border-2 transition-all duration-200 ${
-                      isSelected
-                        ? "border-blue-500 bg-blue-50 text-blue-700 shadow-sm ring-2 ring-blue-500/20 ring-offset-1"
-                        : "border-slate-100 bg-slate-50 text-slate-500 hover:border-slate-200 hover:bg-slate-100"
-                    }`}
-                  >
-                    <Icon className={`w-6 h-6 mb-1 ${isSelected ? "text-blue-600" : "text-slate-400"}`} />
-                    <span className="text-[11px] font-bold tracking-wide uppercase">{role.name}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">NIK Karyawan</label>
             <input
               type="text"
@@ -309,39 +279,70 @@ export default function Login() {
                   {userName}
                 </div>
               </div>
+              
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Penempatan Toko</label>
                 <div className="w-full border border-gray-300 rounded-lg p-3 text-lg bg-gray-50 text-gray-500 font-bold">
                   {toko}
                 </div>
               </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">PIN (Keamanan)</label>
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  required
+                  maxLength={6}
+                  className="w-full border border-gray-300 rounded-lg p-3 text-lg tracking-widest text-center font-mono bg-white text-gray-900"
+                  placeholder="••••••"
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Posisi / Role</label>
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    { name: "Cashier", icon: ShoppingCart },
+                    { name: "Fitter", icon: Shirt },
+                    { name: "Runner", icon: Footprints },
+                    { name: "Gudang Stock", icon: Package },
+                  ].map((role) => {
+                    const Icon = role.icon;
+                    const isSelected = jobTitle === role.name;
+                    return (
+                      <button
+                        key={role.name}
+                        type="button"
+                        onClick={() => setJobTitle(role.name)}
+                        className={`flex flex-col items-center justify-center p-3 rounded-xl border-2 transition-all duration-200 ${
+                          isSelected
+                            ? "border-blue-500 bg-blue-50 text-blue-700 shadow-sm ring-2 ring-blue-500/20 ring-offset-1"
+                            : "border-slate-100 bg-slate-50 text-slate-500 hover:border-slate-200 hover:bg-slate-100"
+                        }`}
+                      >
+                        <Icon className={`w-6 h-6 mb-1 ${isSelected ? "text-blue-600" : "text-slate-400"}`} />
+                        <span className="text-[11px] font-bold tracking-wide uppercase">{role.name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <ShiftToggle isNight={shift === "2"} onToggle={(isNight) => setShift(isNight ? "2" : "1")} />
+
+              <button
+                type="submit"
+                disabled={loading || pin.length < 4 || !nik || !toko}
+                className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-black py-4 rounded-xl mt-6 shadow-lg shadow-blue-500/30 hover:shadow-blue-500/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loading ? "MEMERIKSA..." : "MULAI SHIFT SAYA"}
+              </button>
             </div>
           )}
-
-          <div className={`transition-all duration-500 ${toko ? 'opacity-100 h-auto block' : 'opacity-50 pointer-events-none'}`}>
-            <label className="block text-sm font-medium text-gray-700 mb-1">PIN (Keamanan)</label>
-            <input
-              type="password"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              required
-              maxLength={6}
-              className="w-full border border-gray-300 rounded-lg p-3 text-lg tracking-widest text-center font-mono bg-white text-gray-900"
-              placeholder="••••••"
-              value={pin}
-              onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
-            />
-          </div>
-
-          <ShiftToggle isNight={shift === "2"} onToggle={(isNight) => setShift(isNight ? "2" : "1")} />
-
-          <button
-            type="submit"
-            disabled={loading || pin.length < 4 || !nik || !toko}
-            className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-black py-4 rounded-xl mt-6 shadow-lg shadow-blue-500/30 hover:shadow-blue-500/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {loading ? "MEMERIKSA..." : "MULAI SHIFT SAYA"}
-          </button>
         </form>
       </div>
       )}
