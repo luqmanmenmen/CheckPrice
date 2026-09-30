@@ -149,6 +149,7 @@ export default function UpdateHargaPage() {
           files.map(async (f) => {
             const formData = new FormData();
             formData.append("file", f);
+            formData.append("folder", "PROMO");
             const res = await fetch("/api/upload/file", { method: "POST", body: formData });
             if (res.ok) {
               const data = await res.json();

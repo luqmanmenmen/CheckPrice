@@ -132,6 +132,7 @@ export default function UpdateProdukPage() {
         setResultMsg("Menyimpan file ke Cloud Storage...");
         const formData = new FormData();
         formData.append("file", file);
+        formData.append("folder", "PQ");
         const uploadRes = await fetch("/api/upload/file", { method: "POST", body: formData });
         if (uploadRes.ok) {
           const uploadData = await uploadRes.json();
