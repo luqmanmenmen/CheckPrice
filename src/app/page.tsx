@@ -325,17 +325,59 @@ export default function Home() {
     }
 
     try {
+      // 1. OFFLINE-FIRST: Cek data di database lokal (Dexie) dulu
+      const { db } = await import('@/lib/offlineDb');
+      let localData = null;
+      
+      // Jika halaman 1 (pencarian awal), coba cari berdasarkan SKU persis di memori HP
+      if (page === 1) {
+        localData = await db.products.where('sku').equals(trimmed).first();
+      }
+
+      // Jika data ditemukan di HP, langsung tampilkan (sangat cepat & tanpa internet)
+      if (localData) {
+        if (searchCounterRef.current !== currentSearch) return;
+        
+        setError("");
+        setProduct({
+          id: 0,
+          sku: localData.sku,
+          barcode: null,
+          article: null,
+          description: [localData.name, localData.color, localData.size].filter(Boolean).join(" : "),
+          acara: null,
+          fromDate: null,
+          toDate: localData.toDate,
+          hargaNormal: localData.hargaNormal,
+          hargaPromo: localData.hargaPromo,
+          diskon: null,
+          discountType: null,
+          brand: null,
+          dept: null,
+          stok: 0, // stok mungkin perlu disinkronkan, tapi set 0 dulu dari offline
+          promoFileName: null
+        });
+        setSiblings([]);
+        setProductsList([]);
+        if (scanMode !== "none") setScanMode("none");
+        
+        if (searchCounterRef.current === currentSearch) {
+          setLoading(false);
+        }
+        return; // SELESAI! Tidak perlu panggil server API sama sekali
+      }
+
+      // 2. Jika tidak ada di lokal (mungkin produk baru atau pencarian teks panjang), minta ke server
       const res = await fetch(`/api/product/${encodeURIComponent(trimmed)}?page=${page}`, {
         cache: 'no-store'
       });
       
-      // If a newer search was initiated while we were waiting, ignore this response
       if (searchCounterRef.current !== currentSearch) return;
 
       const data = await res.json();
 
       if (res.ok) {
-        setError(""); // Explicitly clear any stale errors
+        setError("");
         if (Array.isArray(data.data)) {
           setProductsList(data.data);
           setCurrentPage(data.meta?.page || 1);

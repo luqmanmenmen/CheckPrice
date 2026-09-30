@@ -55,7 +55,7 @@ function remap(row){
   }
   return o;
 }
-function processFile(filePath,map){
+function _processFileInternal(filePath,map,isPromoFile){
   const wb=xlsx.read(fs.readFileSync(filePath),{type:"buffer",cellDates:false});
   for(const sn of wb.SheetNames){
     const ws=wb.Sheets[sn];
@@ -132,26 +132,39 @@ function processFile(filePath,map){
         color:null,size:null,bom_unit:0,day_sales_unit:0,day_sales_retail:0,lastPurchaseDate:null
       };
       const ex=map.get(sku);
-      if(!ex){map.set(sku,item);}
-      else{
-        const eP=ex.hargaPromo>0||ex.diskon;
-        const nP=item.hargaPromo>0||item.diskon;
-        if(!eP&&nP) map.set(sku,item);
-        else if(nP) map.set(sku,{...ex,hargaPromo:item.hargaPromo,diskon:item.diskon,discountType:item.discountType,acara:item.acara,fromDate:item.fromDate,toDate:item.toDate});
+      if(isPromoFile){
+        // Promo file: HANYA update SKU yang sudah ada di PQ (jangan buat SKU baru tanpa stok)
+        if(ex){
+          const nP=item.hargaPromo>0||item.diskon;
+          if(nP) map.set(sku,{...ex,hargaPromo:item.hargaPromo,diskon:item.diskon,discountType:item.discountType,acara:item.acara,fromDate:item.fromDate,toDate:item.toDate});
+        }
+        // else: SKU dari promo yang tidak ada di PQ → SKIP (tidak punya stok/data PQ)
+      } else {
+        // PQ file: tambah semua SKU baru
+        if(!ex) map.set(sku,item);
+        else map.set(sku,{...ex,...item}); // update semua data
       }
     }
   }
 }
+function processFilePromoOnly(filePath,map){
+  // Wrapper khusus promo: set flag isPromoFile=true
+  _processFileInternal(filePath,map,true);
+}
+function processFilePQ(filePath,map){
+  _processFileInternal(filePath,map,false);
+}
+// Rename original processFile → _processFileInternal dengan parameter isPromoFile
 async function main(){
   console.log("Wipe + inject ulang (date fix)...");
   await prisma.dailySales.deleteMany({});
   await prisma.product.deleteMany({});
   await prisma.syncHistory.deleteMany({});
   const map=new Map();
-  processFile(PQ_FILE,map);
+  processFilePQ(PQ_FILE,map);
   console.log("PQ SKU:",map.size);
   const promos=fs.readdirSync(PROMO_DIR).filter(f=>f.endsWith(".xlsx")&&!f.startsWith("~"));
-  for(const f of promos) processFile(path.join(PROMO_DIR,f),map);
+  for(const f of promos) processFilePromoOnly(path.join(PROMO_DIR,f),map);
   console.log("After promo:",map.size);
   const items=Array.from(map.values());
   let tot=0;
