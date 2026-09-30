@@ -157,6 +157,7 @@ model SyncHistory {
   user      User     @relation(fields: [userId], references: [id])
   type      String   // "PQ_HARIAN", "PROMO_MINGGUAN"
   fileName  String
+  fileUrl   String?
   status    String   // "SUCCESS", "FAILED"
   records   Int
   createdAt DateTime @default(now())

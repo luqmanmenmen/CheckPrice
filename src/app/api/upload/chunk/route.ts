@@ -574,7 +574,7 @@ export async function POST(request: NextRequest) {
     const userId = session?.userId;
 
     const payload = await request.json();
-    const { type, rows, fileName, uploadDate, isLastChunk, totalRecords } = payload;
+    const { type, rows, fileName, fileUrl, uploadDate, isLastChunk, totalRecords } = payload;
 
     if (!rows || !Array.isArray(rows)) {
       return NextResponse.json({ error: "Data baris (rows) tidak valid" }, { status: 400 });
@@ -627,6 +627,7 @@ export async function POST(request: NextRequest) {
           userId,
           type: type || "UNKNOWN",
           fileName: fileName,
+          fileUrl: fileUrl,
           status: failed > 0 && created === 0 && dbUpdated === 0 ? "FAILED" : "SUCCESS",
           records: totalRecords || (created + dbUpdated),
         }
