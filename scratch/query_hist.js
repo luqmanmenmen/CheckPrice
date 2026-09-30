@@ -1,0 +1,1 @@
+const { PrismaClient } = require('@prisma/client'); const prisma = new PrismaClient(); async function main() { const hist = await prisma.syncHistory.findMany({orderBy: {createdAt: 'desc'}, take: 5}); console.log(hist); } main();
