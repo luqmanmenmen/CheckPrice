@@ -598,6 +598,12 @@ export default function Home() {
                     Beralih ke Gudang
                   </Link>
                 )}
+                {user.role === 'SUPERVISOR' && (
+                  <Link href="/spv-gateway" className="text-[10px] bg-emerald-900/50 hover:bg-emerald-900/80 border border-emerald-500/30 text-emerald-100 px-3 py-1.5 rounded-full flex items-center gap-1.5 transition-colors font-medium">
+                    <ArrowLeft className="w-3.5 h-3.5" />
+                    Portal SPV
+                  </Link>
+                )}
                 <div className="scale-80 origin-top-right">
                   <AnimatedLogoutButton onLogout={handleLogoutClick} />
                 </div>

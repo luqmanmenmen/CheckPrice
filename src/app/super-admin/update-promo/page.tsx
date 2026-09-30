@@ -234,7 +234,7 @@ export default function UpdateHargaPage() {
       {lastSync && (
         <div className="bg-white border border-slate-200 rounded-xl p-4 flex justify-between items-center shadow-sm">
           <div>
-            <p className="text-xs text-slate-500 mb-1">Terakhir Diupdate</p>
+            <p className="text-xs text-slate-500 mb-1">Nama File Terakhir</p>
             <p className="font-bold text-slate-700 text-sm">{lastSync.date}</p>
           </div>
           <div className="text-right">
