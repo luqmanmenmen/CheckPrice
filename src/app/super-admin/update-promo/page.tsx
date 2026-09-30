@@ -144,6 +144,13 @@ export default function UpdateHargaPage() {
       // 1.5 Upload fisik file ke Vercel Blob
       let uploadedBlobUrl = null;
       try {
+        setResultMsg("Menghapus file promo lama di Cloud...");
+        await fetch("/api/upload/clean-folder", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ folder: "PROMO" })
+        });
+
         setResultMsg("Menyimpan fisik file promo ke Cloud Storage...");
         const blobUrls = await Promise.all(
           files.map(async (f) => {
