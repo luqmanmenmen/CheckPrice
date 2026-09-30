@@ -45,7 +45,7 @@ const REQUIRED_COLS = ["SKU"];
 // Mapping fleksibel nama kolom → nama standar kita
 // Agar sheet dengan variasi nama kolom tetap terbaca
 const COL_ALIASES: Record<string, string[]> = {
-  "SKU":              ["SKU", "KODE", "KODE PRODUK", "PRODUCT CODE", "CODE", "ID"],
+  "SKU":              ["SKU", "KODE", "KODE PRODUK", "PRODUCT CODE", "CODE", "ID", "ITEM", "MATERIAL", "NO MATERIAL", "PLU"],
   "DESCRIPTION":      ["DESCRIPTION", "ITEM_DESCRIPTION", "ITEM DESCRIPTION", "NAMA", "NAMA PRODUK", "PRODUCT NAME", "DESC", "KETERANGAN", "DESKRIPSI", "ITEM_DESCRIP"],
   "HARGA NORMAL":     ["HARGA NORMAL", "HARGA", "NORMAL PRICE", "PRICE", "HARGA JUAL", "REGULAR PRICE", "HARGA POKOK"],
   "HARGA PROMO":      ["HARGA PROMO", "PROMO PRICE", "PROMO", "HARGA DISKON", "DISC PRICE"],
@@ -437,14 +437,28 @@ async function upsertProducts(
         const finalPromoFileNameToSave = isPromoFile && explicitFileName ? explicitFileName : undefined;
 
         // Hitung delta omzet MTD retail (untuk dailySales.omzet)
+        // Hitung delta omzet MTD retail (untuk dailySales.omzet)
         const oldMtdRetail = (existingInfo as any).sales_mtd_retail || 0;
-        const newMtdRetail = item.sales_mtd_retail !== undefined ? item.sales_mtd_retail : 0;
+        let newMtdRetail = item.sales_mtd_retail !== undefined && item.sales_mtd_retail !== null ? item.sales_mtd_retail : 0;
+        if (newMtdRetail < oldMtdRetail) {
+          newMtdRetail = oldMtdRetail;
+          item.sales_mtd_retail = oldMtdRetail;
+        }
         const omzetDelta = newMtdRetail > oldMtdRetail ? newMtdRetail - oldMtdRetail : 0;
 
         // Hitung delta QTY (sales_mtd)
         const oldMtdQty = (existingInfo as any).sales_mtd || 0;
-        const newMtdQty = item.sales_mtd !== undefined && item.sales_mtd !== null ? item.sales_mtd : 0;
-        const qtyDelta = newMtdQty > oldMtdQty ? newMtdQty - oldMtdQty : 0;
+        let newMtdQty = item.sales_mtd !== undefined && item.sales_mtd !== null ? item.sales_mtd : 0;
+        if (newMtdQty < oldMtdQty) {
+          newMtdQty = oldMtdQty;
+          item.sales_mtd = oldMtdQty;
+        }
+        
+        let qtyDelta = newMtdQty > oldMtdQty ? newMtdQty - oldMtdQty : 0;
+        
+        if (qtyDelta === 0 && item.day_sales_unit && item.day_sales_unit > 0) {
+           qtyDelta = item.day_sales_unit;
+        }
 
         rowPlaceholders.push(`($${paramIndex++}::text, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::int, $${paramIndex++}::double precision, $${paramIndex++}::double precision, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text, $${paramIndex++}::text)`);
         
@@ -465,6 +479,9 @@ async function upsertProducts(
           item.sales_ytd_retail   !== undefined ? item.sales_ytd_retail   : null,
           item.boy_unit           !== undefined ? item.boy_unit           : null,
           item.boy_retail         !== undefined ? item.boy_retail         : null,
+          item.bom_unit           !== undefined ? item.bom_unit           : null,
+          item.day_sales_unit     !== undefined ? item.day_sales_unit     : null,
+          item.day_sales_retail   !== undefined ? item.day_sales_retail   : null,
           omzetDelta,
           finalPromoToSave,
           finalDiskonToSave,
@@ -481,7 +498,7 @@ async function upsertProducts(
             productId: existingInfo.id,
             date: uploadDate,
             qtySold: qtyDelta,
-            omzet: omzetDelta,
+            omzet: omzetDelta > 0 ? omzetDelta : (item.day_sales_retail || 0)
           });
         }
       }
@@ -506,6 +523,9 @@ async function upsertProducts(
               "sales_ytd_retail" = COALESCE(v."sales_ytd_retail", p."sales_ytd_retail"),
               "boy_unit"         = COALESCE(v."boy_unit",         p."boy_unit"),
               "boy_retail"       = COALESCE(v."boy_retail",       p."boy_retail"),
+              "bom_unit"         = COALESCE(v."bom_unit",         p."bom_unit"),
+              "day_sales_unit"   = COALESCE(v."day_sales_unit",   p."day_sales_unit"),
+              "day_sales_retail" = COALESCE(v."day_sales_retail", p."day_sales_retail"),
               "hargaPromo"       = v."hargaPromo",
               "diskon"           = v."diskon",
               "discountType"     = v."discountType",
@@ -516,7 +536,7 @@ async function upsertProducts(
               "updatedAt"        = CURRENT_TIMESTAMP
             FROM (VALUES
               ${rowPlaceholders.join(", ")}
-            ) AS v("sku", "hargaNormal", "description", "article", "brand", "dept", "stok", "eoh_retail", "sales_mtd", "sales_mtd_retail", "sales_wtd", "sales_wtd_retail", "sales_ytd", "sales_ytd_retail", "boy_unit", "boy_retail", "omzetDelta", "hargaPromo", "diskon", "discountType", "acara", "fromDate", "toDate", "promoFileName")
+            ) AS v("sku", "hargaNormal", "description", "article", "brand", "dept", "stok", "eoh_retail", "sales_mtd", "sales_mtd_retail", "sales_wtd", "sales_wtd_retail", "sales_ytd", "sales_ytd_retail", "boy_unit", "boy_retail", "bom_unit", "day_sales_unit", "day_sales_retail", "omzetDelta", "hargaPromo", "diskon", "discountType", "acara", "fromDate", "toDate", "promoFileName")
             WHERE p."sku" = v."sku"
           `;
 
