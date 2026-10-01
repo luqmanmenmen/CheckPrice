@@ -118,19 +118,50 @@ function parseRow(row: any) {
   const toDate = row["TO DATE"] !== undefined ? parseExcelDate(row["TO DATE"]) : undefined;
 
   // ---- STOK & SALES (semua kolom PQ yang penting) ----
-  const stok             = row["STOK"]             !== undefined ? parseInt(row["STOK"] || "0") || 0 : undefined;
-  const eoh_retail       = row["EOH_RETAIL"]       !== undefined ? safeFloat(row["EOH_RETAIL"]) : undefined;
-  const sales_mtd        = row["SALES_MTD"]        !== undefined ? parseInt(row["SALES_MTD"] || "0") || 0 : undefined;
-  const sales_mtd_retail = row["SALES_MTD_RETAIL"] !== undefined ? safeFloat(row["SALES_MTD_RETAIL"]) : undefined;
-  const sales_wtd        = row["SALES_WTD"]        !== undefined ? parseInt(row["SALES_WTD"] || "0") || 0 : undefined;
-  const sales_wtd_retail = row["SALES_WTD_RETAIL"] !== undefined ? safeFloat(row["SALES_WTD_RETAIL"]) : undefined;
-  const sales_ytd        = row["SALES_YTD"]        !== undefined ? parseInt(row["SALES_YTD"] || "0") || 0 : undefined;
-  const sales_ytd_retail = row["SALES_YTD_RETAIL"] !== undefined ? safeFloat(row["SALES_YTD_RETAIL"]) : undefined;
-  const boy_unit         = row["BOY_UNIT"]         !== undefined ? parseInt(row["BOY_UNIT"] || "0") || 0 : undefined;
-  const boy_retail       = row["BOY_RETAIL"]       !== undefined ? safeFloat(row["BOY_RETAIL"]) : undefined;
-  const bom_unit         = row["BOM_UNIT"]         !== undefined ? parseInt(row["BOM_UNIT"] || "0") || 0 : undefined;
-  const day_sales_unit   = row["DAY_SALES_UNIT"]   !== undefined ? parseInt(row["DAY_SALES_UNIT"] || "0") || 0 : undefined;
-  const day_sales_retail = row["DAY_SALES_RETAIL"] !== undefined ? safeFloat(row["DAY_SALES_RETAIL"]) : undefined;
+  // PENTING: Kembalikan `undefined` jika kolom tidak ada di header sheet.
+  // Kembalikan nilai (termasuk 0) hanya jika kolom ADA, agar COALESCE di SQL
+  // bisa membedakan antara "data 0" vs "kolom tidak ada".
+  // Khusus untuk EOH/Stok: jika kolom ada tapi kosong (""), anggap nilainya NULL
+  // supaya COALESCE melindungi nilai lama. Ini menjaga stok tidak tiba-tiba jadi 0.
+  const stok             = row["STOK"] !== undefined
+    ? (row["STOK"] === "" ? null : (parseInt(row["STOK"]) || 0))
+    : undefined;
+  const eoh_retail       = row["EOH_RETAIL"] !== undefined
+    ? (row["EOH_RETAIL"] === "" ? null : safeFloat(row["EOH_RETAIL"]))
+    : undefined;
+  const sales_mtd        = row["SALES_MTD"] !== undefined
+    ? (row["SALES_MTD"] === "" ? null : (parseInt(row["SALES_MTD"]) || 0))
+    : undefined;
+  const sales_mtd_retail = row["SALES_MTD_RETAIL"] !== undefined
+    ? (row["SALES_MTD_RETAIL"] === "" ? null : safeFloat(row["SALES_MTD_RETAIL"]))
+    : undefined;
+  const sales_wtd        = row["SALES_WTD"] !== undefined
+    ? (row["SALES_WTD"] === "" ? null : (parseInt(row["SALES_WTD"]) || 0))
+    : undefined;
+  const sales_wtd_retail = row["SALES_WTD_RETAIL"] !== undefined
+    ? (row["SALES_WTD_RETAIL"] === "" ? null : safeFloat(row["SALES_WTD_RETAIL"]))
+    : undefined;
+  const sales_ytd        = row["SALES_YTD"] !== undefined
+    ? (row["SALES_YTD"] === "" ? null : (parseInt(row["SALES_YTD"]) || 0))
+    : undefined;
+  const sales_ytd_retail = row["SALES_YTD_RETAIL"] !== undefined
+    ? (row["SALES_YTD_RETAIL"] === "" ? null : safeFloat(row["SALES_YTD_RETAIL"]))
+    : undefined;
+  const boy_unit         = row["BOY_UNIT"] !== undefined
+    ? (row["BOY_UNIT"] === "" ? null : (parseInt(row["BOY_UNIT"]) || 0))
+    : undefined;
+  const boy_retail       = row["BOY_RETAIL"] !== undefined
+    ? (row["BOY_RETAIL"] === "" ? null : safeFloat(row["BOY_RETAIL"]))
+    : undefined;
+  const bom_unit         = row["BOM_UNIT"] !== undefined
+    ? (row["BOM_UNIT"] === "" ? null : (parseInt(row["BOM_UNIT"]) || 0))
+    : undefined;
+  const day_sales_unit   = row["DAY_SALES_UNIT"] !== undefined
+    ? (row["DAY_SALES_UNIT"] === "" ? null : (parseInt(row["DAY_SALES_UNIT"]) || 0))
+    : undefined;
+  const day_sales_retail = row["DAY_SALES_RETAIL"] !== undefined
+    ? (row["DAY_SALES_RETAIL"] === "" ? null : safeFloat(row["DAY_SALES_RETAIL"]))
+    : undefined;
 
   // ---- HARGA NORMAL ----
   let hargaNormal = row["HARGA NORMAL"] !== undefined ? safeFloat(row["HARGA NORMAL"]) : undefined;
@@ -395,10 +426,14 @@ async function upsertProducts(
         let finalToDateToSave;
 
         // Smart File Recognition: Determine if THIS ROW contains ANY promo-related data updates
-        const isPromoFile = item.hargaPromo !== undefined || 
-                            item.diskon !== undefined || 
-                            item.discountType !== undefined || 
-                            item.acara !== undefined;
+        // Hanya dianggap file promo jika kolom BENAR-BENAR ADA DAN berisi konten nyata (bukan string kosong)
+        const hasHargaPromo    = item.hargaPromo !== undefined && item.hargaPromo !== null && (item.hargaPromo as number) > 0;
+        const hasDiskon        = item.diskon !== undefined && item.diskon !== null && String(item.diskon).trim() !== "";
+        const hasDiscountType  = item.discountType !== undefined && item.discountType !== null && String(item.discountType).trim() !== "";
+        const hasAcara         = item.acara !== undefined && item.acara !== null && String(item.acara).trim() !== "";
+        const hasFromDate      = item.fromDate !== undefined && item.fromDate !== null && String(item.fromDate).trim() !== "";
+        const hasToDate        = item.toDate !== undefined && item.toDate !== null && String(item.toDate).trim() !== "";
+        const isPromoFile = hasHargaPromo || hasDiskon || hasDiscountType || hasAcara || hasFromDate || hasToDate;
 
         if (!isPromoFile) {
           // File Excel murni PQ Harian (tanpa kolom promo) -> Proteksi promo yang ada!
