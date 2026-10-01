@@ -280,12 +280,20 @@ export default function UpdateHargaPage() {
             const ws = workbook.Sheets[sheetName];
             const headerRowIndex = findHeaderRowIndex(ws);
             const rawRows = xlsx.utils.sheet_to_json(ws, { range: headerRowIndex, defval: "" });
-            const rowsWithSource = rawRows.map((r: any) => ({
-              ...r,
-              __SOURCE_FILE__: b.filename,
-              __SOURCE_SHEET__: sheetName
-            }));
-            allRows = allRows.concat(rowsWithSource);
+            for (const raw of rawRows as any[]) {
+              const r = {
+                ...raw,
+                __SOURCE_FILE__: b.filename,
+                __SOURCE_SHEET__: sheetName
+              };
+              const firstColValue = String(Object.values(r)[0] || "").toUpperCase();
+              if (firstColValue.includes("GRAND TOTAL")) break;
+              
+              const hasIdentifier = r["SKU"] || r["KODE PRODUK"] || r["KODE"] || r["ARTICLE"] || r["BARCODE"] || r["KODE_PRODUK"];
+              if (!hasIdentifier) continue;
+              
+              allRows.push(r);
+            }
           }
 
           if (allRows.length > 0) {
