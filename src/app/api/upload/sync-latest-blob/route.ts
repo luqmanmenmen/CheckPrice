@@ -81,10 +81,29 @@ export async function POST(request: NextRequest) {
 
       const workbook = xlsx.read(buffer, { type: "buffer", cellDates: false });
       
+      // Helper untuk mencari index baris header (yang ada SKU/KODE)
+      const findHeaderRowIndex = (ws: any): number => {
+        const rows = xlsx.utils.sheet_to_json(ws, { header: 1, defval: "" }) as any[][];
+        for (let i = 0; i < Math.min(20, rows.length); i++) {
+          const row = rows[i];
+          if (!row) continue;
+          const hasSKU = row.some(cell => {
+            if (typeof cell !== 'string') return false;
+            const c = cell.toUpperCase().trim();
+            return c === "SKU" || c === "KODE PRODUK" || c === "KODE" || c === "ARTICLE" || c === "BARCODE";
+          });
+          if (hasSKU) return i;
+        }
+        return 0;
+      };
+      
       let fileRows: any[] = [];
       for (const sheetName of workbook.SheetNames) {
         const ws = workbook.Sheets[sheetName];
-        const rawRows = xlsx.utils.sheet_to_json(ws, { defval: "" });
+        
+        const headerRowIndex = findHeaderRowIndex(ws);
+        const rawRows = xlsx.utils.sheet_to_json(ws, { range: headerRowIndex, defval: "" });
+        
         const rowsWithSource = rawRows.map((r: any) => ({
           ...r,
           __SOURCE_FILE__: fileName,
