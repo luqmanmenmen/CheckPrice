@@ -184,10 +184,14 @@ function parseRow(row: any) {
   const rawPromo = row["HARGA PROMO"];
   let hargaPromo: number | null | undefined = undefined;
   if (rawPromo !== undefined) {
-    const rawPromoStr = typeof rawPromo === "string" ? rawPromo.toUpperCase() : "";
-    const isTextPromo = rawPromoStr.includes("NORMAL") || rawPromoStr.match(/B\dG\d/) || rawPromoStr.includes("BXGY") || rawPromoStr === "";
-    const hargaPromoRaw = isTextPromo ? null : safeFloat(rawPromo);
-    hargaPromo = hargaPromoRaw && hargaPromoRaw > 0 ? hargaPromoRaw : null;
+    if (typeof rawPromo === "number") {
+      hargaPromo = rawPromo > 0 ? rawPromo : null;
+    } else {
+      const rawPromoStr = String(rawPromo).toUpperCase().trim();
+      const isTextPromo = rawPromoStr.includes("NORMAL") || rawPromoStr.match(/B\dG\d/) || rawPromoStr.includes("BXGY") || rawPromoStr === "";
+      const hargaPromoRaw = isTextPromo ? null : safeFloat(rawPromo);
+      hargaPromo = hargaPromoRaw && hargaPromoRaw > 0 ? hargaPromoRaw : null;
+    }
   }
 
   const diskon       = row["DISKON"]         !== undefined ? (String(row["DISKON"]).trim()        || null) : undefined;
