@@ -18,6 +18,8 @@ export default function UpdateProdukPage() {
   const [historyList, setHistoryList] = useState<any[]>([]);
   const [isResetting, setIsResetting] = useState(false);
   const [isReprocessing, setIsReprocessing] = useState(false);
+  const [isFullResyncing, setIsFullResyncing] = useState(false);
+  const [fullResyncMsg, setFullResyncMsg] = useState("");
   const [alertState, setAlertState] = useState<{isOpen: boolean; title: string; message: string; type: "error" | "success" | "warning"}>({isOpen: false, title: "", message: "", type: "error"});
   const [currentUserNik, setCurrentUserNik] = useState<string | null>(null);
 
@@ -289,6 +291,60 @@ export default function UpdateProdukPage() {
     }
   };
 
+  const handleFullResync = async () => {
+    if (!confirm("Peringatan: Ini akan mendownload dan memproses SEMUA file PQ dari awal berurutan hingga terbaru. Proses ini memakan waktu lama. Lanjutkan?")) return;
+    setIsFullResyncing(true);
+    setFullResyncMsg("Mengambil daftar file dari server...");
+    
+    try {
+      const listRes = await fetch("/api/upload/blob-files?folder=PQ");
+      const listData = await listRes.json();
+      
+      if (!listRes.ok || !listData.success) {
+        throw new Error(listData.error || "Gagal mengambil list file blob");
+      }
+      
+      const blobs = listData.blobs; // sorted oldest to newest
+      if (blobs.length === 0) {
+        setAlertState({ isOpen: true, title: "Kosong", message: "Tidak ada file PQ di Blob", type: "warning" });
+        setIsFullResyncing(false);
+        return;
+      }
+
+      let successCount = 0;
+      for (let i = 0; i < blobs.length; i++) {
+        const b = blobs[i];
+        setFullResyncMsg(`Memproses file ${i+1}/${blobs.length}: ${b.filename}`);
+        
+        const syncRes = await fetch("/api/upload/sync-latest-blob", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 
+            type: "PQ_HARIAN",
+            explicitUrl: b.url,
+            explicitFileName: b.filename
+          })
+        });
+        
+        const syncData = await syncRes.json();
+        if (!syncRes.ok || !syncData.success) {
+          console.error(`Gagal sync ${b.filename}:`, syncData.error);
+          // throw new Error(`Gagal memproses ${b.filename}: ${syncData.error}`);
+        } else {
+          successCount++;
+        }
+      }
+      
+      setAlertState({ isOpen: true, title: "✅ Selesai!", message: `Berhasil full resync ${successCount}/${blobs.length} file PQ secara berurutan.`, type: "success" });
+      fetchSyncHistory();
+    } catch (err: any) {
+      setAlertState({ isOpen: true, title: "Error Full Resync", message: err.message || "Terjadi kesalahan", type: "error" });
+    } finally {
+      setIsFullResyncing(false);
+      setFullResyncMsg("");
+    }
+  };
+
   const handlePinSubmit = (pin: string) => {
     const { action } = pinModalState;
     setPinModalState({ isOpen: false, action: null });
@@ -311,25 +367,46 @@ export default function UpdateProdukPage() {
           <h1 className="font-bold text-xl text-slate-800">Sinkronisasi Harian</h1>
           <p className="text-xs text-slate-500">Update Produk Baru, Stok Sisa (EOH), dan Analitik Penjualan</p>
         </div>
-        <button
-          onClick={handleResetClick}
-          disabled={isResetting}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-rose-600 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition-colors disabled:opacity-50"
-          title="Hapus semua riwayat log PQ dan reset data penjualan"
-        >
-          <AlertCircle className="w-3.5 h-3.5" />
-          Reset Semua
-        </button>
-        <button
-          onClick={handleReprocessFromBlob}
-          disabled={isReprocessing}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors disabled:opacity-50"
-          title="Proses ulang data dari file PQ yang sudah ada di Blob (tanpa upload ulang)"
-        >
-          {isReprocessing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
-          {isReprocessing ? "Memproses..." : "Proses Ulang Blob"}
-        </button>
+        <div className="flex gap-2 items-center flex-wrap">
+          <button
+            onClick={handleFullResync}
+            disabled={isFullResyncing || isResetting || isReprocessing}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors disabled:opacity-50"
+            title="Proses semua file PQ dari Blob dari yang terlama sampai terbaru agar history akurat"
+          >
+            {isFullResyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
+            {isFullResyncing ? "Proses Full..." : "Full Resync Blob"}
+          </button>
+          <button
+            onClick={handleReprocessFromBlob}
+            disabled={isReprocessing || isFullResyncing || isResetting}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors disabled:opacity-50"
+            title="Proses ulang data dari file PQ TERBARU"
+          >
+            {isReprocessing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
+            {isReprocessing ? "Memproses..." : "Sync Terbaru"}
+          </button>
+          <button
+            onClick={handleResetClick}
+            disabled={isResetting || isFullResyncing || isReprocessing}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-rose-600 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition-colors disabled:opacity-50"
+            title="Hapus semua riwayat log PQ dan reset data penjualan"
+          >
+            <AlertCircle className="w-3.5 h-3.5" />
+            Reset Semua
+          </button>
+        </div>
       </div>
+
+      {isFullResyncing && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex gap-3 text-emerald-800 shadow-sm animate-pulse">
+          <Loader2 className="w-5 h-5 shrink-0 mt-0.5 animate-spin text-emerald-600" />
+          <div className="text-sm">
+            <p className="font-bold mb-1">Sedang Melakukan Full Resync...</p>
+            <p className="opacity-90 text-xs">{fullResyncMsg}</p>
+          </div>
+        </div>
+      )}
 
       {/* Info Card */}
       <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex gap-3 text-blue-800 shadow-sm">

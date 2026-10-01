@@ -7,19 +7,32 @@ export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
   try {
-    const { type } = await request.json(); // e.g. "PQ_HARIAN" or "PROMO"
+    const { type, explicitUrl, explicitFileName } = await request.json(); // e.g. "PQ_HARIAN" or "PROMO"
     
-    // Find latest file in SyncHistory for this type
-    const latestSync = await prisma.syncHistory.findFirst({
-      where: { type: type || "PQ_HARIAN", fileUrl: { not: null } },
-      orderBy: { createdAt: "desc" },
-    });
+    let urls = [];
+    let fileName = "";
+    let fileDateStr = "";
 
-    if (!latestSync || !latestSync.fileUrl) {
-      return NextResponse.json({ success: false, error: `Belum ada file ter-upload di Blob untuk tipe ${type || "PQ_HARIAN"}` }, { status: 404 });
+    if (explicitUrl) {
+      urls = explicitUrl.split(",");
+      fileName = explicitFileName || "BlobFile";
+      fileDateStr = new Date().toISOString(); // fallback
+    } else {
+      // Find latest file in SyncHistory for this type
+      const latestSync = await prisma.syncHistory.findFirst({
+        where: { type: type || "PQ_HARIAN", fileUrl: { not: null } },
+        orderBy: { createdAt: "desc" },
+      });
+
+      if (!latestSync || !latestSync.fileUrl) {
+        return NextResponse.json({ success: false, error: `Belum ada file ter-upload di Blob untuk tipe ${type || "PQ_HARIAN"}` }, { status: 404 });
+      }
+      
+      urls = latestSync.fileUrl.split(",");
+      fileName = latestSync.fileName || "BlobFile";
+      fileDateStr = latestSync.createdAt.toISOString();
     }
 
-    const urls = latestSync.fileUrl.split(",");
     let allRows: any[] = [];
 
     for (const url of urls) {
@@ -37,7 +50,7 @@ export async function POST(request: NextRequest) {
         const rawRows = xlsx.utils.sheet_to_json(ws, { defval: "" });
         const rowsWithSource = rawRows.map((r: any) => ({
           ...r,
-          __SOURCE_FILE__: latestSync.fileName,
+          __SOURCE_FILE__: fileName,
           __SOURCE_SHEET__: sheetName
         }));
         allRows = allRows.concat(rowsWithSource);
@@ -62,7 +75,7 @@ export async function POST(request: NextRequest) {
         const month = months[match[2]] !== undefined ? months[match[2]] : new Date().getMonth();
         return new Date(parseInt(match[3]), month, parseInt(match[1]), 12, 0, 0);
       }
-      return new Date(latestSync.createdAt);
+      return new Date(fileDateStr);
     };
 
     // Forward to /api/upload/chunk
@@ -77,9 +90,9 @@ export async function POST(request: NextRequest) {
       const chunk = allRows.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
       const payload = {
         type: type || "PQ_HARIAN",
-        fileName: latestSync.fileName,
-        fileUrl: latestSync.fileUrl,
-        uploadDate: extractDate(latestSync.fileName || "").toISOString(),
+        fileName: fileName,
+        fileUrl: explicitUrl || urls.join(","),
+        uploadDate: extractDate(fileName || "").toISOString(),
         isLastChunk: false, // Don't create duplicate SyncHistory record since we already have it
         totalRecords: allRows.length,
         rows: chunk
@@ -102,7 +115,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: `Berhasil melakukan sinkronisasi file terbaru (${latestSync.fileName}) dari Blob dengan total ${allRows.length} baris.`
+      message: `Berhasil melakukan sinkronisasi file (${fileName}) dari Blob dengan total ${allRows.length} baris.`
     });
 
   } catch (error: any) {

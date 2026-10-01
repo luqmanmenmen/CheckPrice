@@ -18,6 +18,8 @@ export default function UpdateHargaPage() {
   const [alertState, setAlertState] = useState<{isOpen: boolean; title: string; message: string; type: "error" | "success" | "warning"}>({isOpen: false, title: "", message: "", type: "error"});
   const [isResetting, setIsResetting] = useState(false);
   const [isReprocessing, setIsReprocessing] = useState(false);
+  const [isFullResyncing, setIsFullResyncing] = useState(false);
+  const [fullResyncMsg, setFullResyncMsg] = useState("");
   const [historyList, setHistoryList] = useState<any[]>([]);
   const [currentUserNik, setCurrentUserNik] = useState<string | null>(null);
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
@@ -242,6 +244,59 @@ export default function UpdateHargaPage() {
     }
   };
 
+  const handleFullResync = async () => {
+    if (!confirm("Peringatan: Ini akan mendownload dan memproses SEMUA file Promo dari awal berurutan hingga terbaru. Proses ini memakan waktu lama. Lanjutkan?")) return;
+    setIsFullResyncing(true);
+    setFullResyncMsg("Mengambil daftar file Promo dari server...");
+    
+    try {
+      const listRes = await fetch("/api/upload/blob-files?folder=PROMO");
+      const listData = await listRes.json();
+      
+      if (!listRes.ok || !listData.success) {
+        throw new Error(listData.error || "Gagal mengambil list file blob");
+      }
+      
+      const blobs = listData.blobs; // sorted oldest to newest
+      if (blobs.length === 0) {
+        setAlertState({ isOpen: true, title: "Kosong", message: "Tidak ada file Promo di Blob", type: "warning" });
+        setIsFullResyncing(false);
+        return;
+      }
+
+      let successCount = 0;
+      for (let i = 0; i < blobs.length; i++) {
+        const b = blobs[i];
+        setFullResyncMsg(`Memproses file ${i+1}/${blobs.length}: ${b.filename}`);
+        
+        const syncRes = await fetch("/api/upload/sync-latest-blob", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 
+            type: "UPDATE_PROMO",
+            explicitUrl: b.url,
+            explicitFileName: b.filename
+          })
+        });
+        
+        const syncData = await syncRes.json();
+        if (!syncRes.ok || !syncData.success) {
+          console.error(`Gagal sync ${b.filename}:`, syncData.error);
+        } else {
+          successCount++;
+        }
+      }
+      
+      setAlertState({ isOpen: true, title: "✅ Selesai!", message: `Berhasil full resync ${successCount}/${blobs.length} file Promo secara berurutan.`, type: "success" });
+      fetchSyncHistory();
+    } catch (err: any) {
+      setAlertState({ isOpen: true, title: "Error Full Resync", message: err.message || "Terjadi kesalahan", type: "error" });
+    } finally {
+      setIsFullResyncing(false);
+      setFullResyncMsg("");
+    }
+  };
+
   const handlePinSubmit = (pin: string) => {
     const action = showPinModal.action;
     setShowPinModal({ isOpen: false, action: null });
@@ -266,27 +321,46 @@ export default function UpdateHargaPage() {
           </div>
         </div>
         
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center flex-wrap">
+          <button
+            onClick={handleFullResync}
+            disabled={isFullResyncing || isResetting || isReprocessing}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors disabled:opacity-50"
+            title="Proses semua file Promo dari Blob dari yang terlama sampai terbaru"
+          >
+            {isFullResyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
+            {isFullResyncing ? "Proses Full..." : "Full Resync Blob"}
+          </button>
           <button
             onClick={handleReprocessFromBlob}
-            disabled={isReprocessing}
+            disabled={isReprocessing || isFullResyncing || isResetting}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors disabled:opacity-50"
-            title="Proses ulang data dari file Promo yang sudah ada di Blob"
+            title="Proses ulang data dari file Promo TERBARU"
           >
             {isReprocessing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
-            {isReprocessing ? "Memproses..." : "Sync Blob"}
+            {isReprocessing ? "Memproses..." : "Sync Terbaru"}
           </button>
           <button
             onClick={handleResetClick}
-            disabled={isResetting}
+            disabled={isResetting || isFullResyncing || isReprocessing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-rose-600 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition-colors disabled:opacity-50"
             title="Hapus semua riwayat log promo"
           >
             <AlertTriangle className="w-3.5 h-3.5" />
-            {isResetting ? "Mereset..." : "Reset Log"}
+            Reset Semua
           </button>
         </div>
       </div>
+
+      {isFullResyncing && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex gap-3 text-emerald-800 shadow-sm animate-pulse">
+          <Loader2 className="w-5 h-5 shrink-0 mt-0.5 animate-spin text-emerald-600" />
+          <div className="text-sm">
+            <p className="font-bold mb-1">Sedang Melakukan Full Resync...</p>
+            <p className="opacity-90 text-xs">{fullResyncMsg}</p>
+          </div>
+        </div>
+      )}
 
       {/* Warning Card */}
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex gap-3 text-amber-800 shadow-sm">
