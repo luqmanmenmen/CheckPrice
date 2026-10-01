@@ -330,7 +330,7 @@ async function upsertProducts(
       
       itemsToCreate.push({
         sku:               item.sku,
-        barcode:           item.barcode            || null,
+        barcode:           (item as any).barcode   || null,
         article:           item.article            || null,
         brand:             item.brand              || null,
         dept:              item.dept               || null,
