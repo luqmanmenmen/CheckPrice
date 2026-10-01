@@ -43,20 +43,10 @@ export async function GET(request: NextRequest) {
       }
     });
 
-    const [totalProducts, totalWithPromo, promoAgg, latestSync] = await Promise.all([
+    const [totalProducts, totalWithPromo, latestSync] = await Promise.all([
       prisma.product.count(),
       prisma.product.count({
         where: { OR: [{ hargaPromo: { not: null } }, { diskon: { not: null } }] }
-      }),
-      // Omzet dari barang yang sedang promo (hargaPromo > 0 atau diskon valid bukan '0')
-      prisma.product.aggregate({
-        where: {
-          OR: [
-            { hargaPromo: { not: null, gt: 0 } },
-            { diskon: { not: null, notIn: ['0', '', 'NORMAL'] } }
-          ]
-        },
-        _sum: { day_sales_retail: true, day_sales_unit: true }
       }),
       // Tanggal file PQ terakhir dari nama file SyncHistory
       prisma.syncHistory.findFirst({
@@ -65,6 +55,45 @@ export async function GET(request: NextRequest) {
         select: { fileName: true, createdAt: true }
       })
     ]);
+
+    // Hitung omzet promo secara akurat:
+    // Ambil produk yang punya promo aktif DAN terjual hari ini (day_sales_unit > 0)
+    // Omzet promo = day_sales_unit × hargaPromo (bukan day_sales_retail yang sering 0)
+    const promoProducts = await prisma.product.findMany({
+      where: {
+        day_sales_unit: { gt: 0 },
+        OR: [
+          { hargaPromo: { not: null, gt: 0 } },
+          { diskon: { not: null, notIn: ['0', '', 'NORMAL'] } }
+        ]
+      },
+      select: {
+        day_sales_unit: true,
+        day_sales_retail: true,
+        hargaPromo: true,
+        hargaNormal: true,
+        diskon: true,
+        discountType: true,
+      }
+    });
+
+    // Hitung omzet promo: qty × hargaPromo, fallback ke day_sales_retail jika ada
+    let omzetPromo = 0;
+    let qtyPromo = 0;
+    for (const p of promoProducts) {
+      const qty = p.day_sales_unit || 0;
+      qtyPromo += qty;
+      if (p.day_sales_retail && p.day_sales_retail > 0) {
+        // Prioritaskan day_sales_retail dari PQ jika ada
+        omzetPromo += p.day_sales_retail;
+      } else if (p.hargaPromo && p.hargaPromo > 0) {
+        // Hitung dari hargaPromo × qty
+        omzetPromo += qty * p.hargaPromo;
+      } else {
+        // Fallback: hargaNormal × qty
+        omzetPromo += qty * (p.hargaNormal || 0);
+      }
+    }
 
     // Extract tanggal dari nama file PQ (e.g., "POWER QUERY 29 SEPTEMBER 2026.csv")
     let pqDateLabel = todayStr;
@@ -230,8 +259,8 @@ export async function GET(request: NextRequest) {
           // Cards utama
           omzet_hari_ini:  agg._sum.day_sales_retail  || 0,
           qty_hari_ini:    agg._sum.day_sales_unit     || 0,
-          omzet_promo:     promoAgg._sum.day_sales_retail || 0,
-          qty_promo:       promoAgg._sum.day_sales_unit   || 0,
+          omzet_promo:     omzetPromo,
+          qty_promo:       qtyPromo,
           mtd_omzet:       agg._sum.sales_mtd_retail  || 0,
           mtd_qty:         agg._sum.sales_mtd          || 0,
           ytd_omzet:       agg._sum.sales_ytd_retail  || 0,
