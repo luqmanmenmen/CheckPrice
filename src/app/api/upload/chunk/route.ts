@@ -329,8 +329,12 @@ async function upsertProducts(
       const explicitFileName = item.sourceFile && item.sourceSheet ? `${item.sourceFile} [Sheet: ${item.sourceSheet}]` : fileName;
       
       itemsToCreate.push({
-        ...item,
-        description:       item.description       ?? "-",
+        sku:               item.sku,
+        barcode:           item.barcode            || null,
+        article:           item.article            || null,
+        brand:             item.brand              || null,
+        dept:              item.dept               || null,
+        description:       item.description        ?? "-",
         hargaNormal:       item.hargaNormal        ?? 0,
         stok:              item.stok               ?? 0,
         eoh_retail:        item.eoh_retail         ?? 0,
@@ -342,7 +346,16 @@ async function upsertProducts(
         sales_ytd_retail:  item.sales_ytd_retail   ?? 0,
         boy_unit:          item.boy_unit           ?? 0,
         boy_retail:        item.boy_retail         ?? 0,
-        promoFileName: isPromo && explicitFileName ? explicitFileName : null,
+        bom_unit:          item.bom_unit           ?? 0,
+        day_sales_unit:    item.day_sales_unit     ?? 0,
+        day_sales_retail:  item.day_sales_retail   ?? 0,
+        hargaPromo:        item.hargaPromo         ?? null,
+        diskon:            item.diskon             ?? null,
+        discountType:      item.discountType       ?? null,
+        acara:             item.acara              ?? null,
+        fromDate:          item.fromDate           ?? null,
+        toDate:            item.toDate             ?? null,
+        promoFileName:     isPromo && explicitFileName ? explicitFileName : null,
       });
     }
   }
@@ -415,7 +428,7 @@ async function upsertProducts(
         // LOGIKA DELTA EOH
         const oldStok = existingInfo.stok || 0;
         let salesDelta = 0;
-        if (item.stok !== undefined && oldStok > 0 && item.stok < oldStok) {
+        if (item.stok !== undefined && item.stok !== null && oldStok > 0 && item.stok < oldStok) {
           salesDelta = oldStok - item.stok;
         }
 
