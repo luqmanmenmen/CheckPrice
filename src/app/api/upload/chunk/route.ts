@@ -311,6 +311,7 @@ async function upsertProducts(
     select: { 
       id: true, sku: true, stok: true,
       sales_mtd: true, sales_mtd_retail: true,
+      hargaNormal: true,
       hargaPromo: true, diskon: true, discountType: true, acara: true, fromDate: true, toDate: true
     },
   });
@@ -564,8 +565,8 @@ async function upsertProducts(
               "boy_unit"         = COALESCE(v."boy_unit",         p."boy_unit"),
               "boy_retail"       = COALESCE(v."boy_retail",       p."boy_retail"),
               "bom_unit"         = COALESCE(v."bom_unit",         p."bom_unit"),
-              "day_sales_unit"   = COALESCE(v."day_sales_unit",   p."day_sales_unit"),
-              "day_sales_retail" = COALESCE(v."day_sales_retail", p."day_sales_retail"),
+              "day_sales_unit"   = CASE WHEN v."day_sales_unit" IS NOT NULL THEN v."day_sales_unit" ELSE p."day_sales_unit" END,
+              "day_sales_retail" = CASE WHEN v."day_sales_retail" IS NOT NULL THEN v."day_sales_retail" ELSE p."day_sales_retail" END,
               "hargaPromo"       = v."hargaPromo",
               "diskon"           = v."diskon",
               "discountType"     = v."discountType",
