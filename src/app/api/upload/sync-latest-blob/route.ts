@@ -49,33 +49,10 @@ export async function POST(request: NextRequest) {
     const detectedType = urls.length > 0 ? detectTypeFromUrl(urls[0]) : (typeParam || "PQ_HARIAN");
 
 
-    let allRows: any[] = [];
-
-    for (const url of urls) {
-      console.log("Downloading from blob:", url);
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Gagal download file dari Blob");
-
-      const ab = await res.arrayBuffer();
-      const buffer = Buffer.from(ab);
-
-      // Read workbook
-      const workbook = xlsx.read(buffer, { type: "buffer", cellDates: false });
-      for (const sheetName of workbook.SheetNames) {
-        const ws = workbook.Sheets[sheetName];
-        const rawRows = xlsx.utils.sheet_to_json(ws, { defval: "" });
-        const rowsWithSource = rawRows.map((r: any) => ({
-          ...r,
-          __SOURCE_FILE__: fileName,
-          __SOURCE_SHEET__: sheetName
-        }));
-        allRows = allRows.concat(rowsWithSource);
-      }
-    }
-
-    if (allRows.length === 0) {
-      return NextResponse.json({ success: false, error: "File Excel/CSV kosong atau format salah" }, { status: 400 });
-    }
+    let totalRowsProcessed = 0;
+    const origin = request.nextUrl.origin;
+    const cookies = request.headers.get("cookie") || "";
+    const CHUNK_SIZE = 500;
 
     // Helper untuk ekstrak tanggal dari nama file
     const extractDate = (filename: string) => {
@@ -94,45 +71,69 @@ export async function POST(request: NextRequest) {
       return new Date(fileDateStr);
     };
 
-    // Forward to /api/upload/chunk
-    const CHUNK_SIZE = 500;
-    const totalChunks = Math.ceil(allRows.length / CHUNK_SIZE);
-    const origin = request.nextUrl.origin;
-    
-    // Pass cookies for auth to the chunk endpoint
-    const cookies = request.headers.get("cookie") || "";
+    for (const url of urls) {
+      console.log("Downloading from blob:", url);
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Gagal download file dari Blob: " + url);
 
-    for (let i = 0; i < totalChunks; i++) {
-      const chunk = allRows.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-      const payload = {
-        type: detectedType,  // dari folder URL: PQ/ → PQ_HARIAN, PROMO/ → UPDATE_PROMO
-        fileName: fileName,
-        fileUrl: explicitUrl || urls.join(","),
-        uploadDate: extractDate(fileName || "").toISOString(),
-        isLastChunk: false,
-        totalRecords: allRows.length,
-        rows: chunk
-      };
+      const ab = await res.arrayBuffer();
+      const buffer = Buffer.from(ab);
 
-      const chunkRes = await fetch(`${origin}/api/upload/chunk`, {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "Cookie": cookies
-        },
-        body: JSON.stringify(payload)
-      });
-
-      if (!chunkRes.ok) {
-        const err = await chunkRes.text();
-        throw new Error(`Chunk ${i} failed: ${err}`);
+      const workbook = xlsx.read(buffer, { type: "buffer", cellDates: false });
+      
+      let fileRows: any[] = [];
+      for (const sheetName of workbook.SheetNames) {
+        const ws = workbook.Sheets[sheetName];
+        const rawRows = xlsx.utils.sheet_to_json(ws, { defval: "" });
+        const rowsWithSource = rawRows.map((r: any) => ({
+          ...r,
+          __SOURCE_FILE__: fileName,
+          __SOURCE_SHEET__: sheetName
+        }));
+        fileRows = fileRows.concat(rowsWithSource);
       }
+      
+      if (fileRows.length === 0) continue;
+      totalRowsProcessed += fileRows.length;
+
+      // Forward to /api/upload/chunk
+      const totalChunks = Math.ceil(fileRows.length / CHUNK_SIZE);
+      for (let i = 0; i < totalChunks; i++) {
+        const chunk = fileRows.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+        const payload = {
+          type: detectedType, 
+          fileName: fileName,
+          fileUrl: explicitUrl || urls.join(","),
+          uploadDate: extractDate(fileName || "").toISOString(),
+          isLastChunk: false, // Prevent multiple history logs
+          totalRecords: fileRows.length,
+          rows: chunk
+        };
+
+        const chunkRes = await fetch(`${origin}/api/upload/chunk`, {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            "Cookie": cookies
+          },
+          body: JSON.stringify(payload)
+        });
+
+        if (!chunkRes.ok) {
+          const err = await chunkRes.text();
+          throw new Error(`Chunk ${i} failed for ${url}: ${err}`);
+        }
+      }
+    }
+
+    if (totalRowsProcessed === 0) {
+      return NextResponse.json({ success: false, error: "File Excel/CSV kosong atau format salah" }, { status: 400 });
     }
 
     return NextResponse.json({
       success: true,
       detectedType,
-      message: `Berhasil sinkronisasi file (${fileName}) [${detectedType}] dari Blob dengan total ${allRows.length} baris.`
+      message: `Berhasil sinkronisasi file (${fileName}) [${detectedType}] dari Blob dengan total ${totalRowsProcessed} baris.`
     });
 
   } catch (error: any) {

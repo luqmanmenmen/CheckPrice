@@ -51,7 +51,7 @@ const REQUIRED_COLS = ["SKU"];
 const COL_ALIASES: Record<string, string[]> = {
   "SKU":              ["SKU", "KODE", "KODE PRODUK", "PRODUCT CODE", "CODE", "ID", "ITEM", "MATERIAL", "NO MATERIAL", "PLU"],
   "DESCRIPTION":      ["DESCRIPTION", "ITEM_DESCRIPTION", "ITEM DESCRIPTION", "NAMA", "NAMA PRODUK", "PRODUCT NAME", "DESC", "KETERANGAN", "DESKRIPSI", "ITEM_DESCRIP"],
-  "HARGA NORMAL":     ["HARGA NORMAL", "HARGA", "NORMAL PRICE", "PRICE", "HARGA JUAL", "REGULAR PRICE", "HARGA POKOK"],
+  "HARGA NORMAL":     ["HARGA NORMAL", "HARGA", "NORMAL PRICE", "PRICE", "HARGA JUAL", "REGULAR PRICE", "HARGA POKOK", "RP RETAIL"],
   "HARGA PROMO":      ["HARGA PROMO", "PROMO PRICE", "PROMO", "HARGA DISKON", "DISC PRICE"],
   "ARTICLE":          ["ARTICLE", "ARTIKEL", "BARCODE", "NO ARTIKEL", "PARENT_NAME", "PARENT NAME"],
   "FROM DATE":        ["FROM DATE", "DARI TANGGAL", "START DATE", "TGL MULAI", "FROM"],
@@ -457,7 +457,13 @@ async function upsertProducts(
           finalToDateToSave         = existingInfo.toDate;
         } else {
           // === JALUR UPDATE PROMO: Terapkan data baru dari file promo ===
-          const newHargaPromo   = item.hargaPromo   !== undefined ? item.hargaPromo   : existingInfo.hargaPromo;
+          // Jika file promo tidak ada kolom "HARGA PROMO" khusus, maka harga apapun yg ada (misal RP RETAIL / HARGA NORMAL) adalah harga promo
+          let extractedPromo = item.hargaPromo;
+          if (extractedPromo === undefined && item.hargaNormal !== undefined) {
+            extractedPromo = item.hargaNormal;
+          }
+
+          const newHargaPromo   = extractedPromo    !== undefined ? extractedPromo    : existingInfo.hargaPromo;
           const newDiskon       = item.diskon       !== undefined ? item.diskon       : existingInfo.diskon;
           const newDiscountType = item.discountType !== undefined ? item.discountType : existingInfo.discountType;
           const newAcara        = item.acara        !== undefined ? item.acara        : existingInfo.acara;
