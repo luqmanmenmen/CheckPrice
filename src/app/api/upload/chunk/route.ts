@@ -295,7 +295,8 @@ function processWorkbook(
 async function upsertProducts(
   productMap: Map<string, ReturnType<typeof parseRow>>,
   uploadDate: Date = new Date(),
-  fileName: string | null = null
+  fileName: string | null = null,
+  uploadType: string = "PQ_HARIAN"  // "PQ_HARIAN" atau "UPDATE_PROMO"
 ): Promise<{ created: number; updated: number; failed: number }> {
   let created = 0;
   let updated = 0;
@@ -309,7 +310,7 @@ async function upsertProducts(
     where: { sku: { in: allSkus } },
     select: { 
       id: true, sku: true, stok: true,
-      sales_mtd_retail: true,
+      sales_mtd: true, sales_mtd_retail: true,
       hargaPromo: true, diskon: true, discountType: true, acara: true, fromDate: true, toDate: true
     },
   });
@@ -425,40 +426,34 @@ async function upsertProducts(
         let finalFromDateToSave;
         let finalToDateToSave;
 
-        // Smart File Recognition: Determine if THIS ROW contains ANY promo-related data updates
-        // Hanya dianggap file promo jika kolom BENAR-BENAR ADA DAN berisi konten nyata (bukan string kosong)
-        const hasHargaPromo    = item.hargaPromo !== undefined && item.hargaPromo !== null && (item.hargaPromo as number) > 0;
-        const hasDiskon        = item.diskon !== undefined && item.diskon !== null && String(item.diskon).trim() !== "";
-        const hasDiscountType  = item.discountType !== undefined && item.discountType !== null && String(item.discountType).trim() !== "";
-        const hasAcara         = item.acara !== undefined && item.acara !== null && String(item.acara).trim() !== "";
-        const hasFromDate      = item.fromDate !== undefined && item.fromDate !== null && String(item.fromDate).trim() !== "";
-        const hasToDate        = item.toDate !== undefined && item.toDate !== null && String(item.toDate).trim() !== "";
-        const isPromoFile = hasHargaPromo || hasDiskon || hasDiscountType || hasAcara || hasFromDate || hasToDate;
+        const explicitFileName = item.sourceFile && item.sourceSheet ? `${item.sourceFile} [Sheet: ${item.sourceSheet}]` : fileName;
 
-        if (!isPromoFile) {
-          // File Excel murni PQ Harian (tanpa kolom promo) -> Proteksi promo yang ada!
-          finalPromoToSave = existingInfo.hargaPromo;
-          finalDiskonToSave = existingInfo.diskon;
-          finalDiscountTypeToSave = existingInfo.discountType;
-          finalAcaraToSave = existingInfo.acara;
-          finalFromDateToSave = existingInfo.fromDate;
-          finalToDateToSave = existingInfo.toDate;
+        // ============================================================
+        // LOGIKA PROMO: Pakai `uploadType`, bukan tebak dari kolom!
+        // - PQ_HARIAN  → SELALU lindungi promo yang ada di DB
+        // - UPDATE_PROMO → SELALU terapkan data promo dari file
+        // ============================================================
+        if (uploadType !== "UPDATE_PROMO") {
+          // === JALUR PQ HARIAN: Jangan sentuh promo sama sekali ===
+          finalPromoToSave          = existingInfo.hargaPromo;
+          finalDiskonToSave         = existingInfo.diskon;
+          finalDiscountTypeToSave   = existingInfo.discountType;
+          finalAcaraToSave          = existingInfo.acara;
+          finalFromDateToSave       = existingInfo.fromDate;
+          finalToDateToSave         = existingInfo.toDate;
         } else {
-          // File Excel memiliki kolom promo -> Terapkan COALESCE dan Layered Validity
-          
-          // Jika kolom ada tapi isinya kosong (""), parser mengembalikan null (Niat Menghapus).
-          // Jika kolom hilang dari header, parser mengembalikan undefined (Niat Mengabaikan / Mempertahankan).
-          const newHargaPromo = item.hargaPromo !== undefined ? item.hargaPromo : existingInfo.hargaPromo;
-          const newDiskon = item.diskon !== undefined ? item.diskon : existingInfo.diskon;
+          // === JALUR UPDATE PROMO: Terapkan data baru dari file promo ===
+          const newHargaPromo   = item.hargaPromo   !== undefined ? item.hargaPromo   : existingInfo.hargaPromo;
+          const newDiskon       = item.diskon       !== undefined ? item.diskon       : existingInfo.diskon;
           const newDiscountType = item.discountType !== undefined ? item.discountType : existingInfo.discountType;
-          const newAcara = item.acara !== undefined ? item.acara : existingInfo.acara;
-          const newFromDate = item.fromDate !== undefined ? item.fromDate : existingInfo.fromDate;
-          const newToDate = item.toDate !== undefined ? item.toDate : existingInfo.toDate;
+          const newAcara        = item.acara        !== undefined ? item.acara        : existingInfo.acara;
+          const newFromDate     = item.fromDate     !== undefined ? item.fromDate     : existingInfo.fromDate;
+          const newToDate       = item.toDate       !== undefined ? item.toDate       : existingInfo.toDate;
 
-          // Validity Check: Apakah benar-benar ada promo aktif secara logis?
-          const isPromoActive = (newHargaPromo !== null && newHargaPromo > 0) || 
-                                (newDiskon !== null) || 
-                                (newDiscountType !== null);
+          // Validity Check: Cek apakah promo masih berlaku (belum kadaluarsa)
+          const isPromoActive = (newHargaPromo !== null && newHargaPromo! > 0) ||
+                                (newDiskon !== null && newDiskon !== undefined) ||
+                                (newDiscountType !== null && newDiscountType !== undefined);
 
           let promoStillValid = false;
           if (isPromoActive) {
@@ -467,20 +462,19 @@ async function upsertProducts(
               toDateObj.setHours(23, 59, 59, 999);
               promoStillValid = new Date() <= toDateObj;
             } else {
-              promoStillValid = true; // Tidak ada tanggal akhir = Berlaku selamanya
+              promoStillValid = true; // Tidak ada tanggal akhir = berlaku selamanya
             }
           }
 
-          finalPromoToSave = promoStillValid ? newHargaPromo : null;
-          finalDiskonToSave = promoStillValid ? newDiskon : null;
+          finalPromoToSave        = promoStillValid ? newHargaPromo   : null;
+          finalDiskonToSave       = promoStillValid ? newDiskon       : null;
           finalDiscountTypeToSave = promoStillValid ? newDiscountType : null;
-          finalAcaraToSave = promoStillValid ? newAcara : null;
-          finalFromDateToSave = promoStillValid ? newFromDate : null;
-          finalToDateToSave = promoStillValid ? newToDate : null;
+          finalAcaraToSave        = promoStillValid ? newAcara        : null;
+          finalFromDateToSave     = promoStillValid ? newFromDate     : null;
+          finalToDateToSave       = promoStillValid ? newToDate       : null;
         }
 
-        const explicitFileName = item.sourceFile && item.sourceSheet ? `${item.sourceFile} [Sheet: ${item.sourceSheet}]` : fileName;
-        const finalPromoFileNameToSave = isPromoFile && explicitFileName ? explicitFileName : undefined;
+        const finalPromoFileNameToSave = (uploadType === "UPDATE_PROMO" && explicitFileName) ? explicitFileName : undefined;
 
         // Hitung delta omzet MTD retail (untuk dailySales.omzet)
         // Hitung delta omzet MTD retail (untuk dailySales.omzet)
@@ -660,7 +654,7 @@ export async function POST(request: NextRequest) {
 
     // 2. Upsert to DB
     const targetUploadDate = uploadDate ? new Date(uploadDate) : new Date();
-    const { created, updated: dbUpdated, failed } = await upsertProducts(productMap, targetUploadDate, fileName);
+    const { created, updated: dbUpdated, failed } = await upsertProducts(productMap, targetUploadDate, fileName, type || "PQ_HARIAN");
 
     // 3. Log History if this is the last chunk
     if (isLastChunk && userId && fileName) {
