@@ -245,7 +245,7 @@ export default function UpdateHargaPage() {
   };
 
   const handleFullResync = async () => {
-    if (!confirm("Peringatan: Ini akan mendownload dan memproses SEMUA file Promo dari awal berurutan hingga terbaru. Proses ini memakan waktu lama. Lanjutkan?")) return;
+    if (!confirm("Sinkronisasi promo dari semua file di folder PROMO Blob? File-file ini akan digabung dan diproses sekaligus.")) return;
     setIsFullResyncing(true);
     setFullResyncMsg("Mengambil daftar file Promo dari server...");
     
@@ -264,33 +264,36 @@ export default function UpdateHargaPage() {
         return;
       }
 
-      let successCount = 0;
-      for (let i = 0; i < blobs.length; i++) {
-        const b = blobs[i];
-        setFullResyncMsg(`Memproses file ${i+1}/${blobs.length}: ${b.filename}`);
-        
-        const syncRes = await fetch("/api/upload/sync-latest-blob", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ 
-            type: "UPDATE_PROMO",
-            explicitUrl: b.url,
-            explicitFileName: b.filename
-          })
-        });
-        
-        const syncData = await syncRes.json();
-        if (!syncRes.ok || !syncData.success) {
-          console.error(`Gagal sync ${b.filename}:`, syncData.error);
-        } else {
-          successCount++;
-        }
+      // ============================================================
+      // PROMO: Gabungkan SEMUA file sekaligus dalam 1 batch
+      // Karena folder PROMO selalu bersih (lama dihapus, baru diupload),
+      // semua file di folder = 1 periode promo yang sama → harus digabung.
+      // Jangan loop satu-satu (nanti saling menimpa!).
+      // ============================================================
+      const allUrls = blobs.map((b: any) => b.url).join(",");
+      const allFileNames = blobs.map((b: any) => b.filename).join(" | ");
+      
+      setFullResyncMsg(`Menggabungkan ${blobs.length} file promo dan menyinkronisasi...`);
+
+      const syncRes = await fetch("/api/upload/sync-latest-blob", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          // type tidak perlu dikirim, auto-detect dari folder PROMO/ di URL
+          explicitUrl: allUrls,
+          explicitFileName: allFileNames
+        })
+      });
+      
+      const syncData = await syncRes.json();
+      if (!syncRes.ok || !syncData.success) {
+        throw new Error(syncData.error || "Gagal sinkronisasi promo dari Blob");
       }
       
-      setAlertState({ isOpen: true, title: "✅ Selesai!", message: `Berhasil full resync ${successCount}/${blobs.length} file Promo secara berurutan.`, type: "success" });
+      setAlertState({ isOpen: true, title: "✅ Berhasil!", message: syncData.message, type: "success" });
       fetchSyncHistory();
     } catch (err: any) {
-      setAlertState({ isOpen: true, title: "Error Full Resync", message: err.message || "Terjadi kesalahan", type: "error" });
+      setAlertState({ isOpen: true, title: "Error Sync Promo", message: err.message || "Terjadi kesalahan", type: "error" });
     } finally {
       setIsFullResyncing(false);
       setFullResyncMsg("");
