@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react";
 import dynamic from "next/dynamic";
-import { Search, Camera, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle, ScanText, ArrowLeft } from "lucide-react";
+import { Search, Camera, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle, ScanText, ArrowLeft, CloudDownload, Loader2 } from "lucide-react";
 import { DetectedSku } from "@/components/TextScanner";
 import { useEffect } from "react";
 import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
@@ -166,6 +166,24 @@ export default function Home() {
   const [lastScanMode, setLastScanMode] = useState<"none" | "barcode" | "text">("none");
   const [user, setUser] = useState<{name: string, nik: string, role: string, status?: string, jobTitle?: string} | null>(null);
   const [togglingStatus, setTogglingStatus] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const handleManualSync = async () => {
+    setIsSyncing(true);
+    showToast("Mengupdate database lokal...", "success");
+    try {
+      const { syncOfflineDatabase } = await import('@/lib/offlineDb');
+      // Forcing version check bypass if needed, but standard sync is fine
+      await syncOfflineDatabase((syncing) => {
+        setIsSyncing(syncing);
+      }, true); // Provide a flag to force sync if we implement it, or just clear local storage version
+      showToast("Data Offline berhasil diupdate!", "success");
+    } catch (e) {
+      showToast("Gagal update data offline", "error");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   // Logout Summary States
   const [showSummary, setShowSummary] = useState(false);
@@ -596,6 +614,14 @@ export default function Home() {
                     Beralih ke Gudang
                   </Link>
                 )}
+                <button 
+                  onClick={handleManualSync}
+                  disabled={isSyncing}
+                  className="text-[10px] bg-sky-900/50 hover:bg-sky-900/80 border border-sky-500/30 text-sky-100 px-3 py-1.5 rounded-full flex items-center gap-1.5 transition-colors font-medium disabled:opacity-50"
+                >
+                  {isSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CloudDownload className="w-3.5 h-3.5" />}
+                  {isSyncing ? "Update..." : "Update Data"}
+                </button>
                 {user.role === 'SUPERVISOR' && (
                   <Link href="/spv-gateway" className="text-[10px] bg-emerald-900/50 hover:bg-emerald-900/80 border border-emerald-500/30 text-emerald-100 px-3 py-1.5 rounded-full flex items-center gap-1.5 transition-colors font-medium">
                     <ArrowLeft className="w-3.5 h-3.5" />

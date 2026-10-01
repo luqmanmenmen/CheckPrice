@@ -23,7 +23,7 @@ class SukoDatabase extends Dexie {
 
 export const db = new SukoDatabase();
 
-export async function syncOfflineDatabase(onSyncStateChange?: (isSyncing: boolean) => void) {
+export async function syncOfflineDatabase(onSyncStateChange?: (isSyncing: boolean) => void, forceSync: boolean = false) {
   try {
     const count = await db.products.count();
     const localVersion = localStorage.getItem("suko_server_version");
@@ -34,8 +34,8 @@ export async function syncOfflineDatabase(onSyncStateChange?: (isSyncing: boolea
     if (checkData.success) {
       const serverVersion = checkData.lastUpdate.toString();
       
-      if (localVersion !== serverVersion || count < 1000) {
-        if (count < 1000 && onSyncStateChange) onSyncStateChange(true);
+      if (forceSync || localVersion !== serverVersion || count < 1000) {
+        if (onSyncStateChange) onSyncStateChange(true);
         
         const res = await fetch('/api/export-products');
         const result = await res.json();
