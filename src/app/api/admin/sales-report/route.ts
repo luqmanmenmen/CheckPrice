@@ -72,10 +72,18 @@ export async function GET(request: NextRequest) {
       const match = latestSync.fileName.match(/(\d{1,2})\s+([A-Z]+)\s+(\d{4})/i);
       if (match) {
         const MONTHS: Record<string, string> = {
-          JANUARI:'01',FEBRUARI:'02',MARET:'03',APRIL:'04',MEI:'05',JUNI:'06',
-          JULI:'07',AGUSTUS:'08',SEPTEMBER:'09',OKTOBER:'10',NOVEMBER:'11',DESEMBER:'12',
-          JANUARY:'01',FEBRUARY:'02',MARCH:'03',MAY:'05',JUNE:'06',JULY:'07',
-          AUGUST:'08',OCTOBER:'10',NOVEMBER:'11',DECEMBER:'12'
+          JANUARI:'01', JANUARY:'01',
+          FEBRUARI:'02', FEBRUARY:'02',
+          MARET:'03', MARCH:'03',
+          APRIL:'04',
+          MEI:'05', MAY:'05',
+          JUNI:'06', JUNE:'06',
+          JULI:'07', JULY:'07',
+          AGUSTUS:'08', AUGUST:'08',
+          SEPTEMBER:'09',
+          OKTOBER:'10', OCTOBER:'10',
+          NOVEMBER:'11',
+          DESEMBER:'12', DECEMBER:'12'
         };
         const m = MONTHS[match[2].toUpperCase()] || '01';
         pqDateLabel = `${match[3]}-${m}-${match[1].padStart(2,'0')}`;

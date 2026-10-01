@@ -24,6 +24,10 @@ function parseExcelDate(value: any): string | null {
     }
   }
   const str = String(value).trim();
+  const match = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (match) {
+    return `${match[3]}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}`;
+  }
   return str || null;
 }
 
@@ -114,19 +118,19 @@ function parseRow(row: any) {
   const toDate = row["TO DATE"] !== undefined ? parseExcelDate(row["TO DATE"]) : undefined;
 
   // ---- STOK & SALES (semua kolom PQ yang penting) ----
-  const stok             = row["STOK"]             !== undefined && row["STOK"]             !== "" ? parseInt(row["STOK"])             || 0 : undefined;
-  const eoh_retail       = row["EOH_RETAIL"]       !== undefined && row["EOH_RETAIL"]       !== "" ? safeFloat(row["EOH_RETAIL"])             : undefined;
-  const sales_mtd        = row["SALES_MTD"]        !== undefined && row["SALES_MTD"]        !== "" ? parseInt(row["SALES_MTD"])        || 0 : undefined;
-  const sales_mtd_retail = row["SALES_MTD_RETAIL"] !== undefined && row["SALES_MTD_RETAIL"] !== "" ? safeFloat(row["SALES_MTD_RETAIL"])       : undefined;
-  const sales_wtd        = row["SALES_WTD"]        !== undefined && row["SALES_WTD"]        !== "" ? parseInt(row["SALES_WTD"])        || 0 : undefined;
-  const sales_wtd_retail = row["SALES_WTD_RETAIL"] !== undefined && row["SALES_WTD_RETAIL"] !== "" ? safeFloat(row["SALES_WTD_RETAIL"])       : undefined;
-  const sales_ytd        = row["SALES_YTD"]        !== undefined && row["SALES_YTD"]        !== "" ? parseInt(row["SALES_YTD"])        || 0 : undefined;
-  const sales_ytd_retail = row["SALES_YTD_RETAIL"] !== undefined && row["SALES_YTD_RETAIL"] !== "" ? safeFloat(row["SALES_YTD_RETAIL"])       : undefined;
-  const boy_unit         = row["BOY_UNIT"]         !== undefined && row["BOY_UNIT"]         !== "" ? parseInt(row["BOY_UNIT"])         || 0 : undefined;
-  const boy_retail       = row["BOY_RETAIL"]       !== undefined && row["BOY_RETAIL"]       !== "" ? safeFloat(row["BOY_RETAIL"])             : undefined;
-  const bom_unit         = row["BOM_UNIT"]         !== undefined && row["BOM_UNIT"]         !== "" ? parseInt(row["BOM_UNIT"])         || 0 : undefined;
-  const day_sales_unit   = row["DAY_SALES_UNIT"]   !== undefined && row["DAY_SALES_UNIT"]   !== "" ? parseInt(row["DAY_SALES_UNIT"])   || 0 : undefined;
-  const day_sales_retail = row["DAY_SALES_RETAIL"] !== undefined && row["DAY_SALES_RETAIL"] !== "" ? safeFloat(row["DAY_SALES_RETAIL"])       : undefined;
+  const stok             = row["STOK"]             !== undefined ? parseInt(row["STOK"] || "0") || 0 : undefined;
+  const eoh_retail       = row["EOH_RETAIL"]       !== undefined ? safeFloat(row["EOH_RETAIL"]) : undefined;
+  const sales_mtd        = row["SALES_MTD"]        !== undefined ? parseInt(row["SALES_MTD"] || "0") || 0 : undefined;
+  const sales_mtd_retail = row["SALES_MTD_RETAIL"] !== undefined ? safeFloat(row["SALES_MTD_RETAIL"]) : undefined;
+  const sales_wtd        = row["SALES_WTD"]        !== undefined ? parseInt(row["SALES_WTD"] || "0") || 0 : undefined;
+  const sales_wtd_retail = row["SALES_WTD_RETAIL"] !== undefined ? safeFloat(row["SALES_WTD_RETAIL"]) : undefined;
+  const sales_ytd        = row["SALES_YTD"]        !== undefined ? parseInt(row["SALES_YTD"] || "0") || 0 : undefined;
+  const sales_ytd_retail = row["SALES_YTD_RETAIL"] !== undefined ? safeFloat(row["SALES_YTD_RETAIL"]) : undefined;
+  const boy_unit         = row["BOY_UNIT"]         !== undefined ? parseInt(row["BOY_UNIT"] || "0") || 0 : undefined;
+  const boy_retail       = row["BOY_RETAIL"]       !== undefined ? safeFloat(row["BOY_RETAIL"]) : undefined;
+  const bom_unit         = row["BOM_UNIT"]         !== undefined ? parseInt(row["BOM_UNIT"] || "0") || 0 : undefined;
+  const day_sales_unit   = row["DAY_SALES_UNIT"]   !== undefined ? parseInt(row["DAY_SALES_UNIT"] || "0") || 0 : undefined;
+  const day_sales_retail = row["DAY_SALES_RETAIL"] !== undefined ? safeFloat(row["DAY_SALES_RETAIL"]) : undefined;
 
   // ---- HARGA NORMAL ----
   let hargaNormal = row["HARGA NORMAL"] !== undefined ? safeFloat(row["HARGA NORMAL"]) : undefined;
