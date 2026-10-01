@@ -7,31 +7,47 @@ export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
   try {
-    const { type, explicitUrl, explicitFileName } = await request.json(); // e.g. "PQ_HARIAN" or "PROMO"
+    const { type: typeParam, explicitUrl, explicitFileName } = await request.json();
     
-    let urls = [];
+    let urls: string[] = [];
     let fileName = "";
     let fileDateStr = "";
 
     if (explicitUrl) {
       urls = explicitUrl.split(",");
       fileName = explicitFileName || "BlobFile";
-      fileDateStr = new Date().toISOString(); // fallback
+      fileDateStr = new Date().toISOString();
     } else {
       // Find latest file in SyncHistory for this type
       const latestSync = await prisma.syncHistory.findFirst({
-        where: { type: type || "PQ_HARIAN", fileUrl: { not: null } },
+        where: { type: typeParam || "PQ_HARIAN", fileUrl: { not: null } },
         orderBy: { createdAt: "desc" },
       });
 
       if (!latestSync || !latestSync.fileUrl) {
-        return NextResponse.json({ success: false, error: `Belum ada file ter-upload di Blob untuk tipe ${type || "PQ_HARIAN"}` }, { status: 404 });
+        return NextResponse.json({ success: false, error: `Belum ada file ter-upload di Blob untuk tipe ${typeParam || "PQ_HARIAN"}` }, { status: 404 });
       }
       
       urls = latestSync.fileUrl.split(",");
       fileName = latestSync.fileName || "BlobFile";
       fileDateStr = latestSync.createdAt.toISOString();
     }
+
+    // ============================================================
+    // Auto-detect type dari folder Blob URL
+    // PQ/... → PQ_HARIAN, PROMO/... → UPDATE_PROMO
+    // Ini lebih akurat daripada parameter manual.
+    // ============================================================
+    const detectTypeFromUrl = (url: string): string => {
+      const urlUpper = url.toUpperCase();
+      if (urlUpper.includes("/PROMO/")) return "UPDATE_PROMO";
+      if (urlUpper.includes("/PQ/")) return "PQ_HARIAN";
+      return typeParam || "PQ_HARIAN"; // fallback ke parameter jika ada
+    };
+    
+    // Ambil type dari URL pertama (semua URL dalam 1 batch pasti 1 folder)
+    const detectedType = urls.length > 0 ? detectTypeFromUrl(urls[0]) : (typeParam || "PQ_HARIAN");
+
 
     let allRows: any[] = [];
 
@@ -89,11 +105,11 @@ export async function POST(request: NextRequest) {
     for (let i = 0; i < totalChunks; i++) {
       const chunk = allRows.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
       const payload = {
-        type: type || "PQ_HARIAN",
+        type: detectedType,  // dari folder URL: PQ/ → PQ_HARIAN, PROMO/ → UPDATE_PROMO
         fileName: fileName,
         fileUrl: explicitUrl || urls.join(","),
         uploadDate: extractDate(fileName || "").toISOString(),
-        isLastChunk: false, // Don't create duplicate SyncHistory record since we already have it
+        isLastChunk: false,
         totalRecords: allRows.length,
         rows: chunk
       };
@@ -115,7 +131,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: `Berhasil melakukan sinkronisasi file (${fileName}) dari Blob dengan total ${allRows.length} baris.`
+      detectedType,
+      message: `Berhasil sinkronisasi file (${fileName}) [${detectedType}] dari Blob dengan total ${allRows.length} baris.`
     });
 
   } catch (error: any) {
