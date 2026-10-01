@@ -17,6 +17,7 @@ export default function UpdateHargaPage() {
   const [showPinModal, setShowPinModal] = useState<{isOpen: boolean, action: "upload" | "reset" | null}>({isOpen: false, action: null});
   const [alertState, setAlertState] = useState<{isOpen: boolean; title: string; message: string; type: "error" | "success" | "warning"}>({isOpen: false, title: "", message: "", type: "error"});
   const [isResetting, setIsResetting] = useState(false);
+  const [isReprocessing, setIsReprocessing] = useState(false);
   const [historyList, setHistoryList] = useState<any[]>([]);
   const [currentUserNik, setCurrentUserNik] = useState<string | null>(null);
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
@@ -218,6 +219,29 @@ export default function UpdateHargaPage() {
     }
   };
 
+  const handleReprocessFromBlob = async () => {
+    if (!confirm("Proses ulang data promo dari file TERBARU yang ada di Blob?")) return;
+    setIsReprocessing(true);
+    try {
+      const res = await fetch("/api/upload/sync-latest-blob", { 
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "UPDATE_PROMO" })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setAlertState({ isOpen: true, title: "✅ Berhasil!", message: data.message, type: "success" });
+        fetchSyncHistory();
+      } else {
+        setAlertState({ isOpen: true, title: "Gagal", message: data.error || "Gagal sinkronisasi.", type: "error" });
+      }
+    } catch (err: any) {
+      setAlertState({ isOpen: true, title: "Kesalahan Jaringan", message: err.message || "Terjadi kesalahan.", type: "error" });
+    } finally {
+      setIsReprocessing(false);
+    }
+  };
+
   const handlePinSubmit = (pin: string) => {
     const action = showPinModal.action;
     setShowPinModal({ isOpen: false, action: null });
@@ -242,15 +266,26 @@ export default function UpdateHargaPage() {
           </div>
         </div>
         
-        <button
-          onClick={handleResetClick}
-          disabled={isResetting}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-rose-600 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition-colors disabled:opacity-50"
-          title="Hapus semua riwayat log promo"
-        >
-          <AlertTriangle className="w-3.5 h-3.5" />
-          {isResetting ? "Mereset..." : "Reset Log"}
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={handleReprocessFromBlob}
+            disabled={isReprocessing}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors disabled:opacity-50"
+            title="Proses ulang data dari file Promo yang sudah ada di Blob"
+          >
+            {isReprocessing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
+            {isReprocessing ? "Memproses..." : "Sync Blob"}
+          </button>
+          <button
+            onClick={handleResetClick}
+            disabled={isResetting}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-rose-600 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition-colors disabled:opacity-50"
+            title="Hapus semua riwayat log promo"
+          >
+            <AlertTriangle className="w-3.5 h-3.5" />
+            {isResetting ? "Mereset..." : "Reset Log"}
+          </button>
+        </div>
       </div>
 
       {/* Warning Card */}

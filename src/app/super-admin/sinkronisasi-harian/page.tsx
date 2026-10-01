@@ -267,10 +267,14 @@ export default function UpdateProdukPage() {
   };
 
   const handleReprocessFromBlob = async () => {
-    if (!confirm("Proses ulang data dari file PQ yang sudah ada di Blob? Ini akan menghitung ulang omzet harian & DailySales.")) return;
+    if (!confirm("Proses ulang data dari file PQ TERBARU yang ada di Blob? Ini akan menimpa seluruh stok dan perhitungan lainnya dengan file teratas.")) return;
     setIsReprocessing(true);
     try {
-      const res = await fetch("/api/upload/reprocess-from-blob", { method: "POST" });
+      const res = await fetch("/api/upload/sync-latest-blob", { 
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "PQ_HARIAN" })
+      });
       const data = await res.json();
       if (res.ok && data.success) {
         setAlertState({ isOpen: true, title: "✅ Berhasil!", message: data.message, type: "success" });
