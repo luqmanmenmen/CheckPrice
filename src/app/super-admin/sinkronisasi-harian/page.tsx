@@ -314,24 +314,93 @@ export default function UpdateProdukPage() {
       let successCount = 0;
       for (let i = 0; i < blobs.length; i++) {
         const b = blobs[i];
-        setFullResyncMsg(`Memproses file ${i+1}/${blobs.length}: ${b.filename}`);
+        setFullResyncMsg(`Mendownload file ${i+1}/${blobs.length}: ${b.filename}`);
         
-        const syncRes = await fetch("/api/upload/sync-latest-blob", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ 
-            type: "PQ_HARIAN",
-            explicitUrl: b.url,
-            explicitFileName: b.filename
-          })
-        });
-        
-        const syncData = await syncRes.json();
-        if (!syncRes.ok || !syncData.success) {
-          console.error(`Gagal sync ${b.filename}:`, syncData.error);
-          // throw new Error(`Gagal memproses ${b.filename}: ${syncData.error}`);
-        } else {
+        try {
+          // Download blob langsung dari client
+          const fileRes = await fetch(b.url);
+          if (!fileRes.ok) throw new Error("Gagal download blob");
+          const ab = await fileRes.arrayBuffer();
+          const workbook = xlsx.read(ab, { type: "buffer", cellDates: false });
+
+          setFullResyncMsg(`Menganalisis file ${i+1}/${blobs.length}: ${b.filename}`);
+
+          const findHeaderRowIndex = (ws: any): number => {
+            const rows = xlsx.utils.sheet_to_json(ws, { header: 1, defval: "" }) as any[][];
+            for (let j = 0; j < Math.min(20, rows.length); j++) {
+              const row = rows[j];
+              if (!row) continue;
+              const hasSKU = row.some(cell => {
+                if (typeof cell !== 'string') return false;
+                const c = cell.toUpperCase().trim();
+                return c === "SKU" || c === "KODE PRODUK" || c === "KODE" || c === "ARTICLE" || c === "BARCODE";
+              });
+              if (hasSKU) return j;
+            }
+            return 0;
+          };
+
+          let allRows: any[] = [];
+          for (const sheetName of workbook.SheetNames) {
+            const ws = workbook.Sheets[sheetName];
+            const headerRowIndex = findHeaderRowIndex(ws);
+            const rawRows = xlsx.utils.sheet_to_json(ws, { range: headerRowIndex, defval: "" });
+            const rowsWithSource = rawRows.map((r: any) => ({
+              ...r,
+              __SOURCE_FILE__: b.filename,
+              __SOURCE_SHEET__: sheetName
+            }));
+            allRows = allRows.concat(rowsWithSource);
+          }
+
+          if (allRows.length > 0) {
+            const extractDate = (filename: string) => {
+              const match = filename.toUpperCase().match(/POWER QUERY (\d{1,2}) ([A-Z]+) (\d{4})/);
+              if (match) {
+                const months: Record<string, number> = {
+                  "JANUARI": 0, "JANUARY": 0, "JAN": 0, "FEBRUARI": 1, "FEB": 1,
+                  "MARET": 2, "MARCH": 2, "MAR": 2, "APRIL": 3, "APR": 3,
+                  "MEI": 4, "MAY": 4, "JUNI": 5, "JUN": 5, "JULI": 6, "JUL": 6,
+                  "AGUSTUS": 7, "AUG": 7, "SEPTEMBER": 8, "SEP": 8,
+                  "OKTOBER": 9, "OCT": 9, "NOVEMBER": 10, "NOV": 10, "DESEMBER": 11, "DEC": 11
+                };
+                const month = months[match[2]] !== undefined ? months[match[2]] : new Date().getMonth();
+                return new Date(parseInt(match[3]), month, parseInt(match[1]), 12, 0, 0);
+              }
+              return new Date();
+            };
+
+            const CHUNK_SIZE = 500;
+            const totalChunks = Math.ceil(allRows.length / CHUNK_SIZE);
+            
+            for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
+              const chunk = allRows.slice(chunkIdx * CHUNK_SIZE, (chunkIdx + 1) * CHUNK_SIZE);
+              setFullResyncMsg(`Menyimpan ${b.filename} (${chunkIdx + 1}/${totalChunks})`);
+              
+              const payload = {
+                type: "PQ_HARIAN",
+                fileName: b.filename,
+                fileUrl: b.url,
+                uploadDate: extractDate(b.filename).toISOString(),
+                isLastChunk: chunkIdx === totalChunks - 1,
+                totalRecords: allRows.length,
+                rows: chunk
+              };
+
+              const chunkRes = await fetch("/api/upload/chunk", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+              });
+
+              if (!chunkRes.ok) {
+                throw new Error("Gagal mengirim chunk");
+              }
+            }
+          }
           successCount++;
+        } catch (fileErr: any) {
+          console.error(`Gagal memproses file ${b.filename}:`, fileErr);
         }
       }
       
