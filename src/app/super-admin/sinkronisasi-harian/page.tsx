@@ -367,28 +367,19 @@ export default function UpdateProdukPage() {
           <h1 className="font-bold text-xl text-slate-800">Sinkronisasi Harian</h1>
           <p className="text-xs text-slate-500">Update Produk Baru, Stok Sisa (EOH), dan Analitik Penjualan</p>
         </div>
-        <div className="flex gap-2 items-center flex-wrap">
+        <div className="flex gap-2 items-center">
           <button
             onClick={handleFullResync}
-            disabled={isFullResyncing || isResetting || isReprocessing}
+            disabled={isFullResyncing || isResetting}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors disabled:opacity-50"
-            title="Proses semua file PQ dari Blob dari yang terlama sampai terbaru agar history akurat"
+            title="Baca semua file PQ dari Blob satu-satu berurutan (dari terlama ke terbaru) untuk hitung delta sales secara akurat"
           >
             {isFullResyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
-            {isFullResyncing ? "Proses Full..." : "Full Resync Blob"}
-          </button>
-          <button
-            onClick={handleReprocessFromBlob}
-            disabled={isReprocessing || isFullResyncing || isResetting}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors disabled:opacity-50"
-            title="Proses ulang data dari file PQ TERBARU"
-          >
-            {isReprocessing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
-            {isReprocessing ? "Memproses..." : "Sync Terbaru"}
+            {isFullResyncing ? `${fullResyncMsg.split(":")[0]}...` : "Sync dari Blob"}
           </button>
           <button
             onClick={handleResetClick}
-            disabled={isResetting || isFullResyncing || isReprocessing}
+            disabled={isResetting || isFullResyncing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-rose-600 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition-colors disabled:opacity-50"
             title="Hapus semua riwayat log PQ dan reset data penjualan"
           >
@@ -399,10 +390,10 @@ export default function UpdateProdukPage() {
       </div>
 
       {isFullResyncing && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex gap-3 text-emerald-800 shadow-sm animate-pulse">
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex gap-3 text-emerald-800 shadow-sm">
           <Loader2 className="w-5 h-5 shrink-0 mt-0.5 animate-spin text-emerald-600" />
           <div className="text-sm">
-            <p className="font-bold mb-1">Sedang Melakukan Full Resync...</p>
+            <p className="font-bold mb-1">Sedang Sync PQ dari Blob...</p>
             <p className="opacity-90 text-xs">{fullResyncMsg}</p>
           </div>
         </div>
