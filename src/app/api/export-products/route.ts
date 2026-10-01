@@ -12,6 +12,8 @@ export async function GET() {
         description: true,
         hargaNormal: true,
         hargaPromo: true,
+        diskon: true,
+        stok: true,
         toDate: true,
       },
     });
@@ -31,6 +33,8 @@ export async function GET() {
         size,
         hargaNormal: p.hargaNormal,
         hargaPromo: p.hargaPromo,
+        diskon: p.diskon || null,
+        stok: p.stok || 0,
         toDate: p.toDate || null
       };
     });

@@ -350,24 +350,22 @@ export default function Home() {
           toDate: localData.toDate,
           hargaNormal: localData.hargaNormal,
           hargaPromo: localData.hargaPromo,
-          diskon: null,
+          diskon: localData.diskon || null,
           discountType: null,
           brand: null,
           dept: null,
-          stok: 0, // stok mungkin perlu disinkronkan, tapi set 0 dulu dari offline
+          stok: localData.stok || 0,
           promoFileName: null
         });
         setSiblings([]);
         setProductsList([]);
         if (scanMode !== "none") setScanMode("none");
         
-        if (searchCounterRef.current === currentSearch) {
-          setLoading(false);
-        }
-        return; // SELESAI! Tidak perlu panggil server API sama sekali
+        // JANGAN return di sini! Lanjut fetch ke server di background (Stale-While-Revalidate)
+        // Agar stok dan promo selalu paling update jika koneksi internet tersedia.
       }
 
-      // 2. Jika tidak ada di lokal (mungkin produk baru atau pencarian teks panjang), minta ke server
+      // 2. Minta data terbaru/live ke server
       const res = await fetch(`/api/product/${encodeURIComponent(trimmed)}?page=${page}`, {
         cache: 'no-store'
       });
