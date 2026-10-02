@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { ArrowLeft, UploadCloud, FileType, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
+import { ArrowLeft, UploadCloud, FileType, CheckCircle2, AlertCircle, Loader2, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { PinModal } from "@/components/PinModal";
 import { AlertModal } from "@/components/AlertModal";
@@ -222,6 +222,26 @@ export default function UpdateProdukPage() {
     }
   };
 
+  const handleCleanBlob = async () => {
+    if (!confirm("Hapus SEMUA file PQ dari penyimpanan Cloud (Vercel Blob)? Pastikan Anda sudah menekan 'Sync dari Blob' sebelumnya agar data masuk ke Database. File Excel akan dihapus permanen untuk menghemat storage.")) return;
+    try {
+      const res = await fetch("/api/upload/clean-folder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folder: "PQ" })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setAlertState({ isOpen: true, title: "Berhasil", message: `${data.deletedCount} file PQ di Cloud berhasil dihapus permanen!`, type: "success" });
+        fetchBlobFiles();
+      } else {
+        setAlertState({ isOpen: true, title: "Gagal", message: data.error || "Gagal membersihkan blob.", type: "error" });
+      }
+    } catch (err: any) {
+      setAlertState({ isOpen: true, title: "Kesalahan Jaringan", message: err.message || "Terjadi kesalahan.", type: "error" });
+    }
+  };
+
   const handleFullResync = async () => {
     if (!confirm("Peringatan: Ini akan mendownload dan memproses SEMUA file PQ dari awal berurutan hingga terbaru. Proses ini memakan waktu lama. Lanjutkan?")) return;
     setIsFullResyncing(true);
@@ -394,6 +414,15 @@ export default function UpdateProdukPage() {
           >
             <AlertCircle className="w-3.5 h-3.5" />
             Reset Semua
+          </button>
+          <button
+            onClick={handleCleanBlob}
+            disabled={isFullResyncing || isResetting}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 transition-colors disabled:opacity-50"
+            title="Hapus permanen semua file Excel dari penyimpanan Cloud untuk menghemat kuota storage"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            Bersihkan Blob
           </button>
         </div>
       </div>
