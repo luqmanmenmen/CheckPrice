@@ -379,9 +379,7 @@ export default function UpdateProdukPage() {
     const { action } = pinModalState;
     setPinModalState({ isOpen: false, action: null });
     
-    if (action === "reset") {
-      executeReset(pin);
-    } else if (action === "upload") {
+    if (action === "upload") {
       executeUpload();
     }
   };

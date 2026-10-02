@@ -303,9 +303,7 @@ export default function UpdateHargaPage() {
   const handlePinSubmit = (pin: string) => {
     const action = showPinModal.action;
     setShowPinModal({ isOpen: false, action: null });
-    if (action === "reset") {
-      executeReset(pin);
-    } else if (action === "upload") {
+    if (action === "upload") {
       executeUpload();
     }
   };
