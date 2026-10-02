@@ -24,6 +24,7 @@ export default function UpdateProdukPage() {
   const [currentUserNik, setCurrentUserNik] = useState<string | null>(null);
   const [blobFiles, setBlobFiles] = useState<any[]>([]);
   const autoSyncTriggered = useRef(false);
+  const processedBlobs = useRef<Set<string>>(new Set());
 
   const fetchSyncHistory = async () => {
     try {
@@ -73,15 +74,18 @@ export default function UpdateProdukPage() {
   }, []);
 
   useEffect(() => {
-    // Jika ada file baru di Blob, tidak sedang sync, dan belum di-trigger otomatis
-    if (blobFiles.length > 0 && !isFullResyncing && !autoSyncTriggered.current) {
+    // Cek apakah ada file yang belum pernah diproses di sesi ini
+    const hasNewFiles = blobFiles.some(b => !processedBlobs.current.has(b.url));
+
+    if (blobFiles.length > 0 && hasNewFiles && !isFullResyncing && !autoSyncTriggered.current) {
       autoSyncTriggered.current = true;
       
       // Tunggu 3 detik sebelum memulai (biar user bisa lihat notif kuningnya sebentar)
       setTimeout(() => {
-        handleFullResync(true).then((success) => {
-          // Hanya sync otomatis, biarkan user klik Bersihkan Blob secara manual
-          autoSyncTriggered.current = false; // Reset trigger
+        handleFullResync(true).then(() => {
+          // Tandai file-file ini sudah selesai diproses agar tidak diloop
+          blobFiles.forEach(b => processedBlobs.current.add(b.url));
+          autoSyncTriggered.current = false; // Reset trigger untuk file masa depan
         });
       }, 3000);
     }

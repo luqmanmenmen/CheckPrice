@@ -24,6 +24,7 @@ export default function UpdateHargaPage() {
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
   const [blobFiles, setBlobFiles] = useState<any[]>([]);
   const autoSyncTriggered = useRef(false);
+  const processedBlobs = useRef<Set<string>>(new Set());
 
   const fetchSyncHistory = async () => {
     try {
@@ -72,10 +73,13 @@ export default function UpdateHargaPage() {
   }, []);
 
   useEffect(() => {
-    if (blobFiles.length > 0 && !isFullResyncing && !autoSyncTriggered.current) {
+    const hasNewFiles = blobFiles.some(b => !processedBlobs.current.has(b.url));
+
+    if (blobFiles.length > 0 && hasNewFiles && !isFullResyncing && !autoSyncTriggered.current) {
       autoSyncTriggered.current = true;
       setTimeout(() => {
-        handleFullResync(true).then((success) => {
+        handleFullResync(true).then(() => {
+          blobFiles.forEach(b => processedBlobs.current.add(b.url));
           autoSyncTriggered.current = false;
         });
       }, 3000);
