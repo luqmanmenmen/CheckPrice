@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { ArrowLeft, UploadCloud, FileType, CheckCircle2, AlertTriangle, Loader2 } from "lucide-react";
+import { ArrowLeft, UploadCloud, FileType, CheckCircle2, AlertTriangle, Loader2, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { PinModal } from "@/components/PinModal";
 import { AlertModal } from "@/components/AlertModal";
@@ -14,7 +14,7 @@ export default function UpdateHargaPage() {
   const [progress, setProgress] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [lastSync, setLastSync] = useState<{name: string; date: string} | null>(null);
-  const [showPinModal, setShowPinModal] = useState<{isOpen: boolean, action: "upload" | "reset" | null}>({isOpen: false, action: null});
+  const [showPinModal, setShowPinModal] = useState<{isOpen: boolean, action: "upload" | "sync" | "clean" | null}>({isOpen: false, action: null});
   const [alertState, setAlertState] = useState<{isOpen: boolean; title: string; message: string; type: "error" | "success" | "warning"}>({isOpen: false, title: "", message: "", type: "error"});
   const [isResetting, setIsResetting] = useState(false);
   const [isFullResyncing, setIsFullResyncing] = useState(false);
@@ -162,7 +162,7 @@ export default function UpdateHargaPage() {
     }
   };
 
-  const handleCleanBlob = async (isAuto = false) => {
+  const handleCleanBlob = async () => {
     try {
       const res = await fetch("/api/upload/clean-folder", {
         method: "POST",
@@ -181,7 +181,6 @@ export default function UpdateHargaPage() {
   };
 
   const handleFullResync = async (isAuto = false): Promise<boolean> => {
-    if (!isAuto && !confirm("Sinkronisasi promo dari semua file di folder PROMO Blob? File-file ini akan digabung dan diproses sekaligus.")) return false;
     setIsFullResyncing(true);
     setFullResyncMsg("Mengambil daftar file Promo dari server...");
     
@@ -309,8 +308,27 @@ export default function UpdateHargaPage() {
     setShowPinModal({ isOpen: false, action: null });
     if (action === "upload") {
       executeUpload();
+    } else if (action === "sync") {
+      handleFullResync(false);
+    } else if (action === "clean") {
+      handleCleanBlob();
     }
   };
+
+  if (currentUserNik && currentUserNik !== "22054178") {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="bg-white p-8 rounded-2xl shadow-sm border border-rose-200 text-center max-w-sm">
+          <AlertTriangle className="w-12 h-12 text-rose-500 mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-slate-800 mb-2">Akses Ditolak</h2>
+          <p className="text-sm text-slate-600 mb-6">Hanya Supervisor IT (NIK 22054178) yang diizinkan mengakses halaman Update Promo ini.</p>
+          <Link href="/super-admin" className="px-6 py-2 bg-slate-800 text-white rounded-lg text-sm font-bold hover:bg-slate-900 transition-colors">
+            Kembali ke Dashboard
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 pb-24 max-w-2xl mx-auto flex flex-col gap-6">
@@ -328,13 +346,22 @@ export default function UpdateHargaPage() {
         
         <div className="flex gap-2 items-center">
           <button
-            onClick={() => handleFullResync(false)}
+            onClick={() => setShowPinModal({ isOpen: true, action: "sync" })}
             disabled={isFullResyncing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors disabled:opacity-50"
             title="Baca semua file promo dari folder PROMO di Blob, gabung jadi 1 batch, dan sinkronisasi"
           >
             {isFullResyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
             {isFullResyncing ? "Menyinkronisasi..." : "Sync dari Blob"}
+          </button>
+          <button
+            onClick={() => setShowPinModal({ isOpen: true, action: "clean" })}
+            disabled={isFullResyncing}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 transition-colors disabled:opacity-50"
+            title="Hapus permanen semua file Promo dari penyimpanan Cloud untuk menghemat kuota storage"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            Bersihkan Blob
           </button>
         </div>
       </div>
@@ -563,8 +590,14 @@ export default function UpdateHargaPage() {
         isOpen={showPinModal.isOpen} 
         onClose={() => setShowPinModal({ isOpen: false, action: null })} 
         onSubmit={handlePinSubmit} 
-        title={showPinModal.action === "reset" ? "Otorisasi Reset Log" : "Otorisasi Update Promo"}
-        description={showPinModal.action === "reset" ? "Peringatan! Log riwayat upload Promo akan dihapus. Lanjutkan?" : "Masukkan PIN Keamanan untuk memulai proses sinkronisasi harga."}
+        title="Otorisasi Supervisor IT"
+        description={
+          showPinModal.action === "clean" 
+            ? "PERINGATAN! Anda akan menghapus permanen file dari Cloud. Masukkan PIN untuk lanjut." 
+          : showPinModal.action === "sync"
+            ? "Masukkan PIN Keamanan untuk memulai sinkronisasi dari Cloud."
+            : "Masukkan PIN Keamanan untuk memulai proses sinkronisasi harga."
+        }
       />
 
       <AlertModal

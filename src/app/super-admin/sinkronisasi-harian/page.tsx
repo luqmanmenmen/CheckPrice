@@ -14,7 +14,7 @@ export default function UpdateProdukPage() {
   const [progress, setProgress] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [lastSync, setLastSync] = useState<{name: string; date: string} | null>(null);
-  const [pinModalState, setPinModalState] = useState<{isOpen: boolean, action: "upload" | "reset" | null}>({isOpen: false, action: null});
+  const [pinModalState, setPinModalState] = useState<{isOpen: boolean, action: "upload" | "sync" | "clean" | null}>({isOpen: false, action: null});
   const [historyList, setHistoryList] = useState<any[]>([]);
   const [isResetting, setIsResetting] = useState(false);
   const [isReprocessing, setIsReprocessing] = useState(false);
@@ -222,8 +222,7 @@ export default function UpdateProdukPage() {
     }
   };
 
-  const handleCleanBlob = async (isAuto = false) => {
-    if (!isAuto && !confirm("Hapus SEMUA file PQ dari penyimpanan Cloud (Vercel Blob)? Pastikan Anda sudah menekan 'Sync dari Blob' sebelumnya agar data masuk ke Database. File Excel akan dihapus permanen untuk menghemat storage.")) return false;
+  const handleCleanBlob = async () => {
     try {
       const res = await fetch("/api/upload/clean-folder", {
         method: "POST",
@@ -232,21 +231,20 @@ export default function UpdateProdukPage() {
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        if (!isAuto) setAlertState({ isOpen: true, title: "Berhasil", message: `${data.deletedCount} file PQ di Cloud berhasil dihapus permanen!`, type: "success" });
+        setAlertState({ isOpen: true, title: "Berhasil", message: `${data.deletedCount} file PQ di Cloud berhasil dihapus permanen!`, type: "success" });
         fetchBlobFiles();
         return true;
       } else {
-        if (!isAuto) setAlertState({ isOpen: true, title: "Gagal", message: data.error || "Gagal membersihkan blob.", type: "error" });
+        setAlertState({ isOpen: true, title: "Gagal", message: data.error || "Gagal membersihkan blob.", type: "error" });
         return false;
       }
     } catch (err: any) {
-      if (!isAuto) setAlertState({ isOpen: true, title: "Kesalahan Jaringan", message: err.message || "Terjadi kesalahan.", type: "error" });
+      setAlertState({ isOpen: true, title: "Kesalahan Jaringan", message: err.message || "Terjadi kesalahan.", type: "error" });
       return false;
     }
   };
 
   const handleFullResync = async (isAuto = false): Promise<boolean> => {
-    if (!isAuto && !confirm("Peringatan: Ini akan mendownload dan memproses SEMUA file PQ dari awal berurutan hingga terbaru. Proses ini memakan waktu lama. Lanjutkan?")) return false;
     setIsFullResyncing(true);
     setFullResyncMsg("Mengambil daftar file dari server...");
     
@@ -387,8 +385,27 @@ export default function UpdateProdukPage() {
     
     if (action === "upload") {
       executeUpload();
+    } else if (action === "sync") {
+      handleFullResync(false);
+    } else if (action === "clean") {
+      handleCleanBlob();
     }
   };
+
+  if (currentUserNik && currentUserNik !== "22054178") {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="bg-white p-8 rounded-2xl shadow-sm border border-rose-200 text-center max-w-sm">
+          <AlertCircle className="w-12 h-12 text-rose-500 mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-slate-800 mb-2">Akses Ditolak</h2>
+          <p className="text-sm text-slate-600 mb-6">Hanya Supervisor IT (NIK 22054178) yang diizinkan mengakses halaman sinkronisasi ini.</p>
+          <Link href="/super-admin" className="px-6 py-2 bg-slate-800 text-white rounded-lg text-sm font-bold hover:bg-slate-900 transition-colors">
+            Kembali ke Dashboard
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 pb-24 max-w-2xl mx-auto flex flex-col gap-6">
@@ -403,7 +420,7 @@ export default function UpdateProdukPage() {
         </div>
         <div className="flex gap-2 items-center">
           <button
-            onClick={() => handleFullResync(false)}
+            onClick={() => setPinModalState({ isOpen: true, action: "sync" })}
             disabled={isFullResyncing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors disabled:opacity-50"
             title="Baca semua file PQ dari Blob satu-satu berurutan (dari terlama ke terbaru) untuk hitung delta sales secara akurat"
@@ -412,7 +429,7 @@ export default function UpdateProdukPage() {
             {isFullResyncing ? `${fullResyncMsg.split(":")[0]}...` : "Sync dari Blob"}
           </button>
           <button
-            onClick={() => handleCleanBlob(false)}
+            onClick={() => setPinModalState({ isOpen: true, action: "clean" })}
             disabled={isFullResyncing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 transition-colors disabled:opacity-50"
             title="Hapus permanen semua file Excel dari penyimpanan Cloud untuk menghemat kuota storage"
@@ -623,10 +640,14 @@ export default function UpdateProdukPage() {
         isOpen={pinModalState.isOpen} 
         onClose={() => setPinModalState({ isOpen: false, action: null })} 
         onSubmit={handlePinSubmit} 
-        title={pinModalState.action === "reset" ? "Otorisasi Reset Data" : "Otorisasi Upload PQ"}
-        description={pinModalState.action === "reset" 
-          ? "PERINGATAN! Ini akan menghapus log dan sales MTD. Masukkan PIN untuk lanjut." 
-          : "Masukkan PIN Keamanan untuk memproses file PQ Harian."}
+        title="Otorisasi Supervisor IT"
+        description={
+          pinModalState.action === "clean" 
+            ? "PERINGATAN! Anda akan menghapus permanen file dari Cloud. Masukkan PIN untuk lanjut." 
+          : pinModalState.action === "sync"
+            ? "Masukkan PIN Keamanan untuk memulai sinkronisasi dari Cloud."
+            : "Masukkan PIN Keamanan untuk memproses file."
+        }
       />
 
       <AlertModal
