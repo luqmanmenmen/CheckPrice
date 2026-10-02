@@ -9,7 +9,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     const formData = await request.formData();
     const file = formData.get('file') as File;
     const token = formData.get('token') as string;
-    const folder = "PQ"; // Otomatis simpan ke folder PQ
+    const folder = (formData.get('folder') as string) || "PQ"; // Otomatis simpan ke folder yang diminta (PQ atau PROMO)
 
     // Validasi token keamanan
     if (token !== SECRET_TOKEN) {
