@@ -80,9 +80,7 @@ export default function UpdateProdukPage() {
       // Tunggu 3 detik sebelum memulai (biar user bisa lihat notif kuningnya sebentar)
       setTimeout(() => {
         handleFullResync(true).then((success) => {
-          if (success) {
-            handleCleanBlob(true); // Langsung bersihkan blob jika sukses
-          }
+          // Hanya sync otomatis, biarkan user klik Bersihkan Blob secara manual
           autoSyncTriggered.current = false; // Reset trigger
         });
       }, 3000);

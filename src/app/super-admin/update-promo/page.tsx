@@ -76,9 +76,6 @@ export default function UpdateHargaPage() {
       autoSyncTriggered.current = true;
       setTimeout(() => {
         handleFullResync(true).then((success) => {
-          if (success) {
-            handleCleanBlob(true);
-          }
           autoSyncTriggered.current = false;
         });
       }, 3000);
