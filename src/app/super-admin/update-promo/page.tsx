@@ -23,6 +23,7 @@ export default function UpdateHargaPage() {
   const [currentUserNik, setCurrentUserNik] = useState<string | null>(null);
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
   const [blobFiles, setBlobFiles] = useState<any[]>([]);
+  const autoSyncTriggered = useRef(false);
 
   const fetchSyncHistory = async () => {
     try {
@@ -63,7 +64,26 @@ export default function UpdateHargaPage() {
     fetch("/api/auth/me").then(res => res.json()).then(data => {
       if (data.user) setCurrentUserNik(data.user.nik);
     }).catch(() => {});
+
+    const interval = setInterval(() => {
+      fetchBlobFiles();
+    }, 60000);
+    return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (blobFiles.length > 0 && !isFullResyncing && !autoSyncTriggered.current) {
+      autoSyncTriggered.current = true;
+      setTimeout(() => {
+        handleFullResync(true).then((success) => {
+          if (success) {
+            handleCleanBlob(true);
+          }
+          autoSyncTriggered.current = false;
+        });
+      }, 3000);
+    }
+  }, [blobFiles, isFullResyncing]);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -141,8 +161,26 @@ export default function UpdateHargaPage() {
     }
   };
 
-  const handleFullResync = async () => {
-    if (!confirm("Sinkronisasi promo dari semua file di folder PROMO Blob? File-file ini akan digabung dan diproses sekaligus.")) return;
+  const handleCleanBlob = async (isAuto = false) => {
+    try {
+      const res = await fetch("/api/upload/clean-folder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folder: "PROMO" })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        fetchBlobFiles();
+        return true;
+      }
+      return false;
+    } catch (err) {
+      return false;
+    }
+  };
+
+  const handleFullResync = async (isAuto = false): Promise<boolean> => {
+    if (!isAuto && !confirm("Sinkronisasi promo dari semua file di folder PROMO Blob? File-file ini akan digabung dan diproses sekaligus.")) return false;
     setIsFullResyncing(true);
     setFullResyncMsg("Mengambil daftar file Promo dari server...");
     
@@ -156,9 +194,9 @@ export default function UpdateHargaPage() {
       
       const blobs = listData.blobs; // sorted oldest to newest
       if (blobs.length === 0) {
-        setAlertState({ isOpen: true, title: "Kosong", message: "Tidak ada file Promo di Blob", type: "warning" });
+        if (!isAuto) setAlertState({ isOpen: true, title: "Kosong", message: "Tidak ada file Promo di Blob", type: "warning" });
         setIsFullResyncing(false);
-        return;
+        return false;
       }
 
       // ============================================================
@@ -252,11 +290,13 @@ export default function UpdateHargaPage() {
         }
       }
       
-      setAlertState({ isOpen: true, title: "✅ Berhasil!", message: `Berhasil memproses ${successCount}/${blobs.length} file promo dari Blob.`, type: "success" });
+      setAlertState({ isOpen: true, title: "✅ Berhasil!", message: `Berhasil memproses ${successCount}/${blobs.length} file promo otomatis dari Blob.`, type: "success" });
       fetchSyncHistory();
       fetchBlobFiles();
+      return true;
     } catch (err: any) {
       setAlertState({ isOpen: true, title: "Error Sync Promo", message: err.message || "Terjadi kesalahan", type: "error" });
+      return false;
     } finally {
       setIsFullResyncing(false);
       setFullResyncMsg("");
@@ -289,7 +329,7 @@ export default function UpdateHargaPage() {
         
         <div className="flex gap-2 items-center">
           <button
-            onClick={handleFullResync}
+            onClick={() => handleFullResync(false)}
             disabled={isFullResyncing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors disabled:opacity-50"
             title="Baca semua file promo dari folder PROMO di Blob, gabung jadi 1 batch, dan sinkronisasi"
@@ -301,10 +341,10 @@ export default function UpdateHargaPage() {
       </div>
 
       {isFullResyncing && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex gap-3 text-emerald-800 shadow-sm">
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex gap-3 text-emerald-800 shadow-sm animate-pulse">
           <Loader2 className="w-5 h-5 shrink-0 mt-0.5 animate-spin text-emerald-600" />
           <div className="text-sm">
-            <p className="font-bold mb-1">Sedang Sync Promo dari Blob...</p>
+            <p className="font-bold mb-1">🤖 Robot Sedang Bekerja Otomatis...</p>
             <p className="opacity-90 text-xs">{fullResyncMsg}</p>
           </div>
         </div>

@@ -23,6 +23,7 @@ export default function UpdateProdukPage() {
   const [alertState, setAlertState] = useState<{isOpen: boolean; title: string; message: string; type: "error" | "success" | "warning"}>({isOpen: false, title: "", message: "", type: "error"});
   const [currentUserNik, setCurrentUserNik] = useState<string | null>(null);
   const [blobFiles, setBlobFiles] = useState<any[]>([]);
+  const autoSyncTriggered = useRef(false);
 
   const fetchSyncHistory = async () => {
     try {
@@ -63,7 +64,30 @@ export default function UpdateProdukPage() {
     fetch("/api/auth/me").then(res => res.json()).then(data => {
       if (data.user) setCurrentUserNik(data.user.nik);
     }).catch(() => {});
+
+    // Polling setiap 1 menit untuk mengecek file baru di Blob
+    const interval = setInterval(() => {
+      fetchBlobFiles();
+    }, 60000);
+    return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    // Jika ada file baru di Blob, tidak sedang sync, dan belum di-trigger otomatis
+    if (blobFiles.length > 0 && !isFullResyncing && !autoSyncTriggered.current) {
+      autoSyncTriggered.current = true;
+      
+      // Tunggu 3 detik sebelum memulai (biar user bisa lihat notif kuningnya sebentar)
+      setTimeout(() => {
+        handleFullResync(true).then((success) => {
+          if (success) {
+            handleCleanBlob(true); // Langsung bersihkan blob jika sukses
+          }
+          autoSyncTriggered.current = false; // Reset trigger
+        });
+      }, 3000);
+    }
+  }, [blobFiles, isFullResyncing]);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -196,8 +220,8 @@ export default function UpdateProdukPage() {
     }
   };
 
-  const handleCleanBlob = async () => {
-    if (!confirm("Hapus SEMUA file PQ dari penyimpanan Cloud (Vercel Blob)? Pastikan Anda sudah menekan 'Sync dari Blob' sebelumnya agar data masuk ke Database. File Excel akan dihapus permanen untuk menghemat storage.")) return;
+  const handleCleanBlob = async (isAuto = false) => {
+    if (!isAuto && !confirm("Hapus SEMUA file PQ dari penyimpanan Cloud (Vercel Blob)? Pastikan Anda sudah menekan 'Sync dari Blob' sebelumnya agar data masuk ke Database. File Excel akan dihapus permanen untuk menghemat storage.")) return false;
     try {
       const res = await fetch("/api/upload/clean-folder", {
         method: "POST",
@@ -206,18 +230,21 @@ export default function UpdateProdukPage() {
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        setAlertState({ isOpen: true, title: "Berhasil", message: `${data.deletedCount} file PQ di Cloud berhasil dihapus permanen!`, type: "success" });
+        if (!isAuto) setAlertState({ isOpen: true, title: "Berhasil", message: `${data.deletedCount} file PQ di Cloud berhasil dihapus permanen!`, type: "success" });
         fetchBlobFiles();
+        return true;
       } else {
-        setAlertState({ isOpen: true, title: "Gagal", message: data.error || "Gagal membersihkan blob.", type: "error" });
+        if (!isAuto) setAlertState({ isOpen: true, title: "Gagal", message: data.error || "Gagal membersihkan blob.", type: "error" });
+        return false;
       }
     } catch (err: any) {
-      setAlertState({ isOpen: true, title: "Kesalahan Jaringan", message: err.message || "Terjadi kesalahan.", type: "error" });
+      if (!isAuto) setAlertState({ isOpen: true, title: "Kesalahan Jaringan", message: err.message || "Terjadi kesalahan.", type: "error" });
+      return false;
     }
   };
 
-  const handleFullResync = async () => {
-    if (!confirm("Peringatan: Ini akan mendownload dan memproses SEMUA file PQ dari awal berurutan hingga terbaru. Proses ini memakan waktu lama. Lanjutkan?")) return;
+  const handleFullResync = async (isAuto = false): Promise<boolean> => {
+    if (!isAuto && !confirm("Peringatan: Ini akan mendownload dan memproses SEMUA file PQ dari awal berurutan hingga terbaru. Proses ini memakan waktu lama. Lanjutkan?")) return false;
     setIsFullResyncing(true);
     setFullResyncMsg("Mengambil daftar file dari server...");
     
@@ -231,9 +258,9 @@ export default function UpdateProdukPage() {
       
       const blobs = listData.blobs; // sorted oldest to newest
       if (blobs.length === 0) {
-        setAlertState({ isOpen: true, title: "Kosong", message: "Tidak ada file PQ di Blob", type: "warning" });
+        if (!isAuto) setAlertState({ isOpen: true, title: "Kosong", message: "Tidak ada file PQ di Blob", type: "warning" });
         setIsFullResyncing(false);
-        return;
+        return false;
       }
 
       let successCount = 0;
@@ -337,11 +364,13 @@ export default function UpdateProdukPage() {
         }
       }
       
-      setAlertState({ isOpen: true, title: "✅ Selesai!", message: `Berhasil full resync ${successCount}/${blobs.length} file PQ secara berurutan.`, type: "success" });
+      setAlertState({ isOpen: true, title: "✅ Selesai!", message: `Berhasil full resync ${successCount}/${blobs.length} file PQ secara otomatis.`, type: "success" });
       fetchSyncHistory();
       fetchBlobFiles();
+      return true;
     } catch (err: any) {
       setAlertState({ isOpen: true, title: "Error Full Resync", message: err.message || "Terjadi kesalahan", type: "error" });
+      return false;
     } finally {
       setIsFullResyncing(false);
       setFullResyncMsg("");
@@ -372,7 +401,7 @@ export default function UpdateProdukPage() {
         </div>
         <div className="flex gap-2 items-center">
           <button
-            onClick={handleFullResync}
+            onClick={() => handleFullResync(false)}
             disabled={isFullResyncing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors disabled:opacity-50"
             title="Baca semua file PQ dari Blob satu-satu berurutan (dari terlama ke terbaru) untuk hitung delta sales secara akurat"
@@ -381,7 +410,7 @@ export default function UpdateProdukPage() {
             {isFullResyncing ? `${fullResyncMsg.split(":")[0]}...` : "Sync dari Blob"}
           </button>
           <button
-            onClick={handleCleanBlob}
+            onClick={() => handleCleanBlob(false)}
             disabled={isFullResyncing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 transition-colors disabled:opacity-50"
             title="Hapus permanen semua file Excel dari penyimpanan Cloud untuk menghemat kuota storage"
@@ -393,10 +422,10 @@ export default function UpdateProdukPage() {
       </div>
 
       {isFullResyncing && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex gap-3 text-emerald-800 shadow-sm">
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex gap-3 text-emerald-800 shadow-sm animate-pulse">
           <Loader2 className="w-5 h-5 shrink-0 mt-0.5 animate-spin text-emerald-600" />
           <div className="text-sm">
-            <p className="font-bold mb-1">Sedang Sync PQ dari Blob...</p>
+            <p className="font-bold mb-1">🤖 Robot Sedang Bekerja Otomatis...</p>
             <p className="opacity-90 text-xs">{fullResyncMsg}</p>
           </div>
         </div>
