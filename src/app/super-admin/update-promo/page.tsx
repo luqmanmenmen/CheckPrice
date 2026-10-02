@@ -98,32 +98,7 @@ export default function UpdateHargaPage() {
     setShowPinModal({ isOpen: true, action: "upload" });
   };
 
-  const handleResetClick = () => {
-    setShowPinModal({ isOpen: true, action: "reset" });
-  };
 
-  const executeReset = async (pin: string) => {
-    setIsResetting(true);
-    try {
-      const res = await fetch("/api/admin/reset-sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "UPDATE_PROMO", pin })
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setAlertState({ isOpen: true, title: "Berhasil", message: "Semua riwayat upload Promo berhasil dihapus.", type: "success" });
-        setLastSync(null);
-      } else {
-        setAlertState({ isOpen: true, title: "Gagal", message: data.error || "Gagal mereset data.", type: "error" });
-      }
-    } catch (err) {
-      console.error(err);
-      setAlertState({ isOpen: true, title: "Kesalahan Jaringan", message: "Terjadi kesalahan saat mereset data.", type: "error" });
-    } finally {
-      setIsResetting(false);
-    }
-  };
 
   const executeUpload = async () => {
     if (files.length === 0) return;
@@ -315,21 +290,12 @@ export default function UpdateHargaPage() {
         <div className="flex gap-2 items-center">
           <button
             onClick={handleFullResync}
-            disabled={isFullResyncing || isResetting}
+            disabled={isFullResyncing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors disabled:opacity-50"
             title="Baca semua file promo dari folder PROMO di Blob, gabung jadi 1 batch, dan sinkronisasi"
           >
             {isFullResyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
             {isFullResyncing ? "Menyinkronisasi..." : "Sync dari Blob"}
-          </button>
-          <button
-            onClick={handleResetClick}
-            disabled={isResetting || isFullResyncing}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-rose-600 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition-colors disabled:opacity-50"
-            title="Hapus semua riwayat log promo"
-          >
-            <AlertTriangle className="w-3.5 h-3.5" />
-            Reset Log
           </button>
         </div>
       </div>

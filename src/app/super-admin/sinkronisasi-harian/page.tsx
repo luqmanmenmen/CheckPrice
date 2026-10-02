@@ -171,33 +171,7 @@ export default function UpdateProdukPage() {
     }
   };
 
-  const handleResetClick = () => {
-    setPinModalState({ isOpen: true, action: "reset" });
-  };
 
-  const executeReset = async (pin: string) => {
-    setIsResetting(true);
-    try {
-      const res = await fetch("/api/admin/reset-sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pin })
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setAlertState({ isOpen: true, title: "Berhasil", message: "Semua log berhasil dihapus dan MTD di-reset.", type: "success" });
-        fetchSyncHistory();
-        setLastSync(null);
-      } else {
-        setAlertState({ isOpen: true, title: "Gagal", message: data.error || "Gagal mereset.", type: "error" });
-      }
-    } catch (err) {
-      console.error(err);
-      setAlertState({ isOpen: true, title: "Kesalahan Jaringan", message: "Terjadi kesalahan jaringan saat mereset data.", type: "error" });
-    } finally {
-      setIsResetting(false);
-    }
-  };
 
   const handleReprocessFromBlob = async () => {
     if (!confirm("Proses ulang data dari file PQ TERBARU yang ada di Blob? Ini akan menimpa seluruh stok dan perhitungan lainnya dengan file teratas.")) return;
@@ -399,7 +373,7 @@ export default function UpdateProdukPage() {
         <div className="flex gap-2 items-center">
           <button
             onClick={handleFullResync}
-            disabled={isFullResyncing || isResetting}
+            disabled={isFullResyncing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors disabled:opacity-50"
             title="Baca semua file PQ dari Blob satu-satu berurutan (dari terlama ke terbaru) untuk hitung delta sales secara akurat"
           >
@@ -407,17 +381,8 @@ export default function UpdateProdukPage() {
             {isFullResyncing ? `${fullResyncMsg.split(":")[0]}...` : "Sync dari Blob"}
           </button>
           <button
-            onClick={handleResetClick}
-            disabled={isResetting || isFullResyncing}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-rose-600 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition-colors disabled:opacity-50"
-            title="Hapus semua riwayat log PQ dan reset data penjualan"
-          >
-            <AlertCircle className="w-3.5 h-3.5" />
-            Reset Semua
-          </button>
-          <button
             onClick={handleCleanBlob}
-            disabled={isFullResyncing || isResetting}
+            disabled={isFullResyncing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 transition-colors disabled:opacity-50"
             title="Hapus permanen semua file Excel dari penyimpanan Cloud untuk menghemat kuota storage"
           >
