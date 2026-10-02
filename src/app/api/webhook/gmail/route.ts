@@ -20,10 +20,13 @@ export async function POST(request: Request): Promise<NextResponse> {
       return NextResponse.json({ error: 'File is required' }, { status: 400 });
     }
 
-    console.log("Menerima file dari Webhook Gmail:", file.name);
+    const explicitFileName = formData.get('fileName') as string;
+    const finalFileName = explicitFileName || file.name || "uploaded_file";
 
-    // Langsung unggah ke Vercel Blob di dalam folder PQ
-    const blob = await put(`${folder}/${file.name}`, file, {
+    console.log("Menerima file dari Webhook Gmail:", finalFileName);
+
+    // Langsung unggah ke Vercel Blob di dalam folder yang diminta
+    const blob = await put(`${folder}/${finalFileName}`, file, {
       access: 'public',
       addRandomSuffix: false // Pertahankan nama aslinya
     });
