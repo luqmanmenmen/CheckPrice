@@ -74,8 +74,8 @@ export default function UpdateProdukPage() {
   }, []);
 
   useEffect(() => {
-    // Cek apakah ada file yang belum pernah diproses di sesi ini
-    const hasNewFiles = blobFiles.some(b => !processedBlobs.current.has(b.url));
+    // Cek apakah ada file yang BELUM pernah diproses (isSynced: false)
+    const hasNewFiles = blobFiles.some(b => !b.isSynced && !processedBlobs.current.has(b.url));
 
     if (blobFiles.length > 0 && hasNewFiles && !isFullResyncing && !autoSyncTriggered.current) {
       autoSyncTriggered.current = true;
@@ -258,9 +258,11 @@ export default function UpdateProdukPage() {
         throw new Error(listData.error || "Gagal mengambil list file blob");
       }
       
-      const blobs = listData.blobs; // sorted oldest to newest
+      // Hanya proses file yang belum pernah sukses di-sync (isSynced = false)
+      const blobs = listData.blobs.filter((b: any) => !b.isSynced); 
+      
       if (blobs.length === 0) {
-        if (!isAuto) setAlertState({ isOpen: true, title: "Kosong", message: "Tidak ada file PQ di Blob", type: "warning" });
+        if (!isAuto) setAlertState({ isOpen: true, title: "Selesai", message: "Semua file PQ yang ada di Cloud sudah tersinkronisasi. Silakan klik tombol kuning Bersihkan Blob.", type: "success" });
         setIsFullResyncing(false);
         return false;
       }

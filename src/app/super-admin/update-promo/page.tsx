@@ -73,7 +73,7 @@ export default function UpdateHargaPage() {
   }, []);
 
   useEffect(() => {
-    const hasNewFiles = blobFiles.some(b => !processedBlobs.current.has(b.url));
+    const hasNewFiles = blobFiles.some(b => !b.isSynced && !processedBlobs.current.has(b.url));
 
     if (blobFiles.length > 0 && hasNewFiles && !isFullResyncing && !autoSyncTriggered.current) {
       autoSyncTriggered.current = true;
@@ -193,9 +193,9 @@ export default function UpdateHargaPage() {
         throw new Error(listData.error || "Gagal mengambil list file blob");
       }
       
-      const blobs = listData.blobs; // sorted oldest to newest
+      const blobs = listData.blobs.filter((b: any) => !b.isSynced);
       if (blobs.length === 0) {
-        if (!isAuto) setAlertState({ isOpen: true, title: "Kosong", message: "Tidak ada file Promo di Blob", type: "warning" });
+        if (!isAuto) setAlertState({ isOpen: true, title: "Selesai", message: "Semua file Promo yang ada di Cloud sudah tersinkronisasi. Silakan klik tombol kuning Bersihkan Blob.", type: "success" });
         setIsFullResyncing(false);
         return false;
       }
