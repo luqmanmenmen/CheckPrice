@@ -93,41 +93,9 @@ export default function UpdateProdukPage() {
     if (!file) return;
     setStatus("uploading");
     setProgress(0);
-    setResultMsg("Membaca file Excel...");
+    setResultMsg("Memulai proses unggah...");
     
     try {
-      // 1. Baca file di Browser (Mencegah Vercel Timeout)
-      const buffer = await file.arrayBuffer();
-      const workbook = xlsx.read(buffer, { type: "buffer", cellDates: false });
-      
-      let allRows: any[] = [];
-      for (const sheetName of workbook.SheetNames) {
-        const ws = workbook.Sheets[sheetName];
-        const rawRows = xlsx.utils.sheet_to_json(ws, { defval: "" });
-        for (const raw of rawRows as any[]) {
-          const r = {
-            ...raw,
-            __SOURCE_FILE__: file.name,
-            __SOURCE_SHEET__: sheetName
-          };
-          const firstColValue = String(Object.values(r)[0] || "").toUpperCase();
-          if (firstColValue.includes("GRAND TOTAL")) break; // Stop at Grand Total
-          
-          // Skip baris yang tidak memiliki indikator SKU sama sekali untuk menghemat payload
-          const hasIdentifier = r["SKU"] || r["KODE PRODUK"] || r["KODE"] || r["ARTICLE"] || r["BARCODE"] || r["KODE_PRODUK"];
-          if (!hasIdentifier) continue;
-
-          allRows.push(r);
-        }
-      }
-
-      if (allRows.length === 0) {
-        setStatus("error");
-        setResultMsg("File Excel kosong atau tidak terbaca.");
-        setAlertState({ isOpen: true, title: "Gagal", message: "File kosong.", type: "error" });
-        return;
-      }
-
       // Validasi format nama file
       const fileNameUpper = file.name.toUpperCase();
       const isValidFormat = /^POWER QUERY \d{1,2} [A-Z]+ \d{4}\.(CSV|XLSX)$/.test(fileNameUpper);
@@ -138,81 +106,21 @@ export default function UpdateProdukPage() {
         return;
       }
 
-      // 1.5 Upload fisik file ke Vercel Blob
-      let uploadedBlobUrl = null;
-      try {
-        setResultMsg("Menyimpan file ke Cloud Storage...");
-        const formData = new FormData();
-        formData.append("file", file);
-        formData.append("folder", "PQ");
-        const uploadRes = await fetch("/api/upload/file", { method: "POST", body: formData });
-        if (uploadRes.ok) {
-          const uploadData = await uploadRes.json();
-          uploadedBlobUrl = uploadData.url;
-        }
-      } catch (err) {
-        console.error("Gagal upload ke Blob", err);
-        // Tetap lanjut walaupun Blob gagal
-      }
+      setProgress(30);
+      setResultMsg("Menyimpan file ke Cloud Storage...");
 
-      // 2. Kirim data per paket kecil (Chunking)
-      const CHUNK_SIZE = 500;
-      const totalChunks = Math.ceil(allRows.length / CHUNK_SIZE);
-      
-      let totalCreated = 0;
-      let totalUpdated = 0;
-      let totalFailed = 0;
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("folder", "PQ");
 
-      for (let i = 0; i < totalChunks; i++) {
-        const chunk = allRows.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-        const progressPercentage = Math.round((i / totalChunks) * 100);
-        setProgress(progressPercentage);
-        setResultMsg(`Analisis Mendalam: Memproses ${i * CHUNK_SIZE} dari ${allRows.length} baris...`);
-
-        // Helper untuk ekstrak tanggal dari nama file
-        const extractDate = (filename: string) => {
-          const match = filename.toUpperCase().match(/POWER QUERY (\d{1,2}) ([A-Z]+) (\d{4})/);
-          if (match) {
-            const months: Record<string, number> = {
-              "JANUARI": 0, "JANUARY": 0, "JAN": 0, "FEBRUARI": 1, "FEB": 1,
-              "MARET": 2, "MARCH": 2, "MAR": 2, "APRIL": 3, "APR": 3,
-              "MEI": 4, "MAY": 4, "JUNI": 5, "JUN": 5, "JULI": 6, "JUL": 6,
-              "AGUSTUS": 7, "AUG": 7, "SEPTEMBER": 8, "SEP": 8,
-              "OKTOBER": 9, "OCT": 9, "NOVEMBER": 10, "NOV": 10, "DESEMBER": 11, "DEC": 11
-            };
-            const month = months[match[2]] !== undefined ? months[match[2]] : new Date().getMonth();
-            return new Date(parseInt(match[3]), month, parseInt(match[1]), 12, 0, 0);
-          }
-          return new Date();
-        };
-
-        const payload = {
-          type: "PQ_HARIAN",
-          fileName: file.name,
-          fileUrl: uploadedBlobUrl,
-          uploadDate: extractDate(file.name).toISOString(),
-          isLastChunk: i === totalChunks - 1,
-          totalRecords: allRows.length,
-          rows: chunk
-        };
-
-        const res = await fetch("/api/upload/chunk", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-
-        const data = await res.json();
-        
-        if (!res.ok || !data.success) {
-          throw new Error(data.error || "Gagal memproses chunk");
-        }
+      const uploadRes = await fetch("/api/upload/file", { method: "POST", body: formData });
+      if (!uploadRes.ok) {
+        throw new Error("Gagal mengunggah file ke Cloud Storage");
       }
 
       setProgress(100);
       setStatus("success");
-      setResultMsg(`Berhasil menganalisis dan menyimpan ${allRows.length} baris data secara akurat!`);
-      fetchSyncHistory();
+      setResultMsg("File berhasil diunggah ke Cloud Storage! Silakan klik tombol 'Sync dari Blob' untuk memproses datanya.");
 
     } catch (error: any) {
       console.error(error);

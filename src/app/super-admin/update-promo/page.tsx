@@ -115,102 +115,34 @@ export default function UpdateHargaPage() {
     if (files.length === 0) return;
     setStatus("uploading");
     setProgress(0);
-    setResultMsg("Membaca file Excel...");
-
+    
     try {
-      let allRows: any[] = [];
-      let mainFileName = files[0].name;
+      setResultMsg("Menghapus file promo lama di Cloud...");
+      setProgress(10);
+      await fetch("/api/upload/clean-folder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folder: "PROMO" })
+      });
 
-      for (const file of files) {
-        const buffer = await file.arrayBuffer();
-        const workbook = xlsx.read(buffer, { type: "buffer", cellDates: false });
-        for (const sheetName of workbook.SheetNames) {
-          const ws = workbook.Sheets[sheetName];
-          const rawRows = xlsx.utils.sheet_to_json(ws, { defval: "" });
-          const rowsWithSource = rawRows.map((r: any) => ({
-            ...r,
-            __SOURCE_FILE__: file.name,
-            __SOURCE_SHEET__: sheetName
-          }));
-          allRows = allRows.concat(rowsWithSource);
+      setResultMsg("Menyimpan fisik file promo ke Cloud Storage...");
+      let uploaded = 0;
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        const formData = new FormData();
+        formData.append("file", f);
+        formData.append("folder", "PROMO");
+        const res = await fetch("/api/upload/file", { method: "POST", body: formData });
+        if (!res.ok) {
+           throw new Error("Gagal mengunggah file " + f.name);
         }
-      }
-
-      if (allRows.length === 0) {
-        setStatus("error");
-        setResultMsg("Semua file kosong atau tidak terbaca.");
-        setAlertState({ isOpen: true, title: "Gagal", message: "File kosong.", type: "error" });
-        return;
-      }
-
-      // 1.5 Upload fisik file ke Vercel Blob
-      let uploadedBlobUrl = null;
-      try {
-        setResultMsg("Menghapus file promo lama di Cloud...");
-        await fetch("/api/upload/clean-folder", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ folder: "PROMO" })
-        });
-
-        setResultMsg("Menyimpan fisik file promo ke Cloud Storage...");
-        const blobUrls = await Promise.all(
-          files.map(async (f) => {
-            const formData = new FormData();
-            formData.append("file", f);
-            formData.append("folder", "PROMO");
-            const res = await fetch("/api/upload/file", { method: "POST", body: formData });
-            if (res.ok) {
-              const data = await res.json();
-              return data.url;
-            }
-            return null;
-          })
-        );
-        const validUrls = blobUrls.filter(Boolean);
-        if (validUrls.length > 0) {
-          uploadedBlobUrl = validUrls.join(",");
-        }
-      } catch (err) {
-        console.error("Gagal upload promo ke Blob", err);
-      }
-
-      const CHUNK_SIZE = 500;
-      const totalChunks = Math.ceil(allRows.length / CHUNK_SIZE);
-      
-      for (let i = 0; i < totalChunks; i++) {
-        const chunk = allRows.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-        const progressPercentage = Math.round((i / totalChunks) * 100);
-        setProgress(progressPercentage);
-        setResultMsg(`Analisis Mendalam: Memproses ${i * CHUNK_SIZE} dari ${allRows.length} baris...`);
-
-        const payload = {
-          type: "UPDATE_PROMO",
-          fileName: files.map(f => f.name).join(" | "),
-          fileUrl: uploadedBlobUrl,
-          uploadDate: new Date().toISOString(),
-          isLastChunk: i === totalChunks - 1,
-          totalRecords: allRows.length,
-          rows: chunk
-        };
-
-        const res = await fetch("/api/upload/chunk", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-
-        const data = await res.json();
-        
-        if (!res.ok || !data.success) {
-          throw new Error(data.error || "Gagal memproses chunk promo");
-        }
+        uploaded++;
+        setProgress(10 + Math.round((uploaded / files.length) * 80));
       }
 
       setProgress(100);
       setStatus("success");
-      setResultMsg(`Berhasil memproses dan mengunci ${allRows.length} data promo!`);
-      fetchSyncHistory();
+      setResultMsg(`Berhasil mengunggah ${files.length} file promo ke Cloud Storage! Silakan klik 'Sync dari Blob'.`);
     } catch (error: any) {
       console.error(error);
       setProgress(100);
