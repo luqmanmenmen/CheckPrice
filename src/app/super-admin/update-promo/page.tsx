@@ -22,6 +22,7 @@ export default function UpdateHargaPage() {
   const [historyList, setHistoryList] = useState<any[]>([]);
   const [currentUserNik, setCurrentUserNik] = useState<string | null>(null);
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
+  const [blobFiles, setBlobFiles] = useState<any[]>([]);
 
   const fetchSyncHistory = async () => {
     try {
@@ -44,8 +45,21 @@ export default function UpdateHargaPage() {
     }
   };
 
+  const fetchBlobFiles = async () => {
+    try {
+      const res = await fetch("/api/upload/blob-files?folder=PROMO");
+      const data = await res.json();
+      if (data.success && data.blobs) {
+        setBlobFiles(data.blobs);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   useEffect(() => {
     fetchSyncHistory();
+    fetchBlobFiles();
     fetch("/api/auth/me").then(res => res.json()).then(data => {
       if (data.user) setCurrentUserNik(data.user.nik);
     }).catch(() => {});
@@ -265,6 +279,7 @@ export default function UpdateHargaPage() {
       
       setAlertState({ isOpen: true, title: "✅ Berhasil!", message: `Berhasil memproses ${successCount}/${blobs.length} file promo dari Blob.`, type: "success" });
       fetchSyncHistory();
+      fetchBlobFiles();
     } catch (err: any) {
       setAlertState({ isOpen: true, title: "Error Sync Promo", message: err.message || "Terjadi kesalahan", type: "error" });
     } finally {
@@ -325,6 +340,25 @@ export default function UpdateHargaPage() {
           <div className="text-sm">
             <p className="font-bold mb-1">Sedang Sync Promo dari Blob...</p>
             <p className="opacity-90 text-xs">{fullResyncMsg}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Blob Notification */}
+      {!isFullResyncing && blobFiles.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex gap-3 text-amber-800 shadow-sm">
+          <UploadCloud className="w-5 h-5 shrink-0 mt-0.5 text-amber-600 animate-bounce" />
+          <div className="text-sm w-full">
+            <p className="font-bold mb-1 text-amber-700">File Promo Baru Tersedia di Cloud!</p>
+            <p className="text-xs mb-2">Terdapat {blobFiles.length} file promo di penyimpanan yang siap di-sync.</p>
+            <div className="bg-amber-100/50 rounded-lg p-2 max-h-24 overflow-y-auto">
+              {blobFiles.map((b, idx) => (
+                <div key={idx} className="text-xs font-mono font-bold text-amber-900 border-b border-amber-200/50 last:border-0 py-1">
+                  {b.filename}
+                </div>
+              ))}
+            </div>
+            <p className="text-[10px] mt-2 italic text-amber-700">*Klik tombol hijau "Sync dari Blob" di atas untuk memprosesnya.</p>
           </div>
         </div>
       )}
