@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react";
 import dynamic from "next/dynamic";
-import { Search, Camera, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle, ScanText, ArrowLeft, CloudDownload, Loader2 } from "lucide-react";
+import { Search, Camera, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle, ScanText, ArrowLeft, CloudDownload, Loader2, Menu } from "lucide-react";
 import { DetectedSku } from "@/components/TextScanner";
 import { useEffect } from "react";
 import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
@@ -10,6 +10,7 @@ import PullToRefresh from "@/components/PullToRefresh";
 import useSWR from "swr";
 import { Bell } from "lucide-react";
 import Link from "next/link";
+import { ChipLoader } from "@/components/ChipLoader";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
@@ -143,6 +144,7 @@ export default function Home() {
   const [scanMode, setScanMode] = useState<"none" | "barcode" | "text">("none");
   const [manualInput, setManualInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [product, setProduct] = useState<ProductData | null>(null);
   const [siblings, setSiblings] = useState<ProductData[]>([]);
   const [productsList, setProductsList] = useState<ProductData[]>([]);
@@ -160,7 +162,7 @@ export default function Home() {
 
   const [submitting, setSubmitting] = useState(false);
   const [qty, setQty] = useState(1);
-  const [activeTab, setActiveTab] = useState<"REQUEST" | "STOCK_CHECK" | "ORDERS">("REQUEST");
+  const [activeTab, setActiveTab] = useState<"REQUEST" | "STOCK_CHECK" | "FACING_OUT" | "ORDERS">("REQUEST");
   const [cart, setCart] = useState<any[]>([]);
   const [continuousMode, setContinuousMode] = useState(false);
   const [lastScanMode, setLastScanMode] = useState<"none" | "barcode" | "text">("none");
@@ -261,7 +263,7 @@ export default function Home() {
   };
 
   useEffect(() => {
-    fetch("/api/auth/me")
+    fetch("/api/auth/me", { credentials: "same-origin" })
       .then(res => res.json())
       .then(data => {
         if (data.user) setUser(data.user);
@@ -575,61 +577,40 @@ export default function Home() {
       </div>
     )}
 
+
+
     <div className="w-full h-full">
       <div className={`flex flex-col lg:flex-row gap-6 max-w-7xl mx-auto w-full ${cart.length > 0 ? 'pb-32' : 'pb-6'}`}>
         <div className="flex-1 flex flex-col w-full">
           {/* User Header */}
           {user && (
-            <div className="bg-gradient-to-r from-blue-700 to-indigo-800 lg:rounded-2xl p-5 pt-8 lg:pt-5 pb-6 shadow-md rounded-b-3xl flex justify-between items-start text-white mb-5">
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 mt-1 bg-white/20 rounded-full flex items-center justify-center backdrop-blur-sm border border-white/30 shrink-0">
+            <div className="bg-gradient-to-r from-blue-700 to-indigo-800 lg:rounded-2xl p-5 pt-8 lg:pt-5 pb-6 shadow-md rounded-b-3xl flex justify-between items-center text-white mb-5">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center backdrop-blur-sm border border-white/30 shrink-0">
                   <UserCircle2 className="w-6 h-6" />
                 </div>
-                <div className="flex flex-col items-start gap-2.5">
-                  <Link href="/profile" className="group cursor-pointer">
-                    <p className="text-xs text-blue-200 font-medium tracking-wide uppercase group-hover:text-white transition-colors">{user.jobTitle || 'Sales Area'}</p>
-                    <h1 className="font-bold text-lg leading-tight group-hover:text-blue-100 transition-colors">{user.name} <span className="text-blue-200 font-normal">({user.nik})</span></h1>
+                <div className="flex flex-col items-start gap-1">
+                  <Link href="/profile" className="group cursor-pointer flex flex-col items-start">
+                    <p className="text-[10px] text-blue-200 font-medium tracking-wide uppercase group-hover:text-white transition-colors">{user.jobTitle || 'Sales Area'}</p>
+                    <h1 className="font-bold text-sm md:text-base leading-tight group-hover:text-blue-100 transition-colors truncate max-w-[150px]">{user.name}</h1>
                   </Link>
-                  <div 
-                    className={`relative flex p-0.5 rounded-full shadow-inner w-32 h-7 cursor-pointer border transition-colors ${togglingStatus ? 'opacity-50 pointer-events-none' : ''} ${user.status === 'ACTIVE' ? 'bg-slate-800/20 border-slate-700/30' : 'bg-slate-800/40 border-slate-700/50'}`} 
-                    onClick={toggleStatus}
-                  >
-                    {/* Animated Pill Background */}
-                    <div 
-                      className={`absolute top-0.5 bottom-0.5 w-[calc(50%-2px)] rounded-full shadow-sm transition-all duration-300 ease-in-out ${user.status === 'ACTIVE' ? 'bg-green-500 left-0.5' : 'bg-amber-500 left-[50%]'}`}
-                    />
-                    <div className={`relative flex-1 flex items-center justify-center text-[10px] font-bold z-10 transition-colors duration-300 ${user.status === 'ACTIVE' ? 'text-white' : 'text-slate-500'}`}>
-                      AKTIF
-                    </div>
-                    <div className={`relative flex-1 flex items-center justify-center text-[10px] font-bold z-10 transition-colors duration-300 ${user.status === 'BREAK' ? 'text-white' : 'text-slate-500'}`}>
-                      REHAT
-                    </div>
-                  </div>
                 </div>
               </div>
-              <div className="flex flex-col items-end gap-2">
-                {user.jobTitle === 'Gudang Stock' && (
-                  <Link href="/warehouse" className="text-[10px] bg-indigo-900/50 hover:bg-indigo-900/80 border border-indigo-500/30 text-indigo-100 px-3 py-1.5 rounded-full flex items-center gap-1.5 transition-colors font-medium">
-                    <Package2 className="w-3.5 h-3.5" />
-                    Beralih ke Gudang
-                  </Link>
-                )}
-                <button 
-                  onClick={handleManualSync}
-                  disabled={isSyncing}
-                  className="text-[10px] bg-sky-900/50 hover:bg-sky-900/80 border border-sky-500/30 text-sky-100 px-3 py-1.5 rounded-full flex items-center gap-1.5 transition-colors font-medium disabled:opacity-50"
+              <div className="flex items-center gap-2">
+                <div 
+                  className={`relative flex p-0.5 rounded-full shadow-inner w-[90px] md:w-28 h-7 cursor-pointer border transition-colors ${togglingStatus ? 'opacity-50 pointer-events-none' : ''} ${user.status === 'ACTIVE' ? 'bg-slate-800/20 border-slate-700/30' : 'bg-slate-800/40 border-slate-700/50'}`} 
+                  onClick={toggleStatus}
                 >
-                  {isSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CloudDownload className="w-3.5 h-3.5" />}
-                  {isSyncing ? "Update..." : "Update Data"}
-                </button>
-                {user.role === 'SUPERVISOR' && (
-                  <Link href="/spv-gateway" className="text-[10px] bg-emerald-900/50 hover:bg-emerald-900/80 border border-emerald-500/30 text-emerald-100 px-3 py-1.5 rounded-full flex items-center gap-1.5 transition-colors font-medium">
-                    <ArrowLeft className="w-3.5 h-3.5" />
-                    Portal SPV
-                  </Link>
-                )}
-                <div className="scale-80 origin-top-right">
-                  <AnimatedLogoutButton onLogout={handleLogoutClick} />
+                  {/* Animated Pill Background */}
+                  <div 
+                    className={`absolute top-0.5 bottom-0.5 w-[calc(50%-2px)] rounded-full shadow-sm transition-all duration-300 ease-in-out ${user.status === 'ACTIVE' ? 'bg-green-500 left-0.5' : 'bg-amber-500 left-[50%]'}`}
+                  />
+                  <div className={`relative flex-1 flex items-center justify-center text-[9px] md:text-[10px] font-bold z-10 transition-colors duration-300 ${user.status === 'ACTIVE' ? 'text-white' : 'text-slate-500'}`}>
+                    AKTIF
+                  </div>
+                  <div className={`relative flex-1 flex items-center justify-center text-[9px] md:text-[10px] font-bold z-10 transition-colors duration-300 ${user.status === 'BREAK' ? 'text-white' : 'text-slate-500'}`}>
+                    REHAT
+                  </div>
                 </div>
               </div>
             </div>
@@ -718,6 +699,15 @@ export default function Home() {
           >
             <MessageSquare className="w-4 h-4" />
             <span className="text-xs font-semibold whitespace-nowrap">Tanya Stok</span>
+          </button>
+          <button
+            onClick={() => setActiveTab("FACING_OUT")}
+            className={`relative flex-1 py-3 px-2 rounded-lg flex items-center justify-center gap-2 transition-all duration-300 z-10 ${
+              activeTab === "FACING_OUT" ? "bg-white shadow-sm text-amber-600 font-bold" : "text-slate-500 font-medium hover:text-slate-700"
+            }`}
+          >
+            <Package2 className="w-4 h-4" />
+            <span className="text-xs font-semibold whitespace-nowrap">Facing Out</span>
           </button>
           <button
             onClick={() => setActiveTab("ORDERS")}
@@ -860,8 +850,8 @@ export default function Home() {
 
       {/* Loading */}
       {loading && (
-        <div className="flex justify-center py-10">
-          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600" />
+        <div className="flex justify-center py-10 w-full overflow-hidden">
+          <ChipLoader />
         </div>
       )}
 
@@ -1189,6 +1179,11 @@ export default function Home() {
                   {activeTab === "STOCK_CHECK" && (
                     <button onClick={() => addToCart("STOCK_CHECK", qty, "")} className="w-full bg-indigo-600 text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 hover:bg-indigo-700 shadow-md active:scale-95 transition-all">
                       <MessageSquare className="w-5 h-5" /> Tanya Stok
+                    </button>
+                  )}
+                  {activeTab === "FACING_OUT" && (
+                    <button onClick={() => addToCart("FACING_OUT", qty, "")} className="w-full bg-amber-500 text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 hover:bg-amber-600 shadow-md active:scale-95 transition-all">
+                      <Package2 className="w-5 h-5" /> Facing Out
                     </button>
                   )}
                 </div>

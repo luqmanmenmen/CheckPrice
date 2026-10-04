@@ -169,12 +169,10 @@ function parseRow(row: any) {
   // Smart Price Extraction dari data PQ jika kolom harga eksplisit tidak ada
   if ((hargaNormal === undefined || hargaNormal === 0) && eoh_retail !== undefined) {
     const eohUnit = stok || 0;
-    const ytdUnit = sales_ytd || 0;
     const boyUnit = boy_unit || 0;
 
     let basePrice = 0;
     if (eohUnit > 0 && eoh_retail! > 0) basePrice = eoh_retail! / eohUnit;
-    else if (ytdUnit > 0 && sales_ytd_retail! > 0) basePrice = sales_ytd_retail! / ytdUnit;
     else if (boyUnit > 0 && boy_retail! > 0) basePrice = boy_retail! / boyUnit;
 
     if (basePrice > 0) hargaNormal = Math.round(basePrice);

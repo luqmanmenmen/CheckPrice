@@ -10,7 +10,7 @@ export default function SpvGateway() {
   const [loggingOut, setLoggingOut] = useState(false);
 
   useEffect(() => {
-    fetch("/api/auth/me")
+    fetch("/api/auth/me", { credentials: "same-origin" })
       .then(res => res.json())
       .then(data => {
         if (data.user) setUser(data.user);
@@ -64,6 +64,20 @@ export default function SpvGateway() {
             <ArrowRight className="w-5 h-5 text-slate-300 group-hover:text-indigo-600 group-hover:translate-x-1 transition-all" />
           </button>
           
+          <button 
+            onClick={() => router.push("/warehouse")}
+            className="group relative w-full flex items-center p-4 rounded-2xl border-2 border-slate-100 bg-white hover:border-amber-500 hover:bg-amber-50 transition-all duration-300 shadow-sm hover:shadow-md text-left"
+          >
+            <div className="w-12 h-12 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+              <Store className="w-6 h-6" />
+            </div>
+            <div className="ml-4 flex-grow">
+              <h3 className="text-base font-bold text-slate-800 group-hover:text-amber-700">Gudang & Stok</h3>
+              <p className="text-xs text-slate-500 mt-0.5">Kontrol Pesanan, Cek Ketersediaan & Stok</p>
+            </div>
+            <ArrowRight className="w-5 h-5 text-slate-300 group-hover:text-amber-600 group-hover:translate-x-1 transition-all" />
+          </button>
+
           <button 
             onClick={() => router.push("/")}
             className="group relative w-full flex items-center p-4 rounded-2xl border-2 border-slate-100 bg-white hover:border-blue-500 hover:bg-blue-50 transition-all duration-300 shadow-sm hover:shadow-md text-left"

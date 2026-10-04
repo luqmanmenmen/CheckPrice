@@ -18,6 +18,7 @@ model Product {
   fromDate      String?
   toDate        String?
   hargaNormal   Float
+  hargaNormalSource String? // "PROMO" | "PQ_STOCK" | "MANUAL" — PQ tidak boleh menimpa harga dari PROMO
   hargaPromo    Float?
   diskon        String?
   discountType  String?
@@ -121,6 +122,7 @@ model Ticket {
 enum TicketType {
   STOCK_CHECK // Tanya Stok
   REQUEST     // Request Barang
+  FACING_OUT  // Barang dibeli atau dikeluarkan dari display
 }
 
 enum Priority {

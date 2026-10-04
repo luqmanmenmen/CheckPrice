@@ -398,7 +398,7 @@ export default function UpdateProdukPage() {
         <div className="bg-white p-8 rounded-2xl shadow-sm border border-rose-200 text-center max-w-sm">
           <AlertCircle className="w-12 h-12 text-rose-500 mx-auto mb-4" />
           <h2 className="text-xl font-bold text-slate-800 mb-2">Akses Ditolak</h2>
-          <p className="text-sm text-slate-600 mb-6">Hanya Supervisor IT (NIK 22054178) yang diizinkan mengakses halaman sinkronisasi ini.</p>
+          <p className="text-sm text-slate-600 mb-6">Hanya Developer (NIK 22054178) yang diizinkan mengakses halaman sinkronisasi ini.</p>
           <Link href="/super-admin" className="px-6 py-2 bg-slate-800 text-white rounded-lg text-sm font-bold hover:bg-slate-900 transition-colors">
             Kembali ke Dashboard
           </Link>
@@ -640,7 +640,7 @@ export default function UpdateProdukPage() {
         isOpen={pinModalState.isOpen} 
         onClose={() => setPinModalState({ isOpen: false, action: null })} 
         onSubmit={handlePinSubmit} 
-        title="Otorisasi Supervisor IT"
+        title="Otorisasi Developer"
         description={
           pinModalState.action === "clean" 
             ? "PERINGATAN! Anda akan menghapus permanen file dari Cloud. Masukkan PIN untuk lanjut." 
@@ -660,3 +660,4 @@ export default function UpdateProdukPage() {
     </div>
   );
 }
+

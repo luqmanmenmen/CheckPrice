@@ -9,9 +9,9 @@ async function main() {
   if (admin) {
     await prisma.user.update({
       where: { id: admin.id },
-      data: { name: "Luqman Arif (Supervisor IT)" }
+      data: { name: "Luqman Arif (Developer)" }
     });
-    console.log("Updated admin name in database.");
+    console.log("Updated admin name in database to Luqman Arif (Developer).");
   } else {
     console.log("Admin not found.");
   }

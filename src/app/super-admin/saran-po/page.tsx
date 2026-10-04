@@ -294,7 +294,7 @@ export default function LaporanPOPage() {
         isOpen={showPinModal}
         onClose={() => setShowPinModal(false)}
         onSubmit={handleExportPDF}
-        title="Otorisasi Supervisor IT"
+        title="Otorisasi Developer"
         description="Masukkan PIN (220117) untuk mengunduh laporan berstatus Confidential."
       />
 
@@ -320,3 +320,4 @@ export default function LaporanPOPage() {
     </div>
   );
 }
+

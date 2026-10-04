@@ -118,14 +118,11 @@ function parseRow(row: any) {
   if (hargaNormal === undefined || hargaNormal === 0) {
     const eohUnit = safeFloat(row["EOH_UNIT"]);
     const eohRetail = safeFloat(row["EOH_RETAIL"]);
-    const ytdUnit = safeFloat(row["YTD_SALES_UNIT"]);
-    const ytdRetail = safeFloat(row["YTD_SALES_RETAIL"]);
     const boyUnit = safeFloat(row["BOY_UNIT"]);
     const boyRetail = safeFloat(row["BOY_RETAIL"]);
 
     let basePrice = 0;
     if (eohUnit > 0) basePrice = eohRetail / eohUnit;
-    else if (ytdUnit > 0) basePrice = ytdRetail / ytdUnit;
     else if (boyUnit > 0) basePrice = boyRetail / boyUnit;
 
     if (basePrice > 0) {

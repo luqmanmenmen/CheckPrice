@@ -21,6 +21,8 @@ type Ticket = {
   requester: { name: string; nik: string };
   productName?: string;
   hargaNormal?: number;
+  color?: string | null;
+  productSize?: string | null;
 };
 
 // Parse the description to get a clean product name and its variants (color/size)
@@ -57,7 +59,7 @@ export default function WarehouseDashboard() {
 
   // Fetch current user details
   useEffect(() => {
-    fetch("/api/auth/me")
+    fetch("/api/auth/me", { credentials: "same-origin" })
       .then((res) => res.json())
       .then((data) => {
         if (data.user) setUser(data.user);
@@ -250,15 +252,6 @@ export default function WarehouseDashboard() {
                 </div>
               </div>
             </div>
-            <div className="flex flex-col items-end gap-2">
-              <Link href="/" className="text-[10px] bg-indigo-900/50 hover:bg-indigo-900/80 border border-indigo-500/30 text-indigo-100 px-3 py-1.5 rounded-full flex items-center gap-1.5 transition-colors font-medium">
-                <Search className="w-3.5 h-3.5" />
-                Cek Harga / Lokasi
-              </Link>
-              <div className="scale-80 origin-top-right">
-                <AnimatedLogoutButton onLogout={handleLogoutClick} />
-              </div>
-            </div>
           </div>
 
       {/* Ticket List */}
@@ -330,9 +323,11 @@ export default function WarehouseDashboard() {
                         }`}>
                           <div>
                             <span className={`text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wider ${
-                              ticket.type === "REQUEST" ? "bg-indigo-100 text-indigo-700" : "bg-sky-100 text-sky-700"
+                              ticket.type === "REQUEST" ? "bg-indigo-100 text-indigo-700" : 
+                              ticket.type === "FACING_OUT" ? "bg-amber-100 text-amber-700" : "bg-sky-100 text-sky-700"
                             }`}>
-                              {ticket.type === "REQUEST" ? "Request Barang" : "Cek Stok"}
+                              {ticket.type === "REQUEST" ? "Request Barang" : 
+                               ticket.type === "FACING_OUT" ? "Facing Out" : "Cek Stok"}
                             </span>
                             <h4 className="font-black text-lg text-slate-800 mt-1.5">{ticket.sku}</h4>
                             
@@ -348,6 +343,22 @@ export default function WarehouseDashboard() {
                                           {v}
                                         </span>
                                       ))}
+                                    </div>
+                                  )}
+                                  
+                                  {/* Detailed Colors and Sizes if they exist */}
+                                  {(ticket.color || ticket.productSize) && (
+                                    <div className="flex flex-wrap gap-2 mt-2">
+                                      {ticket.color && (
+                                        <span className="text-xs font-bold bg-pink-100 text-pink-800 px-2 py-1 rounded-md border border-pink-200">
+                                          Warna: {ticket.color}
+                                        </span>
+                                      )}
+                                      {ticket.productSize && (
+                                        <span className="text-xs font-bold bg-purple-100 text-purple-800 px-2 py-1 rounded-md border border-purple-200">
+                                          Ukuran: {ticket.productSize}
+                                        </span>
+                                      )}
                                     </div>
                                   )}
                                 </div>

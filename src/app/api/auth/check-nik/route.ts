@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
     nik = nik.trim();
 
     if (nik === "22054178") {
-      return NextResponse.json({ success: true, toko: "Server", name: "Luqman Arif (Supervisor IT)" });
+      return NextResponse.json({ success: true, toko: "Server", name: "Luqman Arif (Developer)" });
     }
 
     const user = await prisma.user.findUnique({
@@ -33,3 +33,4 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }
 }
+

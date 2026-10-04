@@ -74,7 +74,7 @@ export default function SuperAdminDashboard() {
             <UserCircle2 className="w-6 h-6 text-slate-300" />
           </div>
           <div>
-            <p className="text-xs text-slate-400 font-medium tracking-wide uppercase">Supervisor IT</p>
+            <p className="text-xs text-slate-400 font-medium tracking-wide uppercase">Developer</p>
             <h1 className="font-bold text-lg leading-tight">Master Control</h1>
           </div>
         </div>
@@ -282,3 +282,4 @@ export default function SuperAdminDashboard() {
     </div>
   );
 }
+

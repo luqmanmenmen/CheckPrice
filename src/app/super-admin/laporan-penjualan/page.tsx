@@ -1,13 +1,34 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { ArrowLeft, Calendar, DollarSign, Package, AlertTriangle, TrendingUp, Search, Download, BarChart3, List } from "lucide-react";
+import { ArrowLeft, Calendar, Search, Download, AlertTriangle, TrendingUp, Package, Box } from "lucide-react";
 import Link from "next/link";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
-import { AlertModal } from "@/components/AlertModal";
 import { PinModal } from "@/components/PinModal";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { ChipLoader } from "@/components/ChipLoader";
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, Legend } from 'recharts';
+
+const DEPT_MAP: Record<string, string> = {
+  "3327": "SUKO MEN",
+  "3328": "SUKO LADIES",
+  "3343": "SUKO WORKWEAR",
+  "3344": "SUKO ESSENTIALS",
+  "3348": "SUKO SPORTS LADIES",
+  "3349": "SUKO SPORTS MEN",
+  "3354": "SUKO BAGS",
+  "3356": "SUKO ACCS",
+  "3357": "SUKO HOME LIVING",
+  "3358": "SUKO TOYS",
+  "3366": "SUKO CHILDREN BOYS",
+  "3367": "SUKO CHILDREN GIRLS",
+  "3368": "SUKO SLEEPWEAR",
+  "3369": "SUKO UNDERWEAR",
+  "3370": "SUKO MEN SLEEPWEAR",
+  "3389": "BYRCH & CO LADIES FOOTWEAR",
+  "3391": "BYRCH & CO MEN FOOTWEAR",
+  "3393": "BYRCH & CO KIDS FOOTWEAR",
+};
 
 type SalesItem = {
   id: string;
@@ -23,20 +44,28 @@ type SalesItem = {
 
 type SalesData = {
   targetDate: string;
+  pqUploadTime: string;
+  pqFileName: string | null;
   availableDates: string[];
   summary: {
     totalRevenue: number;
     totalPromoRevenue: number;
     totalQty: number;
     anomalyCount: number;
-    totalOmzetPOS: number;    // Omzet aktual dari POS (MTD_SALES_RETAIL)
-    ytd_sales_unit: number;   // Penjualan tahun ini (unit)
-    ytd_omzet: number;        // Omzet tahun ini (Rp)
-    mtd_omzet_pos: number;    // Omzet MTD dari seluruh produk (Rp)
-    nilai_inventori: number;  // Nilai stok saat ini (Rp)
+    totalOmzetPOS: number;
+    ytd_sales_unit: number;
+    ytd_omzet: number;
+    mtd_omzet_pos: number;
+    nilai_inventori: number;
   };
   categoryBreakdown: Record<string, { omzet: number; qty: number }>;
   trendData: { date: string; fullDate: string; omzet: number; qty: number }[];
+  topFast: {
+    sku: string;
+    description: string;
+    sales_qty: number;
+    omzet_total: number;
+  }[];
   items: SalesItem[];
 };
 
@@ -45,10 +74,8 @@ export default function LaporanPenjualanPage() {
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeTab, setActiveTab] = useState<"SUMMARY" | "DETAILS">("SUMMARY");
-  const [timeframe, setTimeframe] = useState<"1M" | "1Y" | "ALL">("1M");
+  const [timeframe, setTimeframe] = useState<"1D" | "1W" | "1M" | "1Y" | "ALL">("1M");
 
-  // Modal State
   const [showPinModal, setShowPinModal] = useState(false);
   const [alert, setAlert] = useState<{ isOpen: boolean; title: string; message: string; type: "success" | "error" | "warning" }>({
     isOpen: false,
@@ -56,10 +83,6 @@ export default function LaporanPenjualanPage() {
     message: "",
     type: "success"
   });
-
-  const showAlert = (title: string, message: string, type: "success" | "error" | "warning") => {
-    setAlert({ isOpen: true, title, message, type });
-  };
 
   const fetchReport = async (dateStr: string, tf: string) => {
     setLoading(true);
@@ -82,10 +105,6 @@ export default function LaporanPenjualanPage() {
   useEffect(() => {
     fetchReport(selectedDate, timeframe);
   }, [selectedDate, timeframe]);
-
-  const handleDateChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    setSelectedDate(e.target.value);
-  };
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat("id-ID", {
@@ -111,29 +130,32 @@ export default function LaporanPenjualanPage() {
     return new Date(dateStr).toLocaleDateString('id-ID', options);
   };
 
-  const triggerExport = () => {
-    setShowPinModal(true);
+  const formatShortDate = (dateStr: string) => {
+    if (!dateStr) return "";
+    try {
+      const d = new Date(dateStr);
+      const day = String(d.getDate()).padStart(2, '0');
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+      const month = months[d.getMonth()];
+      return `${day} ${month}`;
+    } catch {
+      return dateStr;
+    }
   };
 
   const exportPDF = (pin: string) => {
     if (!data) return;
-    
     if (pin !== "220117") {
-      showAlert("Akses Ditolak", "PIN yang Anda masukkan salah!", "error");
+      setAlert({ isOpen: true, title: "Akses Ditolak", message: "PIN yang Anda masukkan salah!", type: "error" });
       return;
     }
-
     setShowPinModal(false);
-    
     const doc = new jsPDF();
-    
     doc.setFontSize(16);
     doc.text(`Laporan Penjualan - ${formatDate(data.targetDate)}`, 14, 20);
-    
     doc.setFontSize(10);
     doc.text(`Total Omzet: ${formatCurrency(data.summary.totalRevenue)}`, 14, 30);
     doc.text(`Total Terjual: ${data.summary.totalQty} Pcs`, 14, 35);
-    
     const tableData = filteredItems.map((item, index) => [
       index + 1,
       item.sku,
@@ -143,7 +165,6 @@ export default function LaporanPenjualanPage() {
       item.status === 'NO_PRICE' ? '⚠️ NO PRICE' : item.status,
       item.status === 'NO_PRICE' ? '0' : formatCurrency(item.itemTotal)
     ]);
-
     autoTable(doc, {
       startY: 45,
       head: [['No', 'SKU', 'Nama Barang', 'Qty', 'Harga', 'Status', 'Total']],
@@ -151,7 +172,6 @@ export default function LaporanPenjualanPage() {
       styles: { fontSize: 8 },
       headStyles: { fillColor: [15, 23, 42] }
     });
-
     doc.save(`Laporan_Penjualan_${data.targetDate}.pdf`);
   };
 
@@ -160,393 +180,361 @@ export default function LaporanPenjualanPage() {
     item.sku.toLowerCase().includes(searchQuery.toLowerCase())
   ) || [];
 
+  // Data for Charts
+  const piePromoData = data ? [
+    { name: 'Normal', value: data.summary.totalRevenue - data.summary.totalPromoRevenue, color: '#3b82f6' }, // Blue
+    { name: 'Promo', value: data.summary.totalPromoRevenue, color: '#10b981' } // Green
+  ] : [];
+
+  const topDeptData = data ? Object.entries(data.categoryBreakdown)
+    .map(([dept, metrics], idx) => {
+      const colors = ["#6366f1", "#14b8a6", "#f59e0b", "#ec4899", "#8b5cf6", "#06b6d4"];
+      return {
+        name: DEPT_MAP[dept] || dept,
+        value: metrics.omzet,
+        qty: metrics.qty,
+        color: colors[idx % colors.length]
+      };
+    })
+    .sort((a,b) => b.value - a.value)
+    .slice(0, 5) : [];
+
+  const CustomTooltipArea = ({ active, payload, label }: any) => {
+    if (active && payload && payload.length) {
+      return (
+        <div className="bg-white/95 backdrop-blur-md p-4 rounded-xl shadow-lg border border-slate-200">
+          <p className="text-slate-500 font-bold text-xs uppercase mb-1">{formatShortDate(payload[0].payload.fullDate)}</p>
+          <p className="text-emerald-600 font-black text-xl mb-1">
+            {formatCurrency(payload[0].value)}
+          </p>
+          {payload[1] && (
+            <p className="text-slate-600 font-bold text-sm">
+              {payload[1].value} pcs
+            </p>
+          )}
+        </div>
+      );
+    }
+    return null;
+  };
+
   return (
-    <div className="min-h-screen bg-slate-50 p-4 pb-24 max-w-6xl mx-auto flex flex-col gap-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-2">
-        <div className="flex items-center gap-3">
-          <Link href="/super-admin" className="p-2.5 rounded-xl hover:bg-slate-200 transition-colors bg-white shadow-sm border border-slate-200">
-            <ArrowLeft className="w-5 h-5 text-slate-700" />
+    <div className="min-h-screen bg-slate-100 text-slate-800 p-4 sm:p-6 pb-24 mx-auto flex flex-col gap-6 font-sans">
+      
+      {/* Header - Mimicking reference dashboard header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-2 bg-white p-4 sm:px-6 rounded-2xl shadow-sm border border-slate-200">
+        <div className="flex items-center gap-4">
+          <Link href="/super-admin" className="p-2.5 rounded-full hover:bg-slate-100 transition-colors bg-slate-50 border border-slate-200">
+            <ArrowLeft className="w-5 h-5 text-slate-600" />
           </Link>
           <div>
-            <h1 className="font-black text-2xl text-slate-800 tracking-tight flex items-center gap-2">
-              Dashboard Penjualan
-            </h1>
-            <p className="text-sm text-slate-500">Estimasi omzet harian & analitik berdasarkan Power Query</p>
+            <h1 className="font-black text-2xl text-slate-800 tracking-tight">Fitur Dashboard Otomatis</h1>
+            <p className="text-sm text-slate-500 font-medium">Laporan Penjualan & Analitik - {data?.pqUploadTime || '-'}</p>
           </div>
         </div>
         
-        <div className="flex items-center gap-2 bg-white p-2 rounded-xl border border-slate-200 shadow-sm">
-          <div className="pl-2">
-            <Calendar className="w-5 h-5 text-indigo-500" />
+        <div className="flex items-center gap-2">
+          <div className="flex items-center bg-slate-100 p-1.5 rounded-xl border border-slate-200 shadow-inner">
+            <button onClick={() => setTimeframe("1D")} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-colors ${timeframe === "1D" ? "bg-white text-emerald-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>1 Hari</button>
+            <button onClick={() => setTimeframe("1W")} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-colors ${timeframe === "1W" ? "bg-white text-emerald-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>1 Minggu</button>
+            <button onClick={() => setTimeframe("1M")} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-colors ${timeframe === "1M" ? "bg-white text-emerald-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>1 Bulan</button>
+            <button onClick={() => setTimeframe("1Y")} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-colors ${timeframe === "1Y" ? "bg-white text-emerald-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>1 Tahun</button>
           </div>
-          <select 
-            value={selectedDate}
-            onChange={handleDateChange}
-            className="bg-transparent border-none text-sm font-bold text-slate-700 focus:ring-0 cursor-pointer pr-8"
-          >
-            {selectedDate && selectedDate.length === 7 && (
-              <option value={selectedDate}>Data Bulan: {selectedDate}</option>
-            )}
-            {data?.availableDates.map(date => (
-              <option key={date} value={date}>Data PQ: {formatDate(date)}</option>
-            ))}
-            {!data?.availableDates.includes(selectedDate) && selectedDate && selectedDate.length > 7 && (
-              <option value={selectedDate}>Data PQ: {formatDate(selectedDate)}</option>
-            )}
-          </select>
+          
+          <div className="flex items-center gap-2 bg-slate-50 px-4 py-2 rounded-xl border border-slate-200 shadow-sm">
+            <Calendar className="w-4 h-4 text-emerald-600" />
+            <select 
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="bg-transparent border-none text-sm font-bold text-slate-700 focus:ring-0 cursor-pointer outline-none"
+            >
+              {data?.availableDates.map(date => (
+                <option key={date} value={date}>{formatDate(date)}</option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 
       {loading ? (
-        <div className="flex flex-col items-center justify-center py-20">
-          <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
-          <p className="text-sm font-medium text-slate-500 mt-4 animate-pulse">Memproses miliaran data...</p>
+        <div className="flex flex-col items-center justify-center py-10 bg-white rounded-2xl border border-slate-200 shadow-sm">
+          <ChipLoader />
+          <p className="text-sm font-bold text-slate-500 mt-2 animate-pulse">Memproses miliaran data...</p>
         </div>
       ) : (
-        <>
-          {/* Executive Metric Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {/* Total Omzet — Full width hero card */}
-            <div className="bg-gradient-to-br from-slate-900 to-slate-800 p-6 rounded-3xl shadow-xl relative overflow-hidden group col-span-2 flex flex-col justify-center">
-              <div className="absolute -right-10 -top-10 w-40 h-40 bg-white/5 rounded-full blur-3xl group-hover:bg-white/10 transition-all"></div>
-              <div className="flex items-center gap-3 mb-2">
-                <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center backdrop-blur-md">
-                  <DollarSign className="w-6 h-6 text-emerald-400" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-slate-300 text-sm tracking-wide uppercase">Total Omzet Hari Ini</h3>
-                  <p className="text-xs text-slate-400">
-                    {data?.summary.totalOmzetPOS && data.summary.totalOmzetPOS > 0
-                      ? '✅ Dari data POS (akurat)'
-                      : '⚡ Estimasi dari harga × qty'}
-                  </p>
-                </div>
-              </div>
-              <p className="text-4xl sm:text-5xl lg:text-6xl font-black text-white tracking-tighter mt-2 truncate" title={formatCurrency(data?.summary.totalRevenue || 0)}>
-                {formatCurrency(data?.summary.totalRevenue || 0)}
-              </p>
-            </div>
-
-            {/* Omzet Promo */}
-            <div className="bg-gradient-to-br from-amber-500 to-amber-600 p-5 rounded-3xl shadow-lg relative overflow-hidden">
-              <div className="absolute -right-4 -bottom-4 w-24 h-24 bg-white/20 rounded-full blur-2xl"></div>
-              <h3 className="font-bold text-amber-50 text-xs tracking-wide uppercase mb-1">Omzet Promo</h3>
-              <p className="text-2xl font-black text-white tracking-tight truncate" title={formatCurrency(data?.summary.totalPromoRevenue || 0)}>
-                {formatCurrency(data?.summary.totalPromoRevenue || 0)}
-              </p>
-              <p className="text-xs text-amber-100 mt-1">Dari barang diskon/promo</p>
-            </div>
-
-            {/* Barang Terjual */}
-            <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200 flex flex-col justify-between">
-              <h3 className="font-bold text-slate-400 text-xs tracking-wide uppercase mb-1">Barang Terjual</h3>
-              <p className="text-2xl font-black text-slate-800 tracking-tight">
-                {(data?.summary.totalQty || 0).toLocaleString('id-ID')} <span className="text-sm text-slate-500 font-bold">pcs</span>
-              </p>
-              <div className="flex items-center justify-between mt-2">
-                <p className="text-xs text-slate-400">Hari ini</p>
-                <Package className="w-5 h-5 text-blue-400" />
-              </div>
-            </div>
-
-            {/* Omzet MTD dari PQ (sumber teratas) */}
-            <div className="bg-gradient-to-br from-emerald-500 to-teal-600 p-5 rounded-3xl shadow-lg relative overflow-hidden">
-              <div className="absolute -right-4 -bottom-4 w-24 h-24 bg-white/20 rounded-full blur-2xl"></div>
-              <h3 className="font-bold text-emerald-50 text-xs tracking-wide uppercase mb-1">Omzet MTD (POS)</h3>
-              <p className="text-xl font-black text-white tracking-tight truncate" title={formatCurrency(data?.summary.mtd_omzet_pos || 0)}>
-                {formatCompactCurrency(data?.summary.mtd_omzet_pos || 0)}
-              </p>
-              <p className="text-xs text-emerald-100 mt-1">Langsung dari kasir bulan ini</p>
-            </div>
-
-            {/* Omzet YTD */}
-            <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-5 rounded-3xl shadow-lg relative overflow-hidden">
-              <div className="absolute -right-4 -bottom-4 w-24 h-24 bg-white/20 rounded-full blur-2xl"></div>
-              <h3 className="font-bold text-indigo-100 text-xs tracking-wide uppercase mb-1">Omzet YTD</h3>
-              <p className="text-xl font-black text-white tracking-tight truncate" title={formatCurrency(data?.summary.ytd_omzet || 0)}>
-                {formatCompactCurrency(data?.summary.ytd_omzet || 0)}
-              </p>
-              <p className="text-xs text-indigo-200 mt-1">{(data?.summary.ytd_sales_unit || 0).toLocaleString('id-ID')} pcs tahun ini</p>
-            </div>
-
-            {/* Nilai Inventori */}
-            <div className="bg-gradient-to-br from-rose-500 to-pink-600 p-5 rounded-3xl shadow-lg relative overflow-hidden">
-              <div className="absolute -right-4 -bottom-4 w-24 h-24 bg-white/20 rounded-full blur-2xl"></div>
-              <h3 className="font-bold text-rose-100 text-xs tracking-wide uppercase mb-1">Nilai Stok</h3>
-              <p className="text-xl font-black text-white tracking-tight truncate" title={formatCurrency(data?.summary.nilai_inventori || 0)}>
-                {formatCompactCurrency(data?.summary.nilai_inventori || 0)}
-              </p>
-              <p className="text-xs text-rose-200 mt-1">Nilai inventori saat ini</p>
-            </div>
-          </div>
-
-          {/* Anomaly Alert */}
-          {(data?.summary.anomalyCount || 0) > 0 && (
-            <div className="bg-rose-50 border border-rose-200 p-4 rounded-2xl flex items-start gap-3 shadow-sm">
-              <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
-              <div>
-                <h3 className="font-bold text-rose-800">Perhatian: Ada {data?.summary.anomalyCount} barang tanpa harga (Harga = 0)</h3>
-                <p className="text-sm text-rose-600 mt-1">Barang ini tercatat laku namun harga normalnya belum diperbarui di database. Total omzet mungkin kurang dari yang sebenarnya.</p>
-              </div>
-            </div>
-          )}
-
-          {/* Tabs Navigation */}
-          <div className="flex items-center gap-2 border-b border-slate-200 pb-px">
-            <button
-              onClick={() => setActiveTab("SUMMARY")}
-              className={`px-5 py-3 font-bold text-sm rounded-t-xl transition-colors flex items-center gap-2 ${
-                activeTab === "SUMMARY" ? "bg-white text-indigo-600 border-t border-l border-r border-slate-200 border-b-white translate-y-px" : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
-              }`}
-            >
-              <BarChart3 className="w-4 h-4" />
-              Ringkasan Eksekutif
-            </button>
-            <button
-              onClick={() => setActiveTab("DETAILS")}
-              className={`px-5 py-3 font-bold text-sm rounded-t-xl transition-colors flex items-center gap-2 ${
-                activeTab === "DETAILS" ? "bg-white text-indigo-600 border-t border-l border-r border-slate-200 border-b-white translate-y-px" : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
-              }`}
-            >
-              <List className="w-4 h-4" />
-              Rincian Produk
-            </button>
-          </div>
-
-          {/* Tab Content */}
-          <div className="bg-white rounded-b-2xl rounded-tr-2xl shadow-sm border border-slate-200 p-6 -mt-px relative z-10">
-            {activeTab === "SUMMARY" ? (
-              <div className="flex flex-col lg:flex-row gap-8">
-                {/* Trend Chart Section */}
-                <div className="flex-1 overflow-hidden">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-2 gap-2">
-                    <h2 className="font-bold text-slate-800 text-lg flex items-center gap-2">
-                      <TrendingUp className="w-5 h-5 text-indigo-500" />
-                      Tren Penjualan ({timeframe === "1M" ? "Harian - 30 Hari" : timeframe === "1Y" ? "Bulanan - 1 Tahun" : "Seluruh Waktu"})
-                    </h2>
-                    <div className="flex items-center bg-slate-100 rounded-lg p-1 w-fit">
-                      <button 
-                        onClick={() => setTimeframe("1M")}
-                        className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors ${timeframe === "1M" ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
-                      >
-                        1 Bulan
-                      </button>
-                      <button 
-                        onClick={() => setTimeframe("1Y")}
-                        className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors ${timeframe === "1Y" ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
-                      >
-                        1 Tahun
-                      </button>
-                      <button 
-                        onClick={() => setTimeframe("ALL")}
-                        className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors ${timeframe === "ALL" ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
-                      >
-                        Semua
-                      </button>
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+          
+          {/* ================= LEFT PANEL (8 cols) ================= */}
+          <div className="xl:col-span-7 flex flex-col gap-6">
+            
+            {/* Top Cards (Ringkasan Penjualan) */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center">
+                      <TrendingUp className="w-4 h-4 text-emerald-600" />
                     </div>
+                    <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide">Omzet MTD</h3>
                   </div>
-                  <p className="text-xs text-slate-500 mb-6">💡 Klik pada titik grafik untuk melihat rincian produk di periode tersebut.</p>
-                  <div className="h-[300px] w-full cursor-pointer">
-                    {data?.trendData && data.trendData.length > 0 ? (
-                      <ResponsiveContainer width="100%" height="100%">
-                        <LineChart 
-                          data={data.trendData} 
-                          margin={{ top: 5, right: 20, left: 10, bottom: 5 }}
-                          onClick={(e: any) => {
-                            if (e && e.activePayload && e.activePayload.length > 0) {
-                              const clickedDate = e.activePayload[0].payload.fullDate;
-                              // Bisa pindah tanggal harian (YYYY-MM-DD) atau bulanan (YYYY-MM)
-                              if (clickedDate) {
-                                setSelectedDate(clickedDate);
-                                setActiveTab("DETAILS");
-                              }
-                            }
-                          }}
-                        >
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                          <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#64748b' }} dy={10} />
-                          <YAxis 
-                            yAxisId="left" 
-                            axisLine={false} 
-                            tickLine={false} 
-                            tick={{ fontSize: 12, fill: '#64748b' }} 
-                            tickFormatter={(value) => formatCompactCurrency(value)}
-                          />
-                          <Tooltip 
-                            formatter={(value: any, name: any) => [name === 'omzet' ? formatCurrency(Number(value)) : `${value} pcs`, name === 'omzet' ? 'Omzet' : 'Qty']}
-                            labelStyle={{ fontWeight: 'bold', color: '#1e293b', marginBottom: '8px' }}
-                            contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                          />
-                          <Legend verticalAlign="top" height={36} iconType="circle" />
-                          <Line yAxisId="left" type="monotone" dataKey="omzet" name="omzet" stroke="#4f46e5" strokeWidth={4} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-slate-400 text-sm bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                        Data tren belum tersedia.
-                      </div>
-                    )}
-                  </div>
+                  <div className="text-xs font-bold text-slate-400">Target: 2M</div>
                 </div>
-                
-                {/* Category Breakdown Section */}
-                <div className="w-full lg:w-[350px]">
-                  <h2 className="font-bold text-slate-800 text-lg mb-6">Sumbangsih per Departemen</h2>
-                  <div className="flex flex-col gap-3">
-                    {data?.categoryBreakdown && Object.entries(data.categoryBreakdown).length > 0 ? (
-                      Object.entries(data.categoryBreakdown)
-                        .sort(([, a], [, b]) => b.omzet - a.omzet)
-                        .map(([dept, metrics], idx) => {
-                          const percentage = data.summary.totalRevenue > 0 
-                            ? ((metrics.omzet / data.summary.totalRevenue) * 100).toFixed(1) 
-                            : "0";
-                          
-                          // Auto generate nice colors based on index
-                          const colors = ["bg-indigo-500", "bg-emerald-500", "bg-amber-500", "bg-rose-500", "bg-cyan-500", "bg-fuchsia-500"];
-                          const barColor = colors[idx % colors.length];
-
-                          return (
-                            <div key={dept} className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                              <div className="flex justify-between items-end mb-2">
-                                <div>
-                                  <h3 className="font-bold text-slate-700 text-xs uppercase tracking-wide">{dept}</h3>
-                                  <p className="text-sm font-black text-slate-900 mt-1">{formatCurrency(metrics.omzet)}</p>
-                                </div>
-                                <div className="text-right">
-                                  <p className="text-xs font-bold text-slate-500">{metrics.qty} pcs</p>
-                                  <p className="text-[10px] font-bold text-slate-400">{percentage}%</p>
-                                </div>
-                              </div>
-                              <div className="w-full bg-slate-200 rounded-full h-1.5 mt-2 overflow-hidden">
-                                <div className={`${barColor} h-1.5 rounded-full`} style={{ width: `${percentage}%` }}></div>
-                              </div>
-                            </div>
-                          );
-                        })
-                    ) : (
-                      <div className="text-sm text-slate-500 text-center py-8">
-                        Tidak ada data kategori hari ini.
-                      </div>
-                    )}
-                  </div>
+                <p className="text-2xl font-black text-slate-800 mb-3">{formatCompactCurrency(data?.summary.mtd_omzet_pos || 0)}</p>
+                <div className="w-full bg-slate-100 rounded-full h-2.5 mb-1">
+                  <div className="bg-emerald-500 h-2.5 rounded-full" style={{ width: `${Math.min(((data?.summary.mtd_omzet_pos || 0) / 2000000000) * 100, 100)}%` }}></div>
+                </div>
+                <div className="flex justify-between items-center mt-1">
+                  <span className="text-[10px] text-slate-400 font-bold">{formatCompactCurrency(2000000000)}</span>
+                  <span className="text-[10px] text-emerald-600 font-bold">{((data?.summary.mtd_omzet_pos || 0) / 2000000000 * 100).toFixed(1)}%</span>
                 </div>
               </div>
-            ) : (
-              <div>
-                {/* Table Controls */}
-                <div className="flex flex-col sm:flex-row justify-between gap-4 mb-4">
-                  <div className="relative flex-1 max-w-md">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
-                    <input
-                      type="text"
-                      placeholder="Cari SKU atau nama barang..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2.5 text-sm font-medium focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400 transition-shadow shadow-sm"
-                    />
-                  </div>
-                  
-                  <button 
-                    onClick={triggerExport}
-                    disabled={!data || data.items.length === 0}
-                    className="w-full sm:w-auto bg-green-600 hover:bg-green-700 text-white font-bold py-2.5 px-5 rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm transition-colors disabled:opacity-50"
-                  >
-                    <Download className="w-4 h-4" />
-                    Export PDF Laporan
-                  </button>
-                </div>
 
-                {/* Data Table */}
-                <div className="overflow-x-auto rounded-xl border border-slate-200">
-                  <table className="w-full text-left border-collapse">
-                    <thead>
-                      <tr className="bg-slate-50 border-b border-slate-200 text-xs uppercase tracking-wider text-slate-500 font-bold">
-                        <th className="p-4 rounded-tl-xl">SKU & Barang</th>
-                        <th className="p-4">Qty</th>
-                        <th className="p-4">Harga Satuan</th>
-                        <th className="p-4 text-right rounded-tr-xl">Total Penjualan</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {filteredItems.length === 0 ? (
-                        <tr>
-                          <td colSpan={5} className="p-8 text-center text-slate-500 text-sm font-medium">
-                            Tidak ada barang yang terjual pada pencarian ini.
-                          </td>
-                        </tr>
-                      ) : (
-                        filteredItems.map((item) => {
-                          // Extract category from description randomly if not in table data natively, wait we have dept in product but reportItems didn't send dept.
-                          // Let's send dept in reportItems as well, or just show description.
-                          // Actually, we didn't add dept to SalesItem type. Let's just omit Kategori column or use a placeholder if we don't have it.
-                          // For now, omit Kategori column to be safe. Wait, I added it in TH. Let's remove Kategori TH and TD.
-                          return (
-                          <tr key={item.id} className={`hover:bg-slate-50 transition-colors ${item.status === 'NO_PRICE' ? 'bg-rose-50/30' : ''}`}>
-                            <td className="p-4">
-                              <div className="flex flex-col">
-                                <span className="font-bold text-slate-800 text-sm">{item.sku}</span>
-                                <span className="text-xs text-slate-500 mt-0.5 max-w-[280px]" title={item.description}>{item.description}</span>
-                                
-                                {item.status === 'NO_PRICE' && (
-                                  <div className="mt-2 inline-flex items-center gap-1.5 bg-rose-100 text-rose-700 px-2.5 py-1 rounded-md text-[10px] font-bold w-fit border border-rose-200">
-                                    <AlertTriangle className="w-3 h-3" />
-                                    Harga 0. Mohon update di master data!
-                                  </div>
-                                )}
-                              </div>
-                            </td>
-                            <td className="p-4 align-top">
-                              <span className="font-black text-slate-700 text-sm">{item.qtySold}</span>
-                            </td>
-                            <td className="p-4 align-top">
-                              {item.status === 'NO_PRICE' ? (
-                                <span className="text-xs font-bold text-rose-500">-</span>
-                              ) : (
-                                <div className="flex flex-col">
-                                  <span className="font-bold text-slate-800 text-sm">{formatCurrency(item.unitPrice)}</span>
-                                  <div className={`mt-1 text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded w-fit ${
-                                    item.status === 'PROMO' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'
-                                  }`}>
-                                    {item.status}
-                                  </div>
-                                </div>
-                              )}
-                            </td>
-                            <td className="p-4 align-top text-right">
-                               {item.status === 'NO_PRICE' ? (
-                                <span className="text-sm font-bold text-rose-500">-</span>
-                              ) : (
-                                <span className="font-black text-slate-800 text-base">{formatCurrency(item.itemTotal)}</span>
-                              )}
-                            </td>
-                          </tr>
-                        )})
-                      )}
-                    </tbody>
-                  </table>
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center">
+                    <Package className="w-4 h-4 text-blue-600" />
+                  </div>
+                  <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide">Qty Terjual</h3>
                 </div>
+                <p className="text-2xl font-black text-slate-800">{(data?.summary.totalQty || 0).toLocaleString('id-ID')} <span className="text-sm text-slate-500">Pcs</span></p>
+                <div className="mt-2 text-xs font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded w-fit">
+                  Hari Ini
+                </div>
+              </div>
+
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center">
+                    <Box className="w-4 h-4 text-amber-600" />
+                  </div>
+                  <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide">Nilai Inventori</h3>
+                </div>
+                <p className="text-2xl font-black text-slate-800">{formatCompactCurrency(data?.summary.nilai_inventori || 0)}</p>
+                <div className="mt-2 text-xs font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded w-fit">
+                  Estimasi Stok
+                </div>
+              </div>
+            </div>
+
+            {/* Line Chart: Grafik Penjualan Harian */}
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+              <h2 className="font-bold text-slate-800 text-lg mb-6 flex items-center gap-2">
+                Grafik Penjualan Harian
+              </h2>
+              <div className="h-[250px] w-full">
+                {data?.trendData && data.trendData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={data.trendData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="colorGreen" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
+                          <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                      <XAxis dataKey="fullDate" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} tickFormatter={formatShortDate} dy={10} />
+                      <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} tickFormatter={(val) => formatCompactCurrency(val)} />
+                      <Tooltip content={<CustomTooltipArea />} />
+                      <Area type="monotone" dataKey="omzet" stroke="#10b981" strokeWidth={3} fillOpacity={1} fill="url(#colorGreen)" activeDot={{ r: 6, fill: "#10b981", stroke: "#fff", strokeWidth: 2 }} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-slate-400 text-sm bg-slate-50 rounded-xl">Data tren tidak tersedia</div>
+                )}
+              </div>
+            </div>
+
+            {/* Top Produk & Promo Insights */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                <h2 className="font-bold text-slate-800 text-base mb-4">
+                  Top Produk Terjual ({timeframe === '1D' ? 'Hari Ini' : timeframe === '1W' ? '1 Minggu' : timeframe === '1Y' ? '1 Tahun' : '1 Bulan'})
+                </h2>
+                <div className="flex flex-col gap-3">
+                  {data?.topFast?.slice(0, 5).map((item, idx) => (
+                    <div key={idx} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100">
+                      <div className="flex items-center gap-3">
+                        <div className="w-6 h-6 rounded-full bg-slate-200 flex items-center justify-center text-xs font-bold text-slate-600">{idx + 1}</div>
+                        <div>
+                          <p className="text-sm font-bold text-slate-800 truncate max-w-[150px]">{item.description}</p>
+                          <p className="text-xs text-slate-500">{item.sku}</p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-black text-emerald-600">{formatCompactCurrency(item.omzet_total)}</p>
+                        <p className="text-[10px] font-bold text-slate-500">{item.sales_qty} pcs</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center">
+                <h2 className="font-bold text-slate-800 text-base mb-2 w-full text-left">Persentase Promo vs Normal</h2>
+                <div className="h-[200px] w-full relative">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={piePromoData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value" stroke="none">
+                        {piePromoData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip formatter={(val: number) => formatCurrency(val)} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                    <p className="text-2xl font-black text-slate-800">
+                      {data?.summary.totalRevenue ? Math.round((data.summary.totalPromoRevenue / data.summary.totalRevenue) * 100) : 0}%
+                    </p>
+                    <p className="text-xs text-slate-500 font-bold">PROMO</p>
+                  </div>
+                </div>
+                <div className="flex justify-center gap-6 mt-4 w-full">
+                  {piePromoData.map((entry) => (
+                    <div key={entry.name} className="flex items-center gap-2">
+                      <div className="w-3 h-3 rounded-full" style={{ backgroundColor: entry.color }}></div>
+                      <p className="text-xs font-bold text-slate-600">{entry.name}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ================= RIGHT PANEL (5 cols) ================= */}
+          <div className="xl:col-span-5 flex flex-col gap-6">
+            
+            {/* Bar Chart: Penjualan per Departemen */}
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+              <h2 className="font-bold text-slate-800 text-base mb-6">Penjualan per Kategori (Departemen)</h2>
+              <div className="h-[250px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={topDeptData} layout="vertical" margin={{ top: 0, right: 20, left: 40, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+                    <XAxis type="number" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748b' }} tickFormatter={(val) => formatCompactCurrency(val)} />
+                    <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#334155', fontWeight: 'bold' }} width={90} />
+                    <Tooltip cursor={{ fill: '#f1f5f9' }} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} formatter={(val: number) => formatCurrency(val)} />
+                    <Bar dataKey="value" radius={[0, 4, 4, 0]}>
+                      {topDeptData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* List Departemen (Like the 'Keuangan 2025' table) */}
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex-1">
+              <h2 className="font-bold text-slate-800 text-base mb-4">Detail Laporan Departemen</h2>
+              <div className="overflow-x-auto rounded-xl border border-slate-100">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-50 border-b border-slate-100">
+                    <tr>
+                      <th className="p-3 font-bold text-slate-500 text-xs uppercase">Departemen</th>
+                      <th className="p-3 font-bold text-slate-500 text-xs uppercase text-center">Qty</th>
+                      <th className="p-3 font-bold text-slate-500 text-xs uppercase text-right">Omzet</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {topDeptData.map((dept, i) => (
+                      <tr key={i} className="hover:bg-slate-50 transition-colors">
+                        <td className="p-3 font-bold text-slate-700">{dept.name}</td>
+                        <td className="p-3 font-medium text-slate-600 text-center">{dept.qty}</td>
+                        <td className="p-3 font-black text-emerald-600 text-right">{formatCurrency(dept.value)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* FULL TABLE DATA */}
+      {!loading && data && (
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm mt-2">
+          <div className="flex flex-col sm:flex-row justify-between gap-4 mb-6">
+            <h2 className="font-bold text-slate-800 text-lg">Laporan Penjualan Lengkap</h2>
+            <div className="flex gap-3">
+              <div className="relative w-64">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+                <input
+                  type="text"
+                  placeholder="Cari SKU / Barang..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-9 pr-4 py-2 text-sm font-medium focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                />
+              </div>
+              <button 
+                onClick={() => setShowPinModal(true)}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-4 rounded-lg shadow-sm flex items-center justify-center gap-2 text-sm transition-colors"
+              >
+                <Download className="w-4 h-4" />
+                Export
+              </button>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <table className="w-full text-left border-collapse text-sm">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200 text-xs uppercase tracking-wider text-slate-500 font-bold">
+                  <th className="p-4 font-semibold">SKU & Barang</th>
+                  <th className="p-4 font-semibold text-center">Qty</th>
+                  <th className="p-4 font-semibold text-right">Harga Satuan</th>
+                  <th className="p-4 font-semibold text-right">Total Penjualan</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredItems.slice(0, 50).map((item) => (
+                  <tr key={item.id} className={`hover:bg-slate-50 transition-colors ${item.status === 'NO_PRICE' ? 'bg-rose-50' : ''}`}>
+                    <td className="p-4">
+                      <div className="flex flex-col gap-1">
+                        <span className="font-bold text-slate-800">{item.sku}</span>
+                        <span className="text-xs text-slate-500 max-w-[300px] truncate">{item.description}</span>
+                        {item.status === 'NO_PRICE' && (
+                          <span className="text-[10px] font-bold text-rose-600 bg-rose-100 px-2 py-0.5 rounded w-fit border border-rose-200">⚠️ HARGA KOSONG</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="p-4 text-center font-bold text-slate-700">{item.qtySold}</td>
+                    <td className="p-4 text-right">
+                      {item.status === 'NO_PRICE' ? '-' : (
+                        <div className="flex flex-col items-end gap-1">
+                          <span className="font-bold text-slate-800">{formatCurrency(item.unitPrice)}</span>
+                          <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded ${item.status === 'PROMO' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+                            {item.status}
+                          </span>
+                        </div>
+                      )}
+                    </td>
+                    <td className="p-4 text-right font-black text-emerald-600">
+                      {item.status === 'NO_PRICE' ? '-' : formatCurrency(item.itemTotal)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {filteredItems.length > 50 && (
+              <div className="p-4 text-center text-sm font-bold text-slate-500 bg-slate-50 border-t border-slate-200">
+                Menampilkan 50 data teratas dari {filteredItems.length} hasil pencarian.
               </div>
             )}
           </div>
-        </>
+        </div>
       )}
 
       <PinModal 
         isOpen={showPinModal}
         onClose={() => setShowPinModal(false)}
         onSubmit={exportPDF}
-        title="Otorisasi Supervisor IT"
+        title="Otorisasi Developer"
         description="Masukkan PIN (220117) untuk mengekspor laporan penjualan."
       />
-
-      <AlertModal 
-        isOpen={alert.isOpen}
-        title={alert.title}
-        message={alert.message}
-        type={alert.type}
-        onClose={() => setAlert(prev => ({ ...prev, isOpen: false }))}
-      />
     </div>
-  );
+  )
 }

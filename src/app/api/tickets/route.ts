@@ -14,7 +14,9 @@ export async function GET(req: NextRequest) {
 
     let tickets;
 
-    if (session.role === "WAREHOUSE") {
+    const isWarehouseUser = session.jobTitle === "Gudang Stock" || session.role === "SUPERVISOR";
+
+    if (isWarehouseUser) {
       // Gudang sees all PENDING and READY tickets
       tickets = await prisma.ticket.findMany({
         where: {
@@ -34,6 +36,9 @@ export async function GET(req: NextRequest) {
           requesterId: session.userId,
           status: { not: "COMPLETED" }
         },
+        include: {
+          requester: { select: { name: true, nik: true } }
+        },
         orderBy: {
           createdAt: "desc"
         }
@@ -43,18 +48,24 @@ export async function GET(req: NextRequest) {
     const skus = [...new Set(tickets.map((t: any) => t.sku))];
     const products = await prisma.product.findMany({
       where: { sku: { in: skus } },
-      select: { sku: true, description: true, hargaNormal: true }
+      select: { sku: true, description: true, hargaNormal: true, color: true, size: true }
     });
     
-    // Parse description to just get the name (before colon)
     const productMap = Object.fromEntries(
-      products.map(p => [p.sku, { name: p.description.split(":")[0].trim(), hargaNormal: p.hargaNormal }])
+      products.map(p => [p.sku, { 
+        name: p.description, 
+        hargaNormal: p.hargaNormal,
+        color: p.color,
+        productSize: p.size
+      }])
     );
 
     const ticketsWithProduct = tickets.map((t: any) => ({
       ...t,
       productName: productMap[t.sku]?.name || "Produk Tidak Diketahui",
-      hargaNormal: productMap[t.sku]?.hargaNormal || 0
+      hargaNormal: productMap[t.sku]?.hargaNormal || 0,
+      color: productMap[t.sku]?.color || null,
+      productSize: productMap[t.sku]?.productSize || null
     }));
 
     return NextResponse.json({ success: true, tickets: ticketsWithProduct });
@@ -141,8 +152,9 @@ export async function PATCH(req: NextRequest) {
       for (const update of body.updates) {
         if (!update.ticketId || !update.status) continue;
         
-        if (session.role === "WAREHOUSE" && !["READY", "OOS"].includes(update.status)) continue;
-        if (session.role === "SA" && update.status !== "COMPLETED") continue;
+        const isWarehouseUser = session.jobTitle === "Gudang Stock" || session.role === "SUPERVISOR";
+        if (isWarehouseUser && !["READY", "OOS"].includes(update.status)) continue;
+        if (!isWarehouseUser && update.status !== "COMPLETED") continue;
         
         const updatedTicket = await prisma.ticket.update({
           where: { id: update.ticketId },
@@ -160,12 +172,14 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
+    const isWarehouseUser = session.jobTitle === "Gudang Stock" || session.role === "SUPERVISOR";
+
     // Role check: Only WAREHOUSE can set READY/OOS. SA can set COMPLETED.
-    if (session.role === "WAREHOUSE" && !["READY", "OOS"].includes(status)) {
+    if (isWarehouseUser && !["READY", "OOS"].includes(status)) {
       return NextResponse.json({ error: "Forbidden status update for WAREHOUSE" }, { status: 403 });
     }
 
-    if (session.role === "SA" && status !== "COMPLETED") {
+    if (!isWarehouseUser && status !== "COMPLETED") {
       return NextResponse.json({ error: "Forbidden status update for SA" }, { status: 403 });
     }
 

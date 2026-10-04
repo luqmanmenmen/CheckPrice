@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 import ShiftToggle from "@/components/ShiftToggle";
+import ShiftLoader from "@/components/ShiftLoader";
 import { ShoppingCart, Shirt, Footprints, Package } from "lucide-react";
 
 export default function Login() {
@@ -12,6 +13,14 @@ export default function Login() {
   const [shift, setShift] = useState("1");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [fadeExit, setFadeExit] = useState(false);
+
+  const performExit = (dest: string) => {
+    setFadeExit(true);
+    setTimeout(() => {
+      window.location.replace(dest);
+    }, 1000); // Wait for 1s fade-out animation
+  };
   const [toko, setToko] = useState("");
   const [userName, setUserName] = useState("");
   const [checkingNik, setCheckingNik] = useState(false);
@@ -96,11 +105,11 @@ export default function Login() {
           setShowChangePin(true);
         } else {
           if (data.role === "SUPERVISOR") {
-            router.replace("/spv-gateway");
+            performExit("/spv-gateway");
           } else if (jobTitle === "Gudang Stock") {
-            router.replace("/warehouse");
+            performExit("/warehouse");
           } else {
-            router.replace("/");
+            performExit("/");
           }
         }
       } else {
@@ -139,11 +148,11 @@ export default function Login() {
           setShowChangePin(true);
         } else {
           if (data.role === "SUPERVISOR") {
-            router.replace("/spv-gateway");
+            performExit("/spv-gateway");
           } else if (jobTitle === "Gudang Stock") {
-            router.replace("/warehouse");
+            performExit("/warehouse");
           } else {
-            router.replace("/");
+            performExit("/");
           }
         }
       } else {
@@ -175,11 +184,11 @@ export default function Login() {
       const data = await res.json();
       if (res.ok) {
         if (loginRole === "SUPERVISOR") {
-          router.replace("/spv-gateway");
+          performExit("/spv-gateway");
         } else if (jobTitle === "Gudang Stock") {
-          router.replace("/warehouse");
+          performExit("/warehouse");
         } else {
-          router.replace("/");
+          performExit("/");
         }
       } else {
         setError(data.error || "Gagal mengubah PIN");
@@ -382,6 +391,14 @@ export default function Login() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Full Screen Shift Loader */}
+      {loading && (
+        <div className={`fixed inset-0 z-[100] bg-slate-900/90 backdrop-blur-md flex flex-col items-center justify-center transition-opacity duration-1000 ${fadeExit ? "opacity-0" : "opacity-100"}`}>
+          <ShiftLoader />
+          <p className="text-white font-bold mt-16 text-lg tracking-widest animate-pulse">MEMULAI SHIFT...</p>
         </div>
       )}
     </div>
