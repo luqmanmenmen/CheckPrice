@@ -379,7 +379,7 @@ export default function LaporanPenjualanPage() {
                           <Cell key={`cell-${index}`} fill={entry.color} />
                         ))}
                       </Pie>
-                      <Tooltip formatter={(val: number) => formatCurrency(val)} />
+                      <Tooltip formatter={(val: any) => formatCurrency(val as number)} />
                     </PieChart>
                   </ResponsiveContainer>
                   <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
@@ -413,7 +413,7 @@ export default function LaporanPenjualanPage() {
                     <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
                     <XAxis type="number" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748b' }} tickFormatter={(val) => formatCompactCurrency(val)} />
                     <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#334155', fontWeight: 'bold' }} width={90} />
-                    <Tooltip cursor={{ fill: '#f1f5f9' }} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} formatter={(val: number) => formatCurrency(val)} />
+                    <Tooltip cursor={{ fill: '#f1f5f9' }} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} formatter={(val: any) => formatCurrency(val as number)} />
                     <Bar dataKey="value" radius={[0, 4, 4, 0]}>
                       {topDeptData.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={entry.color} />

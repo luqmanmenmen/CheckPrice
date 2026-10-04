@@ -15,7 +15,7 @@ type Ticket = {
   sku: string;
   size: string | null;
   qty: number | null;
-  type: "REQUEST" | "STOCK_CHECK";
+  type: "REQUEST" | "STOCK_CHECK" | "FACING_OUT";
   status: "PENDING" | "READY" | "OOS" | "COMPLETED";
   createdAt: string;
   requester: { name: string; nik: string };
