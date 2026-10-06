@@ -126,6 +126,12 @@ export default function LaporanPenjualanPage() {
 
   const formatDate = (dateStr: string) => {
     if (!dateStr) return "";
+    // Jika formatnya hanya YYYY-MM
+    if (dateStr.length === 7) {
+      const options: Intl.DateTimeFormatOptions = { month: 'long', year: 'numeric' };
+      // append -01 so it parses correctly without timezone issues
+      return new Date(dateStr + "-01").toLocaleDateString('id-ID', options);
+    }
     const options: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'long', year: 'numeric' };
     return new Date(dateStr).toLocaleDateString('id-ID', options);
   };

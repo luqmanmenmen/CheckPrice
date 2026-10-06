@@ -56,25 +56,32 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    // Uniqify by date string, keeping the latest upload per date
-    const uniqueDatesMap = new Map();
+    // Uniqify by month string (YYYY-MM)
+    const uniqueMonthsMap = new Map();
     for (const sync of parsedSyncs) {
-      if (!uniqueDatesMap.has(sync.date)) {
-        uniqueDatesMap.set(sync.date, sync);
+      const yearMonth = sync.date.substring(0, 7); // "YYYY-MM"
+      if (!uniqueMonthsMap.has(yearMonth)) {
+        uniqueMonthsMap.set(yearMonth, sync); // Simpan sync terakhir di bulan tsb
       }
     }
-    const availableSyncs = Array.from(uniqueDatesMap.values());
-    const availableDates = availableSyncs.map(s => s.date);
+    const availableSyncs = Array.from(uniqueMonthsMap.values());
+    const availableDates = availableSyncs.map(s => s.date.substring(0, 7)); // e.g. "2026-10"
 
     const targetDateParam = searchParams.get("date");
     let selectedSync = availableSyncs.length > 0 ? availableSyncs[0] : null;
+    let targetYearMonth = availableDates.length > 0 ? availableDates[0] : todayStr.substring(0, 7);
     
     if (targetDateParam && targetDateParam !== "") {
-      const found = availableSyncs.find(s => s.date === targetDateParam);
-      if (found) selectedSync = found;
+      const found = availableSyncs.find(s => s.date.substring(0, 7) === targetDateParam.substring(0, 7));
+      if (found) {
+        selectedSync = found;
+        targetYearMonth = targetDateParam.substring(0, 7);
+      } else {
+        targetYearMonth = targetDateParam.substring(0, 7);
+      }
     }
 
-    let pqDateLabel = selectedSync ? selectedSync.date : todayStr;
+    let pqDateLabel = targetYearMonth; 
     const pqUploadTime = selectedSync?.createdAt
       ? new Date(selectedSync.createdAt).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' })
       : '-';
@@ -99,41 +106,12 @@ export async function GET(request: NextRequest) {
     let calculatedMtdOmzet = 0;
     let calculatedMtdQty = 0;
     
-    const targetDateObj = selectedSync ? new Date(selectedSync.date) : new Date();
+    const [tYear, tMonth] = targetYearMonth.split('-');
+    const targetDateObj = new Date(parseInt(tYear), parseInt(tMonth) - 1, 1);
     const startOfMonth = new Date(targetDateObj.getFullYear(), targetDateObj.getMonth(), 1);
     const endOfMonth = new Date(targetDateObj.getFullYear(), targetDateObj.getMonth() + 1, 0, 23, 59, 59, 999);
 
-    if (selectedSync) {
-      // Get the start and end of the selected date to query DailySales
-      const startDate = new Date(selectedSync.date);
-      startDate.setHours(0, 0, 0, 0);
-      const endDate = new Date(selectedSync.date);
-      endDate.setHours(23, 59, 59, 999);
-
-      const dailySalesAgg = await prisma.dailySales.aggregate({
-        where: {
-          date: {
-            gte: startDate,
-            lte: endDate
-          }
-        },
-        _sum: {
-          qtySold: true,
-          omzet: true
-        }
-      });
-      selectedDateOmzet = dailySalesAgg._sum.omzet || 0;
-      selectedDateQty = dailySalesAgg._sum.qtySold || 0;
-    } else {
-      // Fallback to product snapshot if no history found
-      const fallbackAgg = await prisma.product.aggregate({
-        _sum: { day_sales_unit: true, day_sales_retail: true }
-      });
-      selectedDateOmzet = fallbackAgg._sum.day_sales_retail || 0;
-      selectedDateQty = fallbackAgg._sum.day_sales_unit || 0;
-    }
-
-    // Selalu hitung MTD dari DailySales
+    // Karena user memilih bulan, selectedDateOmzet = omzet sebulan (MTD), bukan hanya 1 hari
     const mtdAgg = await prisma.dailySales.aggregate({
       where: {
         date: {
@@ -148,6 +126,9 @@ export async function GET(request: NextRequest) {
     });
     calculatedMtdOmzet = mtdAgg._sum.omzet || 0;
     calculatedMtdQty = mtdAgg._sum.qtySold || 0;
+    
+    selectedDateOmzet = calculatedMtdOmzet;
+    selectedDateQty = calculatedMtdQty;
 
     const [totalProducts, totalWithPromo] = await Promise.all([
       prisma.product.count(),
@@ -163,31 +144,27 @@ export async function GET(request: NextRequest) {
     let anomalyCount = 0;
 
     if (selectedSync) {
-      const startDate = new Date(selectedSync.date);
-      startDate.setHours(0, 0, 0, 0);
-      const endDate = new Date(selectedSync.date);
-      endDate.setHours(23, 59, 59, 999);
-
-      const ds = await prisma.dailySales.findMany({
-        where: { date: { gte: startDate, lte: endDate } },
-        include: {
-          product: {
-            select: {
-              sku: true,
-              description: true,
-              hargaNormal: true,
-              hargaPromo: true,
-              diskon: true,
-              discountType: true
-            }
-          }
+      const dsAgg = await prisma.dailySales.groupBy({
+        by: ['productId'],
+        where: { date: { gte: startOfMonth, lte: endOfMonth } },
+        _sum: { qtySold: true, omzet: true }
+      });
+      
+      const productIds = dsAgg.map((a: any) => a.productId);
+      const dsProducts = await prisma.product.findMany({
+        where: { id: { in: productIds } },
+        select: {
+          id: true, sku: true, description: true,
+          hargaNormal: true, hargaPromo: true, diskon: true, discountType: true
         }
       });
 
-      for (const d of ds) {
-        const p = d.product;
-        const qty = d.qtySold || 0;
-        const total = d.omzet || 0;
+      for (const d of dsAgg) {
+        const p = dsProducts.find((x: any) => x.id === d.productId);
+        if (!p) continue;
+        
+        const qty = d._sum.qtySold || 0;
+        const total = d._sum.omzet || 0;
         
         let unitPrice = p.hargaNormal || 0;
         let isPromo = false;
@@ -207,7 +184,7 @@ export async function GET(request: NextRequest) {
         }
 
         items.push({
-          id: d.id,
+          id: p.id.toString(), // Use product ID instead of dailySales ID to avoid duplicates
           sku: p.sku,
           description: p.description,
           qtySold: qty,
@@ -218,6 +195,9 @@ export async function GET(request: NextRequest) {
           itemTotal: total
         });
       }
+      
+      // Sort items by total desc
+      items.sort((a, b) => b.itemTotal - a.itemTotal);
     } else {
       // Fallback for current day if no history (legacy logic)
       const promoProducts = await prisma.product.findMany({
