@@ -493,11 +493,14 @@ export async function GET(request: NextRequest) {
     } catch (_e) { /* DailySales kosong */ }
 
     if (trendData.length === 0) {
+      const fallbackOmzet = (targetYearMonth === todayStr.substring(0, 7)) ? (calculatedMtdOmzet || agg._sum.sales_mtd_retail || 0) : (agg._sum.sales_mtd_retail || 0);
+      const fallbackQty = (targetYearMonth === todayStr.substring(0, 7)) ? (calculatedMtdQty || agg._sum.sales_mtd || 0) : (agg._sum.sales_mtd || 0);
+      
       trendData = [{
         date:  new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short' }),
         fullDate: todayStr,
-        omzet: calculatedMtdOmzet || agg._sum.sales_mtd_retail || 0,
-        qty:   calculatedMtdQty || agg._sum.sales_mtd        || 0,
+        omzet: fallbackOmzet,
+        qty:   fallbackQty,
         label: 'MTD s/d ' + todayStr,
       }];
     }
@@ -505,6 +508,8 @@ export async function GET(request: NextRequest) {
     // 7. TABEL PRODUK (paginasi, menggunakan data items dari DailySales)
     const totalTopCount = items.length;
     const paginatedItems = items.slice(skip, skip + limit);
+
+    const isCurrentMonth = targetYearMonth === todayStr.substring(0, 7);
 
     return NextResponse.json({
       success: true,
@@ -519,8 +524,8 @@ export async function GET(request: NextRequest) {
           qty_hari_ini:    selectedDateQty,
           omzet_promo:     omzetPromo,
           qty_promo:       qtyPromo,
-          mtd_omzet:       calculatedMtdOmzet || agg._sum.sales_mtd_retail  || 0,
-          mtd_qty:         calculatedMtdQty || agg._sum.sales_mtd          || 0,
+          mtd_omzet:       isCurrentMonth ? (calculatedMtdOmzet || agg._sum.sales_mtd_retail || 0) : (agg._sum.sales_mtd_retail || 0),
+          mtd_qty:         isCurrentMonth ? (calculatedMtdQty || agg._sum.sales_mtd || 0) : (agg._sum.sales_mtd || 0),
           ytd_omzet:       agg._sum.sales_ytd_retail  || 0,
           ytd_qty:         agg._sum.sales_ytd          || 0,
           nilai_inventori: agg._sum.eoh_retail         || 0,
@@ -531,8 +536,8 @@ export async function GET(request: NextRequest) {
           totalRevenue:    selectedDateOmzet,
           totalQty:        selectedDateQty,
           totalPromoRevenue: omzetPromo,
-          totalOmzetPOS:   calculatedMtdOmzet || agg._sum.sales_mtd_retail   || 0,
-          mtd_omzet_pos:   calculatedMtdOmzet || agg._sum.sales_mtd_retail   || 0,
+          totalOmzetPOS:   isCurrentMonth ? (calculatedMtdOmzet || agg._sum.sales_mtd_retail || 0) : (agg._sum.sales_mtd_retail || 0),
+          mtd_omzet_pos:   isCurrentMonth ? (calculatedMtdOmzet || agg._sum.sales_mtd_retail || 0) : (agg._sum.sales_mtd_retail || 0),
           ytd_sales_unit:  agg._sum.sales_ytd           || 0,
           anomalyCount:    anomalyCount,
         },
