@@ -55,6 +55,7 @@ type SalesData = {
     totalOmzetPOS: number;
     ytd_sales_unit: number;
     ytd_omzet: number;
+    ytd_qty: number;
     mtd_omzet_pos: number;
     nilai_inventori: number;
   };
