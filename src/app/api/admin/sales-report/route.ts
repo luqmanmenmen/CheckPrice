@@ -56,35 +56,99 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    // Uniqify by month string (YYYY-MM)
-    const uniqueMonthsMap = new Map();
-    for (const sync of parsedSyncs) {
-      const yearMonth = sync.date.substring(0, 7); // "YYYY-MM"
-      if (!uniqueMonthsMap.has(yearMonth)) {
-        uniqueMonthsMap.set(yearMonth, sync); // Simpan sync terakhir di bulan tsb
+    // Build options based on timeframe
+    let availableDates: string[] = [];
+    let availableSyncs: any[] = [];
+    
+    if (timeframe === "1Y") {
+      const uniqueYearsMap = new Map();
+      for (const sync of parsedSyncs) {
+        const year = sync.date.substring(0, 4);
+        if (!uniqueYearsMap.has(year)) uniqueYearsMap.set(year, sync);
       }
+      availableSyncs = Array.from(uniqueYearsMap.values());
+      availableDates = availableSyncs.map(s => s.date.substring(0, 4));
+    } else if (timeframe === "1M") {
+      const uniqueMonthsMap = new Map();
+      for (const sync of parsedSyncs) {
+        const yearMonth = sync.date.substring(0, 7);
+        if (!uniqueMonthsMap.has(yearMonth)) uniqueMonthsMap.set(yearMonth, sync);
+      }
+      availableSyncs = Array.from(uniqueMonthsMap.values());
+      availableDates = availableSyncs.map(s => s.date.substring(0, 7));
+    } else {
+      const uniqueDaysMap = new Map();
+      for (const sync of parsedSyncs) {
+        const day = sync.date;
+        if (!uniqueDaysMap.has(day)) uniqueDaysMap.set(day, sync);
+      }
+      availableSyncs = Array.from(uniqueDaysMap.values());
+      availableDates = availableSyncs.map(s => s.date);
     }
-    const availableSyncs = Array.from(uniqueMonthsMap.values());
-    const availableDates = availableSyncs.map(s => s.date.substring(0, 7)); // e.g. "2026-10"
 
     const targetDateParam = searchParams.get("date");
+    let targetDateValue = availableDates.length > 0 ? availableDates[0] : (
+      timeframe === '1Y' ? todayStr.substring(0,4) :
+      timeframe === '1M' ? todayStr.substring(0,7) :
+      todayStr
+    );
     let selectedSync = availableSyncs.length > 0 ? availableSyncs[0] : null;
-    let targetYearMonth = availableDates.length > 0 ? availableDates[0] : todayStr.substring(0, 7);
-    
+
     if (targetDateParam && targetDateParam !== "") {
-      const found = availableSyncs.find(s => s.date.substring(0, 7) === targetDateParam.substring(0, 7));
+      const found = availableSyncs.find(s => {
+        if (timeframe === '1Y') return s.date.substring(0,4) === targetDateParam.substring(0,4);
+        if (timeframe === '1M') return s.date.substring(0,7) === targetDateParam.substring(0,7);
+        return s.date === targetDateParam;
+      });
       if (found) {
         selectedSync = found;
-        targetYearMonth = targetDateParam.substring(0, 7);
-      } else {
-        targetYearMonth = targetDateParam.substring(0, 7);
+        if (timeframe === '1Y') targetDateValue = targetDateParam.substring(0,4);
+        else if (timeframe === '1M') targetDateValue = targetDateParam.substring(0,7);
+        else targetDateValue = targetDateParam;
       }
     }
 
-    let pqDateLabel = targetYearMonth; 
+    let pqDateLabel = targetDateValue; 
     const pqUploadTime = selectedSync?.createdAt
       ? new Date(selectedSync.createdAt).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' })
       : '-';
+
+    let mtdMonthObj = new Date();
+    if (timeframe === '1Y') {
+      mtdMonthObj = new Date(parseInt(targetDateValue), 11, 31);
+    } else if (timeframe === '1M') {
+      const [y, m] = targetDateValue.split('-');
+      mtdMonthObj = new Date(parseInt(y), parseInt(m) - 1, 1);
+    } else {
+      mtdMonthObj = new Date(targetDateValue);
+    }
+    const startOfMonth = new Date(mtdMonthObj.getFullYear(), mtdMonthObj.getMonth(), 1);
+    const endOfMonth = new Date(mtdMonthObj.getFullYear(), mtdMonthObj.getMonth() + 1, 0, 23, 59, 59, 999);
+
+    let startDateObj: Date;
+    let endDateObj: Date;
+
+    if (timeframe === '1Y') {
+      const y = parseInt(targetDateValue);
+      startDateObj = new Date(y, 0, 1);
+      endDateObj = new Date(y, 11, 31, 23, 59, 59, 999);
+    } else if (timeframe === '1M') {
+      const [y, m] = targetDateValue.split('-');
+      startDateObj = new Date(parseInt(y), parseInt(m) - 1, 1);
+      endDateObj = new Date(parseInt(y), parseInt(m), 0, 23, 59, 59, 999);
+    } else if (timeframe === '1W') {
+      const targetDate = new Date(targetDateValue);
+      endDateObj = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 23, 59, 59, 999);
+      startDateObj = new Date(endDateObj);
+      startDateObj.setDate(startDateObj.getDate() - 6);
+      startDateObj.setHours(0, 0, 0, 0);
+    } else { // 1D
+      const targetDate = new Date(targetDateValue);
+      startDateObj = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 0, 0, 0, 0);
+      endDateObj = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 23, 59, 59, 999);
+    }
+
+    const targetYearMonth = mtdMonthObj.toISOString().substring(0, 7);
 
     // 1. SUMMARY CARDS
     const agg = await prisma.product.aggregate({
@@ -98,37 +162,24 @@ export async function GET(request: NextRequest) {
       }
     });
 
-    // Query DailySales for the exact selected date
     let selectedDateOmzet = 0;
     let selectedDateQty = 0;
-    
-    // Hitung ulang MTD dari DailySales agar otomatis cut-off ganti bulan
     let calculatedMtdOmzet = 0;
     let calculatedMtdQty = 0;
-    
-    const [tYear, tMonth] = targetYearMonth.split('-');
-    const targetDateObj = new Date(parseInt(tYear), parseInt(tMonth) - 1, 1);
-    const startOfMonth = new Date(targetDateObj.getFullYear(), targetDateObj.getMonth(), 1);
-    const endOfMonth = new Date(targetDateObj.getFullYear(), targetDateObj.getMonth() + 1, 0, 23, 59, 59, 999);
 
-    // Karena user memilih bulan, selectedDateOmzet = omzet sebulan (MTD), bukan hanya 1 hari
     const mtdAgg = await prisma.dailySales.aggregate({
-      where: {
-        date: {
-          gte: startOfMonth,
-          lte: endOfMonth
-        }
-      },
-      _sum: {
-        omzet: true,
-        qtySold: true
-      }
+      where: { date: { gte: startOfMonth, lte: endOfMonth } },
+      _sum: { omzet: true, qtySold: true }
     });
     calculatedMtdOmzet = mtdAgg._sum.omzet || 0;
     calculatedMtdQty = mtdAgg._sum.qtySold || 0;
-    
-    selectedDateOmzet = calculatedMtdOmzet;
-    selectedDateQty = calculatedMtdQty;
+
+    const tfAgg = await prisma.dailySales.aggregate({
+      where: { date: { gte: startDateObj, lte: endDateObj } },
+      _sum: { omzet: true, qtySold: true }
+    });
+    selectedDateOmzet = tfAgg._sum.omzet || 0;
+    selectedDateQty = tfAgg._sum.qtySold || 0;
 
     const [totalProducts, totalWithPromo] = await Promise.all([
       prisma.product.count(),
