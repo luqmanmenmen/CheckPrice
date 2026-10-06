@@ -95,6 +95,14 @@ export async function GET(request: NextRequest) {
     let selectedDateOmzet = 0;
     let selectedDateQty = 0;
     
+    // Hitung ulang MTD dari DailySales agar otomatis cut-off ganti bulan
+    let calculatedMtdOmzet = 0;
+    let calculatedMtdQty = 0;
+    
+    const targetDateObj = selectedSync ? new Date(selectedSync.date) : new Date();
+    const startOfMonth = new Date(targetDateObj.getFullYear(), targetDateObj.getMonth(), 1);
+    const endOfMonth = new Date(targetDateObj.getFullYear(), targetDateObj.getMonth() + 1, 0, 23, 59, 59, 999);
+
     if (selectedSync) {
       // Get the start and end of the selected date to query DailySales
       const startDate = new Date(selectedSync.date);
@@ -124,6 +132,22 @@ export async function GET(request: NextRequest) {
       selectedDateOmzet = fallbackAgg._sum.day_sales_retail || 0;
       selectedDateQty = fallbackAgg._sum.day_sales_unit || 0;
     }
+
+    // Selalu hitung MTD dari DailySales
+    const mtdAgg = await prisma.dailySales.aggregate({
+      where: {
+        date: {
+          gte: startOfMonth,
+          lte: endOfMonth
+        }
+      },
+      _sum: {
+        omzet: true,
+        qtySold: true
+      }
+    });
+    calculatedMtdOmzet = mtdAgg._sum.omzet || 0;
+    calculatedMtdQty = mtdAgg._sum.qtySold || 0;
 
     const [totalProducts, totalWithPromo] = await Promise.all([
       prisma.product.count(),
@@ -248,6 +272,10 @@ export async function GET(request: NextRequest) {
     }
 
     // 2. CATEGORY BREAKDOWN per Department (MTD)
+    // Akan lebih akurat jika ini juga dari DailySales, 
+    // tetapi untuk sekarang kita pakai default query dan fallback ke DailySales jika perlu.
+    // Jika ganti bulan, product.sales_mtd_retail mungkin masih data bulan lalu
+    // Kita overwrite omzet MTD department jika total calculatedMtdOmzet beda signifikan
     const deptBreakdown = await prisma.product.groupBy({
       by: ['dept'],
       _sum: {
@@ -262,17 +290,53 @@ export async function GET(request: NextRequest) {
     });
 
     const categoryBreakdown: any = {};
-    deptBreakdown.forEach((d) => {
-      const deptName = d.dept || 'LAINNYA';
-      categoryBreakdown[deptName] = {
-        omzet:           d._sum.sales_mtd_retail  || 0,
-        qty:             d._sum.sales_mtd          || 0,
-        omzet_hari_ini:  d._sum.day_sales_retail   || 0,
-        qty_hari_ini:    d._sum.day_sales_unit      || 0,
-        stok:            d._sum.stok                || 0,
-        eoh:             d._sum.eoh_retail          || 0,
-      };
-    });
+    
+    // Periksa apakah ganti bulan terjadi (calculatedMtdOmzet jauh lebih kecil dari total sales_mtd_retail)
+    const isNewMonth = calculatedMtdOmzet < (agg._sum.sales_mtd_retail || 0) * 0.5;
+
+    if (isNewMonth) {
+      // Ambil breakdown department murni dari DailySales untuk bulan berjalan
+      const mtdDeptSales = await prisma.dailySales.findMany({
+        where: {
+          date: { gte: startOfMonth, lte: endOfMonth }
+        },
+        include: { product: { select: { dept: true } } }
+      });
+      
+      const deptMtdMap = new Map();
+      mtdDeptSales.forEach(ds => {
+        const dept = ds.product.dept || 'LAINNYA';
+        if (!deptMtdMap.has(dept)) deptMtdMap.set(dept, { omzet: 0, qty: 0 });
+        const val = deptMtdMap.get(dept);
+        val.omzet += ds.omzet || 0;
+        val.qty += ds.qtySold || 0;
+      });
+      
+      deptBreakdown.forEach((d) => {
+        const deptName = d.dept || 'LAINNYA';
+        const mtdValues = deptMtdMap.get(deptName) || { omzet: 0, qty: 0 };
+        categoryBreakdown[deptName] = {
+          omzet:           mtdValues.omzet,
+          qty:             mtdValues.qty,
+          omzet_hari_ini:  d._sum.day_sales_retail   || 0,
+          qty_hari_ini:    d._sum.day_sales_unit      || 0,
+          stok:            d._sum.stok                || 0,
+          eoh:             d._sum.eoh_retail          || 0,
+        };
+      });
+    } else {
+      deptBreakdown.forEach((d) => {
+        const deptName = d.dept || 'LAINNYA';
+        categoryBreakdown[deptName] = {
+          omzet:           d._sum.sales_mtd_retail  || 0,
+          qty:             d._sum.sales_mtd          || 0,
+          omzet_hari_ini:  d._sum.day_sales_retail   || 0,
+          qty_hari_ini:    d._sum.day_sales_unit      || 0,
+          stok:            d._sum.stok                || 0,
+          eoh:             d._sum.eoh_retail          || 0,
+        };
+      });
+    }
 
     // 3. TOP FAST MOVE (Dinamis berdasarkan timeframe)
     let topFast: any[] = [];
@@ -307,37 +371,64 @@ export async function GET(request: NextRequest) {
           };
         });
       } else {
-        let qtyCol = 'sales_mtd';
-        let omzetCol = 'sales_mtd_retail';
-        
-        if (timeframe === '1W') {
-          qtyCol = 'sales_wtd';
-          omzetCol = 'sales_wtd_retail';
-        } else if (timeframe === '1Y') {
-          qtyCol = 'sales_ytd';
-          omzetCol = 'sales_ytd_retail';
-        }
-
-        const fastWhere: any = { [qtyCol]: { gt: 0 } };
-        if (deptFilter) fastWhere.dept = deptFilter;
-
-        const topFastProducts = await prisma.product.findMany({
-          where: fastWhere,
-          orderBy: [{ [qtyCol]: 'desc' }, { [omzetCol]: 'desc' }],
-          take: 10,
-          select: {
-            sku: true, description: true,
-            sales_wtd: true, sales_wtd_retail: true,
-            sales_mtd: true, sales_mtd_retail: true,
-            sales_ytd: true, sales_ytd_retail: true
+        if (isNewMonth && timeframe === '1M') {
+           // Gunakan DailySales
+           const mtdAgg = await prisma.dailySales.groupBy({
+             by: ['productId'],
+             where: { date: { gte: startOfMonth, lte: endOfMonth } },
+             _sum: { qtySold: true, omzet: true },
+             orderBy: { _sum: { qtySold: 'desc' } },
+             take: 10
+           });
+           
+           const productIds = mtdAgg.map((a: any) => a.productId);
+           const topFastProducts = await prisma.product.findMany({
+             where: { id: { in: productIds } },
+             select: { id: true, sku: true, description: true }
+           });
+           
+           topFast = mtdAgg.map((agg: any) => {
+             const p = topFastProducts.find((x: any) => x.id === agg.productId);
+             return {
+               sku: p?.sku || '-',
+               description: p?.description || '-',
+               sales_qty: agg._sum.qtySold || 0,
+               omzet_total: agg._sum.omzet || 0
+             };
+           });
+        } else {
+          let qtyCol = 'sales_mtd';
+          let omzetCol = 'sales_mtd_retail';
+          
+          if (timeframe === '1W') {
+            qtyCol = 'sales_wtd';
+            omzetCol = 'sales_wtd_retail';
+          } else if (timeframe === '1Y') {
+            qtyCol = 'sales_ytd';
+            omzetCol = 'sales_ytd_retail';
           }
-        });
-        topFast = topFastProducts.map((p: any) => ({
-          sku: p.sku,
-          description: p.description,
-          sales_qty: p[qtyCol],
-          omzet_total: p[omzetCol]
-        }));
+
+          const fastWhere: any = { [qtyCol]: { gt: 0 } };
+          if (deptFilter) fastWhere.dept = deptFilter;
+
+          const topFastProducts = await prisma.product.findMany({
+            where: fastWhere,
+            orderBy: [{ [qtyCol]: 'desc' }, { [omzetCol]: 'desc' }],
+            take: 10,
+            select: {
+              sku: true, description: true,
+              sales_wtd: true, sales_wtd_retail: true,
+              sales_mtd: true, sales_mtd_retail: true,
+              sales_ytd: true, sales_ytd_retail: true
+            }
+          });
+          topFast = topFastProducts.map((p: any) => ({
+            sku: p.sku,
+            description: p.description,
+            sales_qty: p[qtyCol],
+            omzet_total: p[omzetCol]
+          }));
+        }
       }
     } catch (e) {
       console.error("Failed to compute topFast dynamic:", e);
@@ -425,8 +516,8 @@ export async function GET(request: NextRequest) {
       trendData = [{
         date:  new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short' }),
         fullDate: todayStr,
-        omzet: agg._sum.sales_mtd_retail || 0,
-        qty:   agg._sum.sales_mtd        || 0,
+        omzet: calculatedMtdOmzet || agg._sum.sales_mtd_retail || 0,
+        qty:   calculatedMtdQty || agg._sum.sales_mtd        || 0,
         label: 'MTD s/d ' + todayStr,
       }];
     }
@@ -448,8 +539,8 @@ export async function GET(request: NextRequest) {
           qty_hari_ini:    selectedDateQty,
           omzet_promo:     omzetPromo,
           qty_promo:       qtyPromo,
-          mtd_omzet:       agg._sum.sales_mtd_retail  || 0,
-          mtd_qty:         agg._sum.sales_mtd          || 0,
+          mtd_omzet:       calculatedMtdOmzet || agg._sum.sales_mtd_retail  || 0,
+          mtd_qty:         calculatedMtdQty || agg._sum.sales_mtd          || 0,
           ytd_omzet:       agg._sum.sales_ytd_retail  || 0,
           ytd_qty:         agg._sum.sales_ytd          || 0,
           nilai_inventori: agg._sum.eoh_retail         || 0,
@@ -460,8 +551,8 @@ export async function GET(request: NextRequest) {
           totalRevenue:    selectedDateOmzet,
           totalQty:        selectedDateQty,
           totalPromoRevenue: omzetPromo,
-          totalOmzetPOS:   agg._sum.sales_mtd_retail   || 0,
-          mtd_omzet_pos:   agg._sum.sales_mtd_retail   || 0,
+          totalOmzetPOS:   calculatedMtdOmzet || agg._sum.sales_mtd_retail   || 0,
+          mtd_omzet_pos:   calculatedMtdOmzet || agg._sum.sales_mtd_retail   || 0,
           ytd_sales_unit:  agg._sum.sales_ytd           || 0,
           anomalyCount:    anomalyCount,
         },
