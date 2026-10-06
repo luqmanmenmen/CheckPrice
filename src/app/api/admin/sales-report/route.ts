@@ -1,10 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
+// Simple in-memory cache to speed up dashboard loading
+interface CacheEntry {
+  data: any;
+  timestamp: number;
+}
+let routeCache: Record<string, CacheEntry> = {};
+let lastSyncId: string | null = null;
+const CACHE_TTL = 1000 * 60 * 60; // 1 hour
+
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
   try {
+    const { searchParams } = new URL(request.url);
+    const timeframe = searchParams.get("timeframe") || "1M";
+    const deptFilter = searchParams.get("dept") || "";
+    const page = parseInt(searchParams.get("page") || "1");
+    const limit = parseInt(searchParams.get("limit") || "99999");
+    const skip = (page - 1) * limit;
+    const targetDateParam = searchParams.get("date") || "";
+
+    // Check latest sync to invalidate cache if new data arrived
+    const latestSync = await prisma.syncHistory.findFirst({
+      where: { type: "PQ_HARIAN", status: "SUCCESS" },
+      orderBy: { createdAt: "desc" },
+      select: { id: true }
+    });
+    
+    if (latestSync && latestSync.id !== lastSyncId) {
+      routeCache = {}; // Invalidate cache
+      lastSyncId = latestSync.id;
+    }
+
+    const cacheKey = `${targetDateParam}_${timeframe}_${deptFilter}_${page}_${limit}`;
+    if (routeCache[cacheKey] && Date.now() - routeCache[cacheKey].timestamp < CACHE_TTL) {
+      return NextResponse.json(routeCache[cacheKey].data);
+    }
+
     // Auto-clean expired promos
     const todayStr = new Date().toISOString().split('T')[0];
     await prisma.product.updateMany({
@@ -16,13 +50,6 @@ export async function GET(request: NextRequest) {
         hargaPromo: null, diskon: null, discountType: null, acara: null, fromDate: null, toDate: null
       }
     });
-
-    const { searchParams } = new URL(request.url);
-    const timeframe = searchParams.get("timeframe") || "1M";
-    const deptFilter = searchParams.get("dept") || "";
-    const page = parseInt(searchParams.get("page") || "1");
-    const limit = parseInt(searchParams.get("limit") || "99999");
-    const skip = (page - 1) * limit;
 
     // ============================================================
     // SUMBER DATA UTAMA: Product table langsung dari PQ upload
@@ -562,7 +589,7 @@ export async function GET(request: NextRequest) {
 
     const isCurrentMonth = targetYearMonth === todayStr.substring(0, 7);
 
-    return NextResponse.json({
+    const responseData = {
       success: true,
       data: {
         targetDate: pqDateLabel,
@@ -592,7 +619,6 @@ export async function GET(request: NextRequest) {
           ytd_sales_unit:  agg._sum.sales_ytd           || 0,
           anomalyCount:    anomalyCount,
         },
-
         categoryBreakdown,
         trendData,
         topFast,
@@ -606,7 +632,14 @@ export async function GET(request: NextRequest) {
           totalPages: Math.ceil(totalTopCount / limit),
         }
       }
-    });
+    };
+
+    routeCache[cacheKey] = {
+      data: responseData,
+      timestamp: Date.now()
+    };
+
+    return NextResponse.json(responseData);
 
   } catch (error) {
     console.error("Error in sales-report route:", error);
