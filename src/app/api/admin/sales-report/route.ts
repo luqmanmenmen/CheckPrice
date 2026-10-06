@@ -113,7 +113,6 @@ export async function GET(request: NextRequest) {
       availableDates = availableSyncs.map(s => s.date);
     }
 
-    const targetDateParam = searchParams.get("date");
     let targetDateValue = availableDates.length > 0 ? availableDates[0] : (
       timeframe === '1Y' ? todayStr.substring(0,4) :
       timeframe === '1M' ? todayStr.substring(0,7) :
