@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 import ShiftToggle from "@/components/ShiftToggle";
@@ -14,12 +14,12 @@ export default function Login() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [fadeExit, setFadeExit] = useState(false);
+  const pinRef = React.useRef<HTMLInputElement>(null);
 
   const performExit = (dest: string) => {
-    setFadeExit(true);
     setTimeout(() => {
-      window.location.replace(dest);
-    }, 1000); // Wait for 1s fade-out animation
+      router.push(dest);
+    }, 1200); // Give time for the animation to play a bit
   };
   const [toko, setToko] = useState("");
   const [userName, setUserName] = useState("");
@@ -44,6 +44,13 @@ export default function Login() {
           if (res.ok) {
             setToko(data.toko || "Toko Belum Di-set");
             setUserName(data.name || "");
+            setTimeout(() => {
+              if (pinRef.current) {
+                pinRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+                // Fokus tanpa merusak animasi scroll
+                setTimeout(() => pinRef.current?.focus({ preventScroll: true }), 100);
+              }
+            }, 100); // Tunggu sampai DOM PIN input muncul
           } else {
             setToko("");
             setUserName("");
@@ -103,6 +110,7 @@ export default function Login() {
         if (pin === "123456") {
           setLoginRole(data.role);
           setShowChangePin(true);
+          setLoading(false);
         } else {
           if (data.role === "SUPERVISOR") {
             performExit("/spv-gateway");
@@ -114,10 +122,10 @@ export default function Login() {
         }
       } else {
         setError(data.error || "Gagal login");
+        setLoading(false);
       }
     } catch (err) {
       setError("Terjadi kesalahan jaringan");
-    } finally {
       setLoading(false);
     }
   };
@@ -146,6 +154,7 @@ export default function Login() {
         if (pin === "123456") {
           setLoginRole(data.role);
           setShowChangePin(true);
+          setLoading(false);
         } else {
           if (data.role === "SUPERVISOR") {
             performExit("/spv-gateway");
@@ -157,10 +166,10 @@ export default function Login() {
         }
       } else {
         setError(data.error || "Gagal login");
+        setLoading(false);
       }
     } catch (err) {
       setError("Terjadi kesalahan jaringan");
-    } finally {
       setLoading(false);
     }
   };
@@ -183,6 +192,7 @@ export default function Login() {
       
       const data = await res.json();
       if (res.ok) {
+        setLoading(true);
         if (loginRole === "SUPERVISOR") {
           performExit("/spv-gateway");
         } else if (jobTitle === "Gudang Stock") {
@@ -192,10 +202,10 @@ export default function Login() {
         }
       } else {
         setError(data.error || "Gagal mengubah PIN");
+        setChangingPin(false);
       }
     } catch (err) {
       setError("Terjadi kesalahan jaringan");
-    } finally {
       setChangingPin(false);
     }
   };
@@ -299,6 +309,7 @@ export default function Login() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">PIN (Keamanan)</label>
                 <input
+                  ref={pinRef}
                   type="password"
                   inputMode="numeric"
                   pattern="[0-9]*"
@@ -395,12 +406,16 @@ export default function Login() {
       )}
 
       {/* Full Screen Shift Loader */}
-      {loading && (
-        <div className={`fixed inset-0 z-[100] bg-slate-900/90 backdrop-blur-md flex flex-col items-center justify-center transition-opacity duration-1000 ${fadeExit ? "opacity-0" : "opacity-100"}`}>
-          <ShiftLoader />
-          <p className="text-white font-bold mt-16 text-lg tracking-widest animate-pulse">MEMULAI SHIFT...</p>
-        </div>
-      )}
+      <div 
+        className={`fixed inset-0 z-[100] bg-white flex flex-col items-center justify-center transition-all duration-700 ease-out ${loading ? "opacity-100 visible" : "opacity-0 invisible pointer-events-none"}`}
+      >
+        {loading && (
+          <>
+            <ShiftLoader />
+            <p className="text-slate-800 font-bold mt-16 text-sm tracking-[0.3em] animate-pulse">MEMULAI SHIFT...</p>
+          </>
+        )}
+      </div>
     </div>
   );
 }

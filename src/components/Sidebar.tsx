@@ -1,29 +1,56 @@
 "use client";
 
 import { useState } from "react";
-import { X, Package2, ArrowLeft, CloudDownload, Loader2, Menu, LayoutDashboard } from "lucide-react";
+import { X, Package2, ArrowLeft, CloudDownload, Loader2, Menu, LayoutDashboard, ShieldCheck } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import AnimatedLogoutButton from "./AnimatedLogoutButton";
+import ShiftLoader from "./ShiftLoader";
 
 export default function Sidebar({ user }: { user: any }) {
   const [isOpen, setIsOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [syncProgress, setSyncProgress] = useState<number | undefined>(undefined);
+  const [showUpToDateModal, setShowUpToDateModal] = useState(false);
+  const router = useRouter();
 
   const handleManualSync = async () => {
     setIsSyncing(true);
+    setSyncProgress(0); // Set to 0 immediately so it doesn't spin infinitely during check
+    setIsOpen(false); // Tutup sidebar agar loading/modal terlihat
     try {
-      const { syncOfflineDatabase } = await import('@/lib/offlineDb');
-      await syncOfflineDatabase(() => {}, true);
+      const { syncOfflineDatabase, checkIfUpdateAvailable } = await import('@/lib/offlineDb');
+      const isAvailable = await checkIfUpdateAvailable();
+      
+      if (!isAvailable) {
+        setShowUpToDateModal(true);
+        setIsSyncing(false);
+        return;
+      }
+
+      await syncOfflineDatabase((syncing, prog) => {
+        setIsSyncing(syncing);
+        if (prog !== undefined) setSyncProgress(prog);
+      }, true);
     } catch (e) {
       console.error(e);
-    } finally {
       setIsSyncing(false);
+    } finally {
+      setSyncProgress(undefined);
     }
   };
 
-  const handleLogout = async () => {
-    await fetch("/api/auth/logout", { method: "POST" });
-    window.location.href = "/login";
+  const handleLogout = () => {
+    setIsLoggingOut(true);
+    
+    // Kirim request ke background (keepalive agar tidak mati saat pindah page)
+    fetch("/api/auth/logout", { method: "POST", keepalive: true }).catch(console.error);
+    
+    // Paksa keluar ke halaman login setelah 1.2 detik (pas animasi selesai)
+    setTimeout(() => {
+      window.location.href = "/login";
+    }, 1200);
   };
 
   if (!user) return null;
@@ -62,7 +89,7 @@ export default function Sidebar({ user }: { user: any }) {
             Aplikasi Toko (SA)
           </Link>
 
-          {user.jobTitle === 'Gudang Stock' && (
+          {(user.jobTitle === 'Gudang Stock' || user.role === 'SUPERVISOR') && (
             <Link href="/warehouse" onClick={() => setIsOpen(false)} className="flex items-center gap-4 p-4 bg-slate-50 hover:bg-slate-100 rounded-xl transition-colors font-bold text-slate-700 shadow-sm border border-slate-100">
               <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center shrink-0">
                 <Package2 className="w-5 h-5" />
@@ -90,10 +117,7 @@ export default function Sidebar({ user }: { user: any }) {
           )}
           
           <button 
-            onClick={() => {
-              setIsOpen(false);
-              handleManualSync();
-            }}
+            onClick={handleManualSync}
             disabled={isSyncing}
             className="flex items-center gap-4 p-4 bg-slate-50 hover:bg-slate-100 rounded-xl transition-colors font-bold text-slate-700 text-left shadow-sm border border-slate-100 disabled:opacity-50"
           >
@@ -108,6 +132,43 @@ export default function Sidebar({ user }: { user: any }) {
           <AnimatedLogoutButton onLogout={handleLogout} />
         </div>
       </div>
+
+      {/* Full Screen Logout Loader */}
+      {isLoggingOut && (
+        <div className="fixed inset-0 z-[200] bg-white flex flex-col items-center justify-center animate-in fade-in duration-500">
+          <ShiftLoader />
+          <p className="text-slate-800 font-bold mt-16 text-sm tracking-[0.3em] animate-pulse">MENGAKHIRI SHIFT...</p>
+        </div>
+      )}
+
+      {/* Up To Date Modal */}
+      {showUpToDateModal && (
+        <div className="fixed inset-0 z-[200] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 shadow-2xl max-w-sm w-full animate-in zoom-in-95 duration-300">
+            <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4 shadow-inner">
+              <ShieldCheck className="w-8 h-8" />
+            </div>
+            <h2 className="text-xl font-bold text-slate-800 mb-2 text-center">Data Sudah Terupdate!</h2>
+            <p className="text-sm text-slate-500 mb-6 leading-relaxed text-center font-medium">
+              Data harga dan promo di perangkat ini sudah menggunakan versi terbaru yang sama dengan server. Tidak perlu mengunduh ulang.
+            </p>
+            <button
+              onClick={() => setShowUpToDateModal(false)}
+              className="w-full h-12 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-all"
+            >
+              Tutup
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Full Screen Download Overlay if Syncing */}
+      {isSyncing && (
+        <div className="fixed inset-0 z-[200] bg-white flex flex-col items-center justify-center transition-all duration-700 ease-out opacity-100 visible">
+          <ShiftLoader progress={syncProgress} />
+          <p className="text-slate-800 font-bold mt-16 text-sm tracking-[0.3em] animate-pulse">LOADING...</p>
+        </div>
+      )}
     </>
   );
 }

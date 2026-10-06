@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { ShieldCheck, Store, LayoutDashboard, ArrowRight, LogOut } from "lucide-react";
 import { useEffect, useState } from "react";
+import ShiftLoader from "@/components/ShiftLoader";
 
 export default function SpvGateway() {
   const router = useRouter();
@@ -17,14 +18,15 @@ export default function SpvGateway() {
       });
   }, []);
 
-  const handleLogout = async () => {
+  const handleLogout = () => {
     setLoggingOut(true);
-    try {
-      await fetch("/api/auth/login", { method: "DELETE" });
-      router.replace("/login");
-    } catch (e) {
-      setLoggingOut(false);
-    }
+    // Kirim request ke background tanpa harus menunggu selesainya (keepalive agar tidak dicancel browser saat pindah page)
+    fetch("/api/auth/logout", { method: "POST", keepalive: true }).catch(console.error);
+    
+    // Paksa pindah ke halaman login setelah animasi 1.2 detik selesai, tidak peduli server lemot/tidak
+    setTimeout(() => {
+      window.location.href = "/login";
+    }, 1200);
   };
 
   return (
@@ -104,6 +106,14 @@ export default function SpvGateway() {
           </button>
         </div>
       </div>
+
+      {/* Full Screen Logout Loader */}
+      {loggingOut && (
+        <div className="fixed inset-0 z-[200] bg-white flex flex-col items-center justify-center transition-all duration-700 ease-out opacity-100 visible">
+          <ShiftLoader />
+          <p className="text-slate-800 font-bold mt-16 text-sm tracking-[0.3em] animate-pulse">MENGAKHIRI SHIFT...</p>
+        </div>
+      )}
     </div>
   );
 }

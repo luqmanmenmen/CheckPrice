@@ -73,7 +73,8 @@ export async function middleware(request: NextRequest) {
       !pathname.startsWith('/_next') &&
       !pathname.startsWith('/assets') &&
       !pathname.startsWith('/suko-logo.png') &&
-      !pathname.startsWith('/favicon.ico')
+      !pathname.startsWith('/favicon.ico') &&
+      !pathname.startsWith('/cek-harga')
     ) {
        return NextResponse.redirect(new URL('/login', request.url));
     }
@@ -95,5 +96,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|assets|favicon.ico|suko-logo.png|api/auth/login|api/auth/check-nik).*)'],
+  matcher: ['/((?!_next/static|_next/image|assets|favicon.ico|suko-logo.png|cek-harga|api/auth/login|api/auth/check-nik).*)'],
 };

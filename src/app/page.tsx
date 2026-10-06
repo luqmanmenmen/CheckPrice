@@ -848,22 +848,17 @@ export default function Home() {
         </div>
       )}
 
-      {/* Loading */}
-      {loading && (
-        <div className="flex justify-center py-10 w-full overflow-hidden">
-          <ChipLoader />
-        </div>
-      )}
+
 
       {/* Error */}
-      {error && !loading && (
+      {error && (
         <div className="bg-red-50 text-red-700 p-4 rounded-xl text-center border border-red-200 text-sm font-medium animate-in zoom-in duration-200">
           {error}
         </div>
       )}
 
       {/* Products List Selection */}
-      {productsList.length > 0 && !loading && (
+      {productsList.length > 0 && (
         <div className="bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden animate-in slide-in-from-bottom-6 duration-400 p-4">
           <h2 className="text-sm font-bold text-slate-500 uppercase mb-3">Pilih Produk:</h2>
           <div className="flex flex-col gap-2">
@@ -926,7 +921,7 @@ export default function Home() {
       )}
 
       {/* Product Card */}
-      {product && !loading && (() => {
+      {product && (() => {
         const { name, variants } = parseDescription(product.description);
 
         // Group siblings by Size (variant 1), then map Colors (variant 0)
