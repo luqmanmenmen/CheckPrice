@@ -41,16 +41,16 @@ export default function Sidebar({ user }: { user: any }) {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     setIsLoggingOut(true);
     
-    // Kirim request ke background (keepalive agar tidak mati saat pindah page)
-    fetch("/api/auth/logout", { method: "POST", keepalive: true }).catch(console.error);
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch (error) {
+      console.error(error);
+    }
     
-    // Paksa keluar ke halaman login setelah 1.2 detik (pas animasi selesai)
-    setTimeout(() => {
-      window.location.href = "/login";
-    }, 1200);
+    window.location.href = "/login";
   };
 
   if (!user) return null;

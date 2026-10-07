@@ -18,15 +18,16 @@ export default function SpvGateway() {
       });
   }, []);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     setLoggingOut(true);
-    // Kirim request ke background tanpa harus menunggu selesainya (keepalive agar tidak dicancel browser saat pindah page)
-    fetch("/api/auth/logout", { method: "POST", keepalive: true }).catch(console.error);
     
-    // Paksa pindah ke halaman login setelah animasi 1.2 detik selesai, tidak peduli server lemot/tidak
-    setTimeout(() => {
-      window.location.href = "/login";
-    }, 1200);
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch (error) {
+      console.error(error);
+    }
+    
+    window.location.href = "/login";
   };
 
   return (
