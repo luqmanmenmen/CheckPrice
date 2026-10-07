@@ -15,7 +15,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     let totalDeleted = 0;
 
     while (hasMore) {
-      const listResult = await list({
+      const listResult: any = await list({
         prefix: `${folder}/`,
         cursor: cursor,
         limit: 1000,
@@ -26,10 +26,10 @@ export async function POST(request: Request): Promise<NextResponse> {
         const thresholdDate = new Date();
         thresholdDate.setDate(thresholdDate.getDate() - daysOld);
         urlsToDelete = listResult.blobs
-          .filter(blob => new Date(blob.uploadedAt) < thresholdDate)
-          .map(blob => blob.url);
+          .filter((blob: any) => new Date(blob.uploadedAt) < thresholdDate)
+          .map((blob: any) => blob.url);
       } else {
-        urlsToDelete = listResult.blobs.map(blob => blob.url);
+        urlsToDelete = listResult.blobs.map((blob: any) => blob.url);
       }
 
       if (urlsToDelete.length > 0) {
