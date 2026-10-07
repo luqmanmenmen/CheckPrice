@@ -254,7 +254,7 @@ export default function UpdateHargaPage() {
           const fileRes = await fetch(b.url);
           if (!fileRes.ok) throw new Error("Gagal download blob");
           const ab = await fileRes.arrayBuffer();
-          const workbook = xlsx.read(ab, { type: "buffer", cellDates: false });
+          const workbook = xlsx.read(ab, { type: "array", cellDates: false });
 
           setFullResyncMsg(`Menganalisis file ${i+1}/${blobs.length}: ${b.filename}`);
 
@@ -279,8 +279,13 @@ export default function UpdateHargaPage() {
             const headerRowIndex = findHeaderRowIndex(ws);
             const rawRows = xlsx.utils.sheet_to_json(ws, { range: headerRowIndex, defval: "" });
             for (const raw of rawRows as any[]) {
+              const normalizedRow: any = {};
+              for (const key of Object.keys(raw)) {
+                normalizedRow[key.trim().toUpperCase()] = raw[key];
+              }
+              
               const r = {
-                ...raw,
+                ...normalizedRow,
                 __SOURCE_FILE__: b.filename,
                 __SOURCE_SHEET__: sheetName
               };
