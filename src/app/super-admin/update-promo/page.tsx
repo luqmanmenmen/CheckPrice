@@ -14,7 +14,7 @@ export default function UpdateHargaPage() {
   const [progress, setProgress] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [lastSync, setLastSync] = useState<{name: string; date: string} | null>(null);
-  const [showPinModal, setShowPinModal] = useState<{isOpen: boolean, action: "upload" | "sync" | "clean" | null}>({isOpen: false, action: null});
+  const [showPinModal, setShowPinModal] = useState<{isOpen: boolean, action: "upload" | "sync" | "clean" | "clean-old" | null}>({isOpen: false, action: null});
   const [alertState, setAlertState] = useState<{isOpen: boolean; title: string; message: string; type: "error" | "success" | "warning"}>({isOpen: false, title: "", message: "", type: "error"});
   const [isResetting, setIsResetting] = useState(false);
   const [isFullResyncing, setIsFullResyncing] = useState(false);
@@ -129,11 +129,14 @@ export default function UpdateHargaPage() {
     try {
       setResultMsg("Menghapus file promo lama di Cloud...");
       setProgress(10);
-      await fetch("/api/upload/clean-folder", {
+      const cleanRes = await fetch("/api/upload/clean-promo", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ folder: "PROMO" })
       });
+      if (!cleanRes.ok) {
+         console.warn("Pembersihan blob gagal atau sebagian gagal");
+      }
 
       setResultMsg("Menyimpan fisik file promo ke Cloud Storage...");
       let uploaded = 0;
@@ -142,10 +145,17 @@ export default function UpdateHargaPage() {
         const formData = new FormData();
         formData.append("file", f);
         formData.append("folder", "PROMO");
-        const res = await fetch("/api/upload/file", { method: "POST", body: formData });
-        if (!res.ok) {
-           throw new Error("Gagal mengunggah file " + f.name);
+        
+        try {
+          const res = await fetch("/api/upload/file", { method: "POST", body: formData });
+          if (!res.ok) {
+             const errorData = await res.json().catch(() => ({}));
+             throw new Error(errorData.error || `Status: ${res.status}`);
+          }
+        } catch (fetchErr: any) {
+          throw new Error(`Gagal mengunggah file ${f.name}: ${fetchErr.message}`);
         }
+        
         uploaded++;
         setProgress(10 + Math.round((uploaded / files.length) * 80));
       }
@@ -153,8 +163,11 @@ export default function UpdateHargaPage() {
       setProgress(100);
       setStatus("success");
       setResultMsg(`Berhasil mengunggah ${files.length} file promo ke Cloud Storage! Silakan klik 'Sync dari Blob'.`);
+      
+      // Auto refresh blob list
+      fetchBlobFiles();
     } catch (error: any) {
-      console.error(error);
+      console.error("Upload error:", error);
       setProgress(100);
       setStatus("error");
       setResultMsg("Terjadi kesalahan saat mengunggah.");
@@ -164,18 +177,44 @@ export default function UpdateHargaPage() {
 
   const handleCleanBlob = async () => {
     try {
-      const res = await fetch("/api/upload/clean-folder", {
+      const res = await fetch("/api/upload/clean-promo", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ folder: "PROMO" })
       });
       const data = await res.json();
       if (res.ok && data.success) {
+        setAlertState({ isOpen: true, title: "Berhasil", message: `${data.deletedCount} file Promo di Cloud berhasil dihapus permanen!`, type: "success" });
         fetchBlobFiles();
         return true;
+      } else {
+        setAlertState({ isOpen: true, title: "Gagal", message: data.error || "Gagal membersihkan blob promo.", type: "error" });
+        return false;
       }
+    } catch (err: any) {
+      setAlertState({ isOpen: true, title: "Kesalahan Jaringan", message: err.message || "Terjadi kesalahan.", type: "error" });
       return false;
-    } catch (err) {
+    }
+  };
+
+  const handleCleanOldBlob = async () => {
+    try {
+      const res = await fetch("/api/upload/clean-promo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folder: "PROMO", daysOld: 3 })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setAlertState({ isOpen: true, title: "Berhasil", message: `${data.deletedCount} file Promo lama (>3 hari) berhasil dihapus!`, type: "success" });
+        fetchBlobFiles();
+        return true;
+      } else {
+        setAlertState({ isOpen: true, title: "Gagal", message: data.error || "Gagal membersihkan blob promo lama.", type: "error" });
+        return false;
+      }
+    } catch (err: any) {
+      setAlertState({ isOpen: true, title: "Kesalahan Jaringan", message: err.message || "Terjadi kesalahan.", type: "error" });
       return false;
     }
   };
@@ -312,6 +351,8 @@ export default function UpdateHargaPage() {
       handleFullResync(false);
     } else if (action === "clean") {
       handleCleanBlob();
+    } else if (action === "clean-old") {
+      handleCleanOldBlob();
     }
   };
 
@@ -355,13 +396,22 @@ export default function UpdateHargaPage() {
             {isFullResyncing ? "Menyinkronisasi..." : "Sync dari Blob"}
           </button>
           <button
+            onClick={() => setShowPinModal({ isOpen: true, action: "clean-old" })}
+            disabled={isFullResyncing}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-blue-600 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors disabled:opacity-50"
+            title="Hapus file Promo yang berumur lebih dari 3 hari dari Blob"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            Hapus File Lama (&gt;3 Hari)
+          </button>
+          <button
             onClick={() => setShowPinModal({ isOpen: true, action: "clean" })}
             disabled={isFullResyncing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 transition-colors disabled:opacity-50"
             title="Hapus permanen semua file Promo dari penyimpanan Cloud untuk menghemat kuota storage"
           >
             <Trash2 className="w-3.5 h-3.5" />
-            Bersihkan Blob
+            Bersihkan Semua
           </button>
         </div>
       </div>
@@ -593,7 +643,9 @@ export default function UpdateHargaPage() {
         title="Otorisasi Developer"
         description={
           showPinModal.action === "clean" 
-            ? "PERINGATAN! Anda akan menghapus permanen file dari Cloud. Masukkan PIN untuk lanjut." 
+            ? "PERINGATAN! Anda akan menghapus permanen SEMUA file dari Cloud. Masukkan PIN untuk lanjut." 
+          : showPinModal.action === "clean-old"
+            ? "Anda akan menghapus file Promo yang berumur lebih dari 3 hari. Masukkan PIN untuk lanjut."
           : showPinModal.action === "sync"
             ? "Masukkan PIN Keamanan untuk memulai sinkronisasi dari Cloud."
             : "Masukkan PIN Keamanan untuk memulai proses sinkronisasi harga."
