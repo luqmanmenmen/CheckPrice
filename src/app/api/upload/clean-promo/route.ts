@@ -46,10 +46,16 @@ export async function POST(request: Request): Promise<NextResponse> {
       cursor = listResult.cursor;
     }
 
+    const debugBlobs = (await list({ prefix: `${folder}/`, limit: 5 })).blobs.map(b => ({
+      url: b.url, 
+      uploadedAt: b.uploadedAt,
+      isOlder: typeof daysOld === 'number' ? new Date(b.uploadedAt) < new Date(new Date().setDate(new Date().getDate() - daysOld)) : false
+    }));
+
     console.log(`Berhasil menghapus ${totalDeleted} file lama dari folder ${folder}`);
-    return NextResponse.json({ success: true, deletedCount: totalDeleted });
+    return NextResponse.json({ success: true, deletedCount: totalDeleted, debugBlobs });
   } catch (error) {
     console.error("Vercel Blob delete PROMO error:", error);
-    return NextResponse.json({ error: 'Failed to delete blobs' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to delete blobs', details: (error as any).message }, { status: 500 });
   }
 }
