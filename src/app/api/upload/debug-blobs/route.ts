@@ -15,7 +15,7 @@ export async function GET() {
       return {
         url,
         uploadedAt: b.created_at,
-        isOlder: new Date(b.created_at) < thresholdDate
+        isOlder: new Date(b.created_at!) < thresholdDate
       };
     })
   });

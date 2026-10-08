@@ -23,7 +23,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       thresholdDate.setDate(thresholdDate.getDate() - daysOld);
       
       urlsToDelete = validFiles
-        .filter(f => new Date(f.created_at) < thresholdDate)
+        .filter(f => new Date(f.created_at!) < thresholdDate)
         .map(f => `${folder}/${f.name}`);
     } else {
       urlsToDelete = validFiles.map(f => `${folder}/${f.name}`);
@@ -44,7 +44,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       return {
         url,
         uploadedAt: f.created_at,
-        isOlder: typeof daysOld === 'number' ? new Date(f.created_at) < new Date(new Date().setDate(new Date().getDate() - daysOld)) : false
+        isOlder: typeof daysOld === 'number' ? new Date(f.created_at!) < new Date(new Date().setDate(new Date().getDate() - daysOld)) : false
       };
     });
 
