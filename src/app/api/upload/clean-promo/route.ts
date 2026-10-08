@@ -1,5 +1,5 @@
-import { list, del } from '@vercel/blob';
 import { NextResponse } from 'next/server';
+import { supabase } from '@/lib/supabaseClient';
 
 export async function POST(request: Request): Promise<NextResponse> {
   try {
@@ -9,53 +9,49 @@ export async function POST(request: Request): Promise<NextResponse> {
       return NextResponse.json({ error: 'Folder must be PROMO' }, { status: 400 });
     }
 
-    // Ambil daftar semua file di folder tersebut (handle pagination jika banyak)
-    let hasMore = true;
-    let cursor: string | undefined = undefined;
-    let totalDeleted = 0;
+    const { data: files, error: listError } = await supabase.storage
+      .from('excel-uploads')
+      .list(folder);
 
-    while (hasMore) {
-      const listResult: any = await list({
-        prefix: `${folder}/`,
-        cursor: cursor,
-        limit: 1000,
-      });
+    if (listError) throw listError;
 
-      let urlsToDelete: string[] = [];
-      if (typeof daysOld === 'number') {
-        const thresholdDate = new Date();
-        thresholdDate.setDate(thresholdDate.getDate() - daysOld);
-        urlsToDelete = listResult.blobs
-          .filter((blob: any) => new Date(blob.uploadedAt) < thresholdDate)
-          .map((blob: any) => blob.url);
-      } else {
-        urlsToDelete = listResult.blobs.map((blob: any) => blob.url);
-      }
-
-      if (urlsToDelete.length > 0) {
-        // Hapus dalam batch untuk menghindari limit
-        const chunkSize = 100;
-        for (let i = 0; i < urlsToDelete.length; i += chunkSize) {
-          const chunk = urlsToDelete.slice(i, i + chunkSize);
-          await del(chunk);
-          totalDeleted += chunk.length;
-        }
-      }
-
-      hasMore = listResult.hasMore;
-      cursor = listResult.cursor;
+    const validFiles = files ? files.filter(f => f.name !== '.emptyFolderPlaceholder') : [];
+    let urlsToDelete: string[] = [];
+    
+    if (typeof daysOld === 'number') {
+      const thresholdDate = new Date();
+      thresholdDate.setDate(thresholdDate.getDate() - daysOld);
+      
+      urlsToDelete = validFiles
+        .filter(f => new Date(f.created_at) < thresholdDate)
+        .map(f => `${folder}/${f.name}`);
+    } else {
+      urlsToDelete = validFiles.map(f => `${folder}/${f.name}`);
     }
 
-    const debugBlobs = (await list({ prefix: `${folder}/`, limit: 5 })).blobs.map(b => ({
-      url: b.url, 
-      uploadedAt: b.uploadedAt,
-      isOlder: typeof daysOld === 'number' ? new Date(b.uploadedAt) < new Date(new Date().setDate(new Date().getDate() - daysOld)) : false
-    }));
+    let totalDeleted = 0;
+    if (urlsToDelete.length > 0) {
+      const { error: delError } = await supabase.storage
+        .from('excel-uploads')
+        .remove(urlsToDelete);
+        
+      if (delError) throw delError;
+      totalDeleted = urlsToDelete.length;
+    }
+
+    const debugBlobs = validFiles.slice(0, 5).map(f => {
+      const url = supabase.storage.from('excel-uploads').getPublicUrl(`${folder}/${f.name}`).data.publicUrl;
+      return {
+        url,
+        uploadedAt: f.created_at,
+        isOlder: typeof daysOld === 'number' ? new Date(f.created_at) < new Date(new Date().setDate(new Date().getDate() - daysOld)) : false
+      };
+    });
 
     console.log(`Berhasil menghapus ${totalDeleted} file lama dari folder ${folder}`);
     return NextResponse.json({ success: true, deletedCount: totalDeleted, debugBlobs });
-  } catch (error) {
-    console.error("Vercel Blob delete PROMO error:", error);
-    return NextResponse.json({ error: 'Failed to delete blobs', details: (error as any).message }, { status: 500 });
+  } catch (error: any) {
+    console.error("Supabase delete PROMO error:", error);
+    return NextResponse.json({ error: 'Failed to delete storage files', details: error.message }, { status: 500 });
   }
 }

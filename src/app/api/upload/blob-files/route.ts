@@ -1,6 +1,6 @@
-import { list } from '@vercel/blob';
 import { NextRequest, NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
+import { supabase } from '@/lib/supabaseClient';
 
 const prisma = new PrismaClient();
 
@@ -9,13 +9,29 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const folder = searchParams.get("folder") || "PQ";
     
-    const { blobs } = await list({ prefix: `${folder}/` });
+    const { data: files, error } = await supabase.storage
+      .from('excel-uploads')
+      .list(folder, { sortBy: { column: 'created_at', order: 'asc' } });
+      
+    if (error) throw error;
     
-    // Sort oldest to newest
-    const sortedBlobs = blobs.sort((a, b) => new Date(a.uploadedAt).getTime() - new Date(b.uploadedAt).getTime());
+    // Filter out the empty placeholder file that Supabase creates for empty folders (.emptyFolderPlaceholder)
+    const validFiles = files ? files.filter(f => f.name !== '.emptyFolderPlaceholder') : [];
+    
+    // Map to the format frontend expects
+    const mappedBlobs = validFiles.map(f => {
+      const pathname = `${folder}/${f.name}`;
+      const url = supabase.storage.from('excel-uploads').getPublicUrl(pathname).data.publicUrl;
+      return {
+        url,
+        pathname,
+        uploadedAt: f.created_at,
+        filename: f.name
+      };
+    });
     
     // Cek mana saja file yang sudah berhasil di-sync sebelumnya
-    const blobUrls = sortedBlobs.map(b => b.url);
+    const blobUrls = mappedBlobs.map(b => b.url);
     const syncedHistories = await prisma.syncHistory.findMany({
       where: {
         fileUrl: { in: blobUrls },
@@ -26,16 +42,13 @@ export async function GET(request: NextRequest) {
     
     return NextResponse.json({
       success: true,
-      blobs: sortedBlobs.map(b => ({
-        url: b.url,
-        pathname: b.pathname,
-        uploadedAt: b.uploadedAt,
-        filename: b.pathname.replace(`${folder}/`, ''),
+      blobs: mappedBlobs.map(b => ({
+        ...b,
         isSynced: syncedUrls.has(b.url)
       }))
     });
   } catch (error: any) {
-    console.error("List blob error:", error);
+    console.error("List storage error:", error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

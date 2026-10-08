@@ -1,5 +1,5 @@
-import { put } from '@vercel/blob';
 import { NextResponse } from 'next/server';
+import { supabase } from '@/lib/supabaseClient';
 
 // Ganti secret token ini atau letakkan di .env sebagai WEBHOOK_SECRET
 const SECRET_TOKEN = process.env.WEBHOOK_SECRET || "B4mb4ng123!Aman";
@@ -25,13 +25,28 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     console.log("Menerima file dari Webhook Gmail:", finalFileName);
 
-    // Langsung unggah ke Vercel Blob di dalam folder yang diminta
-    const blob = await put(`${folder}/${finalFileName}`, file, {
-      access: 'public',
-      addRandomSuffix: false // Pertahankan nama aslinya
-    });
+    // Konversi file ke Buffer untuk Supabase Storage
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const filePath = `${folder}/${finalFileName}`;
 
-    console.log("Berhasil unggah ke Vercel Blob:", blob.url);
+    // Langsung unggah ke Supabase Storage di dalam folder yang diminta
+    const { error: uploadError } = await supabase.storage
+      .from('excel-uploads')
+      .upload(filePath, buffer, {
+        contentType: file.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        upsert: true
+      });
+
+    if (uploadError) {
+      throw uploadError;
+    }
+
+    const { data: { publicUrl } } = supabase.storage
+      .from('excel-uploads')
+      .getPublicUrl(filePath);
+
+    console.log("Berhasil unggah ke Supabase Storage:", publicUrl);
 
     // Trigger sinkronisasi otomatis
     try {
@@ -46,7 +61,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         },
         body: JSON.stringify({ 
           type: folder === "PROMO" ? "UPDATE_PROMO" : "PQ_HARIAN", 
-          explicitUrl: blob.url, 
+          explicitUrl: publicUrl, 
           explicitFileName: finalFileName 
         })
       });
@@ -57,7 +72,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       console.error("Gagal menjalankan auto sync:", e);
     }
 
-    return NextResponse.json({ success: true, url: blob.url });
+    return NextResponse.json({ success: true, url: publicUrl });
   } catch (error) {
     console.error("Gmail Webhook error:", error);
     return NextResponse.json({ error: 'Failed to process webhook' }, { status: 500 });
