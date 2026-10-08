@@ -160,7 +160,11 @@ export default function UpdateProdukPage() {
 
       setProgress(100);
       setStatus("success");
-      setResultMsg("File berhasil diunggah ke Cloud Storage! Silakan klik tombol 'Sync dari Blob' untuk memproses datanya.");
+      setResultMsg("File berhasil diunggah ke Cloud Storage! Sedang memproses data secara otomatis...");
+      
+      // Langsung jalankan proses sync tanpa perlu klik tombol
+      await fetchBlobFiles();
+      await handleFullResync(true);
 
     } catch (error: any) {
       console.error(error);

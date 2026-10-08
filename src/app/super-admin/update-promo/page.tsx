@@ -162,10 +162,11 @@ export default function UpdateHargaPage() {
 
       setProgress(100);
       setStatus("success");
-      setResultMsg(`Berhasil mengunggah ${files.length} file promo ke Cloud Storage! Silakan klik 'Sync dari Blob'.`);
+      setResultMsg(`Berhasil mengunggah ${files.length} file promo! Sedang memproses data secara otomatis...`);
       
-      // Auto refresh blob list
-      fetchBlobFiles();
+      // Langsung jalankan proses sync tanpa perlu klik tombol
+      await fetchBlobFiles();
+      await handleFullResync(true);
     } catch (error: any) {
       console.error("Upload error:", error);
       setProgress(100);

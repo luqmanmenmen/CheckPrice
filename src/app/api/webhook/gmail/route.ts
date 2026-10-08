@@ -33,6 +33,30 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     console.log("Berhasil unggah ke Vercel Blob:", blob.url);
 
+    // Trigger sinkronisasi otomatis
+    try {
+      const syncUrl = new URL('/api/upload/sync-latest-blob', request.url).toString();
+      console.log("Triggering auto-sync to:", syncUrl);
+      
+      // Wait for the sync to complete so serverless function doesn't die early
+      const syncRes = await fetch(syncUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ 
+          type: folder === "PROMO" ? "UPDATE_PROMO" : "PQ_HARIAN", 
+          explicitUrl: blob.url, 
+          explicitFileName: finalFileName 
+        })
+      });
+      
+      const syncData = await syncRes.text();
+      console.log("Auto-sync response:", syncData);
+    } catch (e) {
+      console.error("Gagal menjalankan auto sync:", e);
+    }
+
     return NextResponse.json({ success: true, url: blob.url });
   } catch (error) {
     console.error("Gmail Webhook error:", error);
