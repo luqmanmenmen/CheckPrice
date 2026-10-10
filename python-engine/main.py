@@ -122,6 +122,23 @@ async def _process_and_notify(file_url: str, file_name: str, folder: str):
             for i in range(0, len(supabase_payload), CHUNK_SIZE):
                 chunk = supabase_payload[i:i + CHUNK_SIZE]
                 try:
+                    # Analisis cerdas dengan Database yang sudah ada
+                    chunk_skus = [str(c["sku"]) for c in chunk]
+                    
+                    # Cek status hargaNormalSource dari DB untuk mencegah PQ menimpa PROMO
+                    if folder == "PQ":
+                        existing_res = supabase.table("Product").select("sku, hargaNormalSource").in_("sku", chunk_skus).execute()
+                        existing_map = {str(item["sku"]): item.get("hargaNormalSource") for item in existing_res.data}
+                        
+                        for c in chunk:
+                            sku_str = str(c["sku"])
+                            # Jika di DB sumber harganya dari PROMO, jangan biarkan PQ merusaknya!
+                            if existing_map.get(sku_str) == "PROMO":
+                                if "hargaNormal" in c:
+                                    del c["hargaNormal"]
+                                if "hargaNormalSource" in c:
+                                    del c["hargaNormalSource"]
+
                     supabase.table("Product").upsert(chunk, on_conflict="sku").execute()
                     total_upserted += len(chunk)
                     print(f"[ENGINE] Upserted chunk {i // CHUNK_SIZE + 1}: {len(chunk)} baris")
