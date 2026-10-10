@@ -8,7 +8,7 @@ import httpx
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from supabase import create_client, Client
-from parser import parse_excel_file
+from parser import parse_promo_file, parse_pq_file
 
 load_dotenv()
 
@@ -75,8 +75,12 @@ async def _process_and_notify(file_url: str, file_name: str, folder: str):
             f.write(response.content)
         print(f"[ENGINE] File berhasil didownload ({len(response.content)} bytes)")
 
-        # 2. Parse Excel dengan Pandas
-        parsed_data = parse_excel_file(temp_path)
+        # 2. Parse Excel dengan Pandas berdasarkan jalur (2 JALUR TERPISAH)
+        if folder == "PQ":
+            parsed_data = parse_pq_file(temp_path)
+        else:
+            parsed_data = parse_promo_file(temp_path)
+            
         print(f"[ENGINE] Berhasil parse {len(parsed_data)} baris dari {file_name}")
 
         if not parsed_data:
@@ -88,12 +92,10 @@ async def _process_and_notify(file_url: str, file_name: str, folder: str):
             CHUNK_SIZE = 500
             total_upserted = 0
             
-            # Kita pecah parsed_data menjadi chunk
             for i in range(0, len(parsed_data), CHUNK_SIZE):
                 chunk_data = parsed_data[i:i + CHUNK_SIZE]
-                
-                # Fetch existing data dari DB untuk proteksi overwriting
                 chunk_skus = [str(item["sku"]) for item in chunk_data]
+                
                 try:
                     existing_res = supabase.table("Product").select("*").in_("sku", chunk_skus).execute()
                     existing_map = {str(item["sku"]): item for item in existing_res.data}
@@ -102,65 +104,94 @@ async def _process_and_notify(file_url: str, file_name: str, folder: str):
                     existing_map = {}
 
                 supabase_payload = []
-                for item in chunk_data:
-                    sku_str = str(item["sku"])
-                    ex = existing_map.get(sku_str, {})
-                    
-                    # Logika hargaNormal:
-                    new_harga = item.get("harga_normal", 0)
-                    if folder == "PQ" and ex.get("hargaNormalSource") == "PROMO":
-                        # Proteksi: PQ tidak boleh menimpa harga PROMO
-                        final_harga = ex.get("hargaNormal", 0)
-                        final_source = "PROMO"
-                    else:
-                        # Jika new_harga 0, coba ambil dari DB. Jika di DB null/tidak ada, pakai 0
-                        final_harga = new_harga if new_harga != 0 else ex.get("hargaNormal", 0)
-                        final_source = folder if new_harga != 0 else ex.get("hargaNormalSource", folder)
-
-                    # Logika metrics (stok, sales, dll)
-                    # Jika folder PROMO, kita tidak boleh menimpa dengan 0
-                    def get_metric(key, new_val):
-                        if folder == "PROMO" and new_val == 0:
-                            return ex.get(key, 0)
-                        return new_val
-
-                    # Logika Promo (Harga promo, tipe diskon, tgl mulai/akhir)
-                    # Jika folder PQ, KITA JANGAN MENGHAPUS DATA PROMO YANG SUDAH ADA
-                    def get_promo(key, new_val):
-                        if folder == "PQ":
-                            return ex.get(key) # kembalikan apa yang sudah ada di DB
-                        return new_val
-
-                    payload = {
-                        "sku":               item["sku"],
-                        "description":       item.get("description", "") or ex.get("description", f"Produk {item['sku']}"),
-                        "hargaNormal":       final_harga,
-                        "hargaNormalSource": final_source,
-                        "hargaPromo":        get_promo("hargaPromo", item["harga_promo"] if item.get("is_promo") else None),
-                        "discountType":      get_promo("discountType", item["tipe_diskon"] if item.get("is_promo") else None),
-                        "fromDate":          get_promo("fromDate", item.get("tgl_mulai")),
-                        "toDate":            get_promo("toDate", item.get("tgl_akhir")),
-                        "promoFileName":     get_promo("promoFileName", file_name),
-                        "dept":              item.get("dept", None) or ex.get("dept", None),
+                
+                if folder == "PROMO":
+                    # --- JALUR PROMO ---
+                    for item in chunk_data:
+                        sku_str = str(item["sku"])
+                        ex = existing_map.get(sku_str, {})
                         
-                        "stok":             get_metric("stok", item.get("stok", 0)),
-                        "eoh_retail":       get_metric("eoh_retail", item.get("eoh_retail", 0)),
-                        "sales_mtd":        get_metric("sales_mtd", item.get("sales_mtd", 0)),
-                        "sales_mtd_retail": get_metric("sales_mtd_retail", item.get("sales_mtd_retail", 0)),
-                        "sales_wtd":        get_metric("sales_wtd", item.get("sales_wtd", 0)),
-                        "sales_wtd_retail": get_metric("sales_wtd_retail", item.get("sales_wtd_retail", 0)),
-                        "sales_ytd":        get_metric("sales_ytd", item.get("sales_ytd", 0)),
-                        "sales_ytd_retail": get_metric("sales_ytd_retail", item.get("sales_ytd_retail", 0)),
-                        "boy_unit":         get_metric("boy_unit", item.get("boy_unit", 0)),
-                        "boy_retail":       get_metric("boy_retail", item.get("boy_retail", 0)),
-                        "bom_unit":         get_metric("bom_unit", item.get("bom_unit", 0)),
-                        "day_sales_unit":   get_metric("day_sales_unit", item.get("day_sales_unit", 0)),
-                        "day_sales_retail": get_metric("day_sales_retail", item.get("day_sales_retail", 0)),
+                        payload = {
+                            "sku":               item["sku"],
+                            "description":       item.get("description", "") or ex.get("description", f"Produk {item['sku']}"),
+                            "hargaNormal":       item.get("harga_normal", 0) if item.get("harga_normal", 0) != 0 else ex.get("hargaNormal", 0),
+                            "hargaNormalSource": "PROMO" if item.get("harga_normal", 0) != 0 else ex.get("hargaNormalSource", "PROMO"),
+                            
+                            # PROMO DATA (Overwrites)
+                            "hargaPromo":        item["harga_promo"] if item.get("is_promo") else None,
+                            "discountType":      item["tipe_diskon"] if item.get("is_promo") else None,
+                            "fromDate":          item.get("tgl_mulai"),
+                            "toDate":            item.get("tgl_akhir"),
+                            "promoFileName":     file_name,
+                            "dept":              item.get("dept", None) or ex.get("dept", None),
+                            
+                            # PROTEKSI STOK & SALES (JANGAN DIUBAH/DIBIKIN 0)
+                            "stok":             ex.get("stok", 0),
+                            "eoh_retail":       ex.get("eoh_retail", 0),
+                            "sales_mtd":        ex.get("sales_mtd", 0),
+                            "sales_mtd_retail": ex.get("sales_mtd_retail", 0),
+                            "sales_wtd":        ex.get("sales_wtd", 0),
+                            "sales_wtd_retail": ex.get("sales_wtd_retail", 0),
+                            "sales_ytd":        ex.get("sales_ytd", 0),
+                            "sales_ytd_retail": ex.get("sales_ytd_retail", 0),
+                            "boy_unit":         ex.get("boy_unit", 0),
+                            "boy_retail":       ex.get("boy_retail", 0),
+                            "bom_unit":         ex.get("bom_unit", 0),
+                            "day_sales_unit":   ex.get("day_sales_unit", 0),
+                            "day_sales_retail": ex.get("day_sales_retail", 0),
+                            
+                            "updatedAt": datetime.now(timezone.utc).isoformat(),
+                        }
+                        supabase_payload.append(payload)
                         
-                        "updatedAt": datetime.now(timezone.utc).isoformat(),
-                    }
-                    supabase_payload.append(payload)
-                    
+                else:
+                    # --- JALUR PQ ---
+                    for item in chunk_data:
+                        sku_str = str(item["sku"])
+                        ex = existing_map.get(sku_str, {})
+                        
+                        # PQ tidak boleh menimpa harga PROMO
+                        new_harga = item.get("harga_normal", 0)
+                        if ex.get("hargaNormalSource") == "PROMO":
+                            final_harga = ex.get("hargaNormal", 0)
+                            final_source = "PROMO"
+                        else:
+                            final_harga = new_harga if new_harga != 0 else ex.get("hargaNormal", 0)
+                            final_source = "PQ" if new_harga != 0 else ex.get("hargaNormalSource", "PQ")
+                            
+                        payload = {
+                            "sku":               item["sku"],
+                            "description":       item.get("description", "") or ex.get("description", f"Produk {item['sku']}"),
+                            "hargaNormal":       final_harga,
+                            "hargaNormalSource": final_source,
+                            
+                            # PROTEKSI PROMO DATA (JANGAN DIUBAH/DIBIKIN NONE OLEH PQ)
+                            "hargaPromo":        ex.get("hargaPromo"),
+                            "discountType":      ex.get("discountType"),
+                            "fromDate":          ex.get("fromDate"),
+                            "toDate":            ex.get("toDate"),
+                            "promoFileName":     ex.get("promoFileName"),
+                            "dept":              ex.get("dept", None),
+                            
+                            # STOK & SALES (Overwrites)
+                            "stok":             item.get("stok", 0),
+                            "eoh_retail":       item.get("eoh_retail", 0),
+                            "sales_mtd":        item.get("sales_mtd", 0),
+                            "sales_mtd_retail": item.get("sales_mtd_retail", 0),
+                            "sales_wtd":        item.get("sales_wtd", 0),
+                            "sales_wtd_retail": item.get("sales_wtd_retail", 0),
+                            "sales_ytd":        item.get("sales_ytd", 0),
+                            "sales_ytd_retail": item.get("sales_ytd_retail", 0),
+                            "boy_unit":         item.get("boy_unit", 0),
+                            "boy_retail":       item.get("boy_retail", 0),
+                            "bom_unit":         item.get("bom_unit", 0),
+                            "day_sales_unit":   item.get("day_sales_unit", 0),
+                            "day_sales_retail": item.get("day_sales_retail", 0),
+                            
+                            "updatedAt": datetime.now(timezone.utc).isoformat(),
+                        }
+                        supabase_payload.append(payload)
+
                 try:
                     supabase.table("Product").upsert(supabase_payload, on_conflict="sku").execute()
                     total_upserted += len(supabase_payload)
