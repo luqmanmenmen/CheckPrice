@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react";
 import dynamic from "next/dynamic";
-import { Search, Camera, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle, ScanText, ArrowLeft, CloudDownload, Loader2, Menu } from "lucide-react";
+import { Search, Camera, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle, ScanText, ArrowLeft, CloudDownload, Loader2, Menu, Sparkles, ArrowRight } from "lucide-react";
 import { DetectedSku } from "@/components/TextScanner";
 import { useEffect } from "react";
 import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
@@ -677,6 +677,22 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      {/* New Arrivals Banner */}
+      <Link href="/barang-baru" className="block w-full">
+        <div className="bg-gradient-to-r from-emerald-500 to-teal-600 rounded-2xl p-4 text-white shadow-lg shadow-emerald-200 flex items-center justify-between mb-2 hover:scale-[1.02] transition-transform">
+          <div className="flex items-center gap-3">
+            <div className="bg-white/20 p-2 rounded-xl backdrop-blur-sm">
+              <Sparkles className="w-6 h-6 text-yellow-300" />
+            </div>
+            <div>
+              <h3 className="font-black text-lg leading-none mb-1">Barang Baru!</h3>
+              <p className="text-xs text-emerald-50 font-medium">Cek daftar produk yang baru masuk toko</p>
+            </div>
+          </div>
+          <ArrowRight className="w-5 h-5 text-emerald-100" />
+        </div>
+      </Link>
 
       {/* Menu / Tabs Selection */}
       <div className="pt-2">
