@@ -43,6 +43,10 @@ function processEmailsAndUpload() {
     for (const thread of threads) {
       for (const message of thread.getMessages()) {
         if (!message.isUnread()) continue;
+        
+        const subject = message.getSubject();
+        // Bersihkan subjek dari karakter aneh agar aman dijadikan nama folder
+        const safeSubject = subject.replace(/[^a-zA-Z0-9 -_]/g, "").trim();
 
         for (const attachment of message.getAttachments()) {
           const fileName = attachment.getName();
@@ -52,9 +56,12 @@ function processEmailsAndUpload() {
             continue;
           }
 
-          Logger.log("  Memproses: " + fileName + " -> " + rule.folder);
+          // Format folder dinamis: PROMO/Promo 1-7 Oktober
+          const dynamicFolder = rule.folder + "/" + safeSubject;
 
-          const publicUrl = uploadToSupabase(attachment, fileName, rule.folder);
+          Logger.log("  Memproses: " + fileName + " -> " + dynamicFolder);
+
+          const publicUrl = uploadToSupabase(attachment, fileName, dynamicFolder);
 
           if (!publicUrl) {
             Logger.log("  GAGAL upload: " + fileName);
@@ -63,6 +70,9 @@ function processEmailsAndUpload() {
 
           Logger.log("  Tersimpan: " + publicUrl);
           totalUploaded++;
+          
+          // PENTING: Tetap kirim rule.folder aslinya ("PROMO" / "PQ") ke Python
+          // agar logika deteksi promo di backend tidak rusak.
           triggerPythonEngine(publicUrl, fileName, rule.folder);
         }
 
