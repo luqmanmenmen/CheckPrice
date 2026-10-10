@@ -71,7 +71,7 @@ export default function ClientPromoUnikList({ groupedItems }: { groupedItems: an
                   ? group.promoName 
                   : group.promoName.match(/B\d+D\d+/i) 
                     ? 'DISCOUNT' 
-                    : 'BOGO'}
+                    : group.promoName}
               </div>
 
               <div className="p-5 pt-8 flex flex-col h-full">
