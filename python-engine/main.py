@@ -85,63 +85,79 @@ async def _process_and_notify(file_url: str, file_name: str, folder: str):
 
         # 3. Upsert ke Supabase DB
         if supabase:
-            supabase_payload = []
-            for item in parsed_data:
-                payload = {
-                    "sku":               item["sku"],
-                    "description":       item["description"],
-                    **({ "hargaNormal": item["harga_normal"] } if item["harga_normal"] != 0 else {}),
-                    "hargaNormalSource": folder,
-                    "hargaPromo":        item["harga_promo"] if item["is_promo"] else None,
-                    "discountType":      item["tipe_diskon"] if item["is_promo"] else None,
-                    "fromDate":          item["tgl_mulai"],
-                    "toDate":            item["tgl_akhir"],
-                    "promoFileName":     file_name,
-                    "dept":              item.get("dept", None),
-                    
-                    # Update Stok & Sales (Selalu sertakan jika file PQ. Jika file Promo, hanya sertakan jika bukan 0 agar tidak menimpa data PQ dengan 0)
-                    **({ "stok":             item["stok"] }             if folder == "PQ" or item["stok"] != 0             else {}),
-                    **({ "eoh_retail":       item["eoh_retail"] }       if folder == "PQ" or item["eoh_retail"] != 0       else {}),
-                    **({ "sales_mtd":        item["sales_mtd"] }        if folder == "PQ" or item["sales_mtd"] != 0        else {}),
-                    **({ "sales_mtd_retail": item["sales_mtd_retail"] } if folder == "PQ" or item["sales_mtd_retail"] != 0 else {}),
-                    **({ "sales_wtd":        item["sales_wtd"] }        if folder == "PQ" or item["sales_wtd"] != 0        else {}),
-                    **({ "sales_wtd_retail": item["sales_wtd_retail"] } if folder == "PQ" or item["sales_wtd_retail"] != 0 else {}),
-                    **({ "sales_ytd":        item["sales_ytd"] }        if folder == "PQ" or item["sales_ytd"] != 0        else {}),
-                    **({ "sales_ytd_retail": item["sales_ytd_retail"] } if folder == "PQ" or item["sales_ytd_retail"] != 0 else {}),
-                    **({ "boy_unit":         item["boy_unit"] }         if folder == "PQ" or item["boy_unit"] != 0         else {}),
-                    **({ "boy_retail":       item["boy_retail"] }       if folder == "PQ" or item["boy_retail"] != 0       else {}),
-                    **({ "bom_unit":         item["bom_unit"] }         if folder == "PQ" or item["bom_unit"] != 0         else {}),
-                    **({ "day_sales_unit":   item["day_sales_unit"] }   if folder == "PQ" or item["day_sales_unit"] != 0   else {}),
-                    **({ "day_sales_retail": item["day_sales_retail"] } if folder == "PQ" or item["day_sales_retail"] != 0 else {}),
-                    "updatedAt": datetime.now(timezone.utc).isoformat(),
-                }
-                supabase_payload.append(payload)
-
             CHUNK_SIZE = 500
             total_upserted = 0
-            for i in range(0, len(supabase_payload), CHUNK_SIZE):
-                chunk = supabase_payload[i:i + CHUNK_SIZE]
+            
+            # Kita pecah parsed_data menjadi chunk
+            for i in range(0, len(parsed_data), CHUNK_SIZE):
+                chunk_data = parsed_data[i:i + CHUNK_SIZE]
+                
+                # Fetch existing data dari DB untuk proteksi overwriting
+                chunk_skus = [str(item["sku"]) for item in chunk_data]
                 try:
-                    # Analisis cerdas dengan Database yang sudah ada
-                    chunk_skus = [str(c["sku"]) for c in chunk]
-                    
-                    # Cek status hargaNormalSource dari DB untuk mencegah PQ menimpa PROMO
-                    if folder == "PQ":
-                        existing_res = supabase.table("Product").select("sku, hargaNormalSource").in_("sku", chunk_skus).execute()
-                        existing_map = {str(item["sku"]): item.get("hargaNormalSource") for item in existing_res.data}
-                        
-                        for c in chunk:
-                            sku_str = str(c["sku"])
-                            # Jika di DB sumber harganya dari PROMO, jangan biarkan PQ merusaknya!
-                            if existing_map.get(sku_str) == "PROMO":
-                                if "hargaNormal" in c:
-                                    del c["hargaNormal"]
-                                if "hargaNormalSource" in c:
-                                    del c["hargaNormalSource"]
+                    existing_res = supabase.table("Product").select("*").in_("sku", chunk_skus).execute()
+                    existing_map = {str(item["sku"]): item for item in existing_res.data}
+                except Exception as ex:
+                    print(f"[ENGINE] Error fetching existing data: {ex}")
+                    existing_map = {}
 
-                    supabase.table("Product").upsert(chunk, on_conflict="sku").execute()
-                    total_upserted += len(chunk)
-                    print(f"[ENGINE] Upserted chunk {i // CHUNK_SIZE + 1}: {len(chunk)} baris")
+                supabase_payload = []
+                for item in chunk_data:
+                    sku_str = str(item["sku"])
+                    ex = existing_map.get(sku_str, {})
+                    
+                    # Logika hargaNormal:
+                    new_harga = item.get("harga_normal", 0)
+                    if folder == "PQ" and ex.get("hargaNormalSource") == "PROMO":
+                        # Proteksi: PQ tidak boleh menimpa harga PROMO
+                        final_harga = ex.get("hargaNormal", 0)
+                        final_source = "PROMO"
+                    else:
+                        # Jika new_harga 0, coba ambil dari DB. Jika di DB null/tidak ada, pakai 0
+                        final_harga = new_harga if new_harga != 0 else ex.get("hargaNormal", 0)
+                        final_source = folder if new_harga != 0 else ex.get("hargaNormalSource", folder)
+
+                    # Logika metrics (stok, sales, dll)
+                    # Jika folder PROMO, kita tidak boleh menimpa dengan 0
+                    def get_metric(key, new_val):
+                        if folder == "PROMO" and new_val == 0:
+                            return ex.get(key, 0)
+                        return new_val
+
+                    payload = {
+                        "sku":               item["sku"],
+                        "description":       item.get("description", "") or ex.get("description", f"Produk {item['sku']}"),
+                        "hargaNormal":       final_harga,
+                        "hargaNormalSource": final_source,
+                        "hargaPromo":        item["harga_promo"] if item.get("is_promo") else None,
+                        "discountType":      item["tipe_diskon"] if item.get("is_promo") else None,
+                        "fromDate":          item.get("tgl_mulai"),
+                        "toDate":            item.get("tgl_akhir"),
+                        "promoFileName":     file_name,
+                        "dept":              item.get("dept", None) or ex.get("dept", None),
+                        
+                        "stok":             get_metric("stok", item.get("stok", 0)),
+                        "eoh_retail":       get_metric("eoh_retail", item.get("eoh_retail", 0)),
+                        "sales_mtd":        get_metric("sales_mtd", item.get("sales_mtd", 0)),
+                        "sales_mtd_retail": get_metric("sales_mtd_retail", item.get("sales_mtd_retail", 0)),
+                        "sales_wtd":        get_metric("sales_wtd", item.get("sales_wtd", 0)),
+                        "sales_wtd_retail": get_metric("sales_wtd_retail", item.get("sales_wtd_retail", 0)),
+                        "sales_ytd":        get_metric("sales_ytd", item.get("sales_ytd", 0)),
+                        "sales_ytd_retail": get_metric("sales_ytd_retail", item.get("sales_ytd_retail", 0)),
+                        "boy_unit":         get_metric("boy_unit", item.get("boy_unit", 0)),
+                        "boy_retail":       get_metric("boy_retail", item.get("boy_retail", 0)),
+                        "bom_unit":         get_metric("bom_unit", item.get("bom_unit", 0)),
+                        "day_sales_unit":   get_metric("day_sales_unit", item.get("day_sales_unit", 0)),
+                        "day_sales_retail": get_metric("day_sales_retail", item.get("day_sales_retail", 0)),
+                        
+                        "updatedAt": datetime.now(timezone.utc).isoformat(),
+                    }
+                    supabase_payload.append(payload)
+                    
+                try:
+                    supabase.table("Product").upsert(supabase_payload, on_conflict="sku").execute()
+                    total_upserted += len(supabase_payload)
+                    print(f"[ENGINE] Upserted chunk {i // CHUNK_SIZE + 1}: {len(supabase_payload)} baris")
                 except Exception as ex:
                     print(f"[ENGINE] Error upsert chunk: {ex}")
 
