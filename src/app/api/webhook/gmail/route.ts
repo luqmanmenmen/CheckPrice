@@ -73,8 +73,8 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
 
     return NextResponse.json({ success: true, url: publicUrl });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Gmail Webhook error:", error);
-    return NextResponse.json({ error: 'Failed to process webhook' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to process webhook', details: error.message || String(error) }, { status: 500 });
   }
 }
