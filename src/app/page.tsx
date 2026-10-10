@@ -170,6 +170,15 @@ export default function Home() {
   const [togglingStatus, setTogglingStatus] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
 
+  // Fetch last update date
+  const { data: updateData } = useSWR("/api/last-update", fetcher, { refreshInterval: 60000 });
+  const lastUpdateDate = updateData?.lastUpdate 
+    ? new Date(updateData.lastUpdate).toLocaleString('id-ID', {
+        day: 'numeric', month: 'long', year: 'numeric', 
+        hour: '2-digit', minute: '2-digit'
+      }) 
+    : 'Memuat...';
+
   const handleManualSync = async () => {
     setIsSyncing(true);
     showToast("Mengupdate database lokal...", "success");
@@ -632,7 +641,23 @@ export default function Home() {
       {/* Main Content Wrapper */}
       <div className="px-4 lg:px-0 flex flex-col gap-5">
 
-
+        {/* Database Status Info */}
+        <div className="flex items-center justify-between bg-white rounded-xl p-3 border border-slate-200 shadow-sm">
+          <div className="flex items-center gap-2">
+            <div className={`w-2 h-2 rounded-full ${lastUpdateDate === 'Memuat...' ? 'bg-amber-400 animate-pulse' : 'bg-emerald-500'}`} />
+            <div>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Update Data Terakhir</p>
+              <p className="text-xs font-semibold text-slate-700">{lastUpdateDate}</p>
+            </div>
+          </div>
+          <button 
+            onClick={() => handleManualSync()}
+            disabled={isSyncing}
+            className={`p-2 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-500 transition-colors ${isSyncing ? 'opacity-50' : ''}`}
+          >
+            <CloudDownload className={`w-4 h-4 ${isSyncing ? 'animate-bounce text-blue-500' : ''}`} />
+          </button>
+        </div>
       {/* Logout Summary Modal */}
       {showSummary && (
         <div className="fixed inset-0 bg-black/80 z-50 p-4 flex flex-col justify-center items-center">
