@@ -148,14 +148,25 @@ def parse_excel_file(file_path: str) -> List[Dict[str, Any]]:
 
             # Ambil Description (Nama Barang)
             description = ""
+            # Coba cari kolom DESC / NAMA dulu (prioritas utama)
             for col in df.columns:
                 col_upper_check = str(col).upper()
-                if 'DESC' in col_upper_check or 'NAMA' in col_upper_check or 'ARTICLE' in col_upper_check or 'ITEM' in col_upper_check:
+                if 'DESC' in col_upper_check or 'NAMA' in col_upper_check or 'ITEM' in col_upper_check:
                     val = row[col]
                     if pd.notna(val):
                         description = str(val).strip()
                         break
             
+            # Jika tidak ada, baru coba cari ARTICLE (fallback)
+            if not description:
+                for col in df.columns:
+                    col_upper_check = str(col).upper()
+                    if 'ARTICLE' in col_upper_check:
+                        val = row[col]
+                        if pd.notna(val):
+                            description = str(val).strip()
+                            break
+                            
             if not description:
                 description = f"Produk {sku}"
 
