@@ -163,9 +163,9 @@ def parse_pq_file(file_path: str) -> List[Dict[str, Any]]:
     try:
         if file_path.lower().endswith('.csv'):
             try:
-                df = pd.read_csv(file_path, on_bad_lines='skip', encoding='utf-8')
+                df = pd.read_csv(file_path, on_bad_lines='skip', encoding='utf-8', low_memory=False)
                 if len(df.columns) <= 1:
-                    df = pd.read_csv(file_path, sep=';', on_bad_lines='skip', encoding='utf-8')
+                    df = pd.read_csv(file_path, sep=';', on_bad_lines='skip', encoding='utf-8', low_memory=False)
             except UnicodeDecodeError:
                 df = pd.read_csv(file_path, sep=None, engine='python', on_bad_lines='skip', encoding='latin1')
             all_sheets = {'CSV_DATA': df}
