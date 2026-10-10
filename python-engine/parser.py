@@ -45,19 +45,33 @@ def parse_excel_file(file_path: str) -> List[Dict[str, Any]]:
         harga_promo = 0
         is_promo = False
         
-        # Ekstrak Nama Departemen (Mikir di Python)
-        dept_name = sheet_upper
-        if "3357" in sheet_upper: dept_name = "SUKO HOME LIVING"
-        elif "3356" in sheet_upper: dept_name = "SUKO ACCS"
-        elif "3358" in sheet_upper: dept_name = "SUKO FOOTWEAR"
-        elif "3369" in sheet_upper: dept_name = "SUKO UNDERWEAR"
-        elif "3367" in sheet_upper: dept_name = "SUKO APPAREL"
-        elif "3327" in sheet_upper: dept_name = "SUKO BAG"
-        elif "-" in sheet_upper: 
-            # Contoh "PROMO 3369-SUKO UNDERWEAR" -> "SUKO UNDERWEAR"
-            parts = sheet_upper.split("-")
+        # Ekstrak Nama Departemen dari NAMA FILE (bukan sheet)
+        file_name_upper = str(file_path).upper()
+        dept_name = "DEPARTEMEN LAINNYA"
+        if "3357" in file_name_upper: dept_name = "SUKO HOME LIVING"
+        elif "3356" in file_name_upper: dept_name = "SUKO ACCS"
+        elif "3358" in file_name_upper: dept_name = "SUKO FOOTWEAR"
+        elif "3369" in file_name_upper: dept_name = "SUKO UNDERWEAR"
+        elif "3367" in file_name_upper: dept_name = "SUKO APPAREL"
+        elif "3343" in file_name_upper: dept_name = "SUKO WORKWEAR"
+        elif "3348" in file_name_upper: dept_name = "SUKO SPORTS LADIES"
+        elif "3349" in file_name_upper: dept_name = "SUKO SPORTS MEN"
+        elif "3327" in file_name_upper: dept_name = "SUKO MEN"
+        elif "3328" in file_name_upper: dept_name = "SUKO LADIES"
+        elif "3366" in file_name_upper: dept_name = "SUKO CHILDREN BOYS"
+        elif "3368" in file_name_upper: dept_name = "SUKO SLEEPWEAR"
+        elif "3373" in file_name_upper: dept_name = "SUKO SHOES LADIES"
+        elif "3389" in file_name_upper: dept_name = "BYRCH & CO LADIES FOOTWEAR"
+        elif "3391" in file_name_upper: dept_name = "BYRCH & CO MEN FOOTWEAR"
+        elif "3393" in file_name_upper: dept_name = "BYRCH & CO KIDS FOOTWEAR"
+        elif "-" in file_name_upper: 
+            parts = file_name_upper.split("-")
             if len(parts) > 1:
                 dept_name = parts[1].strip()
+        
+        # Ekstrak Tipe Diskon dari NAMA SHEET
+        tipe_diskon = None
+        is_promo = False
         
         # Deteksi BOGO (Beli x Gratis y)
         if "B1G1" in sheet_upper or "B2G1" in sheet_upper or "B3G1" in sheet_upper:
