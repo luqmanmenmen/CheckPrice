@@ -10,10 +10,23 @@ def parse_excel_file(file_path: str) -> List[Dict[str, Any]]:
     print(f"\n[PARSER] Mulai menganalisis file: {file_path}")
     
     try:
-        # Baca seluruh sheet menjadi dictionary { 'nama_sheet': DataFrame }
-        all_sheets = pd.read_excel(file_path, sheet_name=None, engine='openpyxl')
+        # Dukung format CSV maupun Excel
+        if file_path.lower().endswith('.csv'):
+            try:
+                # Coba baca dengan delimiter koma
+                df = pd.read_csv(file_path, on_bad_lines='skip', encoding='utf-8')
+                if len(df.columns) <= 1:
+                    # Kalau cuma 1 kolom, mungkin delim-nya titik koma
+                    df = pd.read_csv(file_path, sep=';', on_bad_lines='skip', encoding='utf-8')
+            except UnicodeDecodeError:
+                # Coba encoding latin1 jika utf-8 gagal
+                df = pd.read_csv(file_path, sep=None, engine='python', on_bad_lines='skip', encoding='latin1')
+            all_sheets = {'CSV_DATA': df}
+        else:
+            # Baca seluruh sheet menjadi dictionary { 'nama_sheet': DataFrame }
+            all_sheets = pd.read_excel(file_path, sheet_name=None, engine='openpyxl')
     except Exception as e:
-        print(f"[PARSER ERROR] Gagal membaca Excel: {e}")
+        print(f"[PARSER ERROR] Gagal membaca file: {e}")
         return []
     
     combined_data = []
