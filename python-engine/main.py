@@ -124,16 +124,23 @@ async def _process_and_notify(file_url: str, file_name: str, folder: str):
                             return ex.get(key, 0)
                         return new_val
 
+                    # Logika Promo (Harga promo, tipe diskon, tgl mulai/akhir)
+                    # Jika folder PQ, KITA JANGAN MENGHAPUS DATA PROMO YANG SUDAH ADA
+                    def get_promo(key, new_val):
+                        if folder == "PQ":
+                            return ex.get(key) # kembalikan apa yang sudah ada di DB
+                        return new_val
+
                     payload = {
                         "sku":               item["sku"],
                         "description":       item.get("description", "") or ex.get("description", f"Produk {item['sku']}"),
                         "hargaNormal":       final_harga,
                         "hargaNormalSource": final_source,
-                        "hargaPromo":        item["harga_promo"] if item.get("is_promo") else None,
-                        "discountType":      item["tipe_diskon"] if item.get("is_promo") else None,
-                        "fromDate":          item.get("tgl_mulai"),
-                        "toDate":            item.get("tgl_akhir"),
-                        "promoFileName":     file_name,
+                        "hargaPromo":        get_promo("hargaPromo", item["harga_promo"] if item.get("is_promo") else None),
+                        "discountType":      get_promo("discountType", item["tipe_diskon"] if item.get("is_promo") else None),
+                        "fromDate":          get_promo("fromDate", item.get("tgl_mulai")),
+                        "toDate":            get_promo("toDate", item.get("tgl_akhir")),
+                        "promoFileName":     get_promo("promoFileName", file_name),
                         "dept":              item.get("dept", None) or ex.get("dept", None),
                         
                         "stok":             get_metric("stok", item.get("stok", 0)),
