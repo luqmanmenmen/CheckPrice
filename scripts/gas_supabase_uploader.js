@@ -21,7 +21,7 @@ const CONFIG = {
 
   // --- Filter Gmail ---
   GMAIL_QUERIES: [
-    { query: 'has:attachment subject:"Update Harga" is:unread', folder: "PQ" },
+    { query: 'has:attachment subject:"POWER QUERY" is:unread', folder: "PQ" },
     { query: 'has:attachment subject:"Promo" is:unread', folder: "PROMO" },
   ],
 
