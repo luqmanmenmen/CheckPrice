@@ -150,9 +150,9 @@ async def _process_and_notify(file_url: str, file_name: str, folder: str):
                         sku_str = str(item["sku"])
                         ex = existing_map.get(sku_str, {})
                         
-                        # PQ tidak boleh menimpa harga PROMO
+                        # PQ tidak boleh menimpa harga PROMO, KECUALI jika harga promo di DB kosong (0)
                         new_harga = item.get("harga_normal", 0)
-                        if ex.get("hargaNormalSource") == "PROMO":
+                        if ex.get("hargaNormalSource") == "PROMO" and ex.get("hargaNormal", 0) != 0:
                             final_harga = ex.get("hargaNormal", 0)
                             final_source = "PROMO"
                         else:
