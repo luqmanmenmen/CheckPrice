@@ -111,6 +111,19 @@ def parse_excel_file(file_path: str) -> List[Dict[str, Any]]:
                     if pd.notna(val):
                         tgl_akhir = str(val)[:10]
 
+            # Ambil Description (Nama Barang)
+            description = ""
+            for col in df.columns:
+                col_upper_check = str(col).upper()
+                if 'DESC' in col_upper_check or 'NAMA' in col_upper_check or 'ARTICLE' in col_upper_check or 'ITEM' in col_upper_check:
+                    val = row[col]
+                    if pd.notna(val):
+                        description = str(val).strip()
+                        break
+            
+            if not description:
+                description = f"Produk {sku}"
+
             # --- AMBIL DATA STOK & SALES (KHUSUS UNTUK FILE PQ) ---
             stok = 0
             eoh_retail = 0
@@ -187,6 +200,7 @@ def parse_excel_file(file_path: str) -> List[Dict[str, Any]]:
 
             item_data = {
                 "sku": sku,
+                "description": description,
                 "harga_normal": harga_normal,
                 "is_promo": is_promo,
                 "tipe_diskon": tipe_diskon,

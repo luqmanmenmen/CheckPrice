@@ -88,6 +88,7 @@ async def _process_and_notify(file_url: str, file_name: str, folder: str):
             for item in parsed_data:
                 payload = {
                     "sku":               item["sku"],
+                    "description":       item["description"],
                     "hargaNormal":       item["harga_normal"],
                     "hargaNormalSource": folder,
                     "hargaPromo":        item["harga_promo"] if item["is_promo"] else None,
@@ -195,6 +196,7 @@ async def gmail_webhook(
                 supabase_payload = [
                     {
                         "sku":               item["sku"],
+                        "description":       item.get("description", f"Produk {item['sku']}"),
                         "hargaNormal":       item["harga_normal"],
                         "hargaNormalSource": "PROMO",
                         "hargaPromo":        item["harga_promo"] if item["is_promo"] else None,
