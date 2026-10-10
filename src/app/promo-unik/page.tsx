@@ -53,34 +53,35 @@ export default async function PromoUnikPage() {
     return acc;
   }, {} as Record<string, typeof promoUnik>);
 
-  // Untuk setiap dept, lakukan grouping berdasarkan Artikel
-  const groupedByDeptAndArticle: Record<string, any[]> = {};
+  // Untuk setiap dept, lakukan grouping berdasarkan Tipe Promo
+  const groupedByDeptAndPromo: Record<string, any[]> = {};
   
   Object.keys(groupedPromos).forEach(dept => {
     const itemsInDept = groupedPromos[dept];
-    const groupedByArticle: Record<string, any[]> = {};
+    const groupedByPromo: Record<string, any[]> = {};
     
     itemsInDept.forEach(item => {
+      const type = item.discountType || 'PROMO LAINNYA';
+      
       const parts = item.description.split(":");
       const baseName = parts[0].trim();
-      
       let color = item.color || (parts.length > 1 ? parts[1].trim() : "");
       let size = item.size || (parts.length > 2 ? parts[2].trim() : "");
       if (color.toUpperCase() === "F" || color.toUpperCase() === "M") color = "";
       if (size.toUpperCase() === "SOLID") size = "";
 
-      const enrichedItem = { ...item, color, size };
+      const enrichedItem = { ...item, color, size, baseName };
       
-      if (!groupedByArticle[baseName]) {
-        groupedByArticle[baseName] = [];
+      if (!groupedByPromo[type]) {
+        groupedByPromo[type] = [];
       }
-      groupedByArticle[baseName].push(enrichedItem);
+      groupedByPromo[type].push(enrichedItem);
     });
     
     // Ubah ke array format
-    groupedByDeptAndArticle[dept] = Object.keys(groupedByArticle).map(key => ({
-      articleName: key,
-      items: groupedByArticle[key]
+    groupedByDeptAndPromo[dept] = Object.keys(groupedByPromo).map(key => ({
+      promoName: key,
+      items: groupedByPromo[key]
     }));
   });
 
@@ -111,15 +112,15 @@ export default async function PromoUnikPage() {
 
       {/* DAFTAR PROMO DI-GROUP PER DEPT */}
       <div className="max-w-6xl mx-auto space-y-12">
-        {Object.keys(groupedByDeptAndArticle).length === 0 ? (
+        {Object.keys(groupedByDeptAndPromo).length === 0 ? (
           <div className="bg-white rounded-3xl border border-slate-100 p-12 text-center shadow-sm">
             <Tag className="w-16 h-16 text-slate-300 mx-auto mb-4" />
             <h3 className="text-xl font-bold text-slate-800 mb-2">Belum ada Promo BOGO / Unik</h3>
             <p className="text-slate-500">Jika ada barang dengan diskon Beli 1 Gratis 1 atau persentase, akan muncul di sini.</p>
           </div>
         ) : (
-          Object.entries(groupedByDeptAndArticle).map(([dept, articleGroups]) => {
-            const totalSkuCount = articleGroups.reduce((sum, group) => sum + group.items.length, 0);
+          Object.entries(groupedByDeptAndPromo).map(([dept, promoGroups]) => {
+            const totalSkuCount = promoGroups.reduce((sum, group) => sum + group.items.length, 0);
             return (
               <div key={dept} className="bg-white/50 rounded-[2rem] p-6 md:p-8 border border-slate-200/60 shadow-sm backdrop-blur-sm">
                 

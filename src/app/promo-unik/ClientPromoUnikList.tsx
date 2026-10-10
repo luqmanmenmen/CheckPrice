@@ -30,8 +30,8 @@ export default function ClientPromoUnikList({ groupedItems }: { groupedItems: an
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const [copiedSku, setCopiedSku] = useState<string | null>(null);
 
-  const toggleGroup = (articleName: string) => {
-    setOpenGroups(prev => ({ ...prev, [articleName]: !prev[articleName] }));
+  const toggleGroup = (promoName: string) => {
+    setOpenGroups(prev => ({ ...prev, [promoName]: !prev[promoName] }));
   };
 
   const copyToClipboard = (e: React.MouseEvent, sku: string) => {
@@ -48,51 +48,43 @@ export default function ClientPromoUnikList({ groupedItems }: { groupedItems: an
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
       {groupedItems.map((group) => {
-        const isOpen = openGroups[group.articleName];
+        const isOpen = openGroups[group.promoName];
         const firstItem = group.items[0];
         
         // Show discount type as B1G1 or %
-        const discountBadge = formatPromoBadge(firstItem.discountType);
+        const discountBadge = formatPromoBadge(group.promoName);
         const dateAdded = new Date(firstItem.updatedAt).toLocaleDateString('id-ID', {
           day: 'numeric',
           month: 'short'
         });
 
-        // Kumpulkan warna unik
-        const colors = Array.from(new Set(group.items.map((i: any) => i.color).filter(Boolean)));
-
         return (
-          <div key={group.articleName} className="bg-white rounded-3xl overflow-hidden shadow-sm hover:shadow-xl transition-all border border-slate-100 group flex flex-col">
+          <div key={group.promoName} className="bg-white rounded-3xl overflow-hidden shadow-sm hover:shadow-xl transition-all border border-slate-100 group flex flex-col">
             
             <div 
               className="cursor-pointer flex flex-col h-full relative"
-              onClick={() => toggleGroup(group.articleName)}
+              onClick={() => toggleGroup(group.promoName)}
             >
               {/* Badge Promo */}
               <div className="absolute top-0 right-0 bg-purple-600 text-white px-4 py-1.5 rounded-bl-xl text-xs font-black tracking-wider uppercase shadow-sm">
-                {discountBadge}
+                {group.promoName.includes('%') ? group.promoName : 'BOGO'}
               </div>
 
               <div className="p-5 pt-8 flex flex-col h-full">
                 <div className="flex justify-between items-start mb-3">
                   <span className="text-[10px] font-black tracking-widest text-slate-400 bg-slate-100 px-3 py-1 rounded-full uppercase">
-                    {firstItem.brand || "SUKO"}
+                    PROMO {group.promoName}
                   </span>
                 </div>
                 
-                <h3 className="text-lg font-black text-slate-800 leading-tight mb-2 group-hover:text-purple-600 transition-colors">
-                  {group.articleName}
+                <h3 className="text-xl font-black text-purple-700 leading-tight mb-2 group-hover:text-purple-500 transition-colors">
+                  {discountBadge}
                 </h3>
                 
                 <div className="flex items-center gap-2 mb-4 flex-wrap">
                   <span className="bg-slate-100 text-slate-600 font-bold px-2 py-0.5 rounded text-[10px]">
-                    {group.items.length} SKU
+                    {group.items.length} SKU / Barang
                   </span>
-                  {colors.length > 0 && (
-                    <span className="bg-purple-50 text-purple-600 font-bold px-2 py-0.5 rounded text-[10px]">
-                      {colors.length} Warna
-                    </span>
-                  )}
                   <span className="flex items-center gap-1 bg-slate-50 text-slate-400 font-medium px-2 py-0.5 rounded text-[10px]">
                     <CalendarDays className="w-3 h-3" />
                     Update: {dateAdded}
@@ -101,8 +93,7 @@ export default function ClientPromoUnikList({ groupedItems }: { groupedItems: an
                 
                 <div className="pt-3 border-t border-slate-100 flex items-center justify-between mt-auto">
                   <div>
-                    <p className="text-[10px] font-bold text-slate-400 tracking-widest uppercase mb-0.5">HARGA NORMAL</p>
-                    <span className="text-xl font-black text-slate-900">{formatRupiah(firstItem.hargaNormal)}</span>
+                    <p className="text-[10px] font-bold text-slate-400 tracking-widest uppercase mb-0.5">LIHAT DAFTAR BARANG</p>
                   </div>
                   
                   <button className="w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center text-slate-400 group-hover:bg-purple-500 group-hover:text-white transition-all">
@@ -115,21 +106,23 @@ export default function ClientPromoUnikList({ groupedItems }: { groupedItems: an
             {/* Dropdown Varian SKU */}
             {isOpen && (
               <div className="p-4 pt-0 border-t border-slate-100 animate-in slide-in-from-top-2 fade-in duration-200 bg-slate-50">
-                <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 mt-3">Daftar Varian ({group.items.length})</h4>
-                <div className="flex flex-col gap-2 max-h-[250px] overflow-y-auto pr-2 custom-scrollbar">
+                <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 mt-3">Daftar Barang BOGO ({group.items.length})</h4>
+                <div className="flex flex-col gap-2 max-h-[350px] overflow-y-auto pr-2 custom-scrollbar">
                   {group.items.map((item: any) => {
                     const isCopied = copiedSku === item.sku;
                     return (
                       <div key={item.sku} className="flex justify-between items-center bg-white p-2.5 rounded-xl border border-slate-100 hover:border-purple-200 transition-colors">
                         <div>
-                          <p className="text-sm font-bold text-slate-700">{item.sku}</p>
+                          <p className="text-sm font-bold text-slate-700">{item.baseName}</p>
+                          <p className="text-xs font-mono font-medium text-slate-500 mt-1">SKU: {item.sku}</p>
                           {(item.color || item.size) && (
                             <p className="text-[10px] font-semibold text-slate-500 uppercase mt-0.5">
                               {item.color} {item.color && item.size ? '•' : ''} {item.size}
                             </p>
                           )}
                         </div>
-                        <div className="flex items-center gap-3">
+                        <div className="flex flex-col items-end gap-2 shrink-0">
+                          <p className="text-sm font-black text-slate-900">{formatRupiah(item.hargaNormal)}</p>
                           <button 
                             onClick={(e) => copyToClipboard(e, item.sku)}
                             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
