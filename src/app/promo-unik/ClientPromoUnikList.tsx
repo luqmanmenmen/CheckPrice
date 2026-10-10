@@ -67,7 +67,11 @@ export default function ClientPromoUnikList({ groupedItems }: { groupedItems: an
             >
               {/* Badge Promo */}
               <div className="absolute top-0 right-0 bg-purple-600 text-white px-4 py-1.5 rounded-bl-xl text-xs font-black tracking-wider uppercase shadow-sm">
-                {group.promoName.includes('%') ? group.promoName : 'BOGO'}
+                {group.promoName.includes('%') 
+                  ? group.promoName 
+                  : group.promoName.match(/B\d+D\d+/i) 
+                    ? 'DISCOUNT' 
+                    : 'BOGO'}
               </div>
 
               <div className="p-5 pt-8 flex flex-col h-full">

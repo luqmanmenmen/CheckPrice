@@ -45,9 +45,22 @@ export default async function PromoUnikPage() {
     take: 400, 
   });
 
+  // Map untuk nama departemen yang lebih mudah dibaca
+  const getDeptName = (deptCode: string) => {
+    if (!deptCode) return 'DEPARTEMEN LAINNYA';
+    const code = deptCode.toUpperCase();
+    if (code.includes('3357')) return 'SUKO HOME LIVING';
+    if (code.includes('3356')) return 'SUKO ACCS';
+    if (code.includes('3358')) return 'SUKO FOOTWEAR';
+    if (code.includes('3369')) return 'SUKO UNDERWEAR';
+    if (code.includes('3367')) return 'SUKO APPAREL';
+    return code; // Fallback jika tidak ada di map
+  };
+
   // Grouping data berdasarkan Departemen (dept)
   const groupedPromos = promoUnik.reduce((acc, item) => {
-    const dept = item.dept || 'DEPARTEMEN LAINNYA';
+    const rawDept = item.dept || 'DEPARTEMEN LAINNYA';
+    const dept = getDeptName(rawDept);
     if (!acc[dept]) acc[dept] = [];
     acc[dept].push(item);
     return acc;
