@@ -17,7 +17,7 @@ model Product {
   acara         String?
   fromDate      String?
   toDate        String?
-  hargaNormal   Float
+  hargaNormal   Float    @default(0)
   hargaNormalSource String? // "PROMO" | "PQ_STOCK" | "MANUAL" — PQ tidak boleh menimpa harga dari PROMO
   hargaPromo    Float?
   diskon        String?
