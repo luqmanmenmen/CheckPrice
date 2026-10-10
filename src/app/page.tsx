@@ -1013,7 +1013,7 @@ export default function Home() {
               <div className="bg-gradient-to-r from-red-500 to-orange-500 px-5 py-3 flex items-center justify-between">
                 <div className="flex items-center gap-2 text-white font-bold text-sm">
                   <Tag className="w-4 h-4" />
-                  <span>{product.discountType ? formatPromoBadge(product.discountType) : "SPECIAL PRICE"}</span>
+                  <span>{product.discountType ? product.discountType : "SPECIAL PRICE"}</span>
                 </div>
                 <span className="bg-white text-red-600 font-extrabold text-sm px-3 py-1 rounded-full shadow-sm">
                   HEMAT {formatRupiah(product.hargaNormal - product.hargaPromo!)}
@@ -1108,7 +1108,7 @@ export default function Home() {
                       </div>
                     ) : (
                       <div className="bg-purple-600 text-white rounded-lg px-3 py-2 text-center shrink-0 shadow-sm flex items-center justify-center h-fit mt-1">
-                        <p className="text-sm font-black leading-none">{formatPromoBadge(product.discountType)}</p>
+                        <p className="text-sm font-black leading-none">{product.discountType}</p>
                       </div>
                     )}
                   </div>
