@@ -1,70 +1,219 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 import pandas as pd
 import os
 import uvicorn
+import httpx
 from dotenv import load_dotenv
+from supabase import create_client, Client
+from parser import parse_excel_file
 
-# Load environment variables (contoh: SUPABASE_URL, SUPABASE_KEY)
 load_dotenv()
 
-app = FastAPI(title="Price Checker Data Engine")
+SUPABASE_URL  = os.getenv("NEXT_PUBLIC_SUPABASE_URL") or os.getenv("SUPABASE_URL")
+SUPABASE_KEY  = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
+VERCEL_URL    = os.getenv("VERCEL_URL", "")          # contoh: https://max-display.vercel.app
+SECRET_TOKEN  = os.getenv("WEBHOOK_SECRET", "B4mb4ng123!Aman")
 
-SECRET_TOKEN = os.getenv("WEBHOOK_SECRET", "B4mb4ng123!Aman")
+supabase: Client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+app = FastAPI(title="Price Checker — Python Data Engine (Render.com)")
+
+# ─────────────────────────────────────────────────────────────
+#  Health check
+# ─────────────────────────────────────────────────────────────
 @app.get("/")
 def read_root():
     return {"message": "Python Data Engine is running! 🚀"}
 
+# ─────────────────────────────────────────────────────────────
+#  ENDPOINT UTAMA — dipanggil oleh Google Apps Script
+#  GAS upload file ke Supabase Storage, lalu kirim URL ke sini
+#  Python: download dari Storage → parse Excel → upsert ke DB
+#          → notif Vercel agar display data terbaru
+# ─────────────────────────────────────────────────────────────
+class ProcessFromStorageRequest(BaseModel):
+    file_url:  str
+    file_name: str
+    folder:    str = "PQ"   # "PQ" atau "PROMO"
+
+@app.post("/api/process-from-storage")
+async def process_from_storage(req: ProcessFromStorageRequest, background_tasks: BackgroundTasks):
+    """
+    Dipanggil Google Apps Script setelah upload ke Supabase Storage.
+    Tidak menerima file langsung — hanya URL file di Storage.
+    """
+    print(f"\n[ENGINE] Menerima request proses: {req.file_name} ({req.folder})")
+
+    # Jalankan di background agar GAS tidak timeout menunggu
+    background_tasks.add_task(
+        _process_and_notify,
+        file_url=req.file_url,
+        file_name=req.file_name,
+        folder=req.folder
+    )
+
+    return {"success": True, "message": f"Mulai memproses {req.file_name} di background..."}
+
+
+async def _process_and_notify(file_url: str, file_name: str, folder: str):
+    """Proses file dari Supabase Storage dan notify Vercel setelah selesai."""
+    temp_path = f"temp_{file_name}"
+
+    try:
+        # 1. Download file dari Supabase Storage
+        print(f"[ENGINE] Downloading dari Storage: {file_url}")
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.get(file_url)
+            response.raise_for_status()
+
+        with open(temp_path, "wb") as f:
+            f.write(response.content)
+        print(f"[ENGINE] File berhasil didownload ({len(response.content)} bytes)")
+
+        # 2. Parse Excel dengan Pandas
+        parsed_data = parse_excel_file(temp_path)
+        print(f"[ENGINE] Berhasil parse {len(parsed_data)} baris dari {file_name}")
+
+        if not parsed_data:
+            print("[ENGINE] Tidak ada data valid. Proses berhenti.")
+            return
+
+        # 3. Upsert ke Supabase DB
+        if supabase:
+            supabase_payload = []
+            for item in parsed_data:
+                payload = {
+                    "sku":               item["sku"],
+                    "hargaNormal":       item["harga_normal"],
+                    "hargaNormalSource": folder,
+                    "hargaPromo":        item["harga_promo"] if item["is_promo"] else None,
+                    "discountType":      item["tipe_diskon"] if item["is_promo"] else None,
+                    "fromDate":          item["tgl_mulai"],
+                    "toDate":            item["tgl_akhir"],
+                    "promoFileName":     file_name,
+                }
+                supabase_payload.append(payload)
+
+            CHUNK_SIZE = 500
+            total_upserted = 0
+            for i in range(0, len(supabase_payload), CHUNK_SIZE):
+                chunk = supabase_payload[i:i + CHUNK_SIZE]
+                try:
+                    supabase.table("Product").upsert(chunk, on_conflict="sku").execute()
+                    total_upserted += len(chunk)
+                    print(f"[ENGINE] Upserted chunk {i // CHUNK_SIZE + 1}: {len(chunk)} baris")
+                except Exception as ex:
+                    print(f"[ENGINE] Error upsert chunk: {ex}")
+
+            print(f"[ENGINE] ✅ Selesai upsert {total_upserted} produk ke Supabase DB")
+
+        # 4. Notifikasi Vercel — revalidate halaman agar tampilan update
+        await _notify_vercel(folder)
+
+    except Exception as e:
+        print(f"[ENGINE] ❌ Error saat proses file: {e}")
+    finally:
+        # Bersihkan file temp
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+            print(f"[ENGINE] File temp dihapus: {temp_path}")
+
+
+async def _notify_vercel(folder: str):
+    """
+    Ping Vercel setelah data di DB diperbarui.
+    Vercel tinggal ambil data fresh dari Supabase DB dan display.
+    """
+    if not VERCEL_URL:
+        print("[ENGINE] VERCEL_URL tidak diset, skip notifikasi Vercel.")
+        return
+
+    try:
+        notify_url = f"{VERCEL_URL}/api/revalidate"
+        payload    = {
+            "secret": SECRET_TOKEN,
+            "type":   "UPDATE_PROMO" if folder == "PROMO" else "PQ_HARIAN",
+        }
+        async with httpx.AsyncClient(timeout=30) as client:
+            res = await client.post(notify_url, json=payload)
+        print(f"[ENGINE] Notif Vercel [{res.status_code}]: {res.text[:200]}")
+    except Exception as e:
+        print(f"[ENGINE] Gagal notif Vercel (tidak kritis, DB sudah update): {e}")
+
+
+# ─────────────────────────────────────────────────────────────
+#  ENDPOINT LAMA — terima file langsung via multipart (opsional)
+# ─────────────────────────────────────────────────────────────
 @app.post("/api/webhook/gmail")
 async def gmail_webhook(
     file: UploadFile = File(...),
-    token: str = Form(...),
-    folder: str = Form("PQ"),
-    fileName: str = Form(None)
+    token: str       = Form(...),
+    folder: str      = Form("PQ"),
+    fileName: str    = Form(None)
 ):
-    # 1. Validasi Token Keamanan dari Google Apps Script
     if token != SECRET_TOKEN:
         raise HTTPException(status_code=401, detail="Unauthorized")
-    
+
     if not file.filename.endswith(('.xlsx', '.csv')):
         raise HTTPException(status_code=400, detail="Invalid file format. Only .xlsx and .csv allowed.")
 
     final_file_name = fileName or file.filename or "uploaded_file"
-    print(f"Menerima file: {final_file_name} untuk diproses sebagai {folder}")
-    
+    print(f"[WEBHOOK] Menerima file langsung: {final_file_name}")
+
     try:
-        # 2. Simpan file sementara di memori/disk lokal untuk dibaca Pandas
         temp_file_path = f"temp_{final_file_name}"
         with open(temp_file_path, "wb") as buffer:
             buffer.write(await file.read())
 
-        # 3. KUNYAH DATA DENGAN PANDAS
-        # Deteksi format file
+        parsed_data = []
         if final_file_name.endswith('.csv'):
             df = pd.read_csv(temp_file_path)
+            print(f"[WEBHOOK] Membaca {len(df)} baris data CSV!")
         else:
-            df = pd.read_excel(temp_file_path)
-            
-        print(f"Berhasil membaca {len(df)} baris data!")
-        print(df.head(3)) # Print 3 baris pertama untuk debugging
-        
-        # TODO: Logika pembersihan (cleaning) data dan pengiriman ke Supabase 
-        # akan kita bangun di langkah selanjutnya.
+            parsed_data = parse_excel_file(temp_file_path)
 
-        # 4. Hapus file sementara agar server tidak kepenuhan
+            if parsed_data and supabase:
+                supabase_payload = [
+                    {
+                        "sku":               item["sku"],
+                        "hargaNormal":       item["harga_normal"],
+                        "hargaNormalSource": "PROMO",
+                        "hargaPromo":        item["harga_promo"] if item["is_promo"] else None,
+                        "discountType":      item["tipe_diskon"] if item["is_promo"] else None,
+                        "fromDate":          item["tgl_mulai"],
+                        "toDate":            item["tgl_akhir"],
+                        "promoFileName":     item["sumber_sheet"]
+                    }
+                    for item in parsed_data
+                ]
+
+                CHUNK_SIZE = 1000
+                for i in range(0, len(supabase_payload), CHUNK_SIZE):
+                    chunk = supabase_payload[i:i + CHUNK_SIZE]
+                    try:
+                        supabase.table("Product").upsert(chunk, on_conflict="sku").execute()
+                        print(f"[WEBHOOK] Upserted {len(chunk)} baris ke tabel Product")
+                    except Exception as ex:
+                        print(f"[WEBHOOK] Error saat upsert chunk: {ex}")
+
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
 
+        count_rows = len(df) if final_file_name.endswith('.csv') else len(parsed_data)
         return {
-            "success": True, 
-            "message": f"Successfully processed {final_file_name} with {len(df)} rows.",
+            "success": True,
+            "message": f"Successfully processed {final_file_name} with {count_rows} rows.",
             "type": folder
         }
-        
+
     except Exception as e:
-        print(f"Error processing file: {e}")
+        print(f"[WEBHOOK] Error processing file: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
+
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
