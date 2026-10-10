@@ -46,7 +46,7 @@ export default function ClientPromoUnikList({ groupedItems }: { groupedItems: an
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6 items-start">
       {groupedItems.map((group) => {
         const isOpen = openGroups[group.promoName];
         const firstItem = group.items[0];

@@ -29,7 +29,7 @@ export default function ClientBarangBaruList({ groupedItems }: { groupedItems: a
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6 items-start">
       {groupedItems.map((group) => {
         const isOpen = openGroups[group.articleName];
         const firstItem = group.items[0];
