@@ -506,8 +506,12 @@ export default function Home() {
     }
   }
 
-  const isOnPromo = product && product.hargaPromo && product.hargaPromo > 0 && product.hargaPromo !== product.hargaNormal && !isPromoExpired;
-  const discountPct = isOnPromo && product
+  const isBogoPromo = product && product.discountType && /B\dG\d|B\dD\d+|B\dX\d+/i.test(product.discountType) && !isPromoExpired;
+  const isPercentPromo = product && product.discountType && product.discountType.includes('%') && !isPromoExpired;
+  const hasHargaPromo = product && product.hargaPromo && product.hargaPromo > 0 && product.hargaPromo !== product.hargaNormal;
+  const isOnPromo = (hasHargaPromo || isBogoPromo || isPercentPromo) && !isPromoExpired;
+  
+  const discountPct = (hasHargaPromo && product)
     ? Math.round(((product.hargaNormal - product.hargaPromo!) / product.hargaNormal) * 100)
     : 0;
 
@@ -1065,16 +1069,24 @@ export default function Home() {
                     <div>
                       <p className="text-xs text-slate-500 uppercase font-medium mb-1">Harga Promo</p>
                       <p className="text-4xl font-extrabold text-red-600 leading-none">
-                        {formatRupiah(product.hargaPromo!)}
+                        {formatRupiah(product.hargaPromo || product.hargaNormal)}
                       </p>
-                      <p className="text-base text-slate-400 line-through mt-1">
-                        {formatRupiah(product.hargaNormal)}
-                      </p>
+                      {hasHargaPromo && (
+                        <p className="text-base text-slate-400 line-through mt-1">
+                          {formatRupiah(product.hargaNormal)}
+                        </p>
+                      )}
                     </div>
-                    <div className="bg-red-600 text-white rounded-lg px-2.5 py-1.5 text-center shrink-0 shadow-sm flex flex-col justify-center items-center h-fit mt-1">
-                      <p className="text-sm font-black leading-none">{discountPct}%</p>
-                      <p className="text-[9px] font-bold uppercase mt-0.5 opacity-90 tracking-wide">OFF</p>
-                    </div>
+                    {hasHargaPromo ? (
+                      <div className="bg-red-600 text-white rounded-lg px-2.5 py-1.5 text-center shrink-0 shadow-sm flex flex-col justify-center items-center h-fit mt-1">
+                        <p className="text-sm font-black leading-none">{discountPct}%</p>
+                        <p className="text-[9px] font-bold uppercase mt-0.5 opacity-90 tracking-wide">OFF</p>
+                      </div>
+                    ) : (
+                      <div className="bg-purple-600 text-white rounded-lg px-3 py-2 text-center shrink-0 shadow-sm flex items-center justify-center h-fit mt-1">
+                        <p className="text-sm font-black leading-none">{product.discountType}</p>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div>

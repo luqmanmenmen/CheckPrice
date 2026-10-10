@@ -44,11 +44,11 @@ export default async function PromoUnikPage() {
     take: 200, 
   });
 
-  // Grouping data berdasarkan tipe diskon
+  // Grouping data berdasarkan Departemen (dept)
   const groupedPromos = promoUnik.reduce((acc, item) => {
-    const type = item.discountType || 'PROMO LAINNYA';
-    if (!acc[type]) acc[type] = [];
-    acc[type].push(item);
+    const dept = item.dept || 'DEPARTEMEN LAINNYA';
+    if (!acc[dept]) acc[dept] = [];
+    acc[dept].push(item);
     return acc;
   }, {} as Record<string, typeof promoUnik>);
 
