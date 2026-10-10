@@ -90,7 +90,7 @@ async def _process_and_notify(file_url: str, file_name: str, folder: str):
                 payload = {
                     "sku":               item["sku"],
                     "description":       item["description"],
-                    "hargaNormal":       item["harga_normal"],
+                    **({ "hargaNormal": item["harga_normal"] } if item["harga_normal"] != 0 else {}),
                     "hargaNormalSource": folder,
                     "hargaPromo":        item["harga_promo"] if item["is_promo"] else None,
                     "discountType":      item["tipe_diskon"] if item["is_promo"] else None,

@@ -209,6 +209,7 @@ def parse_excel_file(file_path: str) -> List[Dict[str, Any]]:
             boy_unit = 0
             boy_retail = 0
             bom_unit = 0
+            bom_retail = 0
             day_sales_unit = 0
             day_sales_retail = 0
 
@@ -271,12 +272,25 @@ def parse_excel_file(file_path: str) -> List[Dict[str, Any]]:
                 # BOM (Beginning of Month)
                 elif 'BOM' in col_upper and 'UNIT' in col_upper:
                     bom_unit = clean_number(row[col])
+                elif 'BOM' in col_upper and 'RETAIL' in col_upper:
+                    bom_retail = clean_number(row[col], True)
                     
                 # DAY SALES (Sales harian)
                 elif 'DAY' in col_upper and 'SALES' in col_upper and 'UNIT' in col_upper:
                     day_sales_unit = clean_number(row[col])
                 elif 'DAY' in col_upper and 'SALES' in col_upper and 'RETAIL' in col_upper:
                     day_sales_retail = clean_number(row[col], True)
+
+            # Hitung Harga Normal dari RETAIL / UNIT jika harga_normal masih 0 (Kasus File PQ)
+            if harga_normal == 0:
+                if stok > 0 and eoh_retail > 0:
+                    harga_normal = int(eoh_retail / stok)
+                elif bom_unit > 0 and bom_retail > 0:
+                    harga_normal = int(bom_retail / bom_unit)
+                elif boy_unit > 0 and boy_retail > 0:
+                    harga_normal = int(boy_retail / boy_unit)
+                elif sales_mtd > 0 and sales_mtd_retail > 0:
+                    harga_normal = int(sales_mtd_retail / sales_mtd)
 
             item_data = {
                 "sku": sku,
