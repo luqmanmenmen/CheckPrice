@@ -218,9 +218,16 @@ def parse_excel_file(file_path: str) -> List[Dict[str, Any]]:
                     return 0.0 if is_float else 0
                 try:
                     num_str = str(val).replace(',', '').strip()
+                    if num_str.lower() in ['nan', 'null', 'none', '']:
+                        return 0.0 if is_float else 0
+                        
+                    res = float(num_str)
+                    if pd.isna(res):
+                        return 0.0 if is_float else 0
+                        
                     if is_float:
-                        return float(num_str)
-                    return int(float(num_str))
+                        return float(res)
+                    return int(res)
                 except:
                     return 0.0 if is_float else 0
 
