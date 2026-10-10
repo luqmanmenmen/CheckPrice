@@ -16,7 +16,8 @@ function formatRupiah(angka: number) {
 export const revalidate = 60;
 
 // Client component for the card so we can use onClick
-import ClientPromoCard from './ClientPromoCard';
+import ClientPromoUnikList from './ClientPromoUnikList';
+import { ArrowLeft } from 'lucide-react';
 
 export default async function PromoUnikPage() {
   // Ambil promo unik: BXGY atau PERCENTAGE
@@ -41,7 +42,7 @@ export default async function PromoUnikPage() {
     orderBy: {
       updatedAt: 'desc',
     },
-    take: 200, 
+    take: 400, 
   });
 
   // Grouping data berdasarkan Departemen (dept)
@@ -51,6 +52,37 @@ export default async function PromoUnikPage() {
     acc[dept].push(item);
     return acc;
   }, {} as Record<string, typeof promoUnik>);
+
+  // Untuk setiap dept, lakukan grouping berdasarkan Artikel
+  const groupedByDeptAndArticle: Record<string, any[]> = {};
+  
+  Object.keys(groupedPromos).forEach(dept => {
+    const itemsInDept = groupedPromos[dept];
+    const groupedByArticle: Record<string, any[]> = {};
+    
+    itemsInDept.forEach(item => {
+      const parts = item.description.split(":");
+      const baseName = parts[0].trim();
+      
+      let color = item.color || (parts.length > 1 ? parts[1].trim() : "");
+      let size = item.size || (parts.length > 2 ? parts[2].trim() : "");
+      if (color.toUpperCase() === "F" || color.toUpperCase() === "M") color = "";
+      if (size.toUpperCase() === "SOLID") size = "";
+
+      const enrichedItem = { ...item, color, size };
+      
+      if (!groupedByArticle[baseName]) {
+        groupedByArticle[baseName] = [];
+      }
+      groupedByArticle[baseName].push(enrichedItem);
+    });
+    
+    // Ubah ke array format
+    groupedByDeptAndArticle[dept] = Object.keys(groupedByArticle).map(key => ({
+      articleName: key,
+      items: groupedByArticle[key]
+    }));
+  });
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans p-4 md:p-8">
@@ -71,39 +103,38 @@ export default async function PromoUnikPage() {
             href="/"
             className="bg-white hover:bg-slate-100 text-slate-800 border border-slate-200 px-6 py-3 rounded-full font-bold transition-all text-sm flex items-center gap-2 shadow-sm"
           >
+            <ArrowLeft className="w-4 h-4" />
             Kembali ke Dashboard
           </Link>
         </div>
       </div>
 
-      {/* GRID PRODUK PROMO UNIK */}
-      <div className="max-w-6xl mx-auto">
-        {promoUnik.length === 0 ? (
+      {/* DAFTAR PROMO DI-GROUP PER DEPT */}
+      <div className="max-w-6xl mx-auto space-y-12">
+        {Object.keys(groupedByDeptAndArticle).length === 0 ? (
           <div className="bg-white rounded-3xl border border-slate-100 p-12 text-center shadow-sm">
             <Tag className="w-16 h-16 text-slate-300 mx-auto mb-4" />
-            <h3 className="text-xl font-bold text-slate-800">Tidak ada Promo Unik saat ini</h3>
-            <p className="text-slate-500">Produk BOGO atau diskon spesial akan muncul di sini.</p>
+            <h3 className="text-xl font-bold text-slate-800 mb-2">Belum ada Promo BOGO / Unik</h3>
+            <p className="text-slate-500">Jika ada barang dengan diskon Beli 1 Gratis 1 atau persentase, akan muncul di sini.</p>
           </div>
         ) : (
-          <div className="flex flex-col gap-10">
-            {Object.entries(groupedPromos).map(([type, items]) => (
-              <div key={type}>
+          Object.entries(groupedByDeptAndArticle).map(([dept, articleGroups]) => {
+            const totalSkuCount = articleGroups.reduce((sum, group) => sum + group.items.length, 0);
+            return (
+              <div key={dept} className="bg-white/50 rounded-[2rem] p-6 md:p-8 border border-slate-200/60 shadow-sm backdrop-blur-sm">
+                
                 {/* Judul Grup */}
-                <div className="flex items-center gap-3 mb-4 border-b border-slate-200 pb-2">
-                  <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tight">{type}</h2>
-                  <span className="bg-purple-100 text-purple-700 font-bold px-2 py-0.5 rounded-full text-xs">
-                    {items.length} Item
+                <div className="flex items-center gap-4 mb-6 border-b border-slate-200 pb-4">
+                  <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tight">{dept}</h2>
+                  <span className="bg-purple-100 text-purple-700 font-bold px-3 py-1 rounded-full text-xs">
+                    {totalSkuCount} SKU
                   </span>
                 </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
-                  {items.map((item) => (
-                    <ClientPromoCard key={item.id} item={item} />
-                  ))}
-                </div>
+                
+                <ClientPromoUnikList groupedItems={articleGroups} />
               </div>
-            ))}
-          </div>
+            );
+          })
         )}
       </div>
 
