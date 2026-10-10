@@ -111,6 +111,80 @@ def parse_excel_file(file_path: str) -> List[Dict[str, Any]]:
                     if pd.notna(val):
                         tgl_akhir = str(val)[:10]
 
+            # --- AMBIL DATA STOK & SALES (KHUSUS UNTUK FILE PQ) ---
+            stok = 0
+            eoh_retail = 0
+            sales_mtd = 0
+            sales_mtd_retail = 0
+            sales_wtd = 0
+            sales_wtd_retail = 0
+            sales_ytd = 0
+            sales_ytd_retail = 0
+            boy_unit = 0
+            boy_retail = 0
+            bom_unit = 0
+            day_sales_unit = 0
+            day_sales_retail = 0
+
+            # Bantu membersihkan angka dari koma atau teks
+            def clean_number(val, is_float=False):
+                if pd.isna(val):
+                    return 0.0 if is_float else 0
+                try:
+                    num_str = str(val).replace(',', '').strip()
+                    if is_float:
+                        return float(num_str)
+                    return int(float(num_str))
+                except:
+                    return 0.0 if is_float else 0
+
+            for col in df.columns:
+                col_upper = str(col).upper()
+                
+                # EOH (Stok)
+                if 'EOH' in col_upper and 'UNIT' in col_upper:
+                    stok = clean_number(row[col])
+                elif 'EOH' in col_upper and 'RETAIL' in col_upper:
+                    eoh_retail = clean_number(row[col], True)
+                elif 'STOK' in col_upper or 'STOCK' in col_upper:
+                    # Fallback jika tidak ada 'EOH UNIT' tapi ada 'STOK'
+                    if stok == 0:
+                        stok = clean_number(row[col])
+                
+                # MTD (Month to Date)
+                elif 'MTD' in col_upper and 'UNIT' in col_upper:
+                    sales_mtd = clean_number(row[col])
+                elif 'MTD' in col_upper and 'RETAIL' in col_upper:
+                    sales_mtd_retail = clean_number(row[col], True)
+                    
+                # WTD (Week to Date)
+                elif 'WTD' in col_upper and 'UNIT' in col_upper:
+                    sales_wtd = clean_number(row[col])
+                elif 'WTD' in col_upper and 'RETAIL' in col_upper:
+                    sales_wtd_retail = clean_number(row[col], True)
+                    
+                # YTD (Year to Date)
+                elif 'YTD' in col_upper and 'UNIT' in col_upper:
+                    sales_ytd = clean_number(row[col])
+                elif 'YTD' in col_upper and 'RETAIL' in col_upper:
+                    sales_ytd_retail = clean_number(row[col], True)
+                    
+                # BOY (Beginning of Year)
+                elif 'BOY' in col_upper and 'UNIT' in col_upper:
+                    boy_unit = clean_number(row[col])
+                elif 'BOY' in col_upper and 'RETAIL' in col_upper:
+                    boy_retail = clean_number(row[col], True)
+                    
+                # BOM (Beginning of Month)
+                elif 'BOM' in col_upper and 'UNIT' in col_upper:
+                    bom_unit = clean_number(row[col])
+                    
+                # DAY SALES (Sales harian)
+                elif 'DAY' in col_upper and 'SALES' in col_upper and 'UNIT' in col_upper:
+                    day_sales_unit = clean_number(row[col])
+                elif 'DAY' in col_upper and 'SALES' in col_upper and 'RETAIL' in col_upper:
+                    day_sales_retail = clean_number(row[col], True)
+
             item_data = {
                 "sku": sku,
                 "harga_normal": harga_normal,
@@ -119,7 +193,22 @@ def parse_excel_file(file_path: str) -> List[Dict[str, Any]]:
                 "harga_promo": harga_promo,
                 "tgl_mulai": tgl_mulai,
                 "tgl_akhir": tgl_akhir,
-                "sumber_sheet": sheet_name
+                "sumber_sheet": sheet_name,
+                
+                # Data Stok & Sales
+                "stok": stok,
+                "eoh_retail": eoh_retail,
+                "sales_mtd": sales_mtd,
+                "sales_mtd_retail": sales_mtd_retail,
+                "sales_wtd": sales_wtd,
+                "sales_wtd_retail": sales_wtd_retail,
+                "sales_ytd": sales_ytd,
+                "sales_ytd_retail": sales_ytd_retail,
+                "boy_unit": boy_unit,
+                "boy_retail": boy_retail,
+                "bom_unit": bom_unit,
+                "day_sales_unit": day_sales_unit,
+                "day_sales_retail": day_sales_retail
             }
             
             combined_data.append(item_data)

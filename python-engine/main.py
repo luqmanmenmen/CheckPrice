@@ -95,6 +95,21 @@ async def _process_and_notify(file_url: str, file_name: str, folder: str):
                     "fromDate":          item["tgl_mulai"],
                     "toDate":            item["tgl_akhir"],
                     "promoFileName":     file_name,
+                    
+                    # Update Stok & Sales (Hanya akan di-update jika nilainya bukan 0 / file tersebut adalah file PQ)
+                    **({ "stok":             item["stok"] }             if item["stok"] != 0             else {}),
+                    **({ "eoh_retail":       item["eoh_retail"] }       if item["eoh_retail"] != 0       else {}),
+                    **({ "sales_mtd":        item["sales_mtd"] }        if item["sales_mtd"] != 0        else {}),
+                    **({ "sales_mtd_retail": item["sales_mtd_retail"] } if item["sales_mtd_retail"] != 0 else {}),
+                    **({ "sales_wtd":        item["sales_wtd"] }        if item["sales_wtd"] != 0        else {}),
+                    **({ "sales_wtd_retail": item["sales_wtd_retail"] } if item["sales_wtd_retail"] != 0 else {}),
+                    **({ "sales_ytd":        item["sales_ytd"] }        if item["sales_ytd"] != 0        else {}),
+                    **({ "sales_ytd_retail": item["sales_ytd_retail"] } if item["sales_ytd_retail"] != 0 else {}),
+                    **({ "boy_unit":         item["boy_unit"] }         if item["boy_unit"] != 0         else {}),
+                    **({ "boy_retail":       item["boy_retail"] }       if item["boy_retail"] != 0       else {}),
+                    **({ "bom_unit":         item["bom_unit"] }         if item["bom_unit"] != 0         else {}),
+                    **({ "day_sales_unit":   item["day_sales_unit"] }   if item["day_sales_unit"] != 0   else {}),
+                    **({ "day_sales_retail": item["day_sales_retail"] } if item["day_sales_retail"] != 0 else {}),
                 }
                 supabase_payload.append(payload)
 
