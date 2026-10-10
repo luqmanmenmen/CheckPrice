@@ -172,6 +172,18 @@ export default function Home() {
 
   // Fetch last update date
   const { data: updateData } = useSWR("/api/last-update", fetcher, { refreshInterval: 60000 });
+  const serverVersion = updateData?.lastUpdate ? new Date(updateData.lastUpdate).getTime().toString() : null;
+  
+  const [localVersion, setLocalVersion] = useState<string | null>(null);
+  
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setLocalVersion(localStorage.getItem("suko_server_version"));
+    }
+  }, []);
+
+  const hasNewUpdate = serverVersion && localVersion && serverVersion !== localVersion;
+
   const lastUpdateDate = updateData?.lastUpdate 
     ? new Date(updateData.lastUpdate).toLocaleString('id-ID', {
         day: 'numeric', month: 'long', year: 'numeric', 
@@ -184,10 +196,13 @@ export default function Home() {
     showToast("Mengupdate database lokal...", "success");
     try {
       const { syncOfflineDatabase } = await import('@/lib/offlineDb');
-      // Forcing version check bypass if needed, but standard sync is fine
       await syncOfflineDatabase((syncing) => {
         setIsSyncing(syncing);
-      }, true); // Provide a flag to force sync if we implement it, or just clear local storage version
+      }, true);
+      if (serverVersion) {
+        localStorage.setItem("suko_server_version", serverVersion);
+        setLocalVersion(serverVersion);
+      }
       showToast("Data Offline berhasil diupdate!", "success");
     } catch (e) {
       showToast("Gagal update data offline", "error");
@@ -632,21 +647,44 @@ export default function Home() {
       <div className="px-4 lg:px-0 flex flex-col gap-5">
 
         {/* Database Status Info */}
-        <div className="flex items-center justify-between bg-white rounded-xl p-3 border border-slate-200 shadow-sm">
-          <div className="flex items-center gap-2">
-            <div className={`w-2 h-2 rounded-full ${lastUpdateDate === 'Memuat...' ? 'bg-amber-400 animate-pulse' : 'bg-emerald-500'}`} />
-            <div>
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Update Data Terakhir</p>
-              <p className="text-xs font-semibold text-slate-700">{lastUpdateDate}</p>
+        <div className="flex flex-col gap-2">
+          {hasNewUpdate && (
+            <div className="bg-rose-500 rounded-xl p-3 shadow-md border border-rose-600 flex items-center justify-between animate-in slide-in-from-top-2">
+              <div className="flex items-center gap-3">
+                <CloudDownload className="w-6 h-6 text-white animate-bounce shrink-0" />
+                <div>
+                  <p className="text-white font-black text-sm uppercase tracking-wide leading-tight">Data Baru Tersedia!</p>
+                  <p className="text-rose-100 text-[10px] font-medium leading-tight mt-0.5">Silakan update database agar promo terbaru muncul.</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => handleManualSync()}
+                disabled={isSyncing}
+                className={`px-3 py-2 bg-white text-rose-600 font-black text-xs rounded-lg hover:bg-rose-50 transition-colors shadow-sm shrink-0 whitespace-nowrap ${isSyncing ? 'opacity-50' : ''}`}
+              >
+                {isSyncing ? "UPDATE..." : "UPDATE SEKARANG"}
+              </button>
             </div>
+          )}
+
+          <div className="flex items-center justify-between bg-white rounded-xl p-3 border border-slate-200 shadow-sm">
+            <div className="flex items-center gap-2">
+              <div className={`w-2 h-2 rounded-full ${lastUpdateDate === 'Memuat...' ? 'bg-amber-400 animate-pulse' : 'bg-emerald-500'}`} />
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Update Data Terakhir</p>
+                <p className="text-xs font-semibold text-slate-700">{lastUpdateDate}</p>
+              </div>
+            </div>
+            {!hasNewUpdate && (
+              <button 
+                onClick={() => handleManualSync()}
+                disabled={isSyncing}
+                className={`p-2 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-500 transition-colors ${isSyncing ? 'opacity-50' : ''}`}
+              >
+                <CloudDownload className={`w-4 h-4 ${isSyncing ? 'animate-bounce text-blue-500' : ''}`} />
+              </button>
+            )}
           </div>
-          <button 
-            onClick={() => handleManualSync()}
-            disabled={isSyncing}
-            className={`p-2 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-500 transition-colors ${isSyncing ? 'opacity-50' : ''}`}
-          >
-            <CloudDownload className={`w-4 h-4 ${isSyncing ? 'animate-bounce text-blue-500' : ''}`} />
-          </button>
         </div>
       {/* Logout Summary Modal */}
       {showSummary && (
