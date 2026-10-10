@@ -27,12 +27,15 @@ export default async function BarangBaruPage() {
     take: 150,
   });
 
-  // Group by article or description (if article is null)
+  // Group by parsed description
   const groupedData: Record<string, any[]> = {};
   newItems.forEach(item => {
     // Parse name and variants to group properly
     const parts = item.description.split(":");
-    const baseName = item.article || parts[0].trim();
+    
+    // Always use the descriptive name from the description field rather than the raw article code
+    // Example: "SWEATER KNIT WEAR SKSW01" is better than just "SKSW01"
+    const baseName = parts[0].trim();
     
     // Add color/size for the UI if not available
     let color = item.color || (parts.length > 1 ? parts[1].trim() : "");
