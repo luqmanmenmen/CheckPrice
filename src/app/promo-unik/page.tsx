@@ -132,7 +132,7 @@ export default async function PromoUnikPage() {
                   </span>
                 </div>
                 
-                <ClientPromoUnikList groupedItems={articleGroups} />
+                <ClientPromoUnikList groupedItems={promoGroups} />
               </div>
             );
           })
