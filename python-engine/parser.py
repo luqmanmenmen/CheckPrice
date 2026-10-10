@@ -47,6 +47,20 @@ def parse_excel_file(file_path: str) -> List[Dict[str, Any]]:
                 sku_col = col
                 break
                 
+        # Jika tidak ketemu di header, mungkin header-nya ada di baris-baris awal (misal karena ada judul "DATA AS OF")
+        if not sku_col:
+            for i in range(min(15, len(df))):
+                row_vals = [str(val).strip().upper() for val in df.iloc[i]]
+                if any('SKU' in val or 'BARCODE' in val or 'KODE' in val or 'ARTICLE' in val for val in row_vals):
+                    df.columns = row_vals
+                    df = df.iloc[i+1:].reset_index(drop=True)
+                    # Cari lagi sku_col
+                    for col in df.columns:
+                        if 'SKU' in col or 'BARCODE' in col or 'KODE' in col or 'ARTICLE' in col:
+                            sku_col = col
+                            break
+                    break
+                
         if not sku_col:
             print(f"   [SKIP] Melewati sheet '{sheet_name}' karena tidak ditemukan kolom SKU.")
             continue
