@@ -96,6 +96,7 @@ async def _process_and_notify(file_url: str, file_name: str, folder: str):
                     "fromDate":          item["tgl_mulai"],
                     "toDate":            item["tgl_akhir"],
                     "promoFileName":     file_name,
+                    "dept":              item.get("dept", None),
                     
                     # Update Stok & Sales (Hanya akan di-update jika nilainya bukan 0 / file tersebut adalah file PQ)
                     **({ "stok":             item["stok"] }             if item["stok"] != 0             else {}),

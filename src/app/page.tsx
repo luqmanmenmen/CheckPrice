@@ -527,16 +527,6 @@ export default function Home() {
   const handleRefresh = async () => {
     window.location.reload();
   };
-
-  const formatPromoBadge = (promoCode: string | null | undefined) => {
-    if (!promoCode) return "PROMO";
-    const bogoMatch = promoCode.match(/B(\d+)G(\d+)/i);
-    if (bogoMatch) return `BELI ${bogoMatch[1]} GRATIS ${bogoMatch[2]}`;
-    const b1dMatch = promoCode.match(/B(\d+)D(\d+)/i);
-    if (b1dMatch) return `BELI ${b1dMatch[1]} DISKON ${b1dMatch[2]}%`;
-    return promoCode;
-  };
-
   const handlePrintLabel = () => {
     if (!product) return;
     try {

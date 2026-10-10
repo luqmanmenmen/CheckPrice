@@ -11,21 +11,6 @@ function formatRupiah(angka: number) {
   }).format(angka);
 }
 
-function formatPromoBadge(promoCode: string) {
-  if (!promoCode) return "PROMO";
-  // B1G1 -> BELI 1 GRATIS 1
-  const bogoMatch = promoCode.match(/B(\d+)G(\d+)/i);
-  if (bogoMatch) {
-    return `BELI ${bogoMatch[1]} GRATIS ${bogoMatch[2]}`;
-  }
-  // B1D20 -> BELI 1 DISKON 20%
-  const b1dMatch = promoCode.match(/B(\d+)D(\d+)/i);
-  if (b1dMatch) {
-    return `BELI ${b1dMatch[1]} DISKON ${b1dMatch[2]}%`;
-  }
-  return promoCode;
-}
-
 export default function ClientPromoUnikList({ groupedItems }: { groupedItems: any[] }) {
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const [copiedSku, setCopiedSku] = useState<string | null>(null);
@@ -51,8 +36,6 @@ export default function ClientPromoUnikList({ groupedItems }: { groupedItems: an
         const isOpen = openGroups[group.promoName];
         const firstItem = group.items[0];
         
-        // Show discount type as B1G1 or %
-        const discountBadge = formatPromoBadge(group.promoName);
         const dateAdded = new Date(firstItem.updatedAt).toLocaleDateString('id-ID', {
           day: 'numeric',
           month: 'short'
@@ -65,24 +48,20 @@ export default function ClientPromoUnikList({ groupedItems }: { groupedItems: an
               className="cursor-pointer flex flex-col h-full relative"
               onClick={() => toggleGroup(group.promoName)}
             >
-              {/* Badge Promo */}
+              {/* Badge Promo (Hanya Teks Singkat) */}
               <div className="absolute top-0 right-0 bg-purple-600 text-white px-4 py-1.5 rounded-bl-xl text-xs font-black tracking-wider uppercase shadow-sm">
-                {group.promoName.includes('%') 
-                  ? group.promoName 
-                  : group.promoName.match(/B\d+D\d+/i) 
-                    ? 'DISCOUNT' 
-                    : group.promoName}
+                PROMO
               </div>
 
               <div className="p-5 pt-8 flex flex-col h-full">
                 <div className="flex justify-between items-start mb-3">
                   <span className="text-[10px] font-black tracking-widest text-slate-400 bg-slate-100 px-3 py-1 rounded-full uppercase">
-                    PROMO {group.promoName}
+                    PENAWARAN SPESIAL
                   </span>
                 </div>
                 
                 <h3 className="text-xl font-black text-purple-700 leading-tight mb-2 group-hover:text-purple-500 transition-colors">
-                  {discountBadge}
+                  {group.promoName}
                 </h3>
                 
                 <div className="flex items-center gap-2 mb-4 flex-wrap">

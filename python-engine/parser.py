@@ -45,11 +45,32 @@ def parse_excel_file(file_path: str) -> List[Dict[str, Any]]:
         harga_promo = 0
         is_promo = False
         
+        # Ekstrak Nama Departemen (Mikir di Python)
+        dept_name = sheet_upper
+        if "3357" in sheet_upper: dept_name = "SUKO HOME LIVING"
+        elif "3356" in sheet_upper: dept_name = "SUKO ACCS"
+        elif "3358" in sheet_upper: dept_name = "SUKO FOOTWEAR"
+        elif "3369" in sheet_upper: dept_name = "SUKO UNDERWEAR"
+        elif "3367" in sheet_upper: dept_name = "SUKO APPAREL"
+        elif "3327" in sheet_upper: dept_name = "SUKO BAG"
+        elif "-" in sheet_upper: 
+            # Contoh "PROMO 3369-SUKO UNDERWEAR" -> "SUKO UNDERWEAR"
+            parts = sheet_upper.split("-")
+            if len(parts) > 1:
+                dept_name = parts[1].strip()
+        
         # Deteksi BOGO (Beli x Gratis y)
         if "B1G1" in sheet_upper or "B2G1" in sheet_upper or "B3G1" in sheet_upper:
-            match = re.search(r'(B\dG\d)', sheet_upper)
+            match = re.search(r'B(\d+)G(\d+)', sheet_upper)
             if match:
-                tipe_diskon = match.group(1) # B2G1, dll
+                tipe_diskon = f"BELI {match.group(1)} GRATIS {match.group(2)}"
+                is_promo = True
+                
+        # Deteksi Beli X Diskon Y% (B1D20, B2D50)
+        elif "B1D" in sheet_upper or "B2D" in sheet_upper:
+            match = re.search(r'B(\d+)D(\d+)', sheet_upper)
+            if match:
+                tipe_diskon = f"BELI {match.group(1)} DISKON {match.group(2)}%"
                 is_promo = True
             
         # Deteksi Special Price (SP) misal SP79, SP49
@@ -66,7 +87,7 @@ def parse_excel_file(file_path: str) -> List[Dict[str, Any]]:
             match = re.search(r'(\d+)\s*%', sheet_upper) or re.search(r'DISC\s*(\d+)', sheet_upper)
             if match:
                 persen = match.group(1)
-                tipe_diskon = f"{persen}%"
+                tipe_diskon = f"DISKON {persen}%"
                 is_promo = True
             
         # Deteksi Normal Price
@@ -208,6 +229,7 @@ def parse_excel_file(file_path: str) -> List[Dict[str, Any]]:
                 "tgl_mulai": tgl_mulai,
                 "tgl_akhir": tgl_akhir,
                 "sumber_sheet": sheet_name,
+                "dept": dept_name,
                 
                 # Data Stok & Sales
                 "stok": stok,
