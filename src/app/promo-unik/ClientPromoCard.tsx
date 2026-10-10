@@ -3,8 +3,16 @@
 import { CalendarDays, ArrowRight, Copy, Check } from "lucide-react";
 import { useState } from "react";
 
-export default function ClientPromoCard({ item, formatRupiah }: { item: any, formatRupiah: any }) {
+export default function ClientPromoCard({ item }: { item: any }) {
   const [copied, setCopied] = useState(false);
+
+  function formatRupiah(angka: number) {
+    return new Intl.NumberFormat("id-ID", {
+      style: "currency",
+      currency: "IDR",
+      minimumFractionDigits: 0,
+    }).format(angka);
+  }
 
   const dateAdded = new Date(item.updatedAt).toLocaleDateString('id-ID', {
     day: 'numeric',
