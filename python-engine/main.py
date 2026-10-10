@@ -5,6 +5,7 @@ import pandas as pd
 import os
 import uvicorn
 import httpx
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from parser import parse_excel_file
@@ -112,6 +113,7 @@ async def _process_and_notify(file_url: str, file_name: str, folder: str):
                     **({ "bom_unit":         item["bom_unit"] }         if item["bom_unit"] != 0         else {}),
                     **({ "day_sales_unit":   item["day_sales_unit"] }   if item["day_sales_unit"] != 0   else {}),
                     **({ "day_sales_retail": item["day_sales_retail"] } if item["day_sales_retail"] != 0 else {}),
+                    "updatedAt": datetime.now(timezone.utc).isoformat(),
                 }
                 supabase_payload.append(payload)
 
@@ -204,7 +206,8 @@ async def gmail_webhook(
                         "discountType":      item["tipe_diskon"] if item["is_promo"] else None,
                         "fromDate":          item["tgl_mulai"],
                         "toDate":            item["tgl_akhir"],
-                        "promoFileName":     item["sumber_sheet"]
+                        "promoFileName":     item["sumber_sheet"],
+                        "updatedAt":         datetime.now(timezone.utc).isoformat()
                     }
                     for item in parsed_data
                 ]
