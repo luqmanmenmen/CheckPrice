@@ -36,7 +36,8 @@ export default async function PromoUnikPage() {
         },
         { discountType: { not: 'AMOUNT' } },
         { discountType: { not: '0' } },
-        { discountType: { not: 'SPECIAL PRICE' } }
+        { discountType: { not: 'SPECIAL PRICE' } },
+        { discountType: { not: { contains: 'HARGA SPESIAL' } } }
       ]
     },
     orderBy: {

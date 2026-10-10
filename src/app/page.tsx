@@ -530,7 +530,7 @@ export default function Home() {
     }
   }
 
-  const isBogoPromo = product && product.discountType && /B\dG\d|B\dD\d+|B\dX\d+/i.test(product.discountType) && !isPromoExpired;
+  const isBogoPromo = product && product.discountType && (/B\dG\d|B\dD\d+|B\dX\d+/i.test(product.discountType) || /BELI \d+ (GRATIS|DISKON) \d+/i.test(product.discountType)) && !isPromoExpired;
   const isPercentPromo = product && product.discountType && product.discountType.includes('%') && !isPromoExpired;
   const hasHargaPromo = product && product.hargaPromo && product.hargaPromo > 0 && product.hargaPromo !== product.hargaNormal;
   const isOnPromo = (hasHargaPromo || isBogoPromo || isPercentPromo) && !isPromoExpired;
