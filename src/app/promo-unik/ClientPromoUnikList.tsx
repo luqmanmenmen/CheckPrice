@@ -11,6 +11,21 @@ function formatRupiah(angka: number) {
   }).format(angka);
 }
 
+function formatPromoBadge(promoCode: string) {
+  if (!promoCode) return "PROMO";
+  // B1G1 -> BELI 1 GRATIS 1
+  const bogoMatch = promoCode.match(/B(\d+)G(\d+)/i);
+  if (bogoMatch) {
+    return `BELI ${bogoMatch[1]} GRATIS ${bogoMatch[2]}`;
+  }
+  // B1D20 -> BELI 1 DISKON 20%
+  const b1dMatch = promoCode.match(/B(\d+)D(\d+)/i);
+  if (b1dMatch) {
+    return `BELI ${b1dMatch[1]} DISKON ${b1dMatch[2]}%`;
+  }
+  return promoCode;
+}
+
 export default function ClientPromoUnikList({ groupedItems }: { groupedItems: any[] }) {
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const [copiedSku, setCopiedSku] = useState<string | null>(null);
@@ -37,7 +52,7 @@ export default function ClientPromoUnikList({ groupedItems }: { groupedItems: an
         const firstItem = group.items[0];
         
         // Show discount type as B1G1 or %
-        const discountBadge = firstItem.discountType || "PROMO";
+        const discountBadge = formatPromoBadge(firstItem.discountType);
         const dateAdded = new Date(firstItem.updatedAt).toLocaleDateString('id-ID', {
           day: 'numeric',
           month: 'short'

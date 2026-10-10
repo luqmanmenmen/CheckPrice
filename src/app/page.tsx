@@ -519,6 +519,15 @@ export default function Home() {
     window.location.reload();
   };
 
+  const formatPromoBadge = (promoCode: string | null | undefined) => {
+    if (!promoCode) return "PROMO";
+    const bogoMatch = promoCode.match(/B(\d+)G(\d+)/i);
+    if (bogoMatch) return `BELI ${bogoMatch[1]} GRATIS ${bogoMatch[2]}`;
+    const b1dMatch = promoCode.match(/B(\d+)D(\d+)/i);
+    if (b1dMatch) return `BELI ${b1dMatch[1]} DISKON ${b1dMatch[2]}%`;
+    return promoCode;
+  };
+
   const handlePrintLabel = () => {
     if (!product) return;
     try {
@@ -989,7 +998,7 @@ export default function Home() {
               <div className="bg-gradient-to-r from-red-500 to-orange-500 px-5 py-3 flex items-center justify-between">
                 <div className="flex items-center gap-2 text-white font-bold text-sm">
                   <Tag className="w-4 h-4" />
-                  <span>{product.discountType || "SPECIAL PRICE"}</span>
+                  <span>{product.discountType ? formatPromoBadge(product.discountType) : "SPECIAL PRICE"}</span>
                 </div>
                 <span className="bg-white text-red-600 font-extrabold text-sm px-3 py-1 rounded-full shadow-sm">
                   HEMAT {formatRupiah(product.hargaNormal - product.hargaPromo!)}
@@ -1084,7 +1093,7 @@ export default function Home() {
                       </div>
                     ) : (
                       <div className="bg-purple-600 text-white rounded-lg px-3 py-2 text-center shrink-0 shadow-sm flex items-center justify-center h-fit mt-1">
-                        <p className="text-sm font-black leading-none">{product.discountType}</p>
+                        <p className="text-sm font-black leading-none">{formatPromoBadge(product.discountType)}</p>
                       </div>
                     )}
                   </div>
