@@ -170,8 +170,8 @@ export default function Home() {
   const [togglingStatus, setTogglingStatus] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
 
-  // Fetch last update date
-  const { data: updateData } = useSWR("/api/last-update", fetcher, { refreshInterval: 60000 });
+  // Fetch last update date (Cek tiap 5 menit = 300000 ms agar tidak membebani server/kuota)
+  const { data: updateData } = useSWR("/api/last-update", fetcher, { refreshInterval: 300000 });
   const serverVersion = updateData?.lastUpdate ? new Date(updateData.lastUpdate).getTime().toString() : null;
   
   const [localVersion, setLocalVersion] = useState<string | null>(null);
