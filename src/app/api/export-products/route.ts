@@ -9,7 +9,11 @@ export async function GET() {
     const products = await prisma.product.findMany({
       select: {
         sku: true,
+        article: true,
+        brand: true,
         description: true,
+        color: true,
+        size: true,
         hargaNormal: true,
         hargaPromo: true,
         diskon: true,
@@ -19,12 +23,11 @@ export async function GET() {
     });
 
     const parsedProducts = products.map(p => {
-      // Parse description for color and size
-      // Format usually: NAME:COLOR:SIZE:...
+      // Parse description for color and size jika kolom kosong
       const parts = p.description.split(":");
-      const name = parts[0]?.trim() || "";
-      const color = parts[1]?.trim() || "";
-      const size = parts[2]?.trim() || "";
+      const name = p.article || parts[0]?.trim() || p.description;
+      const color = p.color || parts[1]?.trim() || "";
+      const size = p.size || parts[2]?.trim() || "";
       
       return {
         sku: p.sku,
