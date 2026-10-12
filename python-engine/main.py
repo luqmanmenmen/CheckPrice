@@ -404,7 +404,7 @@ async def _process_and_notify(file_url: str, file_name: str, folder: str):
                             "barcode":           barcode_val,
                             "article":           item.get("article") or ex.get("article"),
                             "brand":             item.get("brand") or ex.get("brand", "SUKO"),
-                            "dept":              ex.get("dept") or item.get("dept"),
+                            "dept":              item.get("dept") or ex.get("dept", "DEPARTEMEN LAINNYA"),
                             "color":             item.get("color") or ex.get("color"),
                             "size":              item.get("size") or ex.get("size"),
                             "description":       item.get("description") or ex.get("description", f"Produk {item['sku']}"),

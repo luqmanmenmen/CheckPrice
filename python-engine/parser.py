@@ -39,8 +39,9 @@ def clean_sku(val: Any) -> str:
 def clean_number(val: Any, is_float: bool = False) -> Any:
     """
     Membersihkan angka ritel (mendukung format POS / ERP ritel Indonesia):
-    - ' - ' -> 0
+    - ' - ' atau '" - "' -> 0
     - '7 -' -> -7 (trailing minus format SAP/ERP)
+    - '" 215,946 "' -> 215946 (angka dengan kutip dan spasi)
     - '1.270.400' -> 1270400 (titik pemisah ribuan Rupiah)
     - '71.902' -> 71902
     - '215,730' -> 215730
@@ -48,8 +49,8 @@ def clean_number(val: Any, is_float: bool = False) -> Any:
     if pd.isna(val) or val is None:
         return 0.0 if is_float else 0
     try:
-        s = str(val).strip()
-        if s in ['-', ' - ', '-   ', ' -', '- ', '']:
+        s = str(val).strip().strip('"').strip("'").strip()
+        if s in ['-', ' - ', '-   ', ' -', '- ', '', 'NAN', 'NONE', 'NULL']:
             return 0.0 if is_float else 0
 
         # Tangani trailing minus seperti "7 -" atau "7-" -> "-7"
@@ -459,6 +460,18 @@ def parse_pq_file(file_path: str) -> List[Dict[str, Any]]:
         if df.empty:
             continue
 
+        # 🔍 Deteksi Header Ritel Awal: Cari baris yang memuat 'SKU' atau 'KODE'
+        # Mengatasi file CSV dengan baris metadata di baris 1-3 (misal 'DATA_AS_OF', 'Values')
+        has_sku_in_cols = any('SKU' in str(c).upper() or 'KODE' in str(c).upper() for c in df.columns)
+        if not has_sku_in_cols:
+            for i in range(min(20, len(df))):
+                row_vals = [str(val).strip().upper() for val in df.iloc[i]]
+                if any(v in ['SKU', 'KODE', 'KODE PRODUK', 'ARTICLE'] or 'SKU' in v for v in row_vals):
+                    df.columns = row_vals
+                    df = df.iloc[i+1:].reset_index(drop=True)
+                    print(f"   [HEADER DETECTED] Header SKU ditemukan di baris index {i}!")
+                    break
+
         df.columns = [str(col).strip().upper() for col in df.columns]
 
         # 🎓 KONSULTASI KRITIS KE GEMINI AI
@@ -479,6 +492,7 @@ def parse_pq_file(file_path: str) -> List[Dict[str, Any]]:
         barcode_col = None
         col_desc = None
         col_parent = None
+        col_group = None
         col_dept = None
         col_color = None
         col_size = None
@@ -509,6 +523,7 @@ def parse_pq_file(file_path: str) -> List[Dict[str, Any]]:
             sku_col = ai_cols.get("sku")
             barcode_col = ai_cols.get("barcode")
             col_desc = ai_cols.get("product_name")
+            col_group = ai_cols.get("group") or ai_cols.get("brand")
             col_dept = ai_cols.get("dept")
             col_color = ai_cols.get("color")
             col_size = ai_cols.get("size")
@@ -517,15 +532,16 @@ def parse_pq_file(file_path: str) -> List[Dict[str, Any]]:
             col_eoh_retail = ai_cols.get("stok_retail")
             col_day_sales_unit = ai_cols.get("day_sales_unit")
             col_day_sales_retail = ai_cols.get("day_sales_retail")
-            col_wtd_sales_unit = ai_cols.get("wtd_sales_unit")
-            col_wtd_sales_retail = ai_cols.get("wtd_sales_retail")
-            col_mtd_sales_unit = ai_cols.get("mtd_sales_unit")
-            col_mtd_sales_retail = ai_cols.get("mtd_sales_retail")
-            col_ytd_sales_unit = ai_cols.get("ytd_sales_unit")
-            col_ytd_sales_retail = ai_cols.get("ytd_sales_retail")
+            col_sales_wtd = ai_cols.get("wtd_sales_unit")
+            col_sales_wtd_retail = ai_cols.get("wtd_sales_retail")
+            col_sales_mtd = ai_cols.get("mtd_sales_unit")
+            col_sales_mtd_retail = ai_cols.get("mtd_sales_retail")
+            col_sales_ytd = ai_cols.get("ytd_sales_unit")
+            col_sales_ytd_retail = ai_cols.get("ytd_sales_retail")
             col_boy_unit = ai_cols.get("boy_unit")
             col_boy_retail = ai_cols.get("boy_retail")
             col_bom_unit = ai_cols.get("bom_unit")
+            col_bom_retail = ai_cols.get("bom_retail")
             col_harga_normal = ai_cols.get("harga_normal")
 
         # Fallback Heuristik jika AI offline atau tidak menemukan SKU
@@ -558,7 +574,8 @@ def parse_pq_file(file_path: str) -> List[Dict[str, Any]]:
 
         # Heuristic mapping jika ada kolom yang belum terisi
         for col in df.columns:
-            if 'PARENT_NAME' in col and not col_parent: col_parent = col
+            if any(k in col for k in ['GROUP', 'BRAND', 'MERCHANDISE_GROUP']) and not col_group: col_group = col
+            elif 'PARENT_NAME' in col and not col_parent: col_parent = col
             elif any(k in col for k in ['DESC', 'NAMA', 'ITEM', 'DESCRIPTION']) and not col_desc: col_desc = col
             elif any(k in col for k in ['NORMAL', 'RETAIL PRICE', 'HARGA']) and not col_harga_normal: col_harga_normal = col
             elif 'EOH' in col and 'UNIT' in col and not col_stok: col_stok = col
@@ -573,6 +590,7 @@ def parse_pq_file(file_path: str) -> List[Dict[str, Any]]:
             elif 'BOY' in col and 'UNIT' in col and not col_boy_unit: col_boy_unit = col
             elif 'BOY' in col and 'RETAIL' in col and not col_boy_retail: col_boy_retail = col
             elif 'BOM' in col and 'UNIT' in col and not col_bom_unit: col_bom_unit = col
+            elif 'BOM' in col and 'RETAIL' in col and not col_bom_retail: col_bom_retail = col
             elif 'DAY' in col and 'SALES' in col and 'UNIT' in col and not col_day_sales_unit: col_day_sales_unit = col
             elif 'DAY' in col and 'SALES' in col and 'RETAIL' in col and not col_day_sales_retail: col_day_sales_retail = col
             elif ('LAST_PURCHASE' in col or 'TGL_BELI' in col) and not col_last_purchase: col_last_purchase = col
@@ -618,7 +636,7 @@ def parse_pq_file(file_path: str) -> List[Dict[str, Any]]:
         # Kolom numerik di-SUM, kolom teks diambil nilai FIRST
         agg_rules = {c: 'sum' for c in active_num_cols}
 
-        text_candidates = [col_desc, col_parent, barcode_col, col_color, col_size, col_dept, col_last_purchase]
+        text_candidates = [col_desc, col_parent, col_group, barcode_col, col_color, col_size, col_dept, col_last_purchase]
         active_text_cols = list(set([c for c in text_candidates if c and c in df.columns and c != sku_col]))
         for c in active_text_cols:
             agg_rules[c] = 'first'
@@ -635,7 +653,9 @@ def parse_pq_file(file_path: str) -> List[Dict[str, Any]]:
             # Penamaan Produk: Prioritaskan PARENT_NAME atau ITEM_DESCRIPTION
             desc_val = str(row.get(col_desc, "")).strip() if col_desc and pd.notna(row.get(col_desc)) else ""
             parent_val = str(row.get(col_parent, "")).strip() if col_parent and pd.notna(row.get(col_parent)) else ""
-            final_desc = parent_val or desc_val or f"Produk {sku}"
+            group_val = str(row.get(col_group, "")).strip() if col_group and pd.notna(row.get(col_group)) else ""
+            dept_val = str(row.get(col_dept, "")).strip() if col_dept and pd.notna(row.get(col_dept)) else ""
+            final_desc = desc_val or parent_val or f"Produk {sku}"
 
             raw_barcode = clean_barcode(row.get(barcode_col)) if barcode_col else None
             if not raw_barcode and len(sku) >= 12 and sku.isdigit():
@@ -681,19 +701,22 @@ def parse_pq_file(file_path: str) -> List[Dict[str, Any]]:
                 row_dict['SIZE'] = row.get(col_size)
 
             variants = extract_variants_and_article(final_desc, row_dict, brand_default=brand_from_file)
-            dept_final = str(row.get(col_dept, "")).strip() if col_dept and pd.notna(row.get(col_dept)) else dept_from_file
+            dept_final = dept_val if dept_val else dept_from_file
             last_purch = parse_date_value(row.get(col_last_purchase)) if col_last_purchase else None
+
+            article_final = parent_val if parent_val else variants["article"]
+            brand_final = group_val if group_val else (variants["brand"] if variants["brand"] else brand_from_file)
 
             combined_data.append({
                 "sku": sku,
                 "barcode": raw_barcode,
-                "article": variants["article"],
-                "brand": variants["brand"],
+                "article": article_final,
+                "brand": brand_final,
                 "dept": dept_final if dept_final else dept_from_file,
                 "color": variants["color"],
                 "size": variants["size"],
                 "last_purchase_date": last_purch,
-                "description": variants["clean_desc"],
+                "description": final_desc,
                 "harga_normal": harga_normal,
                 "stok": stok,
                 "eoh_retail": eoh_retail,

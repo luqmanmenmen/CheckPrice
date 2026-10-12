@@ -35,7 +35,7 @@ export default function ClientPromoUnikList({ groupedItems }: { groupedItems: an
       {groupedItems.map((group) => {
         const isOpen = openGroups[group.promoName];
         const firstItem = group.items[0];
-        
+
         const dateAdded = new Date(firstItem.updatedAt).toLocaleDateString('id-ID', {
           day: 'numeric',
           month: 'short'
@@ -43,8 +43,8 @@ export default function ClientPromoUnikList({ groupedItems }: { groupedItems: an
 
         return (
           <div key={group.promoName} className="bg-white rounded-3xl overflow-hidden shadow-sm hover:shadow-xl transition-all border border-slate-100 group flex flex-col">
-            
-            <div 
+
+            <div
               className="cursor-pointer flex flex-col h-full relative"
               onClick={() => toggleGroup(group.promoName)}
             >
@@ -59,11 +59,11 @@ export default function ClientPromoUnikList({ groupedItems }: { groupedItems: an
                     PENAWARAN SPESIAL
                   </span>
                 </div>
-                
+
                 <h3 className="text-xl font-black text-purple-700 leading-tight mb-2 group-hover:text-purple-500 transition-colors">
                   {group.promoName}
                 </h3>
-                
+
                 <div className="flex items-center gap-2 mb-4 flex-wrap">
                   <span className="bg-slate-100 text-slate-600 font-bold px-2 py-0.5 rounded text-[10px]">
                     {group.items.length} SKU / Barang
@@ -73,12 +73,12 @@ export default function ClientPromoUnikList({ groupedItems }: { groupedItems: an
                     Update: {dateAdded}
                   </span>
                 </div>
-                
+
                 <div className="pt-3 border-t border-slate-100 flex items-center justify-between mt-auto">
                   <div>
                     <p className="text-[10px] font-bold text-slate-400 tracking-widest uppercase mb-0.5">LIHAT DAFTAR BARANG</p>
                   </div>
-                  
+
                   <button className="w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center text-slate-400 group-hover:bg-purple-500 group-hover:text-white transition-all">
                     {isOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                   </button>
@@ -106,11 +106,10 @@ export default function ClientPromoUnikList({ groupedItems }: { groupedItems: an
                         </div>
                         <div className="flex flex-col items-end gap-2 shrink-0">
                           <p className="text-sm font-black text-slate-900">{formatRupiah(item.hargaNormal)}</p>
-                          <button 
+                          <button
                             onClick={(e) => copyToClipboard(e, item.sku)}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                              isCopied ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                            }`}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${isCopied ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                              }`}
                           >
                             {isCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                             {isCopied ? 'Dicopy!' : 'Copy'}

@@ -179,12 +179,19 @@ export async function GET(request: NextRequest) {
     // 1. SUMMARY CARDS
     const agg = await prisma.product.aggregate({
       _sum: {
+        day_sales_retail: true,
+        day_sales_unit:   true,
+        sales_wtd:        true,
+        sales_wtd_retail: true,
         sales_mtd:        true,
         sales_mtd_retail: true,
         sales_ytd:        true,
         sales_ytd_retail: true,
         eoh_retail:       true,
         stok:             true,
+        boy_unit:         true,
+        boy_retail:       true,
+        bom_unit:         true,
       }
     });
 
@@ -206,6 +213,28 @@ export async function GET(request: NextRequest) {
     });
     selectedDateOmzet = tfAgg._sum.omzet || 0;
     selectedDateQty = tfAgg._sum.qtySold || 0;
+
+    // Perbandingan Kemarin (Day-over-Day)
+    const yesterdayDate = new Date(startDateObj);
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const yestStart = new Date(yesterdayDate.getFullYear(), yesterdayDate.getMonth(), yesterdayDate.getDate(), 0, 0, 0, 0);
+    const yestEnd = new Date(yesterdayDate.getFullYear(), yesterdayDate.getMonth(), yesterdayDate.getDate(), 23, 59, 59, 999);
+    const yestAgg = await prisma.dailySales.aggregate({
+      where: { date: { gte: yestStart, lte: yestEnd } },
+      _sum: { omzet: true, qtySold: true }
+    });
+    const yesterdayOmzet = yestAgg._sum.omzet || 0;
+    const yesterdayQty = yestAgg._sum.qtySold || 0;
+
+    // Perbandingan Bulan Lalu (Month-over-Month)
+    const lastMonthStart = new Date(mtdMonthObj.getFullYear(), mtdMonthObj.getMonth() - 1, 1);
+    const lastMonthEnd = new Date(mtdMonthObj.getFullYear(), mtdMonthObj.getMonth(), 0, 23, 59, 59, 999);
+    const lastMonthAgg = await prisma.dailySales.aggregate({
+      where: { date: { gte: lastMonthStart, lte: lastMonthEnd } },
+      _sum: { omzet: true, qtySold: true }
+    });
+    const lastMonthOmzet = lastMonthAgg._sum.omzet || 0;
+    const lastMonthQty = lastMonthAgg._sum.qtySold || 0;
 
     const [totalProducts, totalWithPromo] = await Promise.all([
       prisma.product.count(),
@@ -232,6 +261,7 @@ export async function GET(request: NextRequest) {
         where: { id: { in: productIds } },
         select: {
           id: true, sku: true, description: true,
+          article: true, brand: true, dept: true,
           hargaNormal: true, hargaPromo: true, diskon: true, discountType: true
         }
       });
@@ -264,6 +294,9 @@ export async function GET(request: NextRequest) {
           id: p.id.toString(), // Use product ID instead of dailySales ID to avoid duplicates
           sku: p.sku,
           description: p.description,
+          article: p.article || undefined,
+          brand: p.brand || undefined,
+          dept: p.dept || undefined,
           qtySold: qty,
           hargaNormal: p.hargaNormal,
           hargaPromo: p.hargaPromo,
@@ -285,6 +318,9 @@ export async function GET(request: NextRequest) {
           id: true,
           sku: true,
           description: true,
+          article: true,
+          brand: true,
+          dept: true,
           day_sales_unit: true,
           day_sales_retail: true,
           hargaPromo: true,
@@ -318,6 +354,9 @@ export async function GET(request: NextRequest) {
           id: p.id,
           sku: p.sku,
           description: p.description,
+          article: p.article || undefined,
+          brand: p.brand || undefined,
+          dept: p.dept || undefined,
           qtySold: qty,
           hargaNormal: p.hargaNormal,
           hargaPromo: p.hargaPromo,
@@ -328,20 +367,23 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // 2. CATEGORY BREAKDOWN per Department (MTD)
-    // Akan lebih akurat jika ini juga dari DailySales, 
-    // tetapi untuk sekarang kita pakai default query dan fallback ke DailySales jika perlu.
-    // Jika ganti bulan, product.sales_mtd_retail mungkin masih data bulan lalu
-    // Kita overwrite omzet MTD department jika total calculatedMtdOmzet beda signifikan
+    // 2. CATEGORY BREAKDOWN per Department (MTD & Stock Movement)
     const deptBreakdown = await prisma.product.groupBy({
       by: ['dept'],
       _sum: {
         sales_mtd_retail: true,
         sales_mtd:        true,
+        sales_wtd_retail: true,
+        sales_wtd:        true,
+        sales_ytd_retail: true,
+        sales_ytd:        true,
         stok:             true,
         eoh_retail:       true,
         day_sales_retail: true,
         day_sales_unit:   true,
+        bom_unit:         true,
+        boy_unit:         true,
+        boy_retail:       true,
       },
       orderBy: { _sum: { sales_mtd_retail: 'desc' } },
     });
@@ -377,8 +419,14 @@ export async function GET(request: NextRequest) {
           qty:             mtdValues.qty,
           omzet_hari_ini:  d._sum.day_sales_retail   || 0,
           qty_hari_ini:    d._sum.day_sales_unit      || 0,
+          omzet_wtd:       d._sum.sales_wtd_retail    || 0,
+          qty_wtd:         d._sum.sales_wtd           || 0,
+          omzet_ytd:       d._sum.sales_ytd_retail    || 0,
+          qty_ytd:         d._sum.sales_ytd           || 0,
           stok:            d._sum.stok                || 0,
           eoh:             d._sum.eoh_retail          || 0,
+          bom_unit:        d._sum.bom_unit            || 0,
+          boy_unit:        d._sum.boy_unit            || 0,
         };
       });
     } else {
@@ -389,8 +437,14 @@ export async function GET(request: NextRequest) {
           qty:             d._sum.sales_mtd          || 0,
           omzet_hari_ini:  d._sum.day_sales_retail   || 0,
           qty_hari_ini:    d._sum.day_sales_unit      || 0,
+          omzet_wtd:       d._sum.sales_wtd_retail    || 0,
+          qty_wtd:         d._sum.sales_wtd           || 0,
+          omzet_ytd:       d._sum.sales_ytd_retail    || 0,
+          qty_ytd:         d._sum.sales_ytd           || 0,
           stok:            d._sum.stok                || 0,
           eoh:             d._sum.eoh_retail          || 0,
+          bom_unit:        d._sum.bom_unit            || 0,
+          boy_unit:        d._sum.boy_unit            || 0,
         };
       });
     }
@@ -596,27 +650,49 @@ export async function GET(request: NextRequest) {
         pqFileName: selectedSync?.fileName || null,
         availableDates: availableDates,
         summary: {
-          // Cards utama
-          omzet_hari_ini:  selectedDateOmzet,
-          qty_hari_ini:    selectedDateQty,
-          omzet_promo:     omzetPromo,
-          qty_promo:       qtyPromo,
-          mtd_omzet:       isCurrentMonth ? (calculatedMtdOmzet || agg._sum.sales_mtd_retail || 0) : (agg._sum.sales_mtd_retail || 0),
-          mtd_qty:         isCurrentMonth ? (calculatedMtdQty || agg._sum.sales_mtd || 0) : (agg._sum.sales_mtd || 0),
-          ytd_omzet:       agg._sum.sales_ytd_retail  || 0,
-          ytd_qty:         agg._sum.sales_ytd          || 0,
-          nilai_inventori: agg._sum.eoh_retail         || 0,
-          total_stok:      agg._sum.stok               || 0,
-          total_produk:    totalProducts,
-          total_promo:     totalWithPromo,
+          // SPD (Sales Per Day / Hari Ini)
+          spd_omzet:        selectedDateOmzet || agg._sum.day_sales_retail || 0,
+          spd_qty:          selectedDateQty || agg._sum.day_sales_unit || 0,
+          yesterday_omzet:  yesterdayOmzet,
+          yesterday_qty:    yesterdayQty,
+
+          // WTD (Week To Date / Minggu Ini)
+          wtd_omzet:        agg._sum.sales_wtd_retail || 0,
+          wtd_qty:          agg._sum.sales_wtd || 0,
+
+          // MTD (Month To Date / Bulan Ini)
+          mtd_omzet:        isCurrentMonth ? (calculatedMtdOmzet || agg._sum.sales_mtd_retail || 0) : (agg._sum.sales_mtd_retail || 0),
+          mtd_qty:          isCurrentMonth ? (calculatedMtdQty || agg._sum.sales_mtd || 0) : (agg._sum.sales_mtd || 0),
+          last_month_omzet: lastMonthOmzet,
+          last_month_qty:   lastMonthQty,
+
+          // YTD (Year To Date / Tahun Ini)
+          ytd_omzet:        agg._sum.sales_ytd_retail  || 0,
+          ytd_qty:          agg._sum.sales_ytd          || 0,
+
+          // Valuasi & Inventori
+          nilai_inventori:  agg._sum.eoh_retail         || 0,
+          total_stok:       agg._sum.stok               || 0,
+          boy_unit:         agg._sum.boy_unit           || 0,
+          boy_retail:       agg._sum.boy_retail         || 0,
+          bom_unit:         agg._sum.bom_unit           || 0,
+
+          // Promo
+          omzet_promo:      omzetPromo,
+          qty_promo:        qtyPromo,
+          total_produk:     totalProducts,
+          total_promo:      totalWithPromo,
+
           // Legacy keys (backward compat)
-          totalRevenue:    selectedDateOmzet,
-          totalQty:        selectedDateQty,
+          omzet_hari_ini:   selectedDateOmzet || agg._sum.day_sales_retail || 0,
+          qty_hari_ini:     selectedDateQty || agg._sum.day_sales_unit || 0,
+          totalRevenue:     selectedDateOmzet || agg._sum.day_sales_retail || 0,
+          totalQty:         selectedDateQty || agg._sum.day_sales_unit || 0,
           totalPromoRevenue: omzetPromo,
-          totalOmzetPOS:   isCurrentMonth ? (calculatedMtdOmzet || agg._sum.sales_mtd_retail || 0) : (agg._sum.sales_mtd_retail || 0),
-          mtd_omzet_pos:   isCurrentMonth ? (calculatedMtdOmzet || agg._sum.sales_mtd_retail || 0) : (agg._sum.sales_mtd_retail || 0),
-          ytd_sales_unit:  agg._sum.sales_ytd           || 0,
-          anomalyCount:    anomalyCount,
+          totalOmzetPOS:    isCurrentMonth ? (calculatedMtdOmzet || agg._sum.sales_mtd_retail || 0) : (agg._sum.sales_mtd_retail || 0),
+          mtd_omzet_pos:    isCurrentMonth ? (calculatedMtdOmzet || agg._sum.sales_mtd_retail || 0) : (agg._sum.sales_mtd_retail || 0),
+          ytd_sales_unit:   agg._sum.sales_ytd           || 0,
+          anomalyCount:     anomalyCount,
         },
         categoryBreakdown,
         trendData,

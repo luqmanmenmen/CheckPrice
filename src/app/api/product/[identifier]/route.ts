@@ -93,11 +93,14 @@ export async function GET(
     const searchTerms = rawInput.split(/[\s\-_]+/).filter(t => t.length > 0);
 
     // Kriteria pencarian Prisma
-    // 1. Pencocokan frasa penuh atau spaceless pada Artikel / Deskripsi / Brand
+    // 1. Pencocokan frasa penuh atau spaceless pada 4 Cell Utama:
+    //    Cell 1 (PARENT_NAME / article), Cell 2 (ITEM_DESCRIPTION / description),
+    //    Cell 3 (GROUP / brand), Cell 4 (DEPARTMENT / dept), plus SKU & Barcode.
     const phraseConditions = [
       { article: { contains: rawInput, mode: 'insensitive' as const } },
       { description: { contains: rawInput, mode: 'insensitive' as const } },
       { brand: { contains: rawInput, mode: 'insensitive' as const } },
+      { dept: { contains: rawInput, mode: 'insensitive' as const } },
       { sku: { contains: rawInput, mode: 'insensitive' as const } },
       { barcode: { contains: rawInput, mode: 'insensitive' as const } }
     ];
@@ -105,7 +108,9 @@ export async function GET(
     if (spacelessQuery.length >= 3 && spacelessQuery !== rawInput) {
       phraseConditions.push(
         { article: { contains: spacelessQuery, mode: 'insensitive' as const } },
-        { description: { contains: spacelessQuery, mode: 'insensitive' as const } }
+        { description: { contains: spacelessQuery, mode: 'insensitive' as const } },
+        { brand: { contains: spacelessQuery, mode: 'insensitive' as const } },
+        { dept: { contains: spacelessQuery, mode: 'insensitive' as const } }
       );
     }
 
@@ -155,7 +160,7 @@ export async function GET(
       return NextResponse.json(
         {
           error: `Produk tidak ditemukan untuk: "${rawInput}"`,
-          hint: `Total produk di database: ${totalCount}. Coba gunakan sebagian nama artikel, warna, atau scan barcode label.`
+          hint: `Total produk di database: ${totalCount}. Coba gunakan sebagian nama artikel, departemen, merk, atau scan barcode.`
         },
         { status: 404 }
       );
@@ -172,46 +177,57 @@ export async function GET(
       const artUpper = (p.article || "").toUpperCase();
       const descUpper = (p.description || "").toUpperCase();
       const brandUpper = (p.brand || "").toUpperCase();
+      const deptUpper = (p.dept || "").toUpperCase();
       const skuUpper = (p.sku || "").toUpperCase();
       const barcodeUpper = (p.barcode || "").toUpperCase();
-      const deptUpper = (p.dept || "").toUpperCase();
       const colorUpper = (p.color || "").toUpperCase();
 
       const artSpaceless = artUpper.replace(/[\s\-_]+/g, "");
       const descSpaceless = descUpper.replace(/[\s\-_]+/g, "");
+      const brandSpaceless = brandUpper.replace(/[\s\-_]+/g, "");
+      const deptSpaceless = deptUpper.replace(/[\s\-_]+/g, "");
 
-      // 1. Exact Article Match (Paling tinggi karena user mencari artikel)
+      // 1. Exact Match pada salah satu dari 4 Cell Utama (Article / Dept / Brand / Desc)
       if (artUpper === qUpper) score += 300;
-      else if (artSpaceless === qSpacelessUpper) score += 250;
+      else if (deptUpper === qUpper) score += 280;
+      else if (brandUpper === qUpper) score += 260;
+      else if (descUpper === qUpper) score += 250;
+      else if (artSpaceless === qSpacelessUpper) score += 240;
+      else if (deptSpaceless === qSpacelessUpper) score += 230;
 
       // 2. Exact SKU / Barcode Match
       if (skuUpper === qUpper || barcodeUpper === qUpper) score += 280;
 
-      // 3. Article Dimulai Dengan Query
+      // 3. Dimulai Dengan Query
       if (artUpper.startsWith(qUpper)) score += 180;
+      if (deptUpper.startsWith(qUpper)) score += 150;
+      if (brandUpper.startsWith(qUpper)) score += 130;
       if (descUpper.startsWith(qUpper)) score += 120;
 
-      // 4. Frasa query utuh terkandung di Article / Brand / Description
+      // 4. Frasa query utuh terkandung di 4 Cell Utama
       if (artUpper.includes(qUpper)) score += 140;
-      if (brandUpper.includes(qUpper)) score += 80;
+      if (deptUpper.includes(qUpper)) score += 130;
+      if (brandUpper.includes(qUpper)) score += 100;
       if (descUpper.includes(qUpper)) score += 70;
 
       // 5. Spaceless match (contoh: 'na young' cocok dengan 'NAYOUNG' atau 'NA-YOUNG')
       if (qSpacelessUpper.length >= 3) {
         if (artSpaceless.includes(qSpacelessUpper)) score += 130;
+        if (deptSpaceless.includes(qSpacelessUpper)) score += 120;
+        if (brandSpaceless.includes(qSpacelessUpper)) score += 90;
         if (descSpaceless.includes(qSpacelessUpper)) score += 60;
       }
 
-      // 6. Evaluasi kecocokan token kata individu
+      // 6. Evaluasi kecocokan token kata individu di seluruh 4 cell
       let matchedTokens = 0;
       for (const t of searchTerms) {
         const tU = t.toUpperCase();
         let tokenFound = false;
         if (artUpper.includes(tU)) { score += 25; tokenFound = true; }
+        if (deptUpper.includes(tU)) { score += 25; tokenFound = true; }
+        if (brandUpper.includes(tU)) { score += 20; tokenFound = true; }
         if (descUpper.includes(tU)) { score += 15; tokenFound = true; }
-        if (brandUpper.includes(tU)) { score += 10; tokenFound = true; }
         if (colorUpper.includes(tU)) { score += 15; tokenFound = true; }
-        if (deptUpper.includes(tU)) { score += 5; tokenFound = true; }
         if (tokenFound) matchedTokens++;
       }
       if (matchedTokens === searchTerms.length && searchTerms.length > 1) {
