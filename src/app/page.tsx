@@ -36,13 +36,40 @@ type ProductData = {
   promoFileName: string | null;
 };
 
-// Parse the description to get a clean product name
-function parseDescription(desc: string): { name: string; variants: string[] } {
+// Parse the description to get a clean product name (bersihkan kode artikel jika menempel)
+function parseDescription(desc: string, article?: string | null): { name: string; variants: string[] } {
   const parts = desc.split(":");
-  if (parts.length <= 1) return { name: desc, variants: [] };
-  const name = parts[0].trim();
-  const variants = parts.slice(1).map(p => p.trim()).filter(Boolean);
-  return { name, variants };
+  let name = parts[0]?.trim() || desc;
+  const variants = parts.length > 1 ? parts.slice(1).map(p => p.trim()).filter(Boolean) : [];
+
+  const art = (article || "").trim();
+  if (art) {
+    const artWords = art.split(/\s+/);
+    const codesToRemove: string[] = [];
+    if (artWords.length <= 2) codesToRemove.push(art);
+    if (artWords.length > 1) codesToRemove.push(artWords[artWords.length - 1]);
+
+    const descWords = name.split(/\s+/);
+    const lastDescWord = descWords[descWords.length - 1];
+    if (
+      lastDescWord &&
+      /^[A-Z0-9\-_]{3,12}$/i.test(lastDescWord) &&
+      art.toLowerCase().includes(lastDescWord.toLowerCase())
+    ) {
+      codesToRemove.push(lastDescWord);
+    }
+
+    for (const code of Array.from(new Set(codesToRemove))) {
+      if (!code || code.length < 2) continue;
+      const esc = code.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+      name = name.replace(new RegExp(`[\\s\\-_/]+${esc}$`, "i"), "");
+      name = name.replace(new RegExp(`\\b${esc}\\b`, "i"), "");
+    }
+
+    name = name.replace(/\s{2,}/g, " ").replace(/[\s\-_/]+$/, "").trim();
+  }
+
+  return { name: name || parts[0]?.trim() || desc, variants };
 }
 
 // Fungsi bantu untuk mengurutkan ukuran baju/celana secara logis
@@ -1023,13 +1050,13 @@ export default function Home() {
 
       {/* Product Card */}
       {product && (() => {
-        const { name, variants } = parseDescription(product.description);
+        const { name, variants } = parseDescription(product.description, product.article);
 
         // Group siblings by Size (variant 1), then map Colors (variant 0)
         const variantsGroupedBySize: Record<string, any[]> = {};
         if (siblings && siblings.length > 0) {
           siblings.forEach(s => {
-            const parsed = parseDescription(s.description);
+            const parsed = parseDescription(s.description, s.article);
             if (parsed.variants.length >= 2) {
               const color = parsed.variants[0];
               const size = parsed.variants[1];
@@ -1051,14 +1078,20 @@ export default function Home() {
 
             {/* Discount Badge Header */}
             {isOnPromo && (
-              <div className="bg-gradient-to-r from-red-500 to-orange-500 px-5 py-3 flex items-center justify-between">
-                <div className="flex items-center gap-2 text-white font-bold text-sm">
-                  <Tag className="w-4 h-4" />
-                  <span>{product.discountType ? product.discountType : "SPECIAL PRICE"}</span>
+              <div className="bg-gradient-to-r from-purple-600 via-indigo-600 to-rose-600 px-5 py-3 flex flex-wrap items-center justify-between gap-2 text-white">
+                <div className="flex items-center gap-2 font-bold text-sm min-w-0">
+                  <Tag className="w-4 h-4 shrink-0 text-amber-300" />
+                  <span className="truncate">{product.discountType ? product.discountType : "SPECIAL PRICE"}</span>
                 </div>
-                <span className="bg-white text-red-600 font-extrabold text-sm px-3 py-1 rounded-full shadow-sm">
-                  HEMAT {formatRupiah(product.hargaNormal - product.hargaPromo!)}
-                </span>
+                {hasHargaPromo ? (
+                  <span className="bg-white text-red-600 font-extrabold text-xs sm:text-sm px-3 py-1 rounded-full shadow-sm shrink-0">
+                    HEMAT {formatRupiah(product.hargaNormal - product.hargaPromo!)}
+                  </span>
+                ) : (
+                  <span className="bg-white/20 backdrop-blur-sm text-white font-extrabold text-[11px] px-2.5 py-1 rounded-full shadow-sm shrink-0 uppercase tracking-wider">
+                    PROMO AKTIF
+                  </span>
+                )}
               </div>
             )}
 
@@ -1108,6 +1141,28 @@ export default function Home() {
                 )}
               </div>
 
+              {/* Promo Banner di bawah Deskripsi — Aman dan Tidak Pernah Ter-crop */}
+              {isOnPromo && (
+                <div className="w-full bg-gradient-to-r from-purple-50 via-indigo-50 to-pink-50 border border-purple-200/90 rounded-xl p-3 flex items-center justify-between gap-3 shadow-xs">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-purple-600 to-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                      <Tag className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-bold text-purple-600 uppercase tracking-wider leading-tight">
+                        Program Promo Toko
+                      </p>
+                      <p className="text-sm font-black text-purple-950 leading-snug break-words">
+                        {product.discountType || product.diskon || "PROMO SPESIAL"}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="bg-purple-600 text-white text-[10px] font-black px-2.5 py-1 rounded-full shrink-0 shadow-xs uppercase tracking-wide">
+                    {hasHargaPromo ? `HEMAT ${formatRupiah(product.hargaNormal - product.hargaPromo!)}` : "PROMO AKTIF"}
+                  </span>
+                </div>
+              )}
+
               {/* Meta badges */}
               <div className="flex flex-wrap gap-2">
                 <span className="flex items-center gap-1 bg-slate-100 text-slate-600 text-xs font-mono px-2.5 py-1.5 rounded-lg">
@@ -1130,26 +1185,35 @@ export default function Home() {
               {/* Harga & Stok */}
               <div className="bg-slate-50 rounded-xl p-4 border flex flex-col gap-4">
                 {isOnPromo ? (
-                  <div className="flex items-end justify-between gap-3">
-                    <div>
-                      <p className="text-xs text-slate-500 uppercase font-medium mb-1">Harga Promo</p>
-                      <p className="text-4xl font-extrabold text-red-600 leading-none">
-                        {formatRupiah(product.hargaPromo || product.hargaNormal)}
-                      </p>
-                      {hasHargaPromo && (
-                        <p className="text-base text-slate-400 line-through mt-1">
-                          {formatRupiah(product.hargaNormal)}
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-end justify-between gap-3">
+                      <div>
+                        <p className="text-xs text-slate-500 uppercase font-medium mb-1">
+                          {hasHargaPromo ? "Harga Promo" : "Harga Normal Satuan"}
                         </p>
+                        <p className="text-3xl sm:text-4xl font-extrabold text-red-600 leading-none">
+                          {formatRupiah(product.hargaPromo && product.hargaPromo > 0 ? product.hargaPromo : product.hargaNormal)}
+                        </p>
+                        {hasHargaPromo && (
+                          <p className="text-base text-slate-400 line-through mt-1">
+                            {formatRupiah(product.hargaNormal)}
+                          </p>
+                        )}
+                      </div>
+                      {hasHargaPromo && discountPct > 0 && (
+                        <div className="bg-red-600 text-white rounded-lg px-2.5 py-1.5 text-center shrink-0 shadow-sm flex flex-col justify-center items-center h-fit">
+                          <p className="text-sm font-black leading-none">{discountPct}%</p>
+                          <p className="text-[9px] font-bold uppercase mt-0.5 opacity-90 tracking-wide">OFF</p>
+                        </div>
                       )}
                     </div>
-                    {hasHargaPromo ? (
-                      <div className="bg-red-600 text-white rounded-lg px-2.5 py-1.5 text-center shrink-0 shadow-sm flex flex-col justify-center items-center h-fit mt-1">
-                        <p className="text-sm font-black leading-none">{discountPct}%</p>
-                        <p className="text-[9px] font-bold uppercase mt-0.5 opacity-90 tracking-wide">OFF</p>
-                      </div>
-                    ) : (
-                      <div className="bg-purple-600 text-white rounded-lg px-3 py-2 text-center shrink-0 shadow-sm flex items-center justify-center h-fit mt-1">
-                        <p className="text-sm font-black leading-none">{product.discountType}</p>
+
+                    {!hasHargaPromo && (
+                      <div className="w-full bg-purple-100/90 border border-purple-200/90 rounded-xl p-2.5 flex items-center gap-2 text-purple-950">
+                        <Tag className="w-4 h-4 text-purple-700 shrink-0" />
+                        <span className="text-xs font-black tracking-wide break-words flex-1">
+                          {product.discountType || product.diskon || "PROMO SPESIAL KASIR"}
+                        </span>
                       </div>
                     )}
                   </div>
