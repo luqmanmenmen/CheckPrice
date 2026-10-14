@@ -43,15 +43,24 @@ function parseProductInfo(product: ProductData) {
   const rawArticle = (product.article || "").trim();
   if (rawArticle) {
     const artWords = rawArticle.split(/\s+/);
-    // Ambil kode artikel penuh dan kata terakhirnya (misal: "CBS01", "SKBRPRP", "FDCNT")
-    const shortCode = artWords[artWords.length - 1];
-    const targets = Array.from(new Set([rawArticle, shortCode])).filter((t) => t && t.length >= 2);
+    const codesToRemove: string[] = [];
+    if (artWords.length <= 2) codesToRemove.push(rawArticle);
+    if (artWords.length > 1) codesToRemove.push(artWords[artWords.length - 1]);
 
-    for (const target of targets) {
-      const esc = target.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
-      // Hapus jika ada di ujung teks (misal: "T-SHIRT ... SKBRPRP" -> "T-SHIRT ...")
+    const descWords = name.split(/\s+/);
+    const lastDescWord = descWords[descWords.length - 1];
+    if (
+      lastDescWord &&
+      /^[A-Z0-9\-_]{3,12}$/i.test(lastDescWord) &&
+      rawArticle.toLowerCase().includes(lastDescWord.toLowerCase())
+    ) {
+      codesToRemove.push(lastDescWord);
+    }
+
+    for (const code of Array.from(new Set(codesToRemove))) {
+      if (!code || code.length < 2) continue;
+      const esc = code.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
       name = name.replace(new RegExp(`[\\s\\-_/]+${esc}$`, "i"), "");
-      // Hapus jika merupakan kata tersendiri di dalam teks
       name = name.replace(new RegExp(`\\b${esc}\\b`, "i"), "");
     }
 

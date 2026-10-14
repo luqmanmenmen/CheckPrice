@@ -28,9 +28,36 @@ export async function GET() {
     });
 
     const parsedProducts = products.map((p) => {
-      // Parse description for color and size jika kolom kosong
       const parts = p.description ? p.description.split(":") : [];
-      const name = parts[0]?.trim() || p.description || "";
+      let name = parts[0]?.trim() || p.description || "";
+      const art = (p.article || "").trim();
+
+      // Bersihkan kode artikel yang menempel di ujung nama produk agar ramah pelanggan
+      if (art) {
+        const words = art.split(/\s+/);
+        const codesToRemove: string[] = [];
+        if (words.length <= 2) codesToRemove.push(art);
+        if (words.length > 1) codesToRemove.push(words[words.length - 1]);
+
+        const descWords = name.split(/\s+/);
+        const lastDescWord = descWords[descWords.length - 1];
+        if (
+          lastDescWord &&
+          /^[A-Z0-9\-_]{3,12}$/i.test(lastDescWord) &&
+          art.toLowerCase().includes(lastDescWord.toLowerCase())
+        ) {
+          codesToRemove.push(lastDescWord);
+        }
+
+        for (const code of Array.from(new Set(codesToRemove))) {
+          if (!code || code.length < 2) continue;
+          const esc = code.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+          name = name.replace(new RegExp(`[\\s\\-_/]+${esc}$`, "i"), "");
+          name = name.replace(new RegExp(`\\b${esc}\\b`, "i"), "");
+        }
+        name = name.replace(/\s{2,}/g, " ").replace(/[\s\-_/]+$/, "").trim();
+      }
+
       const color = p.color || (parts.length > 1 ? parts[1].trim() : "");
       const size = p.size || (parts.length > 2 ? parts[2].trim() : "");
 
@@ -38,7 +65,7 @@ export async function GET() {
         sku: p.sku,
         barcode: p.barcode || null,
         article: p.article || null,
-        name,
+        name: name || parts[0]?.trim() || p.description || "",
         description: p.description || name,
         brand: p.brand || null,
         dept: p.dept || null,
