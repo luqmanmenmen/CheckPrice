@@ -28,7 +28,7 @@ export async function checkIfUpdateAvailable() {
     const count = await db.products.count();
     const localVersion = localStorage.getItem("suko_server_version");
     
-    const checkRes = await fetch('/api/check-update');
+    const checkRes = await fetch(`/api/check-update?t=${Date.now()}`, { cache: 'no-store' });
     const checkData = await checkRes.json();
     
     if (checkData.success) {
@@ -45,11 +45,12 @@ export async function checkIfUpdateAvailable() {
 
 
 export async function syncOfflineDatabase(onSyncStateChange?: (isSyncing: boolean, progress?: number) => void, forceSync: boolean = false) {
+  let progressInterval: NodeJS.Timeout | null = null;
   try {
     const count = await db.products.count();
     const localVersion = localStorage.getItem("suko_server_version");
     
-    const checkRes = await fetch('/api/check-update');
+    const checkRes = await fetch(`/api/check-update?t=${Date.now()}`, { cache: 'no-store' });
     const checkData = await checkRes.json();
     
     if (checkData.success) {
@@ -59,15 +60,15 @@ export async function syncOfflineDatabase(onSyncStateChange?: (isSyncing: boolea
         if (onSyncStateChange) onSyncStateChange(true, 0);
         
         let progress = 0;
-        const progressInterval = setInterval(() => {
+        progressInterval = setInterval(() => {
           progress += (90 - progress) * 0.15; // Zeno's paradox, smooth approach to 90%
           if (onSyncStateChange) onSyncStateChange(true, Math.round(progress));
         }, 150);
 
-        const res = await fetch('/api/export-products');
+        const res = await fetch(`/api/export-products?t=${Date.now()}`, { cache: 'no-store' });
         const result = await res.json();
         
-        clearInterval(progressInterval);
+        if (progressInterval) clearInterval(progressInterval);
         
         if (result.success && result.data) {
           if (onSyncStateChange) onSyncStateChange(true, 95); // Sedang insert ke DB lokal

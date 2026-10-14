@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
+import { useEffect, useState, useCallback } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { Package, UploadCloud } from "lucide-react";
+import { UploadCloud, Sparkles, RefreshCw, X } from "lucide-react";
 import useSWR from "swr";
 import Sidebar from "./Sidebar";
 import ShiftLoader from "./ShiftLoader";
+import { checkAppVersion, forceAppUpdate, APP_VERSION } from "@/lib/version";
 
 const fetcher = (url: string) => fetch(url, { credentials: "same-origin" }).then(res => res.json());
 
@@ -15,18 +15,18 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   const pathname = usePathname();
   const isAuth = pathname?.startsWith("/login");
   const { data, isLoading } = useSWR(isAuth ? null : "/api/auth/me", fetcher);
-  
-  const isSuperAdmin = data?.user?.role === "SUPERVISOR";
 
-  // NOTE: Auto-logout dihapus. SWR cache lama ({ user: null }) bisa memicu
-  // POST /api/auth/logout tepat setelah login baru dan menghapus session yang valid.
-  // Proteksi route ditangani oleh middleware + cek auth di masing-masing page.
+  // Simpan info user ke localStorage agar siap seketika saat offline / refresh
+  useEffect(() => {
+    if (data?.user && typeof window !== "undefined") {
+      localStorage.setItem("suko_user", JSON.stringify(data.user));
+    }
+  }, [data]);
 
-  // Entry transition effect
+  // Entry transition effect cepat dan halus (tidak membuat user merasa loading lama)
   const [entryFade, setEntryFade] = useState(true);
   const [prevPath, setPrevPath] = useState(pathname);
 
-  // Derive state from pathname change to instantly catch the transition without flashing
   if (pathname !== prevPath) {
     setPrevPath(pathname);
     if (prevPath?.startsWith("/login") && !pathname?.startsWith("/login")) {
@@ -35,32 +35,66 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   }
 
   useEffect(() => {
-    // Memulai fade out HANYA saat komponen portal mount DAN data user sudah selesai diload
     if (!isAuth && !isLoading && entryFade) {
-      const timer = setTimeout(() => setEntryFade(false), 300); // Beri waktu 300ms ekstra agar render DOM sempurna
+      const timer = setTimeout(() => setEntryFade(false), 150);
       return () => clearTimeout(timer);
     } else if (isAuth) {
-      setEntryFade(false); // Kalau di halaman login, tidak perlu entry fade dari layout ini
+      setEntryFade(false);
     }
   }, [isAuth, isLoading, entryFade]);
 
-  // Update Checker for Offline DB
+  // 1. Deteksi Pembaruan Versi Aplikasi (Frontend Code / Web App Version)
+  const [appUpdateInfo, setAppUpdateInfo] = useState<{ hasUpdate: boolean; serverVersion: string } | null>(null);
+
+  const verifyAppVersion = useCallback(async () => {
+    try {
+      const res = await checkAppVersion();
+      if (res.hasUpdate) {
+        setAppUpdateInfo({ hasUpdate: true, serverVersion: res.serverVersion });
+      }
+    } catch (e) {
+      // ignore check error
+    }
+  }, []);
+
+  useEffect(() => {
+    // Cek saat mount
+    verifyAppVersion();
+
+    // Cek berkala tiap 3 menit
+    const interval = setInterval(verifyAppVersion, 180000);
+
+    // Cek saat user kembali membuka tab browser di HP
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        verifyAppVersion();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [verifyAppVersion]);
+
+  // 2. Deteksi Pembaruan Data Offline (Database Server Timestamp)
   const [isSyncing, setIsSyncing] = useState(false);
-  const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [showDbUpdateModal, setShowDbUpdateModal] = useState(false);
   const [syncProgress, setSyncProgress] = useState<number | undefined>(undefined);
   
   useEffect(() => {
     if (!isAuth && data?.user) {
       import("@/lib/offlineDb").then(({ checkIfUpdateAvailable }) => {
         checkIfUpdateAvailable().then((isAvailable) => {
-          if (isAvailable) setShowUpdateModal(true);
+          if (isAvailable) setShowDbUpdateModal(true);
         });
       });
     }
   }, [isAuth, data]);
 
-  const handleStartUpdate = async () => {
-    setShowUpdateModal(false);
+  const handleStartDbUpdate = async () => {
+    setShowDbUpdateModal(false);
     setIsSyncing(true);
     setSyncProgress(0);
     try {
@@ -77,9 +111,13 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
     }
   };
 
+  const handleApplyAppUpdate = async () => {
+    await forceAppUpdate({ clearOfflineData: false });
+  };
+
   if (isAuth) {
     return (
-      <main className="w-full min-h-screen">
+      <main className="w-full min-h-[100dvh]">
         {children}
       </main>
     );
@@ -87,50 +125,81 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
 
   return (
     <>
-      {/* Seamless Transition Overlay */}
+      {/* Quick Entry Fade */}
       <div 
-        className={`fixed inset-0 z-[999] bg-white transition-opacity duration-1000 ease-in-out pointer-events-none ${entryFade ? 'opacity-100' : 'opacity-0'}`} 
+        className={`fixed inset-0 z-[999] bg-white transition-opacity duration-300 ease-in-out pointer-events-none ${entryFade ? 'opacity-100' : 'opacity-0'}`} 
       />
       
-      <header className="bg-white shadow-sm border-b sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+      {/* Header Sticky dengan dukungan Notch iOS (pt-safe) */}
+      <header className="bg-white/95 backdrop-blur-md shadow-xs border-b border-slate-100 sticky top-0 z-50 pt-safe transition-all">
+        <div className="max-w-7xl mx-auto px-3.5 sm:px-6 lg:px-8 h-14 sm:h-16 flex items-center justify-between">
+          <div className="flex items-center gap-2">
             <Sidebar user={data?.user} />
           </div>
-          <div className="flex items-center gap-4">
-            {/* Nav items can be placed here if needed */}
+
+          <div className="flex items-center gap-3">
             <Link 
               href={data?.user?.role === 'SUPERVISOR' ? '/spv-gateway' : data?.user?.jobTitle === 'Gudang Stock' ? '/warehouse' : '/'} 
-              className="flex items-center"
+              className="flex items-center active:scale-95 transition-transform"
             >
-              <img src="/suko-logo.png" alt="SUKO" className="h-10 md:h-12 object-contain drop-shadow-sm" />
+              <img src="/suko-logo.png" alt="SUKO" className="h-8 sm:h-10 md:h-11 object-contain drop-shadow-xs" />
             </Link>
           </div>
         </div>
       </header>
 
-      {/* Update Available Modal */}
-      {showUpdateModal && (
+      {/* Floating Banner Notifikasi Versi Baru Aplikasi (Bila Code Baru Dirilis) */}
+      {appUpdateInfo?.hasUpdate && (
+        <div className="fixed bottom-4 left-4 right-4 md:left-auto md:right-6 md:w-96 z-[150] bg-gradient-to-r from-blue-600 to-indigo-700 text-white p-3.5 rounded-2xl shadow-2xl border border-white/20 animate-in slide-in-from-bottom-5 duration-300 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 overflow-hidden">
+            <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center shrink-0">
+              <Sparkles className="w-4 h-4 text-amber-300 animate-spin" />
+            </div>
+            <div className="truncate">
+              <p className="text-xs font-black tracking-wide leading-tight">Pembaruan Versi {appUpdateInfo.serverVersion}</p>
+              <p className="text-[10px] text-blue-100 font-medium leading-tight">Tersedia perbaikan UI & fitur baru.</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={handleApplyAppUpdate}
+              className="px-3 py-1.5 bg-white text-blue-700 font-black text-xs rounded-lg shadow-sm hover:bg-blue-50 active:scale-95 transition-all"
+            >
+              Perbarui
+            </button>
+            <button
+              onClick={() => setAppUpdateInfo(null)}
+              className="p-1 text-white/70 hover:text-white"
+              aria-label="Tutup"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Pembaruan Data Offline Tersedia */}
+      {showDbUpdateModal && (
         <div className="fixed inset-0 z-[200] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-6 shadow-2xl max-w-sm w-full animate-in zoom-in-95 duration-300">
-            <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4 shadow-inner">
-              <UploadCloud className="w-8 h-8" />
+            <div className="w-14 h-14 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4 shadow-inner">
+              <UploadCloud className="w-7 h-7" />
             </div>
-            <h2 className="text-xl font-bold text-slate-800 mb-2 text-center">Pembaruan Data Tersedia!</h2>
-            <p className="text-sm text-slate-500 mb-6 leading-relaxed text-center font-medium">
-              Terdapat data harga atau promosi terbaru dari server. Apakah Anda ingin mengunduhnya sekarang agar aplikasi berjalan optimal?
+            <h2 className="text-lg font-bold text-slate-800 mb-1.5 text-center">Pembaruan Data Tersedia!</h2>
+            <p className="text-xs text-slate-500 mb-5 leading-relaxed text-center font-medium">
+              Terdapat data harga dan promo terbaru dari server. Unduh sekarang agar database offline selalu akurat saat tidak ada sinyal.
             </p>
             
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-2.5">
               <button
-                onClick={handleStartUpdate}
-                className="w-full h-12 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold rounded-xl shadow-lg shadow-blue-500/30 transition-all"
+                onClick={handleStartDbUpdate}
+                className="w-full h-11 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold rounded-xl shadow-md shadow-blue-500/20 text-sm active:scale-98 transition-all"
               >
                 Ya, Unduh Sekarang
               </button>
               <button
-                onClick={() => setShowUpdateModal(false)}
-                className="w-full h-12 bg-slate-50 hover:bg-slate-100 text-slate-500 font-bold rounded-xl transition-all"
+                onClick={() => setShowDbUpdateModal(false)}
+                className="w-full h-11 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl text-sm transition-all"
               >
                 Nanti Saja
               </button>
@@ -141,17 +210,28 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
       
       {/* Full Screen Download Overlay if Syncing */}
       {isSyncing && (
-        <div className="fixed inset-0 z-[200] bg-white flex flex-col items-center justify-center transition-all duration-700 ease-out opacity-100 visible">
+        <div className="fixed inset-0 z-[200] bg-white flex flex-col items-center justify-center transition-all duration-500 ease-out opacity-100 visible">
           <ShiftLoader progress={syncProgress} />
-          <p className="text-slate-800 font-bold mt-16 text-sm tracking-[0.3em] animate-pulse">LOADING...</p>
+          <p className="text-slate-800 font-bold mt-16 text-sm tracking-[0.3em] animate-pulse">MENYINKRONKAN DATA...</p>
         </div>
       )}
 
-      <main className="flex-1 max-w-7xl mx-auto w-full p-0 lg:p-8 bg-white shadow-sm min-h-[calc(100vh-64px-60px)] flex flex-col">
+      {/* Main Content Area */}
+      <main className="flex-1 max-w-7xl mx-auto w-full p-0 lg:p-8 bg-white shadow-xs min-h-[calc(100dvh-56px-50px)] flex flex-col">
         {children}
       </main>
-      <footer className="w-full py-4 text-center text-xs font-medium text-slate-400 bg-white border-t mt-auto">
-        Powered by Luqmen 😼🕶️
+
+      {/* Footer dengan Nomor Versi */}
+      <footer className="w-full py-3.5 text-center text-[11px] font-medium text-slate-400 bg-white border-t border-slate-100 mt-auto pb-[max(0.875rem,env(safe-area-inset-bottom))] flex items-center justify-center gap-2">
+        <span>Max Display Pro v{APP_VERSION}</span>
+        <span>•</span>
+        <button 
+          onClick={() => forceAppUpdate()} 
+          className="hover:text-blue-600 underline active:text-blue-700"
+          title="Klik jika tampilan terasa lambat atau tidak terupdate"
+        >
+          Bersihkan Cache
+        </button>
       </footer>
     </>
   );

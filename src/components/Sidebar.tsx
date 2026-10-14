@@ -1,24 +1,79 @@
 "use client";
 
-import { useState } from "react";
-import { X, Package2, ArrowLeft, CloudDownload, Loader2, Menu, LayoutDashboard, ShieldCheck } from "lucide-react";
+import { useState, useEffect } from "react";
+import { 
+  X, 
+  Package2, 
+  ArrowLeft, 
+  CloudDownload, 
+  Loader2, 
+  Menu, 
+  LayoutDashboard, 
+  ShieldCheck, 
+  Gift, 
+  Sparkles, 
+  RotateCw, 
+  Info,
+  CheckCircle2,
+  RefreshCw,
+  UserCircle2
+} from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import AnimatedLogoutButton from "./AnimatedLogoutButton";
 import ShiftLoader from "./ShiftLoader";
+import { APP_VERSION, forceAppUpdate } from "@/lib/version";
 
-export default function Sidebar({ user }: { user: any }) {
+export default function Sidebar({ user: propUser }: { user?: any }) {
   const [isOpen, setIsOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [isClearingCache, setIsClearingCache] = useState(false);
   const [syncProgress, setSyncProgress] = useState<number | undefined>(undefined);
   const [showUpToDateModal, setShowUpToDateModal] = useState(false);
+  const [cachedUser, setCachedUser] = useState<any>(null);
+  const [lastSyncDate, setLastSyncDate] = useState<string | null>(null);
   const router = useRouter();
+
+  // Ambil user dari cache lokal jika propUser belum selesai dimuat
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      if (propUser) {
+        localStorage.setItem("suko_user", JSON.stringify(propUser));
+        setCachedUser(propUser);
+      } else {
+        const stored = localStorage.getItem("suko_user");
+        if (stored) {
+          try {
+            setCachedUser(JSON.parse(stored));
+          } catch (e) {
+            // ignore JSON error
+          }
+        }
+      }
+
+      // Ambil timestamp update server yang tersimpan
+      const storedVer = localStorage.getItem("suko_server_version");
+      if (storedVer) {
+        const timeNum = parseInt(storedVer, 10);
+        if (!isNaN(timeNum)) {
+          setLastSyncDate(new Date(timeNum).toLocaleString("id-ID", {
+            day: "numeric",
+            month: "short",
+            hour: "2-digit",
+            minute: "2-digit"
+          }));
+        }
+      }
+    }
+  }, [propUser]);
+
+  const activeUser = propUser || cachedUser;
 
   const handleManualSync = async () => {
     setIsSyncing(true);
-    setSyncProgress(0); // Set to 0 immediately so it doesn't spin infinitely during check
-    setIsOpen(false); // Tutup sidebar agar loading/modal terlihat
+    setSyncProgress(0);
+    setIsOpen(false);
     try {
       const { syncOfflineDatabase, checkIfUpdateAvailable } = await import('@/lib/offlineDb');
       const isAvailable = await checkIfUpdateAvailable();
@@ -33,11 +88,32 @@ export default function Sidebar({ user }: { user: any }) {
         setIsSyncing(syncing);
         if (prog !== undefined) setSyncProgress(prog);
       }, true);
+
+      // Refresh status tanggal sync
+      const storedVer = localStorage.getItem("suko_server_version");
+      if (storedVer) {
+        const timeNum = parseInt(storedVer, 10);
+        if (!isNaN(timeNum)) {
+          setLastSyncDate(new Date(timeNum).toLocaleString("id-ID", {
+            day: "numeric",
+            month: "short",
+            hour: "2-digit",
+            minute: "2-digit"
+          }));
+        }
+      }
     } catch (e) {
       console.error(e);
       setIsSyncing(false);
     } finally {
       setSyncProgress(undefined);
+    }
+  };
+
+  const handleForceUpdateApp = async () => {
+    if (confirm("Perbarui aplikasi dan bersihkan cache? Aplikasi akan memuat ulang versi terbaru.")) {
+      setIsClearingCache(true);
+      await forceAppUpdate({ clearOfflineData: false });
     }
   };
 
@@ -50,86 +126,207 @@ export default function Sidebar({ user }: { user: any }) {
       console.error(error);
     }
     
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("suko_user");
+    }
     window.location.href = "/login";
   };
 
-  if (!user) return null;
-
   return (
     <>
+      {/* Hamburger Trigger - Dibuat mudah ditekan di layar kecil (iPhone XR) */}
       <button 
         onClick={() => setIsOpen(true)}
-        className="p-2 -ml-2 rounded-full hover:bg-slate-100 transition-colors mr-2"
+        aria-label="Buka Menu"
+        className="min-w-[44px] min-h-[44px] flex items-center justify-center -ml-2 rounded-xl text-slate-700 hover:bg-slate-100 active:bg-slate-200 transition-colors"
       >
-        <Menu className="w-6 h-6 text-slate-700" />
+        <Menu className="w-6 h-6" />
       </button>
 
-      {/* Overlay */}
+      {/* Overlay Backdrop */}
       {isOpen && (
         <div 
-          className="fixed inset-0 bg-black/50 z-[100]"
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-[100] transition-opacity duration-300"
           onClick={() => setIsOpen(false)}
         />
       )}
 
-      {/* Drawer */}
-      <div className={`fixed top-0 left-0 h-full w-72 bg-white shadow-2xl z-[110] transform transition-transform duration-300 flex flex-col ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="bg-gradient-to-r from-blue-700 to-indigo-800 p-6 flex justify-between items-center text-white">
-          <h2 className="font-bold text-lg">Menu Utama</h2>
-          <button onClick={() => setIsOpen(false)} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition-colors">
+      {/* Drawer Menu */}
+      <div 
+        className={`fixed top-0 left-0 h-[100dvh] max-h-[100dvh] w-80 max-w-[85vw] bg-white shadow-2xl z-[110] transform transition-transform duration-300 ease-out flex flex-col ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}
+      >
+        {/* Drawer Header */}
+        <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-indigo-800 p-5 pt-[max(1.25rem,env(safe-area-inset-top))] flex justify-between items-center text-white shrink-0 shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 bg-white/20 backdrop-blur-sm rounded-lg flex items-center justify-center border border-white/20">
+              <UserCircle2 className="w-5 h-5" />
+            </div>
+            <div className="leading-tight">
+              <h2 className="font-bold text-base">{activeUser?.name || "Menu Toko"}</h2>
+              <p className="text-[11px] text-blue-200 font-medium">
+                {activeUser?.jobTitle || (activeUser?.role === 'SUPERVISOR' ? 'Supervisor' : 'Aplikasi Toko')}
+              </p>
+            </div>
+          </div>
+          <button 
+            onClick={() => setIsOpen(false)} 
+            aria-label="Tutup Menu"
+            className="w-9 h-9 flex items-center justify-center bg-white/10 rounded-full hover:bg-white/20 active:bg-white/30 transition-colors"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
         
-        <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
-          <Link href="/" onClick={() => setIsOpen(false)} className="flex items-center gap-4 p-4 bg-slate-50 hover:bg-slate-100 rounded-xl transition-colors font-bold text-slate-700 shadow-sm border border-slate-100">
-            <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center shrink-0">
-              <Package2 className="w-5 h-5" />
+        {/* Scrollable Navigation Items */}
+        <div className="flex-1 overflow-y-auto touch-scroll p-4 flex flex-col gap-2.5 custom-scrollbar">
+          
+          <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 px-1 pt-1">
+            Navigasi Utama
+          </div>
+
+          <Link 
+            href="/" 
+            onClick={() => setIsOpen(false)} 
+            className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-blue-50/60 active:bg-blue-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
+          >
+            <div className="w-9 h-9 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <Package2 className="w-4 h-4" />
             </div>
-            Aplikasi Toko (SA)
+            <span className="text-sm">Aplikasi Toko (SA)</span>
           </Link>
 
-          {(user.jobTitle === 'Gudang Stock' || user.role === 'SUPERVISOR') && (
-            <Link href="/warehouse" onClick={() => setIsOpen(false)} className="flex items-center gap-4 p-4 bg-slate-50 hover:bg-slate-100 rounded-xl transition-colors font-bold text-slate-700 shadow-sm border border-slate-100">
-              <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center shrink-0">
-                <Package2 className="w-5 h-5" />
+          <Link 
+            href="/promo-unik" 
+            onClick={() => setIsOpen(false)} 
+            className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-purple-50/60 active:bg-purple-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
+          >
+            <div className="w-9 h-9 bg-purple-100 text-purple-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <Gift className="w-4 h-4" />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-sm">Katalog Promo Unik</span>
+              <span className="text-[10px] text-purple-600 font-semibold">BOGO & Diskon Khusus</span>
+            </div>
+          </Link>
+
+          <Link 
+            href="/barang-baru" 
+            onClick={() => setIsOpen(false)} 
+            className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-amber-50/60 active:bg-amber-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
+          >
+            <div className="w-9 h-9 bg-amber-100 text-amber-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <Sparkles className="w-4 h-4" />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-sm">Barang Baru Masuk</span>
+              <span className="text-[10px] text-amber-600 font-semibold">Koleksi Terkini Toko</span>
+            </div>
+          </Link>
+
+          {(activeUser?.jobTitle === 'Gudang Stock' || activeUser?.role === 'SUPERVISOR') && (
+            <Link 
+              href="/warehouse" 
+              onClick={() => setIsOpen(false)} 
+              className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-indigo-50/60 active:bg-indigo-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
+            >
+              <div className="w-9 h-9 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                <Package2 className="w-4 h-4" />
               </div>
-              Gudang & Stok
+              <span className="text-sm">Gudang & Stok</span>
             </Link>
           )}
           
-          {user.role === 'SUPERVISOR' && (
-            <Link href="/spv-gateway" onClick={() => setIsOpen(false)} className="flex items-center gap-4 p-4 bg-slate-50 hover:bg-slate-100 rounded-xl transition-colors font-bold text-slate-700 shadow-sm border border-slate-100">
-              <div className="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-lg flex items-center justify-center shrink-0">
-                <ArrowLeft className="w-5 h-5" />
+          {activeUser?.role === 'SUPERVISOR' && (
+            <Link 
+              href="/spv-gateway" 
+              onClick={() => setIsOpen(false)} 
+              className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-emerald-50/60 active:bg-emerald-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
+            >
+              <div className="w-9 h-9 bg-emerald-100 text-emerald-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                <ArrowLeft className="w-4 h-4" />
               </div>
-              Portal SPV
+              <span className="text-sm">Portal SPV</span>
             </Link>
           )}
 
-          {(user.role === 'SUPERVISOR' || (user.name && user.name.includes('Developer'))) && (
-            <Link href="/super-admin" onClick={() => setIsOpen(false)} className="flex items-center gap-4 p-4 bg-slate-50 hover:bg-slate-100 rounded-xl transition-colors font-bold text-slate-700 shadow-sm border border-slate-100">
-              <div className="w-10 h-10 bg-rose-100 text-rose-600 rounded-lg flex items-center justify-center shrink-0">
-                <LayoutDashboard className="w-5 h-5" />
+          {(activeUser?.role === 'SUPERVISOR' || (activeUser?.name && activeUser?.name.includes('Developer'))) && (
+            <Link 
+              href="/super-admin" 
+              onClick={() => setIsOpen(false)} 
+              className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-rose-50/60 active:bg-rose-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
+            >
+              <div className="w-9 h-9 bg-rose-100 text-rose-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                <LayoutDashboard className="w-4 h-4" />
               </div>
-              Master Control
+              <span className="text-sm">Master Control</span>
             </Link>
           )}
+
+          {/* Section Pembaruan & Sinkronisasi */}
+          <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 px-1 pt-3">
+            Pembaruan & Sinkronisasi
+          </div>
           
+          {/* Tombol Update Data Offline */}
           <button 
             onClick={handleManualSync}
             disabled={isSyncing}
-            className="flex items-center gap-4 p-4 bg-slate-50 hover:bg-slate-100 rounded-xl transition-colors font-bold text-slate-700 text-left shadow-sm border border-slate-100 disabled:opacity-50"
+            className="flex items-center justify-between p-3.5 bg-sky-50/60 hover:bg-sky-100/70 active:bg-sky-200/60 rounded-xl transition-all font-bold text-slate-700 text-left shadow-xs border border-sky-100 disabled:opacity-50 group"
           >
-            <div className="w-10 h-10 bg-sky-100 text-sky-600 rounded-lg flex items-center justify-center shrink-0">
-              {isSyncing ? <Loader2 className="w-5 h-5 animate-spin" /> : <CloudDownload className="w-5 h-5" />}
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 bg-sky-500 text-white rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform shadow-xs">
+                {isSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <CloudDownload className="w-4 h-4" />}
+              </div>
+              <div className="flex flex-col">
+                <span className="text-sm text-sky-900 leading-tight">Update Data Offline</span>
+                <span className="text-[10px] text-slate-500 font-medium">
+                  {lastSyncDate ? `Tersinkron: ${lastSyncDate}` : 'Download data harga & promo'}
+                </span>
+              </div>
             </div>
-            {isSyncing ? "Mengupdate..." : "Update Data Offline"}
+            <div className="w-2 h-2 rounded-full bg-sky-500 shrink-0"></div>
           </button>
+
+          {/* Tombol Update Versi Aplikasi & Bersihkan Cache */}
+          <button 
+            onClick={handleForceUpdateApp}
+            disabled={isClearingCache}
+            className="flex items-center justify-between p-3.5 bg-slate-50 hover:bg-slate-100 active:bg-slate-200/80 rounded-xl transition-all font-bold text-slate-700 text-left shadow-xs border border-slate-100 group"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 bg-slate-200 text-slate-700 rounded-lg flex items-center justify-center shrink-0 group-hover:rotate-180 transition-transform duration-500">
+                {isClearingCache ? <Loader2 className="w-4 h-4 animate-spin text-blue-600" /> : <RotateCw className="w-4 h-4" />}
+              </div>
+              <div className="flex flex-col">
+                <span className="text-sm leading-tight">Perbarui Versi Web</span>
+                <span className="text-[10px] text-slate-400 font-medium">
+                  Versi {APP_VERSION} • Bersihkan Cache
+                </span>
+              </div>
+            </div>
+            <span className="text-[9px] bg-slate-200 text-slate-600 font-bold px-1.5 py-0.5 rounded">
+              RELOAD
+            </span>
+          </button>
+
         </div>
         
-        <div className="p-4 border-t border-slate-100 mt-auto bg-slate-50">
-          <AnimatedLogoutButton onLogout={handleLogout} />
+        {/* Drawer Footer dengan Safe Area iOS */}
+        <div className="p-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))] border-t border-slate-100 mt-auto bg-slate-50/80 shrink-0">
+          {activeUser ? (
+            <AnimatedLogoutButton onLogout={handleLogout} />
+          ) : (
+            <Link
+              href="/login"
+              onClick={() => setIsOpen(false)}
+              className="w-full h-11 flex items-center justify-center gap-2 bg-blue-600 text-white font-bold rounded-xl shadow-sm text-sm"
+            >
+              Masuk / Login
+            </Link>
+          )}
+          <div className="text-center text-[10px] text-slate-400 font-medium mt-2">
+            Max Display Pro • v{APP_VERSION}
+          </div>
         </div>
       </div>
 
@@ -166,7 +363,7 @@ export default function Sidebar({ user }: { user: any }) {
       {isSyncing && (
         <div className="fixed inset-0 z-[200] bg-white flex flex-col items-center justify-center transition-all duration-700 ease-out opacity-100 visible">
           <ShiftLoader progress={syncProgress} />
-          <p className="text-slate-800 font-bold mt-16 text-sm tracking-[0.3em] animate-pulse">LOADING...</p>
+          <p className="text-slate-800 font-bold mt-16 text-sm tracking-[0.3em] animate-pulse">MENYINKRONKAN DATA...</p>
         </div>
       )}
     </>

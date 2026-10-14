@@ -3,7 +3,8 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-export const revalidate = 300; // Cache for 5 minutes
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 export async function GET() {
   try {
@@ -14,6 +15,12 @@ export async function GET() {
 
     return NextResponse.json({
       lastUpdate: lastUpdatedProduct ? lastUpdatedProduct.updatedAt : null
+    }, {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+      }
     });
   } catch (error) {
     console.error('Error fetching last update:', error);

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import ShiftToggle from "@/components/ShiftToggle";
 import ShiftLoader from "@/components/ShiftLoader";
 import { ShoppingCart, Shirt, Footprints, Package } from "lucide-react";
+import { APP_VERSION, forceAppUpdate } from "@/lib/version";
 
 export default function Login() {
   const [nik, setNik] = useState("");
@@ -367,10 +368,21 @@ export default function Login() {
       </div>
       )}
 
-      <div className="flex-grow shrink-0 min-h-[4rem]"></div>
+      <div className="flex-grow shrink-0 min-h-[2rem]"></div>
 
-      <div className="text-center text-xs font-bold text-white/50 tracking-wide z-10 drop-shadow-sm pb-4">
-        Powered by Luqmen 😼🕶️
+      <div className="text-center text-xs font-bold text-white/60 tracking-wide z-10 drop-shadow-sm pb-6 flex flex-col items-center gap-1.5">
+        <div>Powered by Luqmen 😼🕶️</div>
+        <div className="flex items-center gap-2 text-[10px] text-white/40 font-medium">
+          <span>Max Display Pro v{APP_VERSION}</span>
+          <span>•</span>
+          <button 
+            type="button"
+            onClick={() => forceAppUpdate()}
+            className="text-white/70 hover:text-white underline active:scale-95 transition-all cursor-pointer"
+          >
+            Perbarui Versi & Bersihkan Cache 🔄
+          </button>
+        </div>
       </div>
 
       {/* Modal Force Login */}

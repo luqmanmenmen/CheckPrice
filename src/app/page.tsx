@@ -182,7 +182,7 @@ export default function Home() {
     }
   }, []);
 
-  const hasNewUpdate = serverVersion && localVersion && serverVersion !== localVersion;
+  const hasNewUpdate = Boolean(serverVersion && (!localVersion || serverVersion !== localVersion));
 
   const lastUpdateDate = updateData?.lastUpdate 
     ? new Date(updateData.lastUpdate).toLocaleString('id-ID', {
@@ -290,7 +290,10 @@ export default function Home() {
     fetch("/api/auth/me", { credentials: "same-origin" })
       .then(res => res.json())
       .then(data => {
-        if (data.user) setUser(data.user);
+        if (data.user) {
+          setUser(data.user);
+          localStorage.setItem("suko_user", JSON.stringify(data.user));
+        }
       })
       .catch(console.error);
   }, []);

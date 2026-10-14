@@ -1,11 +1,18 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import Link from "next/link";
-import { Package, UploadCloud } from "lucide-react";
 import LayoutWrapper from "@/components/LayoutWrapper";
 
 const inter = Inter({ subsets: ["latin"] });
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: "cover",
+  themeColor: "#1d4ed8",
+};
 
 export const metadata: Metadata = {
   title: "Price Checker Pro",
@@ -19,7 +26,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="id">
-      <body className={`${inter.className} bg-slate-50 text-slate-900 min-h-screen flex flex-col`}>
+      <body className={`${inter.className} bg-slate-50 text-slate-900 min-h-[100dvh] flex flex-col antialiased`}>
         <LayoutWrapper>
           {children}
         </LayoutWrapper>
