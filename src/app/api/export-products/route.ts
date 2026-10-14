@@ -29,14 +29,17 @@ export async function GET() {
     const parsedProducts = products.map((p) => {
       // Parse description for color and size jika kolom kosong
       const parts = p.description ? p.description.split(":") : [];
-      const name = p.article || parts[0]?.trim() || p.description || "";
+      // Nama produk murni dari Item Description, BUKAN dari artikel
+      const name = parts[0]?.trim() || p.description || "";
       const color = p.color || (parts.length > 1 ? parts[1].trim() : "");
       const size = p.size || (parts.length > 2 ? parts[2].trim() : "");
 
       return {
         sku: p.sku,
         barcode: p.barcode || null,
+        article: p.article || null,
         name,
+        description: p.description || name,
         brand: p.brand || null,
         dept: p.dept || null,
         color,

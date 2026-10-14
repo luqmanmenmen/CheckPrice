@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
-import { Tag, Sparkles, AlertCircle, Camera, RefreshCw, Zap, CheckCircle2 } from "lucide-react";
+import { Tag, Sparkles, AlertCircle, Camera, RefreshCw, Zap } from "lucide-react";
 import { DetectedSku } from "@/components/TextScanner";
 
 // Engine TextScanner — scan teks SKU 8 digit
@@ -33,8 +33,10 @@ function formatRupiah(angka: number) {
 }
 
 function parseProductInfo(product: ProductData) {
-  const parts = (product.description || "").split(":");
-  const name = product.article || parts[0]?.trim() || product.description;
+  // Ambil nama dari Item Description murni (BUKAN dari artikel)
+  const rawDesc = product.description || "";
+  const parts = rawDesc.split(":");
+  const name = parts[0]?.trim() || rawDesc || "Produk";
   let color = product.color || (parts.length > 1 ? parts[1].trim() : "");
   let size = product.size || (parts.length > 2 ? parts[2].trim() : "");
   if (["F", "M", "SOLID"].includes(color.toUpperCase())) color = "";
@@ -85,10 +87,11 @@ export default function CekHargaPage() {
       try {
         const { db, syncOfflineDatabase, checkIfUpdateAvailable } = await import("@/lib/offlineDb");
         const count = await db.products.count();
+        const localSchema = typeof window !== "undefined" ? localStorage.getItem("suko_db_schema_version") : null;
 
-        // 1. Jika pertama kali buka dan DB lokal masih kosong (< 500 produk):
+        // 1. Jika pertama kali buka atau skema belum v5:
         // Tampilkan loading sync cepat (~0.5 - 1 detik untuk unduh 180 KB)
-        if (count < 500) {
+        if (count < 500 || localSchema !== "v5") {
           if (isMounted) setDbState("syncing");
           await syncOfflineDatabase((syncing, prog) => {
             if (isMounted && prog !== undefined) setSyncProgress(prog);
@@ -109,7 +112,7 @@ export default function CekHargaPage() {
         if (isMounted) setDbState("ready");
       } catch (e) {
         console.error("Init DB Error:", e);
-        if (isMounted) setDbState("ready"); // Tetap buka scanner walau sync gagal (fallback ke API)
+        if (isMounted) setDbState("ready");
       }
     };
 
@@ -209,8 +212,8 @@ export default function CekHargaPage() {
         const prodData: ProductData = {
           sku: foundLocal.sku,
           barcode: foundLocal.barcode || null,
-          article: foundLocal.name,
-          description: [foundLocal.name, foundLocal.color, foundLocal.size].filter(Boolean).join(" : "),
+          article: foundLocal.article || null,
+          description: foundLocal.description || foundLocal.name,
           hargaNormal: foundLocal.hargaNormal,
           hargaPromo: foundLocal.hargaPromo,
           diskon: foundLocal.diskon,
@@ -431,10 +434,13 @@ export default function CekHargaPage() {
                     <div className="inline-block bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-[11px] font-black tracking-widest uppercase mb-3">
                       {product.brand || product.dept || "SUKO"}
                     </div>
+
+                    {/* Judul Produk: Murni Item Description */}
                     <h1 className="text-xl sm:text-2xl md:text-3xl font-black text-slate-900 leading-snug mb-4 max-w-md">
                       {name}
                     </h1>
 
+                    {/* Badges: Ukuran, Warna, Artikel, dan SKU bersebelahan */}
                     <div className="flex flex-wrap justify-center items-center gap-2 mb-6">
                       {size && (
                         <span className="bg-blue-50 text-blue-700 border border-blue-200/60 px-3.5 py-1 rounded-full text-xs font-black tracking-wide">
@@ -446,7 +452,12 @@ export default function CekHargaPage() {
                           Warna: {color}
                         </span>
                       )}
-                      <span className="bg-slate-50 text-slate-500 font-mono px-3 py-1 rounded-full text-[11px] border border-slate-100">
+                      {product.article && (
+                        <span className="bg-amber-50 text-amber-800 border border-amber-200/80 font-mono px-3.5 py-1 rounded-full text-[11px] font-bold tracking-wide">
+                          Artikel: {product.article}
+                        </span>
+                      )}
+                      <span className="bg-slate-50 text-slate-600 font-mono px-3.5 py-1 rounded-full text-[11px] font-bold border border-slate-200/80">
                         SKU: {product.sku}
                       </span>
                     </div>

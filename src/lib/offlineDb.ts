@@ -3,7 +3,9 @@ import Dexie from "dexie";
 export interface CachedProduct {
   sku: string;
   barcode?: string | null;
+  article?: string | null;
   name: string;
+  description?: string | null;
   brand?: string | null;
   dept?: string | null;
   color: string;
@@ -27,6 +29,9 @@ class SukoDatabase extends Dexie {
     this.version(4).stores({
       products: 'sku, barcode, name, brand, dept, color, size, hargaNormal, hargaPromo, diskon, discountType, stok, toDate',
     });
+    this.version(5).stores({
+      products: 'sku, barcode, article, name, description, brand, dept, color, size, hargaNormal, hargaPromo, diskon, discountType, stok, toDate',
+    });
   }
 }
 
@@ -36,13 +41,14 @@ export async function checkIfUpdateAvailable(): Promise<boolean> {
   try {
     const count = await db.products.count();
     const localVersion = localStorage.getItem("suko_server_version");
+    const localDbSchema = localStorage.getItem("suko_db_schema_version");
 
     const checkRes = await fetch(`/api/check-update?t=${Date.now()}`, { cache: "no-store" });
     const checkData = await checkRes.json();
 
     if (checkData.success) {
       const serverVersion = checkData.lastUpdate.toString();
-      if (localVersion !== serverVersion || count < 1000) {
+      if (localDbSchema !== "v5" || localVersion !== serverVersion || count < 1000) {
         return true;
       }
     }
@@ -60,6 +66,7 @@ export async function syncOfflineDatabase(
   try {
     const count = await db.products.count();
     const localVersion = localStorage.getItem("suko_server_version");
+    const localDbSchema = localStorage.getItem("suko_db_schema_version");
 
     const checkRes = await fetch(`/api/check-update?t=${Date.now()}`, { cache: "no-store" });
     const checkData = await checkRes.json();
@@ -67,7 +74,7 @@ export async function syncOfflineDatabase(
     if (checkData.success) {
       const serverVersion = checkData.lastUpdate.toString();
 
-      if (forceSync || localVersion !== serverVersion || count < 1000) {
+      if (forceSync || localDbSchema !== "v5" || localVersion !== serverVersion || count < 1000) {
         if (onSyncStateChange) onSyncStateChange(true, 10);
 
         let progress = 10;
@@ -88,7 +95,8 @@ export async function syncOfflineDatabase(
 
           if (onSyncStateChange) onSyncStateChange(true, 100);
           localStorage.setItem("suko_server_version", serverVersion);
-          console.log(`[OfflineDB] Berhasil sync ${result.data.length} produk (versi: ${serverVersion})`);
+          localStorage.setItem("suko_db_schema_version", "v5");
+          console.log(`[OfflineDB] Berhasil sync ${result.data.length} produk v5 (versi: ${serverVersion})`);
           return true;
         }
       } else {
