@@ -391,29 +391,25 @@ export default function CekHargaPage() {
       ? `PROMO DISKON ${discountPct}%`
       : "PENAWARAN SPESIAL TOKO");
 
-  // ── SCREEN 1: DOWNLOAD CACHE DI AWAL (HANYA MUNCUL DI KUNJUNGAN PERTAMA ~0.5 DETIK) ──
+  // ── SCREEN 1: PREPARATION LOADING (HANYA MUNCUL DI KUNJUNGAN PERTAMA ~0.5 DETIK) ──
   if (dbState === "syncing") {
     return (
       <div className="fixed inset-0 z-[200] bg-slate-950 text-white flex flex-col items-center justify-center p-6 text-center select-none">
-        <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-blue-500/30 mb-6 animate-pulse">
-          <Zap className="w-8 h-8 text-white" />
+        <div className="w-16 h-16 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center mb-6 shadow-2xl backdrop-blur-md">
+          <div className="w-8 h-8 border-3 border-white/20 border-t-amber-400 rounded-full animate-spin" />
         </div>
         <img src="/suko-logo.png" alt="SUKO" className="h-10 object-contain mb-4 filter invert opacity-90" />
-        <h2 className="text-xl font-black text-white tracking-tight mb-2">Menyiapkan Pemindai Cepat</h2>
+        <h2 className="text-xl font-black text-white tracking-tight mb-1.5">Menyiapkan Pemindai...</h2>
         <p className="text-slate-400 text-xs max-w-xs mb-6 font-medium">
-          Mengunduh katalog database harga resmi toko agar pemindaian selanjutnya instan 0 detik.
+          Memuat sistem pemindai harga resmi toko
         </p>
 
-        {/* Progress Bar */}
-        <div className="w-full max-w-xs bg-slate-800 rounded-full h-2.5 overflow-hidden p-0.5 border border-slate-700/60 mb-3">
+        {/* Progress Bar Halus */}
+        <div className="w-full max-w-[200px] bg-slate-800/80 rounded-full h-1.5 overflow-hidden border border-slate-700/40">
           <div
-            className="bg-gradient-to-r from-blue-500 via-indigo-500 to-emerald-400 h-full rounded-full transition-all duration-200"
-            style={{ width: `${Math.max(syncProgress, 5)}%` }}
+            className="bg-gradient-to-r from-blue-500 via-indigo-500 to-amber-400 h-full rounded-full transition-all duration-200"
+            style={{ width: `${Math.max(syncProgress, 10)}%` }}
           />
-        </div>
-        <div className="flex items-center justify-between w-full max-w-xs text-[11px] text-slate-400 font-mono">
-          <span>Ukuran data: ~180 KB</span>
-          <span className="font-bold text-white">{syncProgress}%</span>
         </div>
       </div>
     );
