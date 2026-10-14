@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { Search, X, ScanBarcode, Tag, XCircle } from "lucide-react";
 import { ChipLoader } from "@/components/ChipLoader";
 
@@ -129,12 +130,12 @@ export default function CekHargaPage() {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4 md:p-8 font-sans selection:bg-black selection:text-white">
       {/* Kiosk Header */}
-      <div className="mb-8 md:mb-12 text-center animate-in fade-in slide-in-from-top-8 duration-700">
-        <div className="bg-black text-white px-6 py-2 rounded-full inline-block mb-4 font-black tracking-widest text-sm shadow-xl">
-          SUKO
+      <div className="mb-8 md:mb-12 text-center animate-in fade-in slide-in-from-top-8 duration-700 flex flex-col items-center">
+        <div className="mb-4">
+          <img src="/suko-logo.png" alt="SUKO" className="h-12 md:h-16 object-contain drop-shadow-sm" />
         </div>
         <h1 className="text-3xl md:text-5xl font-black text-slate-900 tracking-tight">Cek Harga Produk</h1>
-        <p className="text-slate-500 mt-3 font-medium max-w-md mx-auto">Scan barcode di label produk atau ketik kode/nama barang untuk melihat harga terbaru.</p>
+        <p className="text-slate-500 mt-2 font-medium max-w-md mx-auto text-sm md:text-base">Scan barcode di label produk atau ketik kode/nama barang untuk melihat harga terbaru.</p>
       </div>
 
       <div className="w-full max-w-2xl relative z-10">
@@ -286,6 +287,14 @@ export default function CekHargaPage() {
           </div>
         </div>
       )}
+
+      {/* Footer Kiosk */}
+      <div className="mt-12 text-center text-xs text-slate-400 font-medium z-10 flex flex-col items-center gap-2 pb-safe">
+        <p>SUKO Self-Service Price Checker • Mode Publik Kiosk</p>
+        <Link href="/login" className="text-slate-400 hover:text-slate-600 underline transition-colors">
+          Portal Karyawan / Login Staff 🔒
+        </Link>
+      </div>
 
       {/* Decorative Background Elements */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none -z-10">

@@ -14,7 +14,8 @@ const fetcher = (url: string) => fetch(url, { credentials: "same-origin" }).then
 export default function LayoutWrapper({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isAuth = pathname?.startsWith("/login");
-  const { data, isLoading } = useSWR(isAuth ? null : "/api/auth/me", fetcher);
+  const isCekHarga = pathname?.startsWith("/cek-harga");
+  const { data, isLoading } = useSWR(isAuth || isCekHarga ? null : "/api/auth/me", fetcher);
 
   // Simpan info user ke localStorage agar siap seketika saat offline / refresh
   useEffect(() => {
@@ -84,14 +85,14 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   const [syncProgress, setSyncProgress] = useState<number | undefined>(undefined);
   
   useEffect(() => {
-    if (!isAuth && data?.user) {
+    if (!isAuth && !isCekHarga && data?.user) {
       import("@/lib/offlineDb").then(({ checkIfUpdateAvailable }) => {
         checkIfUpdateAvailable().then((isAvailable) => {
           if (isAvailable) setShowDbUpdateModal(true);
         });
       });
     }
-  }, [isAuth, data]);
+  }, [isAuth, isCekHarga, data]);
 
   const handleStartDbUpdate = async () => {
     setShowDbUpdateModal(false);
@@ -115,7 +116,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
     await forceAppUpdate({ clearOfflineData: false });
   };
 
-  if (isAuth) {
+  if (isAuth || isCekHarga) {
     return (
       <main className="w-full min-h-[100dvh]">
         {children}

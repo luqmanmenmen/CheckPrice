@@ -16,7 +16,8 @@ import {
   Info,
   CheckCircle2,
   RefreshCw,
-  UserCircle2
+  UserCircle2,
+  ScanBarcode
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -220,6 +221,20 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
             <div className="flex flex-col">
               <span className="text-sm">Barang Baru Masuk</span>
               <span className="text-[10px] text-amber-600 font-semibold">Koleksi Terkini Toko</span>
+            </div>
+          </Link>
+
+          <Link 
+            href="/cek-harga" 
+            onClick={() => setIsOpen(false)} 
+            className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-emerald-50/60 active:bg-emerald-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
+          >
+            <div className="w-9 h-9 bg-emerald-100 text-emerald-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <ScanBarcode className="w-4 h-4" />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-sm">Kiosk Cek Harga</span>
+              <span className="text-[10px] text-emerald-600 font-semibold">Tampilan Publik / Tablet</span>
             </div>
           </Link>
 

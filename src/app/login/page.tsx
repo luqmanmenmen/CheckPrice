@@ -2,9 +2,10 @@
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 
+import Link from "next/link";
 import ShiftToggle from "@/components/ShiftToggle";
 import ShiftLoader from "@/components/ShiftLoader";
-import { ShoppingCart, Shirt, Footprints, Package } from "lucide-react";
+import { ShoppingCart, Shirt, Footprints, Package, Search } from "lucide-react";
 import { APP_VERSION, forceAppUpdate } from "@/lib/version";
 
 export default function Login() {
@@ -367,6 +368,17 @@ export default function Login() {
         </form>
       </div>
       )}
+
+      {/* Shortcut ke Kiosk Cek Harga Publik */}
+      <div className="relative z-20 mt-4 text-center">
+        <Link 
+          href="/cek-harga" 
+          className="inline-flex items-center gap-2 px-5 py-2.5 bg-white/15 hover:bg-white/25 backdrop-blur-md rounded-full text-white text-xs font-bold border border-white/25 transition-all shadow-md active:scale-95"
+        >
+          <Search className="w-4 h-4 text-amber-300" />
+          Hanya Mau Cek Harga? Buka Kiosk Publik &rarr;
+        </Link>
+      </div>
 
       <div className="flex-grow shrink-0 min-h-[2rem]"></div>
 
