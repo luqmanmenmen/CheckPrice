@@ -21,6 +21,7 @@ export async function GET() {
         hargaPromo: true,
         diskon: true,
         discountType: true,
+        acara: true,
         stok: true,
         toDate: true,
       },
@@ -29,7 +30,6 @@ export async function GET() {
     const parsedProducts = products.map((p) => {
       // Parse description for color and size jika kolom kosong
       const parts = p.description ? p.description.split(":") : [];
-      // Nama produk murni dari Item Description, BUKAN dari artikel
       const name = parts[0]?.trim() || p.description || "";
       const color = p.color || (parts.length > 1 ? parts[1].trim() : "");
       const size = p.size || (parts.length > 2 ? parts[2].trim() : "");
@@ -48,6 +48,7 @@ export async function GET() {
         hargaPromo: p.hargaPromo,
         diskon: p.diskon || null,
         discountType: p.discountType || null,
+        acara: p.acara || null,
         stok: p.stok || 0,
         toDate: p.toDate || null,
       };

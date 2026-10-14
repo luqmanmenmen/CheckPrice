@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
-import { Tag, Sparkles, AlertCircle, Camera, RefreshCw, Zap } from "lucide-react";
+import { Tag, Sparkles, AlertCircle, Camera, RefreshCw, Zap, Gift, Percent } from "lucide-react";
 import { DetectedSku } from "@/components/TextScanner";
 
 // Engine TextScanner — scan teks SKU 8 digit
@@ -17,6 +17,7 @@ type ProductData = {
   hargaPromo?: number | null;
   diskon?: string | null;
   discountType?: string | null;
+  acara?: string | null;
   brand?: string | null;
   dept?: string | null;
   color?: string | null;
@@ -32,16 +33,37 @@ function formatRupiah(angka: number) {
   }).format(angka);
 }
 
+// Bersihkan nama produk dari artikel & format internal (BUKAN artikel yang jadi judul)
 function parseProductInfo(product: ProductData) {
-  // Ambil nama dari Item Description murni (BUKAN dari artikel)
   const rawDesc = product.description || "";
   const parts = rawDesc.split(":");
-  const name = parts[0]?.trim() || rawDesc || "Produk";
+  let name = parts[0]?.trim() || rawDesc || "Produk";
+
+  // Ambil kode artikel untuk dihapus dari teks deskripsi produk
+  const rawArticle = (product.article || "").trim();
+  if (rawArticle) {
+    const artWords = rawArticle.split(/\s+/);
+    // Ambil kode artikel penuh dan kata terakhirnya (misal: "CBS01", "SKBRPRP", "FDCNT")
+    const shortCode = artWords[artWords.length - 1];
+    const targets = Array.from(new Set([rawArticle, shortCode])).filter((t) => t && t.length >= 2);
+
+    for (const target of targets) {
+      const esc = target.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+      // Hapus jika ada di ujung teks (misal: "T-SHIRT ... SKBRPRP" -> "T-SHIRT ...")
+      name = name.replace(new RegExp(`[\\s\\-_/]+${esc}$`, "i"), "");
+      // Hapus jika merupakan kata tersendiri di dalam teks
+      name = name.replace(new RegExp(`\\b${esc}\\b`, "i"), "");
+    }
+
+    // Bersihkan spasi berlebih dan tanda hubung di ujung
+    name = name.replace(/\s{2,}/g, " ").replace(/[\s\-_/]+$/, "").trim();
+  }
+
   let color = product.color || (parts.length > 1 ? parts[1].trim() : "");
   let size = product.size || (parts.length > 2 ? parts[2].trim() : "");
   if (["F", "M", "SOLID"].includes(color.toUpperCase())) color = "";
   if (size.toUpperCase() === "SOLID") size = "";
-  return { name, color, size };
+  return { name: name || parts[0]?.trim() || rawDesc, color, size };
 }
 
 const playScanBeep = () => {
@@ -89,9 +111,9 @@ export default function CekHargaPage() {
         const count = await db.products.count();
         const localSchema = typeof window !== "undefined" ? localStorage.getItem("suko_db_schema_version") : null;
 
-        // 1. Jika pertama kali buka atau skema belum v5:
+        // 1. Jika pertama kali buka atau skema belum v6:
         // Tampilkan loading sync cepat (~0.5 - 1 detik untuk unduh 180 KB)
-        if (count < 500 || localSchema !== "v5") {
+        if (count < 500 || localSchema !== "v6") {
           if (isMounted) setDbState("syncing");
           await syncOfflineDatabase((syncing, prog) => {
             if (isMounted && prog !== undefined) setSyncProgress(prog);
@@ -218,6 +240,7 @@ export default function CekHargaPage() {
           hargaPromo: foundLocal.hargaPromo,
           diskon: foundLocal.diskon,
           discountType: foundLocal.discountType || null,
+          acara: foundLocal.acara || null,
           brand: foundLocal.brand || null,
           dept: foundLocal.dept || null,
           color: foundLocal.color || null,
@@ -293,7 +316,7 @@ export default function CekHargaPage() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Promo expired check
+  // ── DETEKSI PROMO LENGKAP: BOGO, BXGY, DISKON 60%, HARGA SPESIAL FLAT ──
   let isPromoExpired = false;
   if (product?.toDate) {
     const d = new Date(product.toDate);
@@ -302,12 +325,62 @@ export default function CekHargaPage() {
       if (new Date() > d) isPromoExpired = true;
     }
   }
-  const isOnPromo =
+
+  // 1. Promo Flat Price (misal Rp 99.000)
+  const hasHargaPromo = Boolean(
     product &&
     product.hargaPromo &&
     product.hargaPromo > 0 &&
     product.hargaPromo !== product.hargaNormal &&
-    !isPromoExpired;
+    !isPromoExpired
+  );
+
+  // 2. Promo BOGO / BXGY / Beli X Gratis Y (misal: "BELI 2 GRATIS 1", "BELI 1 GRATIS 1", "B2G1", "B1G1", "BXGY")
+  const isBogoPromo = Boolean(
+    product &&
+    !isPromoExpired &&
+    ((product.discountType && (/B\dG\d|B\dD\d+|B\dX\d+/i.test(product.discountType) || /BELI \d+ (GRATIS|DISKON)/i.test(product.discountType) || /BOGO|BXGY/i.test(product.discountType))) ||
+     (product.diskon && (/B\dG\d|B\dD\d+|B\dX\d+/i.test(product.diskon) || /BOGO|BXGY/i.test(product.diskon))))
+  );
+
+  // 3. Promo Diskon Persentase (misal: "BELI 1 DISKON 60%", "DISKON 60%", "60%", "50%")
+  const isPercentPromo = Boolean(
+    product &&
+    !isPromoExpired &&
+    ((product.discountType && (product.discountType.includes("%") || /DISKON \d+%/i.test(product.discountType))) ||
+     (product.diskon && (product.diskon.includes("%") || /DISKON \d+%/i.test(product.diskon))))
+  );
+
+  // 4. Promo Tipe Khusus Lainnya (HARGA SPESIAL, SPECIAL PRICE, dsb)
+  const hasSpecialDiscountType = Boolean(
+    product &&
+    !isPromoExpired &&
+    product.discountType &&
+    !/NORMAL/i.test(product.discountType) &&
+    product.discountType.trim() !== ""
+  );
+
+  // Total status promo aktif
+  const isOnPromo = (hasHargaPromo || isBogoPromo || isPercentPromo || hasSpecialDiscountType) && !isPromoExpired;
+
+  // Hitung persentase diskon untuk badge
+  let discountPct = 0;
+  if (hasHargaPromo && product) {
+    discountPct = Math.round(((product.hargaNormal - product.hargaPromo!) / product.hargaNormal) * 100);
+  } else if (isPercentPromo && product) {
+    const textToCheck = `${product.discountType || ""} ${product.diskon || ""}`;
+    const match = textToCheck.match(/\b(\d+)%\b/);
+    if (match) discountPct = parseInt(match[1], 10);
+  }
+
+  // Label promo utama
+  const promoTitle =
+    product?.discountType ||
+    (isBogoPromo
+      ? "PROMO BOGO / BELI X GRATIS Y"
+      : isPercentPromo
+      ? `PROMO DISKON ${discountPct}%`
+      : "PENAWARAN SPESIAL TOKO");
 
   // ── SCREEN 1: DOWNLOAD CACHE DI AWAL (HANYA MUNCUL DI KUNJUNGAN PERTAMA ~0.5 DETIK) ──
   if (dbState === "syncing") {
@@ -402,6 +475,16 @@ export default function CekHargaPage() {
         product &&
         (() => {
           const { name, color, size } = parseProductInfo(product);
+
+          // Kode artikel bersih untuk badge samping SKU
+          let articleDisplay = product.article ? product.article.trim() : "";
+          if (articleDisplay) {
+            const artWords = articleDisplay.split(/\s+/);
+            if (artWords.length > 3) {
+              articleDisplay = artWords[artWords.length - 1];
+            }
+          }
+
           return (
             <div className="fixed inset-0 z-[90] bg-gradient-to-b from-slate-50 via-white to-slate-100 flex flex-col items-center justify-between p-4 sm:p-6 overflow-y-auto">
               {/* Logo & Judul Toko */}
@@ -416,16 +499,31 @@ export default function CekHargaPage() {
               {/* Kartu produk */}
               <main className="w-full max-w-lg flex-1 flex flex-col justify-center">
                 <div className="w-full bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden animate-in slide-in-from-bottom-6 duration-300 flex flex-col">
+                  {/* Banner Promo Header: Tampil jika produk sedang promo (BOGO, BXGY, Diskon 60%, atau Harga Khusus) */}
                   {isOnPromo && (
-                    <div className="bg-gradient-to-r from-rose-600 via-red-600 to-amber-600 px-6 py-3.5 flex items-center justify-between text-white">
+                    <div
+                      className={`px-5 py-3.5 flex items-center justify-between text-white ${
+                        isBogoPromo || isPercentPromo
+                          ? "bg-gradient-to-r from-purple-600 via-indigo-600 to-rose-600"
+                          : "bg-gradient-to-r from-rose-600 via-red-600 to-amber-600"
+                      }`}
+                    >
                       <div className="flex items-center gap-2">
-                        <Tag className="w-4 h-4 fill-white" />
-                        <span className="font-black tracking-wider text-xs uppercase">
-                          {product.discountType || "PENAWARAN SPESIAL"}
+                        {isBogoPromo ? (
+                          <Gift className="w-4 h-4 text-amber-300 shrink-0" />
+                        ) : isPercentPromo ? (
+                          <Percent className="w-4 h-4 text-amber-300 shrink-0" />
+                        ) : (
+                          <Tag className="w-4 h-4 fill-white shrink-0" />
+                        )}
+                        <span className="font-black tracking-wider text-xs sm:text-sm uppercase line-clamp-1">
+                          {promoTitle}
                         </span>
                       </div>
-                      <span className="text-[10px] font-black bg-white/20 px-2 py-0.5 rounded-full uppercase tracking-wider">
-                        PROMO AKTIF
+                      <span className="text-[10px] sm:text-xs font-black bg-white/20 backdrop-blur-sm px-2.5 py-1 rounded-full uppercase tracking-wider shrink-0 ml-2">
+                        {hasHargaPromo
+                          ? `HEMAT ${formatRupiah(product.hargaNormal - product.hargaPromo!)}`
+                          : "PROMO AKTIF"}
                       </span>
                     </div>
                   )}
@@ -435,7 +533,7 @@ export default function CekHargaPage() {
                       {product.brand || product.dept || "SUKO"}
                     </div>
 
-                    {/* Judul Produk: Murni Item Description */}
+                    {/* Judul Produk: Murni Item Description (Artikel sudah dibersihkan) */}
                     <h1 className="text-xl sm:text-2xl md:text-3xl font-black text-slate-900 leading-snug mb-4 max-w-md">
                       {name}
                     </h1>
@@ -452,9 +550,9 @@ export default function CekHargaPage() {
                           Warna: {color}
                         </span>
                       )}
-                      {product.article && (
+                      {articleDisplay && (
                         <span className="bg-amber-50 text-amber-800 border border-amber-200/80 font-mono px-3.5 py-1 rounded-full text-[11px] font-bold tracking-wide">
-                          Artikel: {product.article}
+                          Artikel: {articleDisplay}
                         </span>
                       )}
                       <span className="bg-slate-50 text-slate-600 font-mono px-3.5 py-1 rounded-full text-[11px] font-bold border border-slate-200/80">
@@ -464,27 +562,67 @@ export default function CekHargaPage() {
 
                     <div className="w-full max-w-[200px] h-px bg-slate-100 mb-6" />
 
+                    {/* ── AREA HARGA & PROMO (BOGO / DISKON 60% / BXGY / FLAT) ── */}
                     <div className="flex flex-col items-center w-full">
-                      <p className="text-[11px] font-black text-slate-400 tracking-widest uppercase mb-1">
-                        HARGA RESMI
-                      </p>
-
-                      {isOnPromo ? (
+                      {hasHargaPromo ? (
+                        // Kasus 1: Promo Potongan Harga Langsung (Flat Price)
                         <div className="flex flex-col items-center gap-1">
+                          <p className="text-[11px] font-black text-slate-400 tracking-widest uppercase mb-1">
+                            HARGA PROMO RESMI
+                          </p>
                           <span className="text-lg sm:text-xl font-bold text-slate-400 line-through decoration-rose-500/60 decoration-2">
                             {formatRupiah(product.hargaNormal)}
                           </span>
                           <span className="text-4xl sm:text-5xl md:text-6xl font-black text-rose-600 tracking-tight">
                             {formatRupiah(product.hargaPromo!)}
                           </span>
-                          <span className="mt-3 inline-flex items-center gap-1.5 bg-emerald-50 text-emerald-700 border border-emerald-200 px-4 py-1.5 rounded-full text-xs font-black">
-                            HEMAT {formatRupiah(product.hargaNormal - product.hargaPromo!)}
-                          </span>
+                          <div className="mt-3 flex items-center gap-2">
+                            <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-200 px-4 py-1.5 rounded-full text-xs font-black">
+                              HEMAT {formatRupiah(product.hargaNormal - product.hargaPromo!)}
+                            </span>
+                            {discountPct > 0 && (
+                              <span className="bg-rose-600 text-white px-3 py-1.5 rounded-full text-xs font-black shadow-sm">
+                                {discountPct}% OFF
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ) : isOnPromo ? (
+                        // Kasus 2: Promo BOGO / BXGY / Beli 1 Diskon 60% (Tanpa Flat Price)
+                        <div className="flex flex-col items-center gap-3 w-full max-w-sm">
+                          <div>
+                            <p className="text-[11px] font-black text-slate-400 tracking-widest uppercase mb-1">
+                              HARGA NORMAL SATUAN
+                            </p>
+                            <span className="text-4xl sm:text-5xl font-black text-slate-900 tracking-tight">
+                              {formatRupiah(product.hargaNormal)}
+                            </span>
+                          </div>
+
+                          {/* Kartu Promo BOGO / Diskon 60% / BXGY */}
+                          <div className="w-full bg-gradient-to-br from-purple-50 via-indigo-50/50 to-pink-50 border-2 border-purple-200/90 rounded-2xl p-4 flex flex-col items-center shadow-sm">
+                            <div className="inline-flex items-center gap-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 text-white px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-wider shadow-sm mb-2">
+                              {isBogoPromo ? <Gift className="w-3.5 h-3.5" /> : <Tag className="w-3.5 h-3.5 fill-white" />}
+                              {product.discountType || product.diskon || "PROMO SPESIAL"}
+                            </div>
+                            <p className="text-purple-950 font-black text-base sm:text-lg text-center leading-tight">
+                              {product.discountType || (isBogoPromo ? "Promo Beli X Gratis Y" : "Promo Diskon Khusus")}
+                            </p>
+                            <p className="text-xs text-purple-700 font-bold text-center mt-1.5">
+                              🎉 Promo otomatis terhitung di kasir saat pembayaran
+                            </p>
+                          </div>
                         </div>
                       ) : (
-                        <span className="text-4xl sm:text-5xl md:text-6xl font-black text-slate-900 tracking-tight">
-                          {formatRupiah(product.hargaNormal)}
-                        </span>
+                        // Kasus 3: Harga Normal (Tidak Ada Promo)
+                        <div className="flex flex-col items-center">
+                          <p className="text-[11px] font-black text-slate-400 tracking-widest uppercase mb-1">
+                            HARGA RESMI
+                          </p>
+                          <span className="text-4xl sm:text-5xl md:text-6xl font-black text-slate-900 tracking-tight">
+                            {formatRupiah(product.hargaNormal)}
+                          </span>
+                        </div>
                       )}
                     </div>
                   </div>
