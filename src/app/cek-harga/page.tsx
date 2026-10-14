@@ -67,14 +67,17 @@ const playScanBeep = () => {
 };
 
 export default function CekHargaPage() {
-  // State sama persis dengan page.tsx
   const [scanMode, setScanMode] = useState<"none" | "barcode" | "text">("none");
   const [manualInput, setManualInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [searchingFor, setSearchingFor] = useState(""); // Tampilkan barcode yang sedang dicari saat loading
   const [product, setProduct] = useState<ProductData | null>(null);
   const [error, setError] = useState("");
   const [countdown, setCountdown] = useState(25);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // In-memory cache — barcode yang sudah pernah di-scan langsung instan tanpa API call lagi
+  const sessionCache = useRef<Map<string, ProductData>>(new Map());
 
   const resetKiosk = useCallback(() => {
     setProduct(null);
@@ -97,19 +100,30 @@ export default function CekHargaPage() {
     return () => clearInterval(interval);
   }, [product, resetKiosk]);
 
-  // searchProduct — sama logikanya dengan page.tsx
   const searchProduct = async (identifier: string) => {
     const trimmed = identifier.trim();
     if (!trimmed) return;
 
+    // 🚀 CACHE HIT: barcode sudah pernah di-scan sesi ini → instan 0ms, tanpa loading
+    const cacheKey = trimmed.toLowerCase();
+    const cached = sessionCache.current.get(cacheKey);
+    if (cached) {
+      playScanBeep();
+      setProduct(cached);
+      setError("");
+      return;
+    }
+
     setLoading(true);
+    setSearchingFor(trimmed); // Tampilkan barcode agar user tahu sudah terbaca
     setError("");
     setProduct(null);
 
     try {
       const res = await fetch(`/api/product/${encodeURIComponent(trimmed)}?page=1`, {
-        cache: "no-store",
-      });
+        // Cache 5 menit di browser — scan ulang produk yang sama dalam waktu singkat = instan
+        next: { revalidate: 300 }
+      } as RequestInit);
       const data = await res.json();
 
       if (res.ok) {
@@ -122,6 +136,10 @@ export default function CekHargaPage() {
 
         if (found) {
           playScanBeep();
+          // Simpan ke session cache dengan berbagai key (barcode, SKU, identifier)
+          sessionCache.current.set(cacheKey, found);
+          sessionCache.current.set(found.sku.toLowerCase(), found);
+          if (found.barcode) sessionCache.current.set(found.barcode.toLowerCase(), found);
           setProduct(found);
         } else {
           setError("Produk tidak ditemukan. Pastikan barcode yang di-scan sudah benar.");
@@ -133,6 +151,7 @@ export default function CekHargaPage() {
       setError("Gagal terhubung ke server. Periksa koneksi internet.");
     } finally {
       setLoading(false);
+      setSearchingFor("");
     }
   };
 
@@ -188,14 +207,22 @@ export default function CekHargaPage() {
       {/* Main */}
       <main className="w-full max-w-lg flex-1 flex flex-col items-center justify-center gap-4">
 
-        {/* Loading */}
+        {/* Loading — tampilkan barcode yang terbaca agar user tahu scan berhasil */}
         {loading && (
-          <div className="w-full bg-white rounded-3xl p-10 shadow-2xl border border-slate-100 flex flex-col items-center justify-center animate-in zoom-in-95 duration-300">
+          <div className="w-full bg-white rounded-3xl p-8 shadow-2xl border border-slate-100 flex flex-col items-center justify-center animate-in zoom-in-95 duration-300">
             <ChipLoader />
             <p className="mt-5 text-slate-700 font-black text-base animate-pulse">MEMERIKSA HARGA...</p>
-            <p className="text-slate-400 text-xs mt-1">Mengambil data resmi dari database toko</p>
+            {searchingFor ? (
+              <div className="mt-3 flex items-center gap-2 bg-slate-50 border border-slate-200 px-4 py-2 rounded-xl">
+                <ScanBarcode className="w-4 h-4 text-blue-500 shrink-0" />
+                <span className="font-mono text-sm font-bold text-slate-800 tracking-wider">{searchingFor}</span>
+              </div>
+            ) : (
+              <p className="text-slate-400 text-xs mt-1">Mengambil data resmi dari database toko</p>
+            )}
           </div>
         )}
+
 
         {/* Error */}
         {error && !loading && (
