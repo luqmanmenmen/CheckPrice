@@ -16,27 +16,51 @@ export default function Scanner({ onScanSuccess, onScanError }: ScannerProps) {
   useEffect(() => {
     scannerRef.current = new Html5Qrcode("reader");
     
-    const config = { fps: 10, qrbox: { width: 250, height: 250 } };
+    const config = {
+      fps: 15,
+      qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
+        const width = Math.min(viewfinderWidth * 0.88, 320);
+        const height = Math.min(viewfinderHeight * 0.6, 200);
+        return { width: Math.max(width, 240), height: Math.max(height, 120) };
+      },
+    };
 
     scannerRef.current.start(
       { facingMode: "environment" },
       config,
       async (decodedText) => {
-        if (isHandlingResult.current || blacklistedSkus.current.has(decodedText)) return;
+        const cleanText = decodedText.trim();
+        if (!cleanText || isHandlingResult.current || blacklistedSkus.current.has(cleanText)) return;
         isHandlingResult.current = true;
         
         try {
-          const res = await fetch(`/api/product/${decodedText}`);
-          if (!res.ok) {
-            blacklistedSkus.current.add(decodedText);
+          // 1. Cek database lokal IndexedDB
+          const { db } = await import("@/lib/offlineDb");
+          let exists = await db.products.where('sku').equals(cleanText).first();
+          
+          // 2. Fallback cek ke API server jika belum ada di database lokal
+          if (!exists) {
+            const res = await fetch(`/api/product/${encodeURIComponent(cleanText)}?page=1`);
+            if (res.ok) {
+              const data = await res.json();
+              if (data && (data.data || (Array.isArray(data) && data.length > 0))) {
+                exists = data.data || data[0];
+              }
+            }
+          }
+
+          if (!exists) {
+            blacklistedSkus.current.add(cleanText);
+            // Hapus blacklist setelah 2 detik agar tidak terkunci permanen
+            setTimeout(() => blacklistedSkus.current.delete(cleanText), 2000);
             isHandlingResult.current = false;
             return;
           }
-        } catch (e) {
-          // Ignore network errors
+        } catch {
+          // Lanjutkan jika offline/kesalahan jaringan
         }
 
-        onScanSuccess(decodedText);
+        onScanSuccess(cleanText);
       },
       (errorMessage) => {
         if (onScanError) onScanError(errorMessage);

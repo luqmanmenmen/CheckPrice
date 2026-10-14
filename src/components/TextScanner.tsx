@@ -171,10 +171,27 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
     try {
       // 100% Offline check via IndexedDB (0.01 detik!)
-      const product = await db.products.get(sku);
+      let product = await db.products.get(sku);
       
+      // Fallback: Jika belum ada di IndexedDB lokal (misal di browser kiosk public),
+      // cek via API server agar tidak salah memblokir SKU yang valid
+      if (!product) {
+        try {
+          const res = await fetch(`/api/product/${encodeURIComponent(sku)}?page=1`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data && (data.data || (Array.isArray(data) && data.length > 0))) {
+              product = data.data || data[0];
+            }
+          }
+        } catch {
+          // Abaikan kesalahan koneksi
+        }
+      }
+
       if (!product) {
         blacklistedSkus.current.add(sku);
+        setTimeout(() => blacklistedSkus.current.delete(sku), 2500);
         setScanFeedback("wrong_target");
         setStatus(`SKU ${sku} tidak ada, mencari lagi...`);
         setTimeout(() => setScanFeedback("idle"), 800);
