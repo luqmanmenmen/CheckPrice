@@ -19,29 +19,33 @@ export async function GET(
     const limit = parseInt(searchParams.get('limit') || '20', 10);
     const skip = (page - 1) * limit;
 
-    // Helper to auto-remove promo if expired
-    const checkAndCleanPromo = async (p: any) => {
+    // Helper to auto-remove promo if expired (in-memory clean + asynchronous background DB update)
+    const checkAndCleanPromo = (p: any) => {
       if (p && p.toDate) {
         const toDateObj = new Date(p.toDate);
         if (!isNaN(toDateObj.getTime())) {
           toDateObj.setHours(23, 59, 59, 999);
           if (new Date() > toDateObj) {
-            try {
-              const updated = await db.product.update({
-                where: { id: p.id },
-                data: {
-                  hargaPromo: null,
-                  diskon: null,
-                  discountType: null,
-                  acara: null,
-                  fromDate: null,
-                  toDate: null
-                }
-              });
-              return updated;
-            } catch (e) {
-              console.error("Auto-clean promo error:", e);
-            }
+            // Bersihkan di memori langsung agar respons JSON super cepat
+            p.hargaPromo = null;
+            p.diskon = null;
+            p.discountType = null;
+            p.acara = null;
+            p.fromDate = null;
+            p.toDate = null;
+
+            // Update database secara background tanpa memblokir respons user
+            db.product.update({
+              where: { id: p.id },
+              data: {
+                hargaPromo: null,
+                diskon: null,
+                discountType: null,
+                acara: null,
+                fromDate: null,
+                toDate: null
+              }
+            }).catch(e => console.error("Auto-clean promo background error:", e));
           }
         }
       }
@@ -56,7 +60,7 @@ export async function GET(
           where: { article: prod.article },
           orderBy: [{ color: 'asc' }, { size: 'asc' }, { description: 'asc' }]
         });
-        siblings = await Promise.all(allSiblings.map(checkAndCleanPromo));
+        siblings = allSiblings.map(checkAndCleanPromo);
       } else if (prod.description) {
         const parts = prod.description.split(":");
         if (parts.length > 1) {
@@ -65,7 +69,7 @@ export async function GET(
             where: { description: { startsWith: parentName + ":" } },
             orderBy: { description: 'asc' }
           });
-          siblings = await Promise.all(allSiblings.map(checkAndCleanPromo));
+          siblings = allSiblings.map(checkAndCleanPromo);
         }
       }
       return siblings;
@@ -80,7 +84,7 @@ export async function GET(
     }
 
     if (directProduct) {
-      directProduct = await checkAndCleanPromo(directProduct);
+      directProduct = checkAndCleanPromo(directProduct);
       const siblings = await getProductSiblings(directProduct);
       return NextResponse.json({ data: directProduct, siblings });
     }
