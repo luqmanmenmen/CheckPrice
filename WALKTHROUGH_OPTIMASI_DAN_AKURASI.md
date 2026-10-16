@@ -77,12 +77,17 @@ Di file `src/components/Sidebar.tsx`:
    * Optimasi varian warna & ukuran di aplikasi SA.
    * Indikator promo di tombol varian.
    * Pembersihan async promo expired di server.
-   * Penambahan scanner barcode di Kiosk.
 
 2. **Commit 2:** `f9d3457`  
    *`fix(ui): close sidebar immediately on logout and smoothly show full page loading screen`*  
    * Perbaikan penutupan otomatis laci menu sidebar saat logout.
    * Transisi mulus ke layar page loading full-screen.
+
+3. **Commit 3:** `a6754d5`  
+   *`fix(kiosk): restore pure dedicated TextScanner SKU and remove barcode scanner tabs`*  
+   * Menghapus engine barcode scanner dari halaman Kiosk (`/cek-harga`).
+   * Menghapus tombol toggle/tab switcher mode agar tidak membingungkan pengunjung.
+   * Memastikan Kiosk berjalan murni 100% menggunakan TextScanner (OCR teks SKU 8 digit).
 
 ---
 
