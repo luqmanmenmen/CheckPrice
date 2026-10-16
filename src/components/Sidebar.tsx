@@ -119,6 +119,10 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
   };
 
   const handleLogout = async () => {
+    // 1. Segera tutup drawer sidebar agar tidak tertinggal di layar
+    setIsOpen(false);
+    
+    // 2. Tampilkan full page loader 'MENGAKHIRI SHIFT...'
     setIsLoggingOut(true);
     
     try {
@@ -130,7 +134,11 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
     if (typeof window !== "undefined") {
       localStorage.removeItem("suko_user");
     }
-    window.location.href = "/login";
+
+    // 3. Jeda sejenak agar animasi page loading selesai dengan mulus sebelum pindah ke /login
+    setTimeout(() => {
+      window.location.href = "/login";
+    }, 700);
   };
 
   return (
@@ -347,7 +355,7 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
 
       {/* Full Screen Logout Loader */}
       {isLoggingOut && (
-        <div className="fixed inset-0 z-[200] bg-white flex flex-col items-center justify-center animate-in fade-in duration-500">
+        <div className="fixed inset-0 z-[999] bg-white flex flex-col items-center justify-center animate-in fade-in duration-200">
           <ShiftLoader />
           <p className="text-slate-800 font-bold mt-16 text-sm tracking-[0.3em] animate-pulse">MENGAKHIRI SHIFT...</p>
         </div>
