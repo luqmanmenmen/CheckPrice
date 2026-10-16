@@ -2,11 +2,10 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
-import { Tag, Sparkles, AlertCircle, Camera, RefreshCw, Zap, Gift, Percent, Barcode, ScanText } from "lucide-react";
+import { Tag, Sparkles, AlertCircle, Camera, RefreshCw, Zap, Gift, Percent } from "lucide-react";
 import { DetectedSku } from "@/components/TextScanner";
 
-// Engine Scanner (Barcode 1D/2D) & TextScanner (OCR teks SKU 8 digit)
-const Scanner = dynamic(() => import("@/components/Scanner"), { ssr: false });
+// Engine TextScanner — scan teks SKU 8 digit
 const TextScanner = dynamic(() => import("@/components/TextScanner"), { ssr: false });
 
 type ProductData = {
@@ -102,7 +101,6 @@ export default function CekHargaPage() {
 
   // Status tampilan
   const [isScanning, setIsScanning] = useState(true);
-  const [scanMethod, setScanMethod] = useState<"barcode" | "text">("barcode");
   const [loading, setLoading] = useState(false);
   const [searchingFor, setSearchingFor] = useState("");
   const [product, setProduct] = useState<ProductData | null>(null);
@@ -315,11 +313,6 @@ export default function CekHargaPage() {
     if (sku) searchProduct(sku);
   };
 
-  // Handler Barcode Scanner — dipanggil otomatis begitu barcode garis terdeteksi (Super Cepat <50ms)
-  const handleBarcodeSuccess = (decodedBarcode: string) => {
-    if (decodedBarcode) searchProduct(decodedBarcode);
-  };
-
   // Auto-search dari URL params (?sku= / ?barcode= / ?q=)
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -424,55 +417,25 @@ export default function CekHargaPage() {
 
   return (
     <div className="min-h-[100dvh] bg-black flex flex-col font-sans">
-      {/* ── SCANNING VIEW (Barcode & TextScanner) ── */}
+      {/* ── SCANNING VIEW (Full Screen TextScanner SKU) ── */}
       {isScanning && (
         <div className="fixed inset-0 z-[100] bg-black flex flex-col">
-          {/* Header bersih — Mode Switcher */}
-          <div className="flex justify-between items-center px-4 py-3 bg-slate-900/95 backdrop-blur-md text-white z-10 border-b border-slate-800">
+          {/* Header bersih — TANPA tombol login staff */}
+          <div className="flex justify-between items-center px-4 py-3 bg-slate-900/90 backdrop-blur-md text-white z-10">
             <div className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-amber-300" />
-              <span className="font-black text-sm tracking-wide">CEK HARGA</span>
+              <span className="font-black text-sm tracking-wide">CEK HARGA • Scan Teks SKU</span>
             </div>
-
-            {/* Mode Switcher Tabs */}
-            <div className="flex items-center bg-slate-800/90 p-1 rounded-xl border border-slate-700/80">
-              <button
-                onClick={() => setScanMethod("barcode")}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                  scanMethod === "barcode"
-                    ? "bg-blue-600 text-white shadow-sm"
-                    : "text-slate-400 hover:text-white"
-                }`}
-              >
-                <Barcode className="w-3.5 h-3.5" />
-                <span>Barcode</span>
-              </button>
-              <button
-                onClick={() => setScanMethod("text")}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                  scanMethod === "text"
-                    ? "bg-indigo-600 text-white shadow-sm"
-                    : "text-slate-400 hover:text-white"
-                }`}
-              >
-                <ScanText className="w-3.5 h-3.5" />
-                <span>Teks SKU</span>
-              </button>
+            {/* Status Kecepatan Offline 0ms */}
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-[10px] font-bold text-emerald-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              Mode Cepat 0ms
             </div>
           </div>
 
-          {/* Scanner Area */}
-          <div className="flex-1 overflow-hidden relative flex flex-col items-center justify-center bg-black">
-            {scanMethod === "barcode" ? (
-              <div className="w-full h-full max-w-md mx-auto flex flex-col justify-center px-4">
-                <Scanner onScanSuccess={handleBarcodeSuccess} />
-                <p className="text-center text-xs font-bold text-slate-400 mt-4">
-                  Arahkan kamera ke barcode garis produk
-                </p>
-              </div>
-            ) : (
-              <TextScanner onScanResult={handleTextScanSuccess} />
-            )}
+          {/* TextScanner full height — Murni Scan Teks SKU 8 Digit */}
+          <div className="flex-1 overflow-hidden">
+            <TextScanner onScanResult={handleTextScanSuccess} />
           </div>
         </div>
       )}

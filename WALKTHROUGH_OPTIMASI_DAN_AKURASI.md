@@ -19,7 +19,7 @@ Dokumen ini merangkum seluruh perbaikan, optimasi arsitektur, dan solusi teknis 
 | **2** | Jeda loading berkedip beberapa detik saat klik ganti warna di matriks varian | Mengganggu efisiensi pelayanan SA di depan pelanggan | Implementasi fungsi `handleSelectVariant()` yang membaca langsung dari memori aktif `siblings` (0ms latensi, zero flicker). |
 | **3** | Keraguan akurasi promo dalam 1 artikel yang memiliki banyak warna | Tidak semua warna diskon (ada warna basic normal & warna broken diskon) | Data disimpan dan dihitung murni di level **SKU unik**, bukan disamaratakan per artikel. Ditambahkan badge `PROMO` dan rincian harga langsung di tombol tiap varian. |
 | **4** | Delay hingga 5 detik saat scan produk di mall padahal menggunakan HP flagship | Pelanggan dan SA menunggu lama di depan scanner | Memperbaiki endpoint `/api/product/[identifier]`: pembersihan promo kedaluwarsa diubah menjadi *in-memory* instan dan update database dijalankan secara *asynchronous background*. |
-| **5** | Kiosk (`/cek-harga`) hanya memiliki pemindai teks OCR, menolak barcode garis | Pengunjung butuh 3-5 detik mengarahkan teks SKU kecil ke kotak bidik | Menambahkan scanner **Barcode Garis (`Html5Qrcode`)** dengan respon <50ms sebagai mode default, plus toggle tab ke scan teks SKU. |
+| **5** | Kiosk (`/cek-harga`) fokus pemindai murni teks OCR SKU | Scan price tag pakaian di toko fokus pada teks SKU 8 digit | Memastikan Kiosk berjalan murni 100% menggunakan **TextScanner (OCR teks SKU 8 digit)** tanpa scanner barcode garis dan tanpa tab pemilih yang membingungkan pengunjung. |
 | **6** | Laci sidebar tidak mau menutup saat logout ditekan | Tampilan membeku dengan laci menu tetap terbuka | Menambahkan `setIsOpen(false)` pada `handleLogout()`, menaikkan overlay loader ke `z-[999]`, dan transisi halus sebelum redirect ke `/login`. |
 
 ---
@@ -58,12 +58,10 @@ Di file `src/app/api/product/[identifier]/route.ts`:
     .catch(e => console.error("Auto-clean promo background error:", e));
   ```
 
-### C. Kiosk Dual-Mode Scanner (`/cek-harga`)
+### C. Kiosk Dedicated TextScanner SKU (`/cek-harga`)
 Di file `src/app/cek-harga/page.tsx`:
-* Menambahkan komponen `Scanner` (`Html5Qrcode`) di samping `TextScanner` (Tesseract AI OCR).
-* Menyediakan *Mode Switcher Pills* di header:
-  * **Barcode Garis**: Kecepatan instan < 50ms untuk label barcode reguler.
-  * **Teks SKU**: Khusus jika label barcode rusak/robek sehingga perlu membaca angka 8 digit.
+* Menggunakan pemindai murni **TextScanner (OCR Teks SKU 8 Digit)** secara full-screen.
+* Tanpa barcode scanner garis dan tanpa tab opsi/mode switcher, sehingga pengunjung kiosk toko langsung memindai teks kode SKU 8 digit pada label harga pakaian secara instan dan tanpa distraksi.
 
 ### D. Perbaikan Alur Logout di Sidebar
 Di file `src/components/Sidebar.tsx`:
