@@ -4,7 +4,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import Tesseract from "tesseract.js";
-import { Loader2, Flashlight, FlashlightOff, CheckCircle2, DownloadCloud, Sparkles } from "lucide-react";
+import { Loader2, Flashlight, FlashlightOff, CheckCircle2, ScanText } from "lucide-react";
 import { db } from "@/lib/offlineDb";
 
 export interface DetectedSku {
@@ -21,7 +21,6 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const workerRef = useRef<Tesseract.Worker | null>(null);
-  const barcodeDetectorRef = useRef<any>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
   const isHandlingResult = useRef(false);
@@ -31,24 +30,23 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
   const animationFrameIdRef = useRef<number | null>(null);
   const blacklistedSkus = useRef<Set<string>>(new Set());
 
-  const [status, setStatus] = useState("Memulai Kamera & AI Super Cepat...");
+  const [status, setStatus] = useState("Menyiapkan Pemindai Teks SKU...");
   const [torchOn, setTorchOn] = useState(false);
   const [hasTorch, setHasTorch] = useState(false);
   const [foundSku, setFoundSku] = useState<string | null>(null);
   const [scanFeedback, setScanFeedback] = useState<"idle" | "wrong_target">("idle");
-  const [hasBarcodeSupport, setHasBarcodeSupport] = useState(false);
 
-  // Verifikasi apakah string merupakan SKU toko yang valid (0.05ms di IndexedDB lokal)
+  // Validasi apakah string adalah SKU toko 8 digit yang sah (Cek Dexie IndexedDB <0.05ms)
   const resolveSku = useCallback(async (text: string): Promise<string | null> => {
     if (!text) return null;
     const clean = text.trim();
 
-    // 1. FILTER ANTI-ARTIKEL (KODE PABRIK): Misal "605-12218278"
+    // 1. FILTER ANTI-ARTIKEL (KODE PABRIK): Misal "605-12218278" atau format dengan tanda strip
     if (/\b\d{3,4}\s*-\s*\d{6,10}\b/.test(clean)) {
       return null;
     }
 
-    // 2. Cek apakah string adalah 8 digit murni
+    // 2. Cek apakah teks adalah 8 digit murni
     if (/^\d{8}$/.test(clean)) {
       if (blacklistedSkus.current.has(clean)) return null;
       try {
@@ -56,19 +54,19 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
         if (product) return product.sku;
       } catch {}
 
-      // Fallback API jika local DB belum tersinkron
+      // Fallback API server jika cache IndexedDB lokal belum siap
       const existsOnServer = await checkRemoteSku(clean);
       if (existsOnServer) return clean;
       return null;
     }
 
-    // 3. Pecah teks berdasarkan spasi/baris untuk mengambil angka-angka
+    // 3. Pecah berdasarkan spasi/baris untuk mengambil deretan angka
     const tokens = clean.replace(/[^0-9-\s]/g, " ").split(/\s+/);
     for (const token of tokens) {
       if (!token || token.includes("-")) continue;
       const digits = token.replace(/\D/g, "");
 
-      // 8 Digit SKU Kandidat
+      // HANYA terima jika tepat 8 digit angka murni
       if (digits.length === 8) {
         if (blacklistedSkus.current.has(digits)) continue;
         try {
@@ -78,19 +76,6 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
         const existsOnServer = await checkRemoteSku(digits);
         if (existsOnServer) return digits;
-      }
-
-      // Barcode panjang (12 - 14 digit): ambil 8 digit terakhirnya
-      if (digits.length >= 12 && digits.length <= 14) {
-        const last8 = digits.slice(-8);
-        if (blacklistedSkus.current.has(last8)) continue;
-        try {
-          const product = await db.products.get(last8);
-          if (product) return product.sku;
-        } catch {}
-
-        const existsOnServer = await checkRemoteSku(last8);
-        if (existsOnServer) return last8;
       }
     }
 
@@ -110,7 +95,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     return false;
   }
 
-  // Eksekusi jika SKU berhasil ditemukan (Haptic buzz + snapshot + dispatch)
+  // Eksekusi jika SKU 8 digit berhasil dikenali
   const handleSuccess = useCallback(async (sku: string) => {
     if (isHandlingResult.current) return;
     isHandlingResult.current = true;
@@ -121,7 +106,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       animationFrameIdRef.current = null;
     }
 
-    // Getar halus (Haptic) untuk feedback instan native
+    // Feedback getar halus (Haptic)
     if (typeof navigator !== "undefined" && navigator.vibrate) {
       try {
         navigator.vibrate(50);
@@ -129,7 +114,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     }
 
     setFoundSku(sku);
-    setStatus(`Berhasil terdeteksi: ${sku}`);
+    setStatus(`SKU Terdeteksi: ${sku}`);
 
     let snapshot: string | undefined = undefined;
     if (videoRef.current && canvasRef.current) {
@@ -152,7 +137,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     }, 600);
   }, [onScanResult]);
 
-  // Eksekusi OCR Super Cepat (Non-Blocking, GPU Contrast Filter, PSM Single Line)
+  // Eksekusi OCR Ringan & Super Cepat (Non-blocking, GPU Filter, Single Line PSM 7)
   const runOcrPass = useCallback(async (video: HTMLVideoElement) => {
     if (!workerRef.current || !canvasRef.current || isHandlingResult.current) return;
 
@@ -161,23 +146,23 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     if (!vw || !vh) return;
 
     const canvas = canvasRef.current;
-    // Standarisasi ukuran OCR kecil (360x72 px) -> Eksekusi OCR super cepat ~40ms!
+    // Ukuran canvas OCR kecil & presisi (360x64 px) -> Tesseract proses dalam ~35ms tanpa beban CPU
     const targetW = 360;
-    const targetH = 72;
+    const targetH = 64;
     if (canvas.width !== targetW) canvas.width = targetW;
     if (canvas.height !== targetH) canvas.height = targetH;
 
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return;
 
-    // Ambil ROI tengah (di mana garis merah Alfagift berada)
+    // ROI Presisi: Bagian tengah di mana garis merah Alfagift berada
     const roiW = vw * 0.75;
-    const roiH = Math.max(vh * 0.16, 60);
+    const roiH = Math.max(vh * 0.15, 60);
     const startX = (vw - roiW) / 2;
     const startY = (vh - roiH) / 2;
 
-    // Filter Hardware GPU (0% CPU! Menggantikan loop manual binarization JavaScript)
-    ctx.filter = "contrast(190%) grayscale(100%) brightness(105%)";
+    // Filter Kontras GPU Hardware (0% CPU! Tidak ada loop pixel manual di JavaScript)
+    ctx.filter = "contrast(200%) grayscale(100%) brightness(105%)";
     ctx.drawImage(video, startX, startY, roiW, roiH, 0, 0, targetW, targetH);
     ctx.filter = "none";
 
@@ -192,11 +177,11 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
         await handleSuccess(validSku);
       }
     } catch {
-      // Abaikan frame drop sesaat
+      // Abaikan frame drop
     }
   }, [resolveSku, handleSuccess]);
 
-  // Main 60 FPS Viewfinder Loop (Tidak pernah freeze karena OCR berjalan asinkron)
+  // Loop Kamera 60 FPS (Bebas Freeze karena OCR berjalan asinkron dan tidak memblokir render)
   const frameLoop = useCallback(() => {
     if (!isLoopRunningRef.current || isHandlingResult.current) return;
 
@@ -208,28 +193,8 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
     const now = performance.now();
 
-    // 1. FAST-PATH: Native Hardware BarcodeDetector (C++/GPU di Chrome Android / iOS 17+, <4ms!)
-    if (barcodeDetectorRef.current && !isOcrRunningRef.current) {
-      barcodeDetectorRef.current
-        .detect(video)
-        .then(async (barcodes: any[]) => {
-          if (barcodes && barcodes.length > 0 && !isHandlingResult.current) {
-            for (const b of barcodes) {
-              const raw = b.rawValue?.trim();
-              if (raw) {
-                const matched = await resolveSku(raw);
-                if (matched) {
-                  await handleSuccess(matched);
-                  return;
-                }
-              }
-            }
-          }
-        })
-        .catch(() => {});
-    }
-
-    // 2. ACCURATE-PATH: OCR Teks SKU 8 Digit (Berjalan terjadwal tiap 280ms, 0 freeze di video)
+    // Jalankan OCR hanya jika tidak ada OCR yang sedang aktif dan sudah lewat 280ms
+    // Ini memberi CPU HP waktu istirahat sehingga kamera tetap mulus 60 FPS & tidak panas
     if (workerRef.current && !isOcrRunningRef.current && now - lastOcrTimeRef.current >= 280) {
       isOcrRunningRef.current = true;
       lastOcrTimeRef.current = now;
@@ -243,33 +208,21 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     if (isLoopRunningRef.current && !isHandlingResult.current) {
       animationFrameIdRef.current = requestAnimationFrame(frameLoop);
     }
-  }, [resolveSku, handleSuccess, runOcrPass]);
+  }, [runOcrPass]);
 
-  // Inisialisasi Kamera & Worker
+  // Inisialisasi Kamera & Tesseract Worker
   useEffect(() => {
     let isMounted = true;
     isLoopRunningRef.current = true;
 
-    // 1. Inisialisasi Native BarcodeDetector jika browser mendukung
-    if (typeof window !== "undefined" && "BarcodeDetector" in window) {
-      try {
-        barcodeDetectorRef.current = new (window as any).BarcodeDetector({
-          formats: ["code_128", "ean_13", "code_39", "upc_a", "ean_8"],
-        });
-        setHasBarcodeSupport(true);
-      } catch (e) {
-        console.warn("[TextScanner] BarcodeDetector init fallback", e);
-      }
-    }
-
-    // 2. Buka Kamera dengan Continuous Autofocus
+    // 1. Buka Kamera dengan continuous autofocus
     const startCamera = async () => {
       try {
         if (streamRef.current) {
           streamRef.current.getTracks().forEach((t) => t.stop());
         }
 
-        setStatus("Membuka Kamera 60 FPS...");
+        setStatus("Membuka Kamera...");
         const localStream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: "environment",
@@ -284,7 +237,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
           videoRef.current.onloadedmetadata = () => {
             videoRef.current?.play().catch(() => {});
-            setStatus("Arahkan SKU (8 Digit) ke garis merah");
+            setStatus("Arahkan angka SKU (8 Digit) ke garis merah");
             if (isLoopRunningRef.current) {
               animationFrameIdRef.current = requestAnimationFrame(frameLoop);
             }
@@ -295,7 +248,6 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
             const capabilities = track.getCapabilities() as any;
             if (capabilities?.torch) setHasTorch(true);
 
-            // Terapkan autofocus continuous jika didukung hardware HP
             if (capabilities?.focusMode?.includes("continuous")) {
               track.applyConstraints({ advanced: [{ focusMode: "continuous" } as any] }).catch(() => {});
             }
@@ -307,9 +259,10 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       }
     };
 
-    // 3. Inisialisasi Tesseract Worker dengan Parameter Tercepat (Single Line + Digits Only)
+    // 2. Inisialisasi Tesseract Worker: Murni Angka 0-9 & Single Line PSM
     const initWorker = async () => {
       try {
+        setStatus("Memuat AI OCR 8 Digit...");
         const worker = await Tesseract.createWorker("eng");
         await worker.setParameters({
           tessedit_char_whitelist: "0123456789-",
@@ -326,10 +279,9 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       }
     };
 
-    // Jalankan keduanya secara simultan
     Promise.all([startCamera(), initWorker()]);
 
-    // Listener Lifecycle: Hemat baterai saat minimize, bangun seketika saat dibuka
+    // Lifecycle Visibility: 0% CPU saat minimize, bangun instan saat buka
     const handleVisibilityChange = async () => {
       if (document.visibilityState === "visible") {
         isLoopRunningRef.current = true;
@@ -414,7 +366,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
         {/* Kotak ROI (Overlay Tengah) bergaya Alfagift */}
         {!foundSku && (
-          <div className="absolute top-1/2 left-[10%] right-[10%] h-[16%] min-h-[64px] -translate-y-1/2 shadow-[0_0_0_9999px_rgba(0,0,0,0.6)] z-10 pointer-events-none overflow-hidden">
+          <div className="absolute top-1/2 left-[10%] right-[10%] h-[15%] min-h-[60px] -translate-y-1/2 shadow-[0_0_0_9999px_rgba(0,0,0,0.6)] z-10 pointer-events-none overflow-hidden">
             {/* 4 Sudut Merah (Corners) */}
             <div
               className={`absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 transition-colors duration-300 ${
@@ -450,10 +402,10 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
         {/* Hidden Canvas untuk Snapshot & OCR */}
         <canvas ref={canvasRef} className="hidden" />
 
-        {/* Badge Dual Engine Scanner */}
+        {/* Badge Murni TextScanner SKU 8 Digit */}
         <div className="absolute top-3 left-3 z-30 flex items-center gap-1.5 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full border border-white/10 text-[10px] text-white font-medium">
-          <Sparkles className="w-3 h-3 text-amber-400" />
-          <span>{hasBarcodeSupport ? "Dual Engine (Barcode + OCR)" : "AI OCR Ultra Cepat"}</span>
+          <ScanText className="w-3.5 h-3.5 text-blue-400" />
+          <span>AI OCR Teks SKU (8 Digit)</span>
         </div>
 
         {/* Tombol Flash */}
@@ -490,7 +442,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
                 <span className="text-sm">{scanFeedback === "wrong_target" ? "Target Salah!" : "Siap Memindai"}</span>
               </div>
               <p className="text-xs text-slate-600 font-medium leading-tight">
-                Arahkan <strong className="text-slate-800 font-black">Angka SKU (8 Digit)</strong> atau barcode persis ke garis merah
+                Arahkan <strong className="text-slate-800 font-black">Angka SKU (8 Digit)</strong> persis ke garis merah
               </p>
               <p className="text-[10px] text-slate-400 mt-0.5 font-mono">{status}</p>
             </>

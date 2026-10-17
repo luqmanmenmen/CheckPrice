@@ -12,7 +12,8 @@ function formatRupiah(angka: number) {
   }).format(angka);
 }
 
-// Enable ISR revalidation for this page
+// Force dynamic rendering to prevent prerender database connection errors at build time
+export const dynamic = "force-dynamic";
 export const revalidate = 60;
 
 // Client component for the card so we can use onClick
@@ -20,8 +21,10 @@ import ClientPromoUnikList from './ClientPromoUnikList';
 import { ArrowLeft } from 'lucide-react';
 
 export default async function PromoUnikPage() {
-  // Ambil promo unik: BXGY atau PERCENTAGE
-  const promoUnik = await prisma.product.findMany({
+  let promoUnik: any[] = [];
+  try {
+    // Ambil promo unik: BXGY atau PERCENTAGE
+    promoUnik = await prisma.product.findMany({
     where: {
       AND: [
         { discountType: { not: null } },
@@ -44,15 +47,18 @@ export default async function PromoUnikPage() {
       updatedAt: 'desc',
     },
     take: 400, 
-  });
+    });
+  } catch (err) {
+    console.warn("Failed to fetch promo unik items:", err);
+  }
 
   // Grouping data berdasarkan Departemen (dept)
-  const groupedPromos = promoUnik.reduce((acc, item) => {
+  const groupedPromos = promoUnik.reduce((acc: Record<string, any[]>, item: any) => {
     const dept = item.dept || 'DEPARTEMEN LAINNYA';
     if (!acc[dept]) acc[dept] = [];
     acc[dept].push(item);
     return acc;
-  }, {} as Record<string, typeof promoUnik>);
+  }, {} as Record<string, any[]>);
 
   // Untuk setiap dept, lakukan grouping berdasarkan Tipe Promo
   const groupedByDeptAndPromo: Record<string, any[]> = {};
@@ -61,7 +67,7 @@ export default async function PromoUnikPage() {
     const itemsInDept = groupedPromos[dept];
     const groupedByPromo: Record<string, any[]> = {};
     
-    itemsInDept.forEach(item => {
+    itemsInDept.forEach((item: any) => {
       const type = item.discountType || 'PROMO LAINNYA';
       
       const parts = item.description.split(":");
