@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react";
 import dynamic from "next/dynamic";
-import { Search, Camera, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle, ScanText, ArrowLeft, CloudDownload, Loader2, Menu, Sparkles, ArrowRight, Gift } from "lucide-react";
+import { Search, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle, ScanText, ArrowLeft, CloudDownload, Loader2, Menu, Sparkles, ArrowRight, Gift } from "lucide-react";
 import { DetectedSku } from "@/components/TextScanner";
 import { useEffect } from "react";
 import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
@@ -14,7 +14,6 @@ import { ChipLoader } from "@/components/ChipLoader";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
-const Scanner = dynamic(() => import("@/components/Scanner"), { ssr: false });
 const TextScanner = dynamic(() => import("@/components/TextScanner"), { ssr: false });
 
 type ProductData = {
@@ -196,7 +195,7 @@ function formatDate(dateStr: string | null): string {
 }
 
 export default function Home() {
-  const [scanMode, setScanMode] = useState<"none" | "barcode" | "text">("none");
+  const [isScanning, setIsScanning] = useState(false);
   const [manualInput, setManualInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -220,7 +219,6 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<"REQUEST" | "STOCK_CHECK" | "FACING_OUT" | "ORDERS">("REQUEST");
   const [cart, setCart] = useState<any[]>([]);
   const [continuousMode, setContinuousMode] = useState(false);
-  const [lastScanMode, setLastScanMode] = useState<"none" | "barcode" | "text">("none");
   const [user, setUser] = useState<{name: string, nik: string, role: string, status?: string, jobTitle?: string} | null>(null);
   const [togglingStatus, setTogglingStatus] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -470,7 +468,7 @@ export default function Home() {
       setSiblings(inMemory.siblings);
       setProductsList([]);
       setLoading(false);
-      if (scanMode !== "none") setScanMode("none");
+      if (isScanning) setIsScanning(false);
       return;
     }
 
@@ -547,7 +545,7 @@ export default function Home() {
         sessionCacheRef.current.set(trimmed, { product: localProduct, siblings: currentSiblings });
 
         setProductsList([]);
-        if (scanMode !== "none") setScanMode("none");
+        if (isScanning) setIsScanning(false);
       } else if (page === 1) {
         setProduct(null);
         setSiblings([]);
@@ -604,7 +602,7 @@ export default function Home() {
             db.products.bulkPut(items).catch(() => {});
           });
         }
-        if (scanMode !== "none") setScanMode("none");
+        if (isScanning) setIsScanning(false);
       } else {
         if (!localData) {
           setError(data.error || "Produk tidak ditemukan");
@@ -621,20 +619,12 @@ export default function Home() {
     }
   };
 
-  const handleBarcodeSuccess = (result: string) => {
-    setManualInput(result);
-    searchProduct(result);
-    setScanMode("none");
-    setLastScanMode("barcode");
-  };
-
   const handleTextScanSuccess = (sku: string) => {
     if (sku) {
       setManualInput(sku);
       searchProduct(sku);
     }
-    setScanMode("none");
-    setLastScanMode("text");
+    setIsScanning(false);
   };
 
   const addToCart = (type: string, qty: number, size: string) => {
@@ -652,10 +642,8 @@ export default function Home() {
     setManualInput("");
     setQty(1);
     showToast(`Berhasil ditambahkan ke daftar. Total: ${cart.length + 1}`);
-    if (continuousMode && lastScanMode !== "none") {
-      setScanMode(lastScanMode);
-    } else {
-      setLastScanMode("none");
+    if (continuousMode) {
+      setIsScanning(true);
     }
   };
 
@@ -690,7 +678,6 @@ export default function Home() {
     setProductsList([]);
     setError("");
     setQty(1);
-    setLastScanMode("none");
     inputRef.current?.focus();
   };
 
@@ -1076,30 +1063,14 @@ export default function Home() {
                 </button>
               )}
               {!manualInput && (
-                <>
-                  <button 
-                    type="button"
-                    onClick={() => {
-                      setScanMode(scanMode === "barcode" ? "none" : "barcode");
-                      setLastScanMode("barcode");
-                    }}
-                    title="Scan Barcode Garis"
-                    className={`p-1.5 rounded-lg text-slate-400 hover:text-blue-600 transition-colors ${scanMode === "barcode" ? "text-blue-600 bg-blue-50" : ""}`}
-                  >
-                    <Camera className="w-5 h-5" />
-                  </button>
-                  <button 
-                    type="button"
-                    onClick={() => {
-                      setScanMode(scanMode === "text" ? "none" : "text");
-                      setLastScanMode("text");
-                    }}
-                    title="Scan Teks / SKU OCR"
-                    className={`p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 transition-colors ${scanMode === "text" ? "text-indigo-600 bg-indigo-50" : ""}`}
-                  >
-                    <ScanText className="w-5 h-5" />
-                  </button>
-                </>
+                <button 
+                  type="button"
+                  onClick={() => setIsScanning(!isScanning)}
+                  title="Scan SKU (OCR Teks 8 Digit)"
+                  className={`p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 transition-colors ${isScanning ? "text-indigo-600 bg-indigo-50" : ""}`}
+                >
+                  <ScanText className="w-5 h-5" />
+                </button>
               )}
             </div>
           </div>
@@ -1114,26 +1085,22 @@ export default function Home() {
 
       </div>
 
-      {/* Full Screen Scanner Views */}
-      {scanMode !== "none" && (
+      {/* Full Screen Scanner Views (Murni TextScanner SKU 8 Digit) */}
+      {isScanning && (
         <div className="fixed inset-0 z-[100] bg-black flex flex-col animate-in fade-in zoom-in-95 duration-300">
           <div className="flex justify-between items-center p-4 bg-slate-900 text-white shadow-md z-10">
-            <h3 className="font-bold">{scanMode === "barcode" ? "Scan Barcode" : "Scan Teks (SKU)"}</h3>
-            <button onClick={() => setScanMode("none")} className="p-2 bg-slate-800 rounded-full hover:bg-slate-700 transition-colors">
+            <div className="flex items-center gap-2">
+              <ScanText className="w-5 h-5 text-indigo-400" />
+              <h3 className="font-bold">Scan Teks (SKU 8 Digit)</h3>
+            </div>
+            <button onClick={() => setIsScanning(false)} className="p-2 bg-slate-800 rounded-full hover:bg-slate-700 transition-colors">
               <X className="w-6 h-6 text-white" />
             </button>
           </div>
           <div className="flex-1 relative overflow-hidden bg-black flex items-center justify-center">
-            {scanMode === "barcode" ? (
-               <div className="w-full h-full max-w-2xl mx-auto flex flex-col justify-center px-4">
-                  <Scanner onScanSuccess={handleBarcodeSuccess} />
-                  <p className="text-center text-sm font-bold text-slate-300 mt-6 absolute bottom-12 w-full left-0">Arahkan kamera ke barcode garis</p>
-               </div>
-            ) : (
-               <div className="w-full h-full max-w-2xl mx-auto flex flex-col justify-center px-4">
-                 <TextScanner onScanResult={handleTextScanSuccess} />
-               </div>
-            )}
+            <div className="w-full h-full max-w-2xl mx-auto flex flex-col justify-center px-4">
+              <TextScanner onScanResult={handleTextScanSuccess} />
+            </div>
           </div>
         </div>
       )}

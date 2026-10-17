@@ -68,7 +68,13 @@ Di file `src/components/Sidebar.tsx`:
 * `setIsOpen(false)` dipanggil segera setelah animasi tombol selesai.
 * Layar *loader* `"MENGAKHIRI SHIFT..."` dinaikkan ke level `z-[999]` dengan durasi animasi responsif (200ms) dan jeda transisi 700ms sebelum navigasi ke `/login`.
 
-| **7** | Scanner membeku (*freeze*) & lama respon setelah aplikasi di-minimize di HP | SA/Kiosk tidak bisa scan teks SKU saat HP dibuka kembali tanpa refresh | Implementasi *Visibility Lifecycle Manager* pada [TextScanner](file:///c:/Max%20Display/price-checker/src/components/TextScanner.tsx): (1) Matikan total loop saat minimize (0% CPU, zero battery drain), (2) Bangunkan kamera & OCR seketika saat tab visible (`scheduleNextFrame(50)`), (3) Buang frame basi dengan *timeout safeguard* 1200ms, (4) Cooldown 60s pada cek update kiosk. |
+### E. ATURAN MUTLAK SISTEM: Murni 100% TextScanner SKU (Tanpa Barcode Garis)
+* **Konteks Operasional Toko Fisik SUKO**: Label harga pakaian dan price tag di toko mengidentifikasi produk melalui **teks nomor SKU 8 digit** (contoh: `61356398`), bukan garis barcode.
+* **Status Barcode Scanner**: Barcode scanner (`Scanner.tsx` / `Html5Qrcode`) dan icon tombol barcode kamera (`Camera`) telah **DIHAPUS TOTAL** dari:
+  1. Halaman Publik Kiosk Cek Harga (`/cek-harga`).
+  2. Halaman Staf Toko SA (`/` - `src/app/page.tsx`).
+* **Pengalaman Staf SA**: Di bilah pencarian aplikasi SA kini hanya ada **1 tombol pemindai**: `ScanText` (`title="Scan SKU (OCR Teks 8 Digit)"`). Ketika ditekan, langsung membuka [TextScanner](file:///c:/Max%20Display/price-checker/src/components/TextScanner.tsx) layar penuh tanpa ada kebingungan memilih mode scan.
+* **Universal Fast Resume & Battery Safe**: Perbaikan *Visibility Lifecycle Manager* (bangun instan 50ms setelah minimize, 0% CPU saat layar mati, dan timeout frame basi 1.2s) berlaku seragam untuk aplikasi SA maupun Kiosk.
 
 ---
 
@@ -91,11 +97,18 @@ Di file `src/components/Sidebar.tsx`:
    * Menghapus tombol toggle/tab switcher mode agar tidak membingungkan pengunjung.
    * Memastikan Kiosk berjalan murni 100% menggunakan TextScanner (OCR teks SKU 8 digit).
 
-4. **Commit 4:** `fix(scanner): instant resume on mobile reopen with zero background battery drain`  
+4. **Commit 4:** `d2a5574`  
+   *`fix(scanner): instant resume on mobile reopen with zero background battery drain`*  
    * Penanganan event `visibilitychange` di TextScanner untuk auto-play video dan deteksi restart stream kamera jika dihentikan OS HP.
    * Timeout safeguard 1200ms via `Promise.race` agar frame basi saat minimize otomatis dibuang dan tidak menahan antrean OCR.
    * Loop scheduler resilient (anti-dead-loop) dengan heartbeat timer.
    * Cooldown 60 detik pada update check Kiosk saat tab aktif kembali untuk menghemat kuota & daya baterai.
+
+5. **Commit 5:** `fix(sa): remove barcode scanner and camera icon from SA app, unify 100% pure TextScanner`  
+   * Menghapus icon kamera barcode dari input search bar aplikasi SA (`src/app/page.tsx`).
+   * Menghapus komponen dynamic import `Scanner.tsx` barcode dari aplikasi SA.
+   * Menyatukan pengalaman pemindaian staf SA menjadi murni dedicated 1 tombol `ScanText` (SKU 8 Digit).
+   * Memastikan optimasi baterai dan instant wake-up aktif penuh untuk staf SA.
 
 ---
 
