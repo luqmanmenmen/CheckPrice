@@ -1,107 +1,141 @@
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
-async function syncImages() {
-  console.log("🚀 [Sync Images] Memulai penarikan galeri foto akurat per SKU & Warna dari Matahari.com...");
+async function fullSync() {
+  console.log("🚀 [Sync] Memulai penarikan 100% lengkap seluruh katalog SUKO dari Matahari...");
   const startTime = Date.now();
 
-  const res = await fetch("https://matahari.com/collections/hp-brand-suko/products.json?limit=250", {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-  });
+  const collections = [
+    'suko',
+    'hp-brand-suko',
+    'new-year-new-style-all-suko-mulai-dari-79rb',
+    'promo-tengah-bulan-best-of-suko',
+    '4-4-urban-look-suko-kids-diskon-sampai-50',
+    '4-4-urban-look-suko-women-pilihan-terbaik-mulai-dari-79rb'
+  ];
 
-  if (!res.ok) {
-    throw new Error(`Gagal fetch dari Matahari.com: ${res.status} ${res.statusText}`);
+  const productMap = new Map();
+
+  for (const col of collections) {
+    let p = 1;
+    while (true) {
+      try {
+        const res = await fetch(`https://matahari.com/collections/${col}/products.json?limit=250&page=${p}`, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+        });
+        if (!res.ok) break;
+        const d = await res.json();
+        if (!d.products || d.products.length === 0) break;
+        for (const prod of d.products) {
+          if (!productMap.has(prod.handle)) {
+            productMap.set(prod.handle, prod);
+          }
+        }
+        p++;
+      } catch (err) {
+        console.error(`Error fetching ${col} page ${p}:`, err.message);
+        break;
+      }
+    }
   }
 
-  const data = await res.json();
-  const products = data.products || [];
-  console.log(`📦 [Sync Images] Ditemukan ${products.length} artikel produk di Matahari.`);
+  console.log(`📦 [Sync] Berhasil menghimpun ${productMap.size} artikel produk unik SUKO.`);
 
   const skuImageRecords = [];
 
-  for (const p of products) {
-    const defaultImg = p.images && p.images.length > 0
-      ? (p.images[0].src.startsWith('//') ? `https:${p.images[0].src}` : p.images[0].src)
-      : null;
-
-    // 1. Kelompokkan varian per warna & kumpulkan kode photoshoot spesifik warna tersebut
-    const colorMap = {};
+  for (const p of productMap.values()) {
+    // 1. Petakan varian ke kelompok warna
+    const colorVariants = {}; // COLOR -> [skus]
     p.variants.forEach(v => {
       const color = (v.title.split('/')[0] || '').trim().toUpperCase();
-      if (!colorMap[color]) {
-        colorMap[color] = {
-          color,
-          codes: new Set(),
-          featuredImage: null,
-          images: []
-        };
-      }
-      if (v.sku) colorMap[color].codes.add(v.sku.trim());
-      if (v.featured_image && v.featured_image.src) {
-        const clean = v.featured_image.src.startsWith('//') ? `https:${v.featured_image.src}` : v.featured_image.src;
-        if (!colorMap[color].featuredImage) colorMap[color].featuredImage = clean;
-        const filename = clean.split('?')[0].split('/').pop();
-        const matches = filename.match(/\d{6,12}/g);
-        if (matches) matches.forEach(m => colorMap[color].codes.add(m));
-      }
+      if (!colorVariants[color]) colorVariants[color] = [];
+      if (v.sku) colorVariants[color].push(v.sku.trim());
     });
 
-    // 2. Cocokkan foto hanya ke warna yang sesuai (TANPA bocor ke warna lain)
+    // 2. Petakan foto ke warna berdasarkan kode photoshoot pada nama file foto
+    // Contoh: "61358252-1.jpg" -> kode "61358252", cari warna mana yang memiliki SKU ini.
+    const colorGalleries = {};
+    for (const color of Object.keys(colorVariants)) {
+      colorGalleries[color] = [];
+    }
+
     p.images.forEach(img => {
       const cleanSrc = img.src.startsWith('//') ? `https:${img.src}` : img.src;
       const filename = cleanSrc.split('?')[0].split('/').pop();
 
-      for (const [color, data] of Object.entries(colorMap)) {
-        const byVariantId = img.variant_ids && img.variant_ids.some(vid =>
-          p.variants.some(v => v.id === vid && (v.title.split('/')[0] || '').trim().toUpperCase() === color)
-        );
-        const byCode = Array.from(data.codes).some(code => filename.includes(code));
-
-        if (byVariantId || byCode) {
-          if (!data.images.includes(cleanSrc)) {
-            data.images.push(cleanSrc);
+      // Cari digit SKU 6-12 digit di nama file
+      const match = filename.match(/(\d{6,12})/);
+      if (match) {
+        const code = match[1];
+        for (const [color, skus] of Object.entries(colorVariants)) {
+          if (skus.includes(code)) {
+            if (!colorGalleries[color].includes(cleanSrc)) {
+              colorGalleries[color].push(cleanSrc);
+            }
+            break;
           }
         }
       }
     });
 
-    // 3. Bangun galeri per variant SKU
+    // Fallback: Jika ada warna yang tidak punya kode di filename, cek apakah ada featured_image dari varian
+    p.variants.forEach(v => {
+      const color = (v.title.split('/')[0] || '').trim().toUpperCase();
+      if (colorGalleries[color] && colorGalleries[color].length === 0 && v.featured_image?.src) {
+        const clean = v.featured_image.src.startsWith('//') ? `https:${v.featured_image.src}` : v.featured_image.src;
+        if (!colorGalleries[color].includes(clean)) {
+          colorGalleries[color].push(clean);
+        }
+      }
+    });
+
+    // 3. Bangun data per varian SKU
     for (const v of p.variants) {
       if (!v.sku) continue;
       const sku = v.sku.trim();
       const color = (v.title.split('/')[0] || '').trim().toUpperCase();
 
-      let primaryImg = v.featured_image
-        ? (v.featured_image.src.startsWith('//') ? `https:${v.featured_image.src}` : v.featured_image.src)
-        : colorMap[color]?.featuredImage;
+      let gallery = colorGalleries[color] || [];
 
-      let gallery = colorMap[color]?.images ? [...colorMap[color].images] : [];
+      // Sortir agar sudut -1, -2, -3, -4, -5 berurutan rapi
+      gallery = [...gallery].sort((a, b) => {
+        const getAngle = (url) => {
+          const fn = url.split('?')[0].split('/').pop();
+          const m = fn.match(/-(\d+)[._]/);
+          return m ? parseInt(m[1], 10) : 99;
+        };
+        return getAngle(a) - getAngle(b);
+      });
 
-      // Pastikan primaryImg berada di index 0
-      if (primaryImg) {
-        gallery = [primaryImg, ...gallery.filter(u => u !== primaryImg)];
-      } else if (gallery.length > 0) {
-        primaryImg = gallery[0];
-      } else if (defaultImg) {
-        primaryImg = defaultImg;
-        gallery = [defaultImg];
+      // Filter agar tiap sudut (1, 2, 3...) hanya muncul 1x (tidak duplikat)
+      const seenAngles = new Set();
+      const distinctGallery = [];
+      for (const u of gallery) {
+        const fn = u.split('?')[0].split('/').pop();
+        const m = fn.match(/-(\d+)[._]/);
+        const angleKey = m ? m[1] : u;
+        if (!seenAngles.has(angleKey)) {
+          seenAngles.add(angleKey);
+          distinctGallery.push(u);
+        }
       }
 
-      if (primaryImg && gallery.length > 0) {
+      const finalGallery = distinctGallery.length > 0 ? distinctGallery : gallery;
+      const primaryImg = finalGallery.length > 0 ? finalGallery[0] : null;
+
+      if (primaryImg && finalGallery.length > 0) {
         skuImageRecords.push({
           sku,
           imageUrl: primaryImg,
-          images: gallery
+          images: finalGallery
         });
       }
     }
   }
 
-  console.log(`🖼️ [Sync Images] Siap mengupdate ${skuImageRecords.length} SKU dengan galeri foto akurat per warna.`);
+  console.log(`🖼️ [Sync] Siap memperbarui ${skuImageRecords.length} SKU varian dengan galeri foto akurat per warna.`);
 
-  // Update ke PostgreSQL Supabase dalam chunk 200 row
+  // Update Supabase PostgreSQL dalam batch
   const chunkSize = 200;
   let totalUpdated = 0;
 
@@ -127,19 +161,29 @@ async function syncImages() {
     try {
       const affected = await prisma.$executeRawUnsafe(sql);
       totalUpdated += affected;
-      process.stdout.write(`⏳ Progres: ${totalUpdated} SKU terupdate (${Math.min(i + chunkSize, skuImageRecords.length)}/${skuImageRecords.length})...\r`);
+      process.stdout.write(`⏳ Progres DB: ${totalUpdated} SKU terupdate (${Math.min(i + chunkSize, skuImageRecords.length)}/${skuImageRecords.length})...\r`);
     } catch (err) {
       console.error(`\n❌ Error pada chunk ${i}:`, err.message);
     }
   }
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-  console.log(`\n✅ [Sync Images] SELESAI dalam ${duration} detik! Berhasil memperbarui ${totalUpdated} SKU dengan galeri foto akurat per warna.`);
+  console.log(`\n✅ [Sync] SELESAI dalam ${duration} detik! Berhasil memperbarui ${totalUpdated} SKU di PostgreSQL Supabase.`);
+
+  // Verifikasi khusus SKU 61358270
+  const verify = await prisma.product.findUnique({ where: { sku: '61358270' } });
+  console.log('\n🔍 Verifikasi SKU 61358270:', {
+    sku: verify?.sku,
+    color: verify?.color,
+    imageUrl: verify?.imageUrl,
+    imagesCount: verify?.images?.length,
+    images: verify?.images
+  });
 
   await prisma.$disconnect();
 }
 
-syncImages().catch(err => {
+fullSync().catch(err => {
   console.error("Fatal error:", err);
   prisma.$disconnect();
   process.exit(1);
