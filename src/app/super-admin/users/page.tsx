@@ -144,7 +144,7 @@ export default function UsersManagement() {
           <form onSubmit={handleAddUser} className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">NIK (Nomor Induk)</label>
-              <input type="text" required value={nik} onChange={e => setNik(e.target.value)} className="w-full p-2.5 rounded-lg border focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Contoh: 123456" />
+              <input type="text" inputMode="numeric" pattern="[0-9]*" required value={nik} onChange={e => setNik(e.target.value.replace(/\D/g, ''))} className="w-full p-2.5 rounded-lg border focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Contoh: 123456" />
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Nama Lengkap</label>

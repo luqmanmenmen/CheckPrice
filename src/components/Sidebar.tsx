@@ -171,9 +171,13 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
               <UserCircle2 className="w-5 h-5" />
             </div>
             <div className="leading-tight">
-              <h2 className="font-bold text-base">{activeUser?.name || "Menu Toko"}</h2>
+              <h2 className="font-bold text-base">
+                {activeUser?.name ? activeUser.name.replace(/\s*\(Developer\)/i, '').trim() : "Menu Toko"}
+              </h2>
               <p className="text-[11px] text-blue-200 font-medium">
-                {activeUser?.jobTitle || (activeUser?.role === 'SUPERVISOR' ? 'Supervisor' : 'Aplikasi Toko')}
+                {activeUser?.name?.toLowerCase().includes('developer')
+                  ? 'Developer'
+                  : (activeUser?.jobTitle || (activeUser?.role === 'SUPERVISOR' ? 'Supervisor' : 'Aplikasi Toko'))}
               </p>
             </div>
           </div>

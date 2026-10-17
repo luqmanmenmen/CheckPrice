@@ -283,11 +283,13 @@ export default function Login() {
             <label className="block text-sm font-medium text-gray-700 mb-1">NIK Karyawan</label>
             <input
               type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
               required
               className="w-full border border-gray-300 rounded-lg p-3 text-lg bg-white text-gray-900"
               placeholder="Contoh: 123456"
               value={nik}
-              onChange={(e) => setNik(e.target.value.toUpperCase())}
+              onChange={(e) => setNik(e.target.value.replace(/\D/g, ''))}
             />
             {checkingNik && <p className="text-xs text-blue-600 mt-1 animate-pulse">Memeriksa NIK...</p>}
           </div>
@@ -296,8 +298,13 @@ export default function Login() {
             <div className="animate-in slide-in-from-top-2 duration-300 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Nama Karyawan</label>
-                <div className="w-full border border-gray-300 rounded-lg p-3 text-lg bg-gray-50 text-gray-700 font-bold">
-                  {userName}
+                <div className="w-full border border-gray-300 rounded-lg p-3 bg-gray-50 text-gray-700 font-bold flex flex-col items-start gap-1">
+                  <span className="text-lg leading-tight">{userName.replace(/\s*\(Developer\)/i, '').trim()}</span>
+                  {userName.toLowerCase().includes('developer') && (
+                    <span className="text-xs font-bold text-indigo-600 bg-indigo-100/70 border border-indigo-200 px-2.5 py-0.5 rounded-md tracking-wide">
+                      Developer
+                    </span>
+                  )}
                 </div>
               </div>
               
