@@ -11,6 +11,7 @@ import useSWR from "swr";
 import { Bell } from "lucide-react";
 import Link from "next/link";
 import { ChipLoader } from "@/components/ChipLoader";
+import ProductImageSlider from "@/components/ProductImageSlider";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
@@ -36,6 +37,7 @@ type ProductData = {
   stok: number;
   promoFileName: string | null;
   imageUrl?: string | null;
+  images?: string[];
 };
 
 // Parse product info to get clean product name, color, and size
@@ -512,7 +514,8 @@ export default function Home() {
           size: localData.size || null,
           stok: localData.stok ?? 0,
           promoFileName: null,
-          imageUrl: localData.imageUrl || null
+          imageUrl: localData.imageUrl || null,
+          images: localData.images && localData.images.length > 0 ? localData.images : (localData.imageUrl ? [localData.imageUrl] : [])
         };
         setProduct(localProduct);
 
@@ -540,7 +543,8 @@ export default function Home() {
               size: s.size || null,
               stok: s.stok ?? 0,
               promoFileName: null,
-              imageUrl: s.imageUrl || null
+              imageUrl: s.imageUrl || null,
+              images: s.images && s.images.length > 0 ? s.images : (s.imageUrl ? [s.imageUrl] : [])
             }));
           }
         }
@@ -601,7 +605,8 @@ export default function Home() {
               acara: item.acara || null,
               stok: item.stok ?? 0,
               toDate: item.toDate || null,
-              imageUrl: item.imageUrl || null
+              imageUrl: item.imageUrl || null,
+              images: item.images && item.images.length > 0 ? item.images : (item.imageUrl ? [item.imageUrl] : [])
             }));
             db.products.bulkPut(items).catch(() => {});
           });
@@ -1263,19 +1268,15 @@ export default function Home() {
 
             <div className="p-5 flex flex-col gap-4">
 
-              {/* Product Header: Photo & Name */}
+              {/* Product Header: Photo Slider Gallery & Name */}
               <div className="flex gap-4 items-start">
-                {product.imageUrl && (
-                  <div className="w-20 h-28 sm:w-24 sm:h-32 rounded-xl overflow-hidden bg-slate-100 border border-slate-200/80 shrink-0 shadow-xs">
-                    <img
-                      src={product.imageUrl}
-                      alt={parsedInfo.name}
-                      loading="lazy"
-                      referrerPolicy="no-referrer"
-                      className="w-full h-full object-cover object-top"
-                    />
-                  </div>
-                )}
+                <div className="shrink-0">
+                  <ProductImageSlider
+                    images={product.images && product.images.length > 0 ? product.images : (product.imageUrl ? [product.imageUrl] : [])}
+                    alt={parsedInfo.name}
+                    className="w-24 h-32 sm:w-28 sm:h-36"
+                  />
+                </div>
                 <div className="flex-1 min-w-0">
                   <h2 className="text-xl font-bold text-slate-800 leading-snug">{parsedInfo.name}</h2>
                   <div className="flex flex-wrap gap-2 mt-2.5">

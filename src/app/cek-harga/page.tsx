@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { Tag, Sparkles, AlertCircle, Camera, RefreshCw, Zap, Gift, Percent } from "lucide-react";
 import { DetectedSku } from "@/components/TextScanner";
+import ProductImageSlider from "@/components/ProductImageSlider";
 
 // Engine TextScanner — scan teks SKU 8 digit
 const TextScanner = dynamic(() => import("@/components/TextScanner"), { ssr: false });
@@ -24,6 +25,7 @@ type ProductData = {
   size?: string | null;
   toDate?: string | null;
   imageUrl?: string | null;
+  images?: string[];
 };
 
 function formatRupiah(angka: number) {
@@ -121,9 +123,9 @@ export default function CekHargaPage() {
         const count = await db.products.count();
         const localSchema = typeof window !== "undefined" ? localStorage.getItem("suko_db_schema_version") : null;
 
-        // 1. Jika pertama kali buka atau skema belum v7:
+        // 1. Jika pertama kali buka atau skema belum v8:
         // Tampilkan loading sync cepat (~0.5 - 1 detik untuk unduh 180 KB)
-        if (count < 500 || localSchema !== "v7") {
+        if (count < 500 || localSchema !== "v8") {
           if (isMounted) setDbState("syncing");
           await syncOfflineDatabase((syncing, prog) => {
             if (isMounted && prog !== undefined) setSyncProgress(prog);
@@ -261,6 +263,7 @@ export default function CekHargaPage() {
           size: foundLocal.size || null,
           toDate: foundLocal.toDate || null,
           imageUrl: foundLocal.imageUrl || null,
+          images: foundLocal.images && foundLocal.images.length > 0 ? foundLocal.images : (foundLocal.imageUrl ? [foundLocal.imageUrl] : []),
         };
 
         playScanBeep();
@@ -544,18 +547,14 @@ export default function CekHargaPage() {
                       {product.brand || product.dept || "SUKO"}
                     </div>
 
-                    {/* Foto Produk HD Matahari Official */}
-                    {product.imageUrl && (
-                      <div className="relative w-36 h-44 sm:w-44 sm:h-52 mb-4 rounded-2xl overflow-hidden bg-slate-100 shadow-md border border-slate-200/80 group">
-                        <img
-                          src={product.imageUrl}
-                          alt={name}
-                          loading="lazy"
-                          referrerPolicy="no-referrer"
-                          className="w-full h-full object-cover object-top transition-transform duration-300 group-hover:scale-105"
-                        />
-                      </div>
-                    )}
+                    {/* Galeri Foto Multi-Slide Resmi Matahari */}
+                    <div className="mb-4 flex justify-center">
+                      <ProductImageSlider
+                        images={product.images && product.images.length > 0 ? product.images : (product.imageUrl ? [product.imageUrl] : [])}
+                        alt={name}
+                        className="w-40 h-52 sm:w-48 sm:h-64"
+                      />
+                    </div>
 
                     {/* Judul Produk: Murni Item Description (Artikel sudah dibersihkan) */}
                     <h1 className="text-xl sm:text-2xl md:text-3xl font-black text-slate-900 leading-snug mb-4 max-w-md">

@@ -2,7 +2,7 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
 async function syncImages() {
-  console.log("🚀 [Sync Images] Memulai penarikan foto resmi SUKO dari Matahari.com...");
+  console.log("🚀 [Sync Images] Memulai penarikan galeri multi-foto resmi SUKO dari Matahari.com...");
   const startTime = Date.now();
 
   const res = await fetch("https://matahari.com/collections/hp-brand-suko/products.json?limit=250", {
@@ -17,63 +17,142 @@ async function syncImages() {
 
   const data = await res.json();
   const products = data.products || [];
-  console.log(`📦 [Sync Images] Ditemukan ${products.length} artikel induk di Matahari.`);
+  console.log(`📦 [Sync Images] Ditemukan ${products.length} artikel produk di Matahari.`);
 
-  const skuImagePairs = [];
+  const skuImageRecords = [];
 
   for (const p of products) {
-    const defaultImg = p.images && p.images.length > 0 ? p.images[0].src : null;
+    const productImages = (p.images || []).map(img => {
+      const src = img.src.startsWith('//') ? `https:${img.src}` : img.src;
+      return { id: img.id, src, variant_ids: img.variant_ids || [] };
+    });
 
-    for (const v of p.variants) {
-      if (v.sku) {
-        const img = v.featured_image ? v.featured_image.src : defaultImg;
-        if (img) {
-          const cleanImg = img.startsWith('//') ? `https:${img}` : img;
-          skuImagePairs.push({
-            sku: v.sku.trim(),
-            imageUrl: cleanImg
-          });
+    const defaultImg = productImages.length > 0 ? productImages[0].src : null;
+
+    // Kelompokkan SKU berdasarkan warna
+    const variantSkusByColor = {};
+    p.variants.forEach(v => {
+      const color = (v.title.split('/')[0] || '').trim().toUpperCase();
+      if (!variantSkusByColor[color]) variantSkusByColor[color] = [];
+      if (v.sku) variantSkusByColor[color].push(v.sku.trim());
+    });
+
+    // Petakan gambar per warna
+    const colorImagesMap = {};
+    for (const color of Object.keys(variantSkusByColor)) {
+      colorImagesMap[color] = new Set();
+    }
+
+    // Masukkan featured_image masing-masing varian terlebih dahulu (prioritas utama)
+    p.variants.forEach(v => {
+      const color = (v.title.split('/')[0] || '').trim().toUpperCase();
+      if (v.featured_image && v.featured_image.src) {
+        const clean = v.featured_image.src.startsWith('//') ? `https:${v.featured_image.src}` : v.featured_image.src;
+        if (colorImagesMap[color]) colorImagesMap[color].add(clean);
+      }
+    });
+
+    // Cocokkan seluruh gambar produk ke warna yang relevan
+    productImages.forEach(img => {
+      let matchedAny = false;
+      for (const [color, skus] of Object.entries(variantSkusByColor)) {
+        const matchesSku = skus.some(s => img.src.includes(s));
+        const matchesVariantId = img.variant_ids.some(vid => p.variants.some(v => v.id === vid && (v.title.split('/')[0] || '').trim().toUpperCase() === color));
+        if (matchesSku || matchesVariantId) {
+          colorImagesMap[color].add(img.src);
+          matchedAny = true;
         }
+      }
+
+      // Gambar umum (lifestyle/tampak belakang tanpa spesifik varian ID) ditambahkan ke semua warna
+      if (!matchedAny && img.variant_ids.length === 0) {
+        for (const color of Object.keys(colorImagesMap)) {
+          colorImagesMap[color].add(img.src);
+        }
+      }
+    });
+
+    // Sekarang buat record per variant SKU
+    for (const v of p.variants) {
+      if (!v.sku) continue;
+      const sku = v.sku.trim();
+      const color = (v.title.split('/')[0] || '').trim().toUpperCase();
+
+      // Featured image spesifik varian
+      let primaryImg = v.featured_image ? v.featured_image.src : null;
+      if (primaryImg && primaryImg.startsWith('//')) primaryImg = `https:${primaryImg}`;
+
+      // Daftar galeri gambar warna ini
+      let gallery = Array.from(colorImagesMap[color] || []);
+
+      // Pastikan primaryImg berada di urutan pertama (index 0)
+      if (primaryImg) {
+        gallery = [primaryImg, ...gallery.filter(u => u !== primaryImg)];
+      } else if (gallery.length > 0) {
+        primaryImg = gallery[0];
+      } else if (defaultImg) {
+        primaryImg = defaultImg;
+        gallery = [defaultImg];
+      }
+
+      // Fallback jika masih kosong: gunakan semua gambar produk
+      if (gallery.length === 0 && productImages.length > 0) {
+        gallery = productImages.map(i => i.src);
+        primaryImg = gallery[0];
+      }
+
+      if (primaryImg && gallery.length > 0) {
+        skuImageRecords.push({
+          sku,
+          imageUrl: primaryImg,
+          images: gallery
+        });
       }
     }
   }
 
-  console.log(`🖼️ [Sync Images] Mengumpulkan ${skuImagePairs.length} foto spesifik SKU.`);
+  console.log(`🖼️ [Sync Images] Siap mengupdate ${skuImageRecords.length} SKU dengan galeri foto slide.`);
 
-  // Update menggunakan PostgreSQL UPDATE ... FROM VALUES (Super Cepat & 1 Koneksi!)
-  const chunkSize = 250;
+  // Update ke database dalam chunks 200 row
+  const chunkSize = 200;
   let totalUpdated = 0;
 
-  for (let i = 0; i < skuImagePairs.length; i += chunkSize) {
-    const chunk = skuImagePairs.slice(i, i + chunkSize);
+  for (let i = 0; i < skuImageRecords.length; i += chunkSize) {
+    const chunk = skuImageRecords.slice(i, i + chunkSize);
 
     const valuesList = chunk.map(c => {
       const safeSku = c.sku.replace(/'/g, "''");
-      const safeUrl = c.imageUrl.replace(/'/g, "''");
-      return `('${safeSku}', '${safeUrl}')`;
+      const safePrimary = c.imageUrl.replace(/'/g, "''");
+      const arraySql = `ARRAY[${c.images.map(img => `'${img.replace(/'/g, "''")}'`).join(', ')}]::text[]`;
+      return `('${safeSku}', '${safePrimary}', ${arraySql})`;
     }).join(", ");
 
     const sql = `
       UPDATE "Product" AS p
       SET "imageUrl" = c.img,
+          "images" = c.imgs,
           "updatedAt" = NOW()
-      FROM (VALUES ${valuesList}) AS c(sku, img)
-      WHERE p.sku = c.sku;
+      FROM (VALUES ${valuesList}) AS c(sku, img, imgs)
+      WHERE p.sku = c.sku
     `;
 
-    const count = await prisma.$executeRawUnsafe(sql);
-    totalUpdated += count;
-
-    console.log(`⚡ [Sync Images] Chunk ${Math.floor(i / chunkSize) + 1} selesai: ${count} produk terupdate.`);
+    try {
+      const affected = await prisma.$executeRawUnsafe(sql);
+      totalUpdated += affected;
+      process.stdout.write(`⏳ Progres: ${totalUpdated} SKU terupdate (${Math.min(i + chunkSize, skuImageRecords.length)}/${skuImageRecords.length})...\r`);
+    } catch (err) {
+      console.error(`\n❌ Error pada chunk ${i}:`, err.message);
+    }
   }
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-  console.log(`\n🎉 [Sync Images] BERHASIL! Total ${totalUpdated} SKU di database toko kita kini memiliki foto resmi Matahari (Waktu: ${duration} detik).`);
+  console.log(`\n✅ [Sync Images] SELESAI dalam ${duration} detik! Berhasil mengupdate ${totalUpdated} SKU dengan galeri multi-foto slide.`);
+
+  await prisma.$disconnect();
 }
 
-syncImages()
-  .catch(err => {
-    console.error("❌ [Sync Images] Error:", err);
-    process.exit(1);
-  })
-  .finally(() => prisma.$disconnect());
+syncImages().catch(err => {
+  console.error("Fatal error:", err);
+  prisma.$disconnect();
+  process.exit(1);
+});

@@ -116,12 +116,23 @@ Di file `src/components/Sidebar.tsx`:
    * Input NIK di halaman login (`/login`) dan admin user management (`/super-admin/users`) dikhususkan untuk keyboard numerik mobile (`inputMode="numeric"`, `pattern="[0-9]*"`, dan auto-strip karakter non-angka).
    * Badge "Developer" dipindahkan ke bawah nama "Luqman Arif" di halaman login, sidebar menu, dan super-admin.
 
-7. **Commit 7:** `feat(products): sync official Matahari images and display in Kiosk and SA apps`  
+7. **Commit 7:** `092705f`  
+   *`feat(products): sync official Matahari images and display in Kiosk and SA apps`*  
    * Penambahan kolom `imageUrl String?` pada model `Product` di Prisma schema & migrasi live Supabase.
-   * Sinkronisasi 2.551 foto produk HD resmi SUKO dari Shopify Matahari (`https://matahari.com/collections/hp-brand-suko/products.json?limit=250`).
-   * Sesuai arahan: 4 SKU yang belum ada di database fisik tidak ditambahkan dummy-nya; akan masuk natural saat update PQ dan promo baru.
-   * Pembaruan Dexie IndexedDB offline database ke skema `v7` dengan kolom `imageUrl`.
-   * Tampilan foto produk premium di Kiosk (`/cek-harga`), Sales Assistant (`/`), daftar pilihan pencarian, dan halaman Barang Baru (`/barang-baru`).
+   * Sinkronisasi 2.551 foto produk HD resmi SUKO dari Shopify Matahari.
+   * Pembaruan Dexie IndexedDB offline database ke skema `v7`.
+
+8. **Commit 8:** `feat(gallery): slideable multi-angle image gallery with touch swipe and full-screen zoom`  
+   * Penambahan kolom array `images String[] @default([])` pada model `Product` Prisma & PostgreSQL live Supabase.
+   * Ekstraksi dan pengelompokan seluruh foto sudut pandang varian (tampak depan warna terkait, tampak samping, belakang, close-up tekstur, dan pose model) dari Shopify Matahari.
+   * Berhasil memperbarui 2.551 SKU (96.9% memiliki 3-6 foto per SKU).
+   * Pembuatan komponen responsif [`ProductImageSlider.tsx`](file:///c:/Max%20Display/price-checker/src/components/ProductImageSlider.tsx) lengkap dengan:
+     - Gestur **touch swipe** halus ke kiri/kanan di layar sentuh HP.
+     - Tombol navigasi panah kiri/kanan ber-efek *glassmorphism*.
+     - Indikator titik (*dots*) dan *counter badge* (contoh: `1 / 5`).
+     - Mode *lightbox zoom full-screen* saat foto diketuk untuk melihat detail jahitan & bahan.
+   * Integrasi komponen slider ke Kiosk Cek Harga (`/cek-harga`) dan Sales Assistant (`/`).
+   * Peningkatan skema offline Dexie ke `v8` agar seluruh galeri tersimpan di cache lokal HP.
 
 ---
 

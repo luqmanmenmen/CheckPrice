@@ -28,6 +28,7 @@ model Product {
   color         String?
   size          String?
   imageUrl      String?  // URL foto model resmi produk dari Matahari CDN
+  images        String[] @default([]) // Daftar seluruh foto varian (depan, samping, belakang, detail tekstur)
   lastPurchaseDate String?
   stok          Int      @default(0)   // EOH_UNIT — stok saat ini (unit)
   eoh_retail    Float    @default(0)   // EOH_RETAIL — nilai stok saat ini (Rp)

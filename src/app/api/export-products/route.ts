@@ -25,6 +25,7 @@ export async function GET() {
         stok: true,
         toDate: true,
         imageUrl: true,
+        images: true,
       },
     });
 
@@ -80,6 +81,7 @@ export async function GET() {
         stok: p.stok || 0,
         toDate: p.toDate || null,
         imageUrl: p.imageUrl || null,
+        images: p.images && p.images.length > 0 ? p.images : (p.imageUrl ? [p.imageUrl] : []),
       };
     });
 
