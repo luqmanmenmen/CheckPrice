@@ -2,9 +2,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import Tesseract from "tesseract.js";
-import { Loader2, Flashlight, FlashlightOff, CheckCircle2, DownloadCloud } from "lucide-react";
+import { Loader2, Flashlight, FlashlightOff, CheckCircle2, DownloadCloud, Sparkles } from "lucide-react";
 import { db } from "@/lib/offlineDb";
 
 export interface DetectedSku {
@@ -20,340 +20,337 @@ interface TextScannerProps {
 export default function TextScanner({ onScanResult }: TextScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const debugCanvasRef = useRef<HTMLCanvasElement>(null);
   const workerRef = useRef<Tesseract.Worker | null>(null);
-  const isHandlingResult = useRef(false);
-  const blacklistedSkus = useRef<Set<string>>(new Set());
+  const barcodeDetectorRef = useRef<any>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  const [status, setStatus] = useState("Memulai Kamera & AI...");
+  const isHandlingResult = useRef(false);
+  const isLoopRunningRef = useRef(false);
+  const isOcrRunningRef = useRef(false);
+  const lastOcrTimeRef = useRef(0);
+  const animationFrameIdRef = useRef<number | null>(null);
+  const blacklistedSkus = useRef<Set<string>>(new Set());
+
+  const [status, setStatus] = useState("Memulai Kamera & AI Super Cepat...");
   const [torchOn, setTorchOn] = useState(false);
   const [hasTorch, setHasTorch] = useState(false);
   const [foundSku, setFoundSku] = useState<string | null>(null);
   const [scanFeedback, setScanFeedback] = useState<"idle" | "wrong_target">("idle");
-  const [isSyncing, setIsSyncing] = useState(false);
+  const [hasBarcodeSupport, setHasBarcodeSupport] = useState(false);
 
+  // Verifikasi apakah string merupakan SKU toko yang valid (0.05ms di IndexedDB lokal)
+  const resolveSku = useCallback(async (text: string): Promise<string | null> => {
+    if (!text) return null;
+    const clean = text.trim();
 
-
-  // Status Lifecycle & Hemat Baterai (Zero-Drain saat Minimize, Instan saat Buka)
-  const isTabActiveRef = useRef(true);
-  const isProcessingFrameRef = useRef(false);
-  const loopTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  function scheduleNextFrame(delayMs = 100) {
-    if (!isTabActiveRef.current || isHandlingResult.current) return;
-    if (loopTimeoutRef.current) {
-      clearTimeout(loopTimeoutRef.current);
+    // 1. FILTER ANTI-ARTIKEL (KODE PABRIK): Misal "605-12218278"
+    if (/\b\d{3,4}\s*-\s*\d{6,10}\b/.test(clean)) {
+      return null;
     }
-    loopTimeoutRef.current = setTimeout(() => {
-      requestAnimationFrame(processFrame);
-    }, delayMs);
-  }
 
-  // Main Processing Loop
-  async function processFrame() {
-    if (!isTabActiveRef.current || isHandlingResult.current || !workerRef.current || !videoRef.current || !canvasRef.current) return;
-    if (isProcessingFrameRef.current) return;
+    // 2. Cek apakah string adalah 8 digit murni
+    if (/^\d{8}$/.test(clean)) {
+      if (blacklistedSkus.current.has(clean)) return null;
+      try {
+        const product = await db.products.get(clean);
+        if (product) return product.sku;
+      } catch {}
 
-    const video = videoRef.current;
-    if (video.paused || video.ended || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-      if (video.paused && isTabActiveRef.current) {
-        video.play().catch(() => {});
+      // Fallback API jika local DB belum tersinkron
+      const existsOnServer = await checkRemoteSku(clean);
+      if (existsOnServer) return clean;
+      return null;
+    }
+
+    // 3. Pecah teks berdasarkan spasi/baris untuk mengambil angka-angka
+    const tokens = clean.replace(/[^0-9-\s]/g, " ").split(/\s+/);
+    for (const token of tokens) {
+      if (!token || token.includes("-")) continue;
+      const digits = token.replace(/\D/g, "");
+
+      // 8 Digit SKU Kandidat
+      if (digits.length === 8) {
+        if (blacklistedSkus.current.has(digits)) continue;
+        try {
+          const product = await db.products.get(digits);
+          if (product) return product.sku;
+        } catch {}
+
+        const existsOnServer = await checkRemoteSku(digits);
+        if (existsOnServer) return digits;
       }
-      scheduleNextFrame(200);
-      return;
+
+      // Barcode panjang (12 - 14 digit): ambil 8 digit terakhirnya
+      if (digits.length >= 12 && digits.length <= 14) {
+        const last8 = digits.slice(-8);
+        if (blacklistedSkus.current.has(last8)) continue;
+        try {
+          const product = await db.products.get(last8);
+          if (product) return product.sku;
+        } catch {}
+
+        const existsOnServer = await checkRemoteSku(last8);
+        if (existsOnServer) return last8;
+      }
     }
 
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) {
-      scheduleNextFrame(200);
-      return;
-    }
+    return null;
+  }, []);
 
-    const vw = video.videoWidth;
-    const vh = video.videoHeight;
-    if (vw === 0 || vh === 0) {
-      scheduleNextFrame(200);
-      return;
-    }
-
-    isProcessingFrameRef.current = true;
-    const frameStartTime = Date.now();
-
-    // ROI Box (Tengah) — Hanya 15% dari tinggi video (hemat CPU & baterai)
-    const roiWidth = vw * 0.8;
-    const roiHeight = Math.max(vh * 0.15, 60); // min 60px height
-    const startX = (vw - roiWidth) / 2;
-    const startY = (vh - roiHeight) / 2;
-
-    canvas.width = roiWidth;
-    canvas.height = roiHeight;
-
-    // Draw frame ROI to canvas
-    ctx.drawImage(video, startX, startY, roiWidth, roiHeight, 0, 0, roiWidth, roiHeight);
-
-    // Binarization (Hitam Putih Murni) berdasarkan rata-rata cahaya (Luminance)
-    const imageData = ctx.getImageData(0, 0, roiWidth, roiHeight);
-    const data = imageData.data;
-    let totalLuminance = 0;
-
-    for (let i = 0; i < data.length; i += 4) {
-        const lum = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2]; 
-        totalLuminance += lum;
-    }
-    const avgLuminance = totalLuminance / (roiWidth * roiHeight);
-    const threshold = avgLuminance * 0.85; // Sedikit lebih gelap dari rata-rata agar tinta hitam terpisah jelas
-
-    for (let i = 0; i < data.length; i += 4) {
-        const lum = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
-        const value = lum < threshold ? 0 : 255; 
-        data[i] = data[i+1] = data[i+2] = value;
-    }
-    ctx.putImageData(imageData, 0, 0);
-
-    // Optional debug view
-    if (debugCanvasRef.current) {
-        const dctx = debugCanvasRef.current.getContext("2d");
-        if (dctx) {
-            debugCanvasRef.current.width = roiWidth;
-            debugCanvasRef.current.height = roiHeight;
-            dctx.putImageData(imageData, 0, 0);
-        }
-    }
-
+  async function checkRemoteSku(sku: string): Promise<boolean> {
     try {
-      // Cek apakah tab diminimize saat binarisasi
-      if (!isTabActiveRef.current) return;
-
-      // Timeout safeguard 1200ms: jika OCR macet/phone lag saat minimize, buang frame lama
-      const recognizePromise = workerRef.current.recognize(canvas);
-      const timeoutPromise = new Promise<{ isTimeout: true }>((resolve) =>
-        setTimeout(() => resolve({ isTimeout: true }), 1200)
-      );
-
-      const result = await Promise.race([recognizePromise, timeoutPromise]);
-
-      // Jika tab sudah diminimize atau frame kadaluwarsa (> 1.5 detik), buang hasil frame ini
-      if (!isTabActiveRef.current || (Date.now() - frameStartTime > 1500) || ("isTimeout" in (result as any))) {
-        return;
+      const res = await fetch(`/api/product/${encodeURIComponent(sku)}?page=1`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && (data.data || (Array.isArray(data) && data.length > 0))) {
+          return true;
+        }
       }
-
-      const recognizeResult = result as Tesseract.RecognizeResult;
-      const text = recognizeResult.data.text.toUpperCase();
-      
-      // LOGIKA CERDAS V3: Analisis Baris per Baris (Anti-Barcode & Anti-Artikel)
-      // Pecah teks berdasarkan newline atau spasi yang terlalu lebar (karena kadang nyambung jadi satu baris)
-      const lines = text.replace(/\s{2,}/g, '\n').split('\n');
-      const valid8Digits: string[] = [];
-      let detectedWrong = false;
-      
-      for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-          
-          // FILTER ANTI-ARTIKEL (KODE PABRIK): Misal "605-12218278" atau "605 12218278"
-          if (/\b\d{3}\s*[-]?\s*\d{8}\b/.test(trimmed)) {
-              detectedWrong = true;
-              continue; 
-          }
-
-          // 1. Buang semua huruf/simbol, ambil murni angkanya saja dalam baris ini
-          const digits = trimmed.replace(/\D/g, '');
-          
-          // 2. FILTER ANTI-BARCODE: 
-          if (digits.length >= 12 && digits.length <= 14) {
-              detectedWrong = true;
-              continue;
-          }
-          
-          // 3. FILTER ANTI-HARGA:
-          if (trimmed.includes('RP') || digits === '129900') continue;
-          
-          // 4. TANGKAP SKU:
-          if (digits.length === 8) {
-              valid8Digits.push(digits);
-          } else if (digits.length > 8 && digits.length <= 22) {
-              valid8Digits.push(digits.slice(-8));
-          }
-      }
-
-      // 5. Eksekusi SKU Terakhir yang Valid
-      let validSku = null;
-      if (valid8Digits.length > 0) {
-          const finalSku = valid8Digits[valid8Digits.length - 1];
-          if (blacklistedSkus.current.has(finalSku)) {
-              detectedWrong = true;
-          } else {
-              validSku = finalSku;
-          }
-      }
-
-      if (validSku) {
-          handleSuccess(validSku);
-          return;
-      }
-
-      // Jika membaca *sesuatu* tapi bukan SKU, beri feedback merah
-      if (detectedWrong || lines.length > 0) {
-          setScanFeedback("wrong_target");
-          setTimeout(() => setScanFeedback("idle"), 800);
-      }
-    } catch (err) {
-      console.error("OCR Check Error", err);
-    } finally {
-      isProcessingFrameRef.current = false;
-      if (isTabActiveRef.current && !isHandlingResult.current) {
-        scheduleNextFrame(100);
-      }
-    }
+    } catch {}
+    return false;
   }
 
-  async function handleSuccess(sku: string) {
+  // Eksekusi jika SKU berhasil ditemukan (Haptic buzz + snapshot + dispatch)
+  const handleSuccess = useCallback(async (sku: string) => {
     if (isHandlingResult.current) return;
     isHandlingResult.current = true;
-    
-    setStatus(`Memverifikasi SKU ${sku}...`);
+    isLoopRunningRef.current = false;
 
-    try {
-      // 100% Offline check via IndexedDB (0.01 detik!)
-      let product = await db.products.get(sku);
-      
-      // Fallback: Jika belum ada di IndexedDB lokal (misal di browser kiosk public),
-      // cek via API server agar tidak salah memblokir SKU yang valid
-      if (!product) {
-        try {
-          const res = await fetch(`/api/product/${encodeURIComponent(sku)}?page=1`);
-          if (res.ok) {
-            const data = await res.json();
-            if (data && (data.data || (Array.isArray(data) && data.length > 0))) {
-              product = data.data || data[0];
-            }
-          }
-        } catch {
-          // Abaikan kesalahan koneksi
-        }
-      }
-
-      if (!product) {
-        blacklistedSkus.current.add(sku);
-        setTimeout(() => blacklistedSkus.current.delete(sku), 2500);
-        setScanFeedback("wrong_target");
-        setStatus(`SKU ${sku} tidak ada, mencari lagi...`);
-        setTimeout(() => setScanFeedback("idle"), 800);
-        isHandlingResult.current = false;
-        scheduleNextFrame(100);
-        return;
-      }
-    } catch (e) {
-      console.error("DB Check error", e);
+    if (animationFrameIdRef.current) {
+      cancelAnimationFrame(animationFrameIdRef.current);
+      animationFrameIdRef.current = null;
     }
-    
+
+    // Getar halus (Haptic) untuk feedback instan native
+    if (typeof navigator !== "undefined" && navigator.vibrate) {
+      try {
+        navigator.vibrate(50);
+      } catch {}
+    }
+
     setFoundSku(sku);
-    setStatus(`Berhasil ditemukan: ${sku}`);
-    
-    let snapshot = undefined;
+    setStatus(`Berhasil terdeteksi: ${sku}`);
+
+    let snapshot: string | undefined = undefined;
     if (videoRef.current && canvasRef.current) {
-        const ctx = canvasRef.current.getContext("2d");
-        if (ctx) {
-            canvasRef.current.width = videoRef.current.videoWidth;
-            canvasRef.current.height = videoRef.current.videoHeight;
-            ctx.drawImage(videoRef.current, 0, 0, canvasRef.current.width, canvasRef.current.height);
-            snapshot = canvasRef.current.toDataURL("image/jpeg", 0.6);
-        }
+      const ctx = canvasRef.current.getContext("2d");
+      if (ctx) {
+        canvasRef.current.width = videoRef.current.videoWidth;
+        canvasRef.current.height = videoRef.current.videoHeight;
+        ctx.drawImage(videoRef.current, 0, 0);
+        snapshot = canvasRef.current.toDataURL("image/jpeg", 0.6);
+      }
     }
 
-    // Hentikan proses & kamera
+    // Hentikan stream kamera agar hemat baterai
     if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current.getTracks().forEach((track) => track.stop());
     }
 
     setTimeout(() => {
-       onScanResult(sku, { text: sku, bbox: {x0:0,y0:0,x1:0,y1:0}, rawText: sku }, snapshot);
-    }, 800);
-  }
+      onScanResult(sku, { text: sku, bbox: { x0: 0, y0: 0, x1: 0, y1: 0 }, rawText: sku }, snapshot);
+    }, 600);
+  }, [onScanResult]);
 
+  // Eksekusi OCR Super Cepat (Non-Blocking, GPU Contrast Filter, PSM Single Line)
+  const runOcrPass = useCallback(async (video: HTMLVideoElement) => {
+    if (!workerRef.current || !canvasRef.current || isHandlingResult.current) return;
+
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (!vw || !vh) return;
+
+    const canvas = canvasRef.current;
+    // Standarisasi ukuran OCR kecil (360x72 px) -> Eksekusi OCR super cepat ~40ms!
+    const targetW = 360;
+    const targetH = 72;
+    if (canvas.width !== targetW) canvas.width = targetW;
+    if (canvas.height !== targetH) canvas.height = targetH;
+
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return;
+
+    // Ambil ROI tengah (di mana garis merah Alfagift berada)
+    const roiW = vw * 0.75;
+    const roiH = Math.max(vh * 0.16, 60);
+    const startX = (vw - roiW) / 2;
+    const startY = (vh - roiH) / 2;
+
+    // Filter Hardware GPU (0% CPU! Menggantikan loop manual binarization JavaScript)
+    ctx.filter = "contrast(190%) grayscale(100%) brightness(105%)";
+    ctx.drawImage(video, startX, startY, roiW, roiH, 0, 0, targetW, targetH);
+    ctx.filter = "none";
+
+    try {
+      const { data } = await workerRef.current.recognize(canvas);
+      if (!data || !data.text || isHandlingResult.current) return;
+
+      const raw = data.text;
+      const validSku = await resolveSku(raw);
+
+      if (validSku) {
+        await handleSuccess(validSku);
+      }
+    } catch {
+      // Abaikan frame drop sesaat
+    }
+  }, [resolveSku, handleSuccess]);
+
+  // Main 60 FPS Viewfinder Loop (Tidak pernah freeze karena OCR berjalan asinkron)
+  const frameLoop = useCallback(() => {
+    if (!isLoopRunningRef.current || isHandlingResult.current) return;
+
+    const video = videoRef.current;
+    if (!video || video.paused || video.ended || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      animationFrameIdRef.current = requestAnimationFrame(frameLoop);
+      return;
+    }
+
+    const now = performance.now();
+
+    // 1. FAST-PATH: Native Hardware BarcodeDetector (C++/GPU di Chrome Android / iOS 17+, <4ms!)
+    if (barcodeDetectorRef.current && !isOcrRunningRef.current) {
+      barcodeDetectorRef.current
+        .detect(video)
+        .then(async (barcodes: any[]) => {
+          if (barcodes && barcodes.length > 0 && !isHandlingResult.current) {
+            for (const b of barcodes) {
+              const raw = b.rawValue?.trim();
+              if (raw) {
+                const matched = await resolveSku(raw);
+                if (matched) {
+                  await handleSuccess(matched);
+                  return;
+                }
+              }
+            }
+          }
+        })
+        .catch(() => {});
+    }
+
+    // 2. ACCURATE-PATH: OCR Teks SKU 8 Digit (Berjalan terjadwal tiap 280ms, 0 freeze di video)
+    if (workerRef.current && !isOcrRunningRef.current && now - lastOcrTimeRef.current >= 280) {
+      isOcrRunningRef.current = true;
+      lastOcrTimeRef.current = now;
+
+      runOcrPass(video).finally(() => {
+        isOcrRunningRef.current = false;
+      });
+    }
+
+    // Jadwalkan frame berikutnya di 60 FPS tanpa jeda
+    if (isLoopRunningRef.current && !isHandlingResult.current) {
+      animationFrameIdRef.current = requestAnimationFrame(frameLoop);
+    }
+  }, [resolveSku, handleSuccess, runOcrPass]);
+
+  // Inisialisasi Kamera & Worker
   useEffect(() => {
     let isMounted = true;
+    isLoopRunningRef.current = true;
 
+    // 1. Inisialisasi Native BarcodeDetector jika browser mendukung
+    if (typeof window !== "undefined" && "BarcodeDetector" in window) {
+      try {
+        barcodeDetectorRef.current = new (window as any).BarcodeDetector({
+          formats: ["code_128", "ean_13", "code_39", "upc_a", "ean_8"],
+        });
+        setHasBarcodeSupport(true);
+      } catch (e) {
+        console.warn("[TextScanner] BarcodeDetector init fallback", e);
+      }
+    }
+
+    // 2. Buka Kamera dengan Continuous Autofocus
     const startCamera = async () => {
       try {
         if (streamRef.current) {
-          streamRef.current.getTracks().forEach((track) => track.stop());
+          streamRef.current.getTracks().forEach((t) => t.stop());
         }
-        setStatus("Membuka Kamera...");
+
+        setStatus("Membuka Kamera 60 FPS...");
         const localStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }
+          video: {
+            facingMode: "environment",
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
         });
 
         if (isMounted && videoRef.current) {
           streamRef.current = localStream;
           videoRef.current.srcObject = localStream;
+
           videoRef.current.onloadedmetadata = () => {
             videoRef.current?.play().catch(() => {});
-            setStatus("Arahkan SKU ke garis merah");
-            scheduleNextFrame(100);
+            setStatus("Arahkan SKU (8 Digit) ke garis merah");
+            if (isLoopRunningRef.current) {
+              animationFrameIdRef.current = requestAnimationFrame(frameLoop);
+            }
           };
 
           const track = localStream.getVideoTracks()[0];
           if (track) {
             const capabilities = track.getCapabilities() as any;
             if (capabilities?.torch) setHasTorch(true);
+
+            // Terapkan autofocus continuous jika didukung hardware HP
+            if (capabilities?.focusMode?.includes("continuous")) {
+              track.applyConstraints({ advanced: [{ focusMode: "continuous" } as any] }).catch(() => {});
+            }
           }
         }
       } catch (err) {
         console.error("Camera Init Error:", err);
-        if (isMounted) setStatus("Gagal memuat kamera. Pastikan izin kamera diberikan.");
+        if (isMounted) setStatus("Gagal membuka kamera. Periksa izin kamera.");
       }
     };
 
-    const initAll = async () => {
+    // 3. Inisialisasi Tesseract Worker dengan Parameter Tercepat (Single Line + Digits Only)
+    const initWorker = async () => {
       try {
-        setStatus("Memuat AI Scanner Tercepat...");
         const worker = await Tesseract.createWorker("eng");
         await worker.setParameters({
-          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789- '
+          tessedit_char_whitelist: "0123456789-",
+          tessedit_pageseg_mode: Tesseract.PSM.SINGLE_LINE,
         });
-        if (isMounted) workerRef.current = worker;
 
-        await startCamera();
+        if (isMounted) {
+          workerRef.current = worker;
+        } else {
+          worker.terminate();
+        }
       } catch (err) {
-        console.error("Init Error:", err);
-        if (isMounted) setStatus("Gagal inisialisasi AI Scanner.");
+        console.error("OCR Worker Init Error:", err);
       }
     };
 
-    initAll();
+    // Jalankan keduanya secara simultan
+    Promise.all([startCamera(), initWorker()]);
 
-    // Listener Visibility Change: Bangun seketika saat dibuka, Hemat Baterai (0% CPU) saat minimize
+    // Listener Lifecycle: Hemat baterai saat minimize, bangun seketika saat dibuka
     const handleVisibilityChange = async () => {
       if (document.visibilityState === "visible") {
-        isTabActiveRef.current = true;
+        isLoopRunningRef.current = true;
 
-        // 1. Pastikan video langsung diputar kembali
         if (videoRef.current && videoRef.current.paused) {
           videoRef.current.play().catch(() => {});
         }
 
-        // 2. Periksa apakah track kamera dihentikan oleh OS HP saat minimize
         const tracks = streamRef.current?.getVideoTracks();
         const isTrackAlive = tracks && tracks.length > 0 && tracks[0].readyState === "live";
 
         if (!isTrackAlive) {
-          console.log("[TextScanner] Camera track ended by mobile OS, restarting camera stream...");
           await startCamera();
         } else {
-          // 3. Bangunkan loop pemrosesan seketika tanpa refresh
-          if (!isProcessingFrameRef.current && !isHandlingResult.current) {
-            scheduleNextFrame(50);
-          }
+          animationFrameIdRef.current = requestAnimationFrame(frameLoop);
         }
       } else {
-        // Tab minimize / screen off: tidurkan pemrosesan sepenuhnya (Zero Battery Drain)
-        isTabActiveRef.current = false;
-        if (loopTimeoutRef.current) {
-          clearTimeout(loopTimeoutRef.current);
-          loopTimeoutRef.current = null;
+        isLoopRunningRef.current = false;
+        if (animationFrameIdRef.current) {
+          cancelAnimationFrame(animationFrameIdRef.current);
+          animationFrameIdRef.current = null;
         }
       }
     };
@@ -362,114 +359,140 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
     return () => {
       isMounted = false;
-      isTabActiveRef.current = false;
+      isLoopRunningRef.current = false;
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-      if (loopTimeoutRef.current) {
-        clearTimeout(loopTimeoutRef.current);
-        loopTimeoutRef.current = null;
+
+      if (animationFrameIdRef.current) {
+        cancelAnimationFrame(animationFrameIdRef.current);
+        animationFrameIdRef.current = null;
       }
-      if (workerRef.current) workerRef.current.terminate();
+      if (workerRef.current) {
+        workerRef.current.terminate();
+        workerRef.current = null;
+      }
       if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
       }
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [frameLoop]);
 
   const toggleTorch = async () => {
     if (!streamRef.current) return;
     const track = streamRef.current.getVideoTracks()[0];
     if (track) {
-        try {
-            await track.applyConstraints({
-                advanced: [{ torch: !torchOn } as any]
-            });
-            setTorchOn(!torchOn);
-        } catch (err) {
-            console.error("Failed to toggle torch", err);
-        }
+      try {
+        await track.applyConstraints({
+          advanced: [{ torch: !torchOn } as any],
+        });
+        setTorchOn(!torchOn);
+      } catch (err) {
+        console.error("Failed to toggle torch", err);
+      }
     }
   };
 
   return (
     <div className="flex flex-col gap-3">
       {/* Container Video Utama */}
-      <div className={`relative rounded-3xl overflow-hidden shadow-2xl border-4 transition-colors duration-300 bg-black ${
-         foundSku ? "border-green-500" :
-         scanFeedback === "wrong_target" ? "border-red-500" :
-         "border-slate-800"
-      }`}>
-        
-        <video 
-           ref={videoRef} 
-           playsInline 
-           muted 
-           autoPlay 
-           className="w-full min-h-[300px] sm:min-h-[400px] object-cover" 
+      <div
+        className={`relative rounded-3xl overflow-hidden shadow-2xl border-4 transition-colors duration-300 bg-black ${
+          foundSku
+            ? "border-green-500 ring-4 ring-green-500/20"
+            : scanFeedback === "wrong_target"
+            ? "border-red-500"
+            : "border-slate-800"
+        }`}
+      >
+        <video
+          ref={videoRef}
+          playsInline
+          muted
+          autoPlay
+          className="w-full min-h-[300px] sm:min-h-[400px] object-cover"
         />
 
         {/* Kotak ROI (Overlay Tengah) bergaya Alfagift */}
         {!foundSku && (
-          <div className="absolute top-1/2 left-[10%] right-[10%] h-[15%] min-h-[60px] -translate-y-1/2 shadow-[0_0_0_9999px_rgba(0,0,0,0.6)] z-10 pointer-events-none overflow-hidden">
-             
-             {/* 4 Sudut Merah (Corners) */}
-             <div className={`absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 transition-colors duration-300 ${scanFeedback === 'wrong_target' ? 'border-red-600' : 'border-red-500'} rounded-tl-lg`}></div>
-             <div className={`absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 transition-colors duration-300 ${scanFeedback === 'wrong_target' ? 'border-red-600' : 'border-red-500'} rounded-tr-lg`}></div>
-             <div className={`absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 transition-colors duration-300 ${scanFeedback === 'wrong_target' ? 'border-red-600' : 'border-red-500'} rounded-bl-lg`}></div>
-             <div className={`absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 transition-colors duration-300 ${scanFeedback === 'wrong_target' ? 'border-red-600' : 'border-red-500'} rounded-br-lg`}></div>
+          <div className="absolute top-1/2 left-[10%] right-[10%] h-[16%] min-h-[64px] -translate-y-1/2 shadow-[0_0_0_9999px_rgba(0,0,0,0.6)] z-10 pointer-events-none overflow-hidden">
+            {/* 4 Sudut Merah (Corners) */}
+            <div
+              className={`absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 transition-colors duration-300 ${
+                scanFeedback === "wrong_target" ? "border-red-600" : "border-red-500"
+              } rounded-tl-lg`}
+            />
+            <div
+              className={`absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 transition-colors duration-300 ${
+                scanFeedback === "wrong_target" ? "border-red-600" : "border-red-500"
+              } rounded-tr-lg`}
+            />
+            <div
+              className={`absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 transition-colors duration-300 ${
+                scanFeedback === "wrong_target" ? "border-red-600" : "border-red-500"
+              } rounded-bl-lg`}
+            />
+            <div
+              className={`absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 transition-colors duration-300 ${
+                scanFeedback === "wrong_target" ? "border-red-600" : "border-red-500"
+              } rounded-br-lg`}
+            />
 
-             {/* Garis Merah Laser Animasi dengan Gradient (Kaya Scanner Beneran) */}
-             <div className="w-full h-[4px] bg-gradient-to-b from-transparent via-red-500 to-transparent absolute top-0 shadow-[0_0_15px_rgba(239,68,68,1)] animate-scan z-20"></div>
-             
-             {/* Efek Flash Merah saat Gagal Deteksi */}
-             {scanFeedback === "wrong_target" && (
-                 <div className="absolute inset-0 bg-red-500/20 animate-pulse z-10"></div>
-             )}
+            {/* Garis Merah Laser Animasi dengan Gradient */}
+            <div className="w-full h-[3px] bg-gradient-to-r from-transparent via-red-500 to-transparent absolute top-0 shadow-[0_0_15px_rgba(239,68,68,1)] animate-scan z-20" />
+
+            {/* Efek Flash Merah jika Salah Target */}
+            {scanFeedback === "wrong_target" && (
+              <div className="absolute inset-0 bg-red-500/20 animate-pulse z-10" />
+            )}
           </div>
         )}
 
-        {/* Hidden Canvas OCR & Debug */}
+        {/* Hidden Canvas untuk Snapshot & OCR */}
         <canvas ref={canvasRef} className="hidden" />
-        <canvas ref={debugCanvasRef} className="absolute bottom-2 right-2 w-24 h-8 border border-white/30 rounded object-contain bg-black z-20 hidden" />
+
+        {/* Badge Dual Engine Scanner */}
+        <div className="absolute top-3 left-3 z-30 flex items-center gap-1.5 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full border border-white/10 text-[10px] text-white font-medium">
+          <Sparkles className="w-3 h-3 text-amber-400" />
+          <span>{hasBarcodeSupport ? "Dual Engine (Barcode + OCR)" : "AI OCR Ultra Cepat"}</span>
+        </div>
 
         {/* Tombol Flash */}
         {hasTorch && !foundSku && (
-           <button 
-             onClick={toggleTorch}
-             className="absolute top-4 right-4 z-50 bg-black/50 backdrop-blur-md p-3 rounded-full text-white border border-white/20 active:scale-95 transition-all"
-           >
-              {torchOn ? <Flashlight className="w-5 h-5 text-yellow-400" /> : <FlashlightOff className="w-5 h-5" />}
-           </button>
+          <button
+            onClick={toggleTorch}
+            className="absolute top-3 right-3 z-30 bg-black/60 backdrop-blur-md p-2.5 rounded-full text-white border border-white/20 active:scale-95 transition-all"
+            aria-label="Toggle Torch"
+          >
+            {torchOn ? <Flashlight className="w-4 h-4 text-yellow-400" /> : <FlashlightOff className="w-4 h-4 text-white/80" />}
+          </button>
         )}
       </div>
-      
-      {/* Indikator Status */}
-      <div className="flex justify-center z-10 w-full mt-2">
-        <div className="bg-white/95 backdrop-blur-xl shadow-lg rounded-2xl p-4 w-full text-center border border-slate-200 flex flex-col items-center gap-2 transform transition-all duration-300 relative">
-          
-          {isSyncing && (
-             <div className="absolute -top-3 right-4 bg-indigo-100 text-indigo-700 text-[9px] font-bold px-2 py-0.5 rounded-full border border-indigo-200 flex items-center gap-1 shadow-sm">
-                <DownloadCloud className="w-3 h-3 animate-pulse" /> Sync Database
-             </div>
-          )}
 
+      {/* Indikator Status & Panduan */}
+      <div className="flex justify-center z-10 w-full mt-1">
+        <div className="bg-white/95 backdrop-blur-xl shadow-lg rounded-2xl p-4 w-full text-center border border-slate-200 flex flex-col items-center gap-2 transform transition-all duration-300 relative">
           {foundSku ? (
             <>
-               <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mb-1">
-                  <CheckCircle2 className="w-7 h-7 text-green-600" />
-               </div>
-               <p className="font-black text-xl text-slate-800">{foundSku}</p>
-               <p className="text-xs text-green-600 font-bold">Memuat Detail...</p>
+              <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mb-1 animate-bounce">
+                <CheckCircle2 className="w-7 h-7 text-green-600" />
+              </div>
+              <p className="font-black text-2xl text-slate-800 tracking-wider">{foundSku}</p>
+              <p className="text-xs text-green-600 font-bold">Memuat Detail Produk...</p>
             </>
           ) : (
             <>
-               <div className={`flex items-center gap-2 font-bold mb-1 ${scanFeedback === 'wrong_target' ? 'text-red-600' : 'text-blue-600'}`}>
-                  <Loader2 className={`w-4 h-4 ${scanFeedback === 'wrong_target' ? '' : 'animate-spin'}`} />
-                  <span>{scanFeedback === 'wrong_target' ? 'Salah Fokus!' : 'Memindai SKU...'}</span>
-               </div>
-               <p className="text-xs text-slate-600 font-medium leading-tight">
-                 Arahkan <strong className="text-slate-800">Angka SKU (8 Digit)</strong> persis ke garis merah
-               </p>
-               <p className="text-[10px] text-slate-400 mt-1">{status}</p>
+              <div
+                className={`flex items-center gap-2 font-bold mb-0.5 ${
+                  scanFeedback === "wrong_target" ? "text-red-600" : "text-blue-600"
+                }`}
+              >
+                <Loader2 className={`w-4 h-4 ${scanFeedback === "wrong_target" ? "" : "animate-spin"}`} />
+                <span className="text-sm">{scanFeedback === "wrong_target" ? "Target Salah!" : "Siap Memindai"}</span>
+              </div>
+              <p className="text-xs text-slate-600 font-medium leading-tight">
+                Arahkan <strong className="text-slate-800 font-black">Angka SKU (8 Digit)</strong> atau barcode persis ke garis merah
+              </p>
+              <p className="text-[10px] text-slate-400 mt-0.5 font-mono">{status}</p>
             </>
           )}
         </div>

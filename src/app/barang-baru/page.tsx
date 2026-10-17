@@ -12,20 +12,26 @@ function formatRupiah(angka: number) {
   }).format(angka);
 }
 
-// Enable ISR revalidation for this page
-export const revalidate = 60; // revalidate every 60 seconds at most, or on demand
+// Force dynamic rendering to prevent prerender database connection errors at build time
+export const dynamic = "force-dynamic";
+export const revalidate = 60;
 
 // Client component for accordion list
 import ClientBarangBaruList from './ClientBarangBaruList';
 
 export default async function BarangBaruPage() {
-  // Ambil 150 barang terbaru berdasarkan createdAt
-  const newItems = await prisma.product.findMany({
-    orderBy: {
-      createdAt: 'desc',
-    },
-    take: 150,
-  });
+  let newItems: any[] = [];
+  try {
+    // Ambil 150 barang terbaru berdasarkan createdAt
+    newItems = await prisma.product.findMany({
+      orderBy: {
+        createdAt: 'desc',
+      },
+      take: 150,
+    });
+  } catch (err) {
+    console.warn("Failed to fetch new items for barang-baru:", err);
+  }
 
   // Group by parsed description
   const groupedData: Record<string, any[]> = {};
