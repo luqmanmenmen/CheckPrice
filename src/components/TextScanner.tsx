@@ -35,21 +35,53 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
 
 
+  // Status Lifecycle & Hemat Baterai (Zero-Drain saat Minimize, Instan saat Buka)
+  const isTabActiveRef = useRef(true);
+  const isProcessingFrameRef = useRef(false);
+  const loopTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  function scheduleNextFrame(delayMs = 100) {
+    if (!isTabActiveRef.current || isHandlingResult.current) return;
+    if (loopTimeoutRef.current) {
+      clearTimeout(loopTimeoutRef.current);
+    }
+    loopTimeoutRef.current = setTimeout(() => {
+      requestAnimationFrame(processFrame);
+    }, delayMs);
+  }
+
   // Main Processing Loop
   async function processFrame() {
-    if (isHandlingResult.current || !workerRef.current || !videoRef.current || !canvasRef.current) return;
+    if (!isTabActiveRef.current || isHandlingResult.current || !workerRef.current || !videoRef.current || !canvasRef.current) return;
+    if (isProcessingFrameRef.current) return;
+
     const video = videoRef.current;
-    if (video.paused || video.ended || video.readyState !== video.HAVE_ENOUGH_DATA) return;
+    if (video.paused || video.ended || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      if (video.paused && isTabActiveRef.current) {
+        video.play().catch(() => {});
+      }
+      scheduleNextFrame(200);
+      return;
+    }
 
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return;
+    if (!ctx) {
+      scheduleNextFrame(200);
+      return;
+    }
 
-    // Ukuran Video aktual
     const vw = video.videoWidth;
     const vh = video.videoHeight;
-    
-    // ROI Box (Tengah)
+    if (vw === 0 || vh === 0) {
+      scheduleNextFrame(200);
+      return;
+    }
+
+    isProcessingFrameRef.current = true;
+    const frameStartTime = Date.now();
+
+    // ROI Box (Tengah) — Hanya 15% dari tinggi video (hemat CPU & baterai)
     const roiWidth = vw * 0.8;
     const roiHeight = Math.max(vh * 0.15, 60); // min 60px height
     const startX = (vw - roiWidth) / 2;
@@ -91,8 +123,24 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     }
 
     try {
-      const result = await workerRef.current.recognize(canvas);
-      const text = result.data.text.toUpperCase();
+      // Cek apakah tab diminimize saat binarisasi
+      if (!isTabActiveRef.current) return;
+
+      // Timeout safeguard 1200ms: jika OCR macet/phone lag saat minimize, buang frame lama
+      const recognizePromise = workerRef.current.recognize(canvas);
+      const timeoutPromise = new Promise<{ isTimeout: true }>((resolve) =>
+        setTimeout(() => resolve({ isTimeout: true }), 1200)
+      );
+
+      const result = await Promise.race([recognizePromise, timeoutPromise]);
+
+      // Jika tab sudah diminimize atau frame kadaluwarsa (> 1.5 detik), buang hasil frame ini
+      if (!isTabActiveRef.current || (Date.now() - frameStartTime > 1500) || ("isTimeout" in (result as any))) {
+        return;
+      }
+
+      const recognizeResult = result as Tesseract.RecognizeResult;
+      const text = recognizeResult.data.text.toUpperCase();
       
       // LOGIKA CERDAS V3: Analisis Baris per Baris (Anti-Barcode & Anti-Artikel)
       // Pecah teks berdasarkan newline atau spasi yang terlalu lebar (karena kadang nyambung jadi satu baris)
@@ -153,14 +201,12 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       }
     } catch (err) {
       console.error("OCR Check Error", err);
+    } finally {
+      isProcessingFrameRef.current = false;
+      if (isTabActiveRef.current && !isHandlingResult.current) {
+        scheduleNextFrame(100);
+      }
     }
-
-    // Continue loop
-    setTimeout(() => {
-        if (!isHandlingResult.current) {
-            requestAnimationFrame(processFrame);
-        }
-    }, 100);
   }
 
   async function handleSuccess(sku: string) {
@@ -196,7 +242,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
         setStatus(`SKU ${sku} tidak ada, mencari lagi...`);
         setTimeout(() => setScanFeedback("idle"), 800);
         isHandlingResult.current = false;
-        setTimeout(() => requestAnimationFrame(processFrame), 100);
+        scheduleNextFrame(100);
         return;
       }
     } catch (e) {
@@ -229,7 +275,37 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
   useEffect(() => {
     let isMounted = true;
-    let localStream: MediaStream | null = null;
+
+    const startCamera = async () => {
+      try {
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((track) => track.stop());
+        }
+        setStatus("Membuka Kamera...");
+        const localStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }
+        });
+
+        if (isMounted && videoRef.current) {
+          streamRef.current = localStream;
+          videoRef.current.srcObject = localStream;
+          videoRef.current.onloadedmetadata = () => {
+            videoRef.current?.play().catch(() => {});
+            setStatus("Arahkan SKU ke garis merah");
+            scheduleNextFrame(100);
+          };
+
+          const track = localStream.getVideoTracks()[0];
+          if (track) {
+            const capabilities = track.getCapabilities() as any;
+            if (capabilities?.torch) setHasTorch(true);
+          }
+        }
+      } catch (err) {
+        console.error("Camera Init Error:", err);
+        if (isMounted) setStatus("Gagal memuat kamera. Pastikan izin kamera diberikan.");
+      }
+    };
 
     const initAll = async () => {
       try {
@@ -240,40 +316,61 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
         });
         if (isMounted) workerRef.current = worker;
 
-        setStatus("Membuka Kamera...");
-        localStream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }
-        });
-        
-        if (isMounted && videoRef.current) {
-            streamRef.current = localStream;
-            videoRef.current.srcObject = localStream;
-            videoRef.current.onloadedmetadata = () => {
-                videoRef.current?.play();
-                setStatus("Arahkan SKU ke garis merah");
-                requestAnimationFrame(processFrame);
-            };
-
-            // Check Torch
-            const track = localStream.getVideoTracks()[0];
-            if (track) {
-                const capabilities = track.getCapabilities() as any;
-                if (capabilities.torch) setHasTorch(true);
-            }
-        }
+        await startCamera();
       } catch (err) {
         console.error("Init Error:", err);
-        if (isMounted) setStatus("Gagal memuat kamera. Pastikan izin kamera diberikan.");
+        if (isMounted) setStatus("Gagal inisialisasi AI Scanner.");
       }
     };
 
     initAll();
 
+    // Listener Visibility Change: Bangun seketika saat dibuka, Hemat Baterai (0% CPU) saat minimize
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState === "visible") {
+        isTabActiveRef.current = true;
+
+        // 1. Pastikan video langsung diputar kembali
+        if (videoRef.current && videoRef.current.paused) {
+          videoRef.current.play().catch(() => {});
+        }
+
+        // 2. Periksa apakah track kamera dihentikan oleh OS HP saat minimize
+        const tracks = streamRef.current?.getVideoTracks();
+        const isTrackAlive = tracks && tracks.length > 0 && tracks[0].readyState === "live";
+
+        if (!isTrackAlive) {
+          console.log("[TextScanner] Camera track ended by mobile OS, restarting camera stream...");
+          await startCamera();
+        } else {
+          // 3. Bangunkan loop pemrosesan seketika tanpa refresh
+          if (!isProcessingFrameRef.current && !isHandlingResult.current) {
+            scheduleNextFrame(50);
+          }
+        }
+      } else {
+        // Tab minimize / screen off: tidurkan pemrosesan sepenuhnya (Zero Battery Drain)
+        isTabActiveRef.current = false;
+        if (loopTimeoutRef.current) {
+          clearTimeout(loopTimeoutRef.current);
+          loopTimeoutRef.current = null;
+        }
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
     return () => {
       isMounted = false;
+      isTabActiveRef.current = false;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      if (loopTimeoutRef.current) {
+        clearTimeout(loopTimeoutRef.current);
+        loopTimeoutRef.current = null;
+      }
       if (workerRef.current) workerRef.current.terminate();
       if (streamRef.current) {
-          streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current.getTracks().forEach(track => track.stop());
       }
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps

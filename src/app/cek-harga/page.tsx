@@ -164,8 +164,12 @@ export default function CekHargaPage() {
       }
     }, 120000);
 
+    let lastVisibilityCheck = Date.now();
     const handleVisibility = async () => {
       if (document.visibilityState === "visible") {
+        // Cooldown 60 detik agar tidak membebani network/CPU saat sering buka/tutup minimize
+        if (Date.now() - lastVisibilityCheck < 60000) return;
+        lastVisibilityCheck = Date.now();
         try {
           const { checkIfUpdateAvailable, syncOfflineDatabase } = await import("@/lib/offlineDb");
           const hasUpdate = await checkIfUpdateAvailable();

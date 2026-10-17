@@ -68,6 +68,8 @@ Di file `src/components/Sidebar.tsx`:
 * `setIsOpen(false)` dipanggil segera setelah animasi tombol selesai.
 * Layar *loader* `"MENGAKHIRI SHIFT..."` dinaikkan ke level `z-[999]` dengan durasi animasi responsif (200ms) dan jeda transisi 700ms sebelum navigasi ke `/login`.
 
+| **7** | Scanner membeku (*freeze*) & lama respon setelah aplikasi di-minimize di HP | SA/Kiosk tidak bisa scan teks SKU saat HP dibuka kembali tanpa refresh | Implementasi *Visibility Lifecycle Manager* pada [TextScanner](file:///c:/Max%20Display/price-checker/src/components/TextScanner.tsx): (1) Matikan total loop saat minimize (0% CPU, zero battery drain), (2) Bangunkan kamera & OCR seketika saat tab visible (`scheduleNextFrame(50)`), (3) Buang frame basi dengan *timeout safeguard* 1200ms, (4) Cooldown 60s pada cek update kiosk. |
+
 ---
 
 ## 🚀 3. Riwayat Git Commit
@@ -89,9 +91,16 @@ Di file `src/components/Sidebar.tsx`:
    * Menghapus tombol toggle/tab switcher mode agar tidak membingungkan pengunjung.
    * Memastikan Kiosk berjalan murni 100% menggunakan TextScanner (OCR teks SKU 8 digit).
 
+4. **Commit 4:** `fix(scanner): instant resume on mobile reopen with zero background battery drain`  
+   * Penanganan event `visibilitychange` di TextScanner untuk auto-play video dan deteksi restart stream kamera jika dihentikan OS HP.
+   * Timeout safeguard 1200ms via `Promise.race` agar frame basi saat minimize otomatis dibuang dan tidak menahan antrean OCR.
+   * Loop scheduler resilient (anti-dead-loop) dengan heartbeat timer.
+   * Cooldown 60 detik pada update check Kiosk saat tab aktif kembali untuk menghemat kuota & daya baterai.
+
 ---
 
 ## 📝 4. Rencana Kerja Selanjutnya (Besok)
 * Pengujian lapangan (*field-testing*) langsung di toko menggunakan perangkat di Pakuwon Mall.
 * Verifikasi integrasi upload file PQ dan Promo baru ketika ada artikel/warna musiman baru yang masuk.
 * Pemantauan performa auto-deploy di Vercel dan Railway.
+
