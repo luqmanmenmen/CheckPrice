@@ -233,7 +233,16 @@ export default function WarehouseDashboard() {
               <div className="flex flex-col items-start gap-2.5">
                 <div>
                   <p className="text-xs text-blue-200 font-medium tracking-wide uppercase">{user.jobTitle || 'Gudang Stock'}</p>
-                  <h1 className="font-bold text-lg leading-tight">{user.name} <span className="text-blue-200 font-normal">({user.nik})</span></h1>
+                  <h1 className="font-bold text-lg leading-tight">
+                    {user.name.replace(/\s*\(Developer\)/i, '').trim()} <span className="text-blue-200 font-normal">({user.nik})</span>
+                  </h1>
+                  {user.name?.toLowerCase().includes('developer') && (
+                    <div className="mt-1">
+                      <span className="text-[9px] font-black bg-white/20 text-white border border-white/30 px-2 py-0.5 rounded tracking-wider uppercase">
+                        Developer
+                      </span>
+                    </div>
+                  )}
                 </div>
                 <div 
                   className={`relative flex p-0.5 rounded-full shadow-inner w-32 h-7 cursor-pointer border transition-colors ${togglingStatus ? 'opacity-50 pointer-events-none' : ''} ${user.status === 'ACTIVE' ? 'bg-slate-800/20 border-slate-700/30' : 'bg-slate-800/40 border-slate-700/50'}`} 

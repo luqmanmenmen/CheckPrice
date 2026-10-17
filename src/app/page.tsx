@@ -12,6 +12,8 @@ import { Bell } from "lucide-react";
 import Link from "next/link";
 import { ChipLoader } from "@/components/ChipLoader";
 import ProductImageSlider from "@/components/ProductImageSlider";
+import ShiftLoader from "@/components/ShiftLoader";
+import { createPortal } from "react-dom";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
@@ -298,6 +300,12 @@ export default function Home() {
   const [showSummary, setShowSummary] = useState(false);
   const [shiftSummary, setShiftSummary] = useState<any>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const previousProcessedIds = useRef<Set<string>>(new Set());
 
@@ -417,12 +425,19 @@ export default function Home() {
   };
 
   const confirmLogout = async () => {
+    setIsLoggingOut(true);
+    setShowSummary(false);
     try {
       await fetch("/api/auth/logout", { method: "POST" });
-      window.location.href = "/login";
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("suko_user");
+      }
     } catch (error) {
       console.error("Failed to logout:", error);
     }
+    setTimeout(() => {
+      window.location.href = "/login";
+    }, 700);
   };
 
   const markAsCompleted = async (ticketId: string) => {
@@ -789,10 +804,21 @@ export default function Home() {
                 <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center backdrop-blur-sm border border-white/30 shrink-0">
                   <UserCircle2 className="w-6 h-6" />
                 </div>
-                <div className="flex flex-col items-start gap-1">
+                <div className="flex flex-col items-start gap-0.5">
                   <Link href="/profile" className="group cursor-pointer flex flex-col items-start">
-                    <p className="text-[10px] text-blue-200 font-medium tracking-wide uppercase group-hover:text-white transition-colors">{user.jobTitle || 'Sales Area'}</p>
-                    <h1 className="font-bold text-sm md:text-base leading-tight group-hover:text-blue-100 transition-colors truncate max-w-[150px]">{user.name}</h1>
+                    <h1 className="font-bold text-sm md:text-base leading-tight group-hover:text-blue-100 transition-colors truncate max-w-[170px]">
+                      {user.name.replace(/\s*\(Developer\)/i, '').trim()}
+                    </h1>
+                    <div className="flex flex-col items-start gap-1 mt-0.5">
+                      <p className="text-[10px] text-blue-200 font-medium tracking-wide uppercase group-hover:text-white transition-colors">
+                        {user.jobTitle || 'Sales Area'}
+                      </p>
+                      {user.name?.toLowerCase().includes('developer') && (
+                        <span className="text-[9px] font-black bg-white/20 text-white border border-white/30 px-2 py-0.5 rounded tracking-wider uppercase shadow-xs">
+                          Developer
+                        </span>
+                      )}
+                    </div>
                   </Link>
                 </div>
               </div>
@@ -859,13 +885,13 @@ export default function Home() {
             )}
           </div>
         </div>
-      {/* Logout Summary Modal */}
-      {showSummary && (
-        <div className="fixed inset-0 bg-black/80 z-50 p-4 flex flex-col justify-center items-center">
-          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden flex flex-col shadow-2xl animate-in zoom-in-95 duration-200">
-            <div className="bg-gradient-to-r from-slate-800 to-slate-900 p-5 text-white text-center">
-              <h2 className="text-xl font-bold">Rekapan Shift Anda</h2>
-              <p className="text-slate-300 text-sm mt-1">Aktivitas (Daily Activity) Hari Ini</p>
+      {/* Logout Summary Modal (Portal) */}
+      {mounted && showSummary && createPortal(
+        <div className="fixed inset-0 bg-slate-950/75 backdrop-blur-sm z-[99990] p-4 flex flex-col justify-center items-center">
+          <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden flex flex-col shadow-2xl animate-in zoom-in-95 duration-200 border border-slate-100">
+            <div className="bg-gradient-to-r from-slate-800 to-slate-900 p-6 text-white text-center">
+              <h2 className="text-xl font-black">Rekapan Shift Anda</h2>
+              <p className="text-slate-300 text-xs mt-1">Aktivitas (Daily Activity) Hari Ini</p>
             </div>
             
             <div className="p-6 bg-slate-50">
@@ -902,19 +928,38 @@ export default function Home() {
             <div className="p-4 border-t flex flex-col gap-3 bg-white">
               <button 
                 onClick={confirmLogout}
-                className="w-full bg-red-600 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-red-200 hover:bg-red-700"
+                className="w-full bg-red-600 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-red-200 hover:bg-red-700 transition-all active:scale-95"
               >
                 Konfirmasi Akhiri Shift
               </button>
               <button 
                 onClick={() => setShowSummary(false)}
-                className="w-full bg-slate-100 text-slate-700 font-bold py-3.5 rounded-xl hover:bg-slate-200"
+                className="w-full bg-slate-100 text-slate-700 font-bold py-3.5 rounded-xl hover:bg-slate-200 transition-all"
               >
                 Batal (Lanjut Shift)
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Full Screen Centered Logout Loader (Portal) */}
+      {mounted && isLoggingOut && createPortal(
+        <div className="fixed inset-0 z-[99999] bg-slate-950/75 backdrop-blur-md flex flex-col items-center justify-center p-4 animate-in fade-in duration-300 select-none">
+          <div className="bg-white/95 backdrop-blur-xl border border-white/50 rounded-3xl p-8 sm:p-10 shadow-2xl flex flex-col items-center max-w-xs w-full text-center">
+            <ShiftLoader />
+            <div className="mt-8 flex flex-col items-center gap-1.5">
+              <h3 className="text-base sm:text-lg font-black text-slate-800 tracking-wider">
+                MENGAKHIRI SHIFT
+              </h3>
+              <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                Menyimpan sesi & keluar dengan aman...
+              </p>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
 
       {/* New Arrivals Banner */}

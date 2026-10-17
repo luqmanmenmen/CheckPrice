@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { createPortal } from "react-dom";
 import AnimatedLogoutButton from "./AnimatedLogoutButton";
 import ShiftLoader from "./ShiftLoader";
 import { APP_VERSION, forceAppUpdate } from "@/lib/version";
@@ -34,7 +35,12 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
   const [showUpToDateModal, setShowUpToDateModal] = useState(false);
   const [cachedUser, setCachedUser] = useState<any>(null);
   const [lastSyncDate, setLastSyncDate] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
   const router = useRouter();
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Ambil user dari cache lokal jika propUser belum selesai dimuat
   useEffect(() => {
@@ -152,246 +158,275 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
         <Menu className="w-6 h-6" />
       </button>
 
-      {/* Overlay Backdrop */}
-      {isOpen && (
-        <div 
-          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-[100] transition-opacity duration-300"
-          onClick={() => setIsOpen(false)}
-        />
-      )}
-
-      {/* Drawer Menu */}
-      <div 
-        className={`fixed top-0 left-0 h-[100dvh] max-h-[100dvh] w-80 max-w-[85vw] bg-white shadow-2xl z-[110] transform transition-transform duration-300 ease-out flex flex-col ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}
-      >
-        {/* Drawer Header */}
-        <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-indigo-800 p-5 pt-[max(1.25rem,env(safe-area-inset-top))] flex justify-between items-center text-white shrink-0 shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-white/20 backdrop-blur-sm rounded-lg flex items-center justify-center border border-white/20">
-              <UserCircle2 className="w-5 h-5" />
-            </div>
-            <div className="leading-tight">
-              <h2 className="font-bold text-base">
-                {activeUser?.name ? activeUser.name.replace(/\s*\(Developer\)/i, '').trim() : "Menu Toko"}
-              </h2>
-              <p className="text-[11px] text-blue-200 font-medium">
-                {activeUser?.name?.toLowerCase().includes('developer')
-                  ? 'Developer'
-                  : (activeUser?.jobTitle || (activeUser?.role === 'SUPERVISOR' ? 'Supervisor' : 'Aplikasi Toko'))}
-              </p>
-            </div>
-          </div>
-          <button 
-            onClick={() => setIsOpen(false)} 
-            aria-label="Tutup Menu"
-            className="w-9 h-9 flex items-center justify-center bg-white/10 rounded-full hover:bg-white/20 active:bg-white/30 transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        
-        {/* Scrollable Navigation Items */}
-        <div className="flex-1 overflow-y-auto touch-scroll p-4 flex flex-col gap-2.5 custom-scrollbar">
-          
-          <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 px-1 pt-1">
-            Navigasi Utama
-          </div>
-
-          <Link 
-            href="/" 
-            onClick={() => setIsOpen(false)} 
-            className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-blue-50/60 active:bg-blue-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
-          >
-            <div className="w-9 h-9 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-              <Package2 className="w-4 h-4" />
-            </div>
-            <span className="text-sm">Aplikasi Toko (SA)</span>
-          </Link>
-
-          <Link 
-            href="/promo-unik" 
-            onClick={() => setIsOpen(false)} 
-            className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-purple-50/60 active:bg-purple-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
-          >
-            <div className="w-9 h-9 bg-purple-100 text-purple-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-              <Gift className="w-4 h-4" />
-            </div>
-            <div className="flex flex-col">
-              <span className="text-sm">Katalog Promo Unik</span>
-              <span className="text-[10px] text-purple-600 font-semibold">BOGO & Diskon Khusus</span>
-            </div>
-          </Link>
-
-          <Link 
-            href="/barang-baru" 
-            onClick={() => setIsOpen(false)} 
-            className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-amber-50/60 active:bg-amber-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
-          >
-            <div className="w-9 h-9 bg-amber-100 text-amber-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-              <Sparkles className="w-4 h-4" />
-            </div>
-            <div className="flex flex-col">
-              <span className="text-sm">Barang Baru Masuk</span>
-              <span className="text-[10px] text-amber-600 font-semibold">Koleksi Terkini Toko</span>
-            </div>
-          </Link>
-
-          <Link 
-            href="/cek-harga" 
-            onClick={() => setIsOpen(false)} 
-            className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-emerald-50/60 active:bg-emerald-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
-          >
-            <div className="w-9 h-9 bg-emerald-100 text-emerald-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-              <ScanBarcode className="w-4 h-4" />
-            </div>
-            <div className="flex flex-col">
-              <span className="text-sm">Kiosk Cek Harga</span>
-              <span className="text-[10px] text-emerald-600 font-semibold">Tampilan Publik / Tablet</span>
-            </div>
-          </Link>
-
-          {(activeUser?.jobTitle === 'Gudang Stock' || activeUser?.role === 'SUPERVISOR') && (
-            <Link 
-              href="/warehouse" 
-              onClick={() => setIsOpen(false)} 
-              className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-indigo-50/60 active:bg-indigo-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
-            >
-              <div className="w-9 h-9 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                <Package2 className="w-4 h-4" />
-              </div>
-              <span className="text-sm">Gudang & Stok</span>
-            </Link>
-          )}
-          
-          {activeUser?.role === 'SUPERVISOR' && (
-            <Link 
-              href="/spv-gateway" 
-              onClick={() => setIsOpen(false)} 
-              className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-emerald-50/60 active:bg-emerald-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
-            >
-              <div className="w-9 h-9 bg-emerald-100 text-emerald-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                <ArrowLeft className="w-4 h-4" />
-              </div>
-              <span className="text-sm">Portal SPV</span>
-            </Link>
-          )}
-
-          {(activeUser?.role === 'SUPERVISOR' || (activeUser?.name && activeUser?.name.includes('Developer'))) && (
-            <Link 
-              href="/super-admin" 
-              onClick={() => setIsOpen(false)} 
-              className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-rose-50/60 active:bg-rose-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
-            >
-              <div className="w-9 h-9 bg-rose-100 text-rose-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                <LayoutDashboard className="w-4 h-4" />
-              </div>
-              <span className="text-sm">Master Control</span>
-            </Link>
-          )}
-
-          {/* Section Pembaruan & Sinkronisasi */}
-          <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 px-1 pt-3">
-            Pembaruan & Sinkronisasi
-          </div>
-          
-          {/* Tombol Update Data Offline */}
-          <button 
-            onClick={handleManualSync}
-            disabled={isSyncing}
-            className="flex items-center justify-between p-3.5 bg-sky-50/60 hover:bg-sky-100/70 active:bg-sky-200/60 rounded-xl transition-all font-bold text-slate-700 text-left shadow-xs border border-sky-100 disabled:opacity-50 group"
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 bg-sky-500 text-white rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform shadow-xs">
-                {isSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <CloudDownload className="w-4 h-4" />}
-              </div>
-              <div className="flex flex-col">
-                <span className="text-sm text-sky-900 leading-tight">Update Data Offline</span>
-                <span className="text-[10px] text-slate-500 font-medium">
-                  {lastSyncDate ? `Tersinkron: ${lastSyncDate}` : 'Download data harga & promo'}
-                </span>
-              </div>
-            </div>
-            <div className="w-2 h-2 rounded-full bg-sky-500 shrink-0"></div>
-          </button>
-
-          {/* Tombol Update Versi Aplikasi & Bersihkan Cache */}
-          <button 
-            onClick={handleForceUpdateApp}
-            disabled={isClearingCache}
-            className="flex items-center justify-between p-3.5 bg-slate-50 hover:bg-slate-100 active:bg-slate-200/80 rounded-xl transition-all font-bold text-slate-700 text-left shadow-xs border border-slate-100 group"
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 bg-slate-200 text-slate-700 rounded-lg flex items-center justify-center shrink-0 group-hover:rotate-180 transition-transform duration-500">
-                {isClearingCache ? <Loader2 className="w-4 h-4 animate-spin text-blue-600" /> : <RotateCw className="w-4 h-4" />}
-              </div>
-              <div className="flex flex-col">
-                <span className="text-sm leading-tight">Perbarui Versi Web</span>
-                <span className="text-[10px] text-slate-400 font-medium">
-                  Versi {APP_VERSION} • Bersihkan Cache
-                </span>
-              </div>
-            </div>
-            <span className="text-[9px] bg-slate-200 text-slate-600 font-bold px-1.5 py-0.5 rounded">
-              RELOAD
-            </span>
-          </button>
-
-        </div>
-        
-        {/* Drawer Footer dengan Safe Area iOS */}
-        <div className="p-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))] border-t border-slate-100 mt-auto bg-slate-50/80 shrink-0">
-          {activeUser ? (
-            <AnimatedLogoutButton onLogout={handleLogout} />
-          ) : (
-            <Link
-              href="/login"
+      {/* Portal elements to document.body so they escape sticky header backdrop-blur containing block */}
+      {mounted && createPortal(
+        <>
+          {/* Overlay Backdrop */}
+          {isOpen && (
+            <div 
+              className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-[9990] transition-opacity duration-300"
               onClick={() => setIsOpen(false)}
-              className="w-full h-11 flex items-center justify-center gap-2 bg-blue-600 text-white font-bold rounded-xl shadow-sm text-sm"
-            >
-              Masuk / Login
-            </Link>
+            />
           )}
-          <div className="text-center text-[10px] text-slate-400 font-medium mt-2">
-            Max Display Pro • v{APP_VERSION}
-          </div>
-        </div>
-      </div>
 
-      {/* Full Screen Logout Loader */}
-      {isLoggingOut && (
-        <div className="fixed inset-0 z-[999] bg-white flex flex-col items-center justify-center animate-in fade-in duration-200">
-          <ShiftLoader />
-          <p className="text-slate-800 font-bold mt-16 text-sm tracking-[0.3em] animate-pulse">MENGAKHIRI SHIFT...</p>
-        </div>
-      )}
-
-      {/* Up To Date Modal */}
-      {showUpToDateModal && (
-        <div className="fixed inset-0 z-[200] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 shadow-2xl max-w-sm w-full animate-in zoom-in-95 duration-300">
-            <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4 shadow-inner">
-              <ShieldCheck className="w-8 h-8" />
+          {/* Drawer Menu */}
+          <div 
+            className={`fixed top-0 left-0 h-[100dvh] max-h-[100dvh] w-80 max-w-[85vw] bg-white shadow-2xl z-[9995] transform transition-transform duration-300 ease-out flex flex-col ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}
+          >
+            {/* Drawer Header */}
+            <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-indigo-800 p-5 pt-[max(1.25rem,env(safe-area-inset-top))] flex justify-between items-center text-white shrink-0 shadow-sm">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 bg-white/20 backdrop-blur-sm rounded-lg flex items-center justify-center border border-white/20">
+                  <UserCircle2 className="w-5 h-5" />
+                </div>
+                <div className="flex flex-col items-start leading-tight">
+                  <h2 className="font-bold text-base leading-tight">
+                    {activeUser?.name ? activeUser.name.replace(/\s*\(Developer\)/i, '').trim() : "Menu Toko"}
+                  </h2>
+                  <div className="flex flex-col items-start gap-1 mt-0.5">
+                    <p className="text-[11px] text-blue-200 font-medium">
+                      {activeUser?.jobTitle || (activeUser?.role === 'SUPERVISOR' ? 'Supervisor' : 'Aplikasi Toko')}
+                    </p>
+                    {activeUser?.name?.toLowerCase().includes('developer') && (
+                      <span className="text-[9px] font-black bg-white/20 text-white border border-white/30 px-2 py-0.5 rounded tracking-wider uppercase">
+                        Developer
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <button 
+                onClick={() => setIsOpen(false)} 
+                aria-label="Tutup Menu"
+                className="w-9 h-9 flex items-center justify-center bg-white/10 rounded-full hover:bg-white/20 active:bg-white/30 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
-            <h2 className="text-xl font-bold text-slate-800 mb-2 text-center">Data Sudah Terupdate!</h2>
-            <p className="text-sm text-slate-500 mb-6 leading-relaxed text-center font-medium">
-              Data harga dan promo di perangkat ini sudah menggunakan versi terbaru yang sama dengan server. Tidak perlu mengunduh ulang.
-            </p>
-            <button
-              onClick={() => setShowUpToDateModal(false)}
-              className="w-full h-12 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-all"
-            >
-              Tutup
-            </button>
-          </div>
-        </div>
-      )}
+            
+            {/* Scrollable Navigation Items */}
+            <div className="flex-1 overflow-y-auto touch-scroll p-4 flex flex-col gap-2.5 custom-scrollbar">
+              
+              <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 px-1 pt-1">
+                Navigasi Utama
+              </div>
 
-      {/* Full Screen Download Overlay if Syncing */}
-      {isSyncing && (
-        <div className="fixed inset-0 z-[200] bg-white flex flex-col items-center justify-center transition-all duration-700 ease-out opacity-100 visible">
-          <ShiftLoader progress={syncProgress} />
-          <p className="text-slate-800 font-bold mt-16 text-sm tracking-[0.3em] animate-pulse">MENYINKRONKAN DATA...</p>
-        </div>
+              <Link 
+                href="/" 
+                onClick={() => setIsOpen(false)} 
+                className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-blue-50/60 active:bg-blue-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
+              >
+                <div className="w-9 h-9 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                  <Package2 className="w-4 h-4" />
+                </div>
+                <span className="text-sm">Aplikasi Toko (SA)</span>
+              </Link>
+
+              <Link 
+                href="/promo-unik" 
+                onClick={() => setIsOpen(false)} 
+                className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-purple-50/60 active:bg-purple-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
+              >
+                <div className="w-9 h-9 bg-purple-100 text-purple-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                  <Gift className="w-4 h-4" />
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-sm">Katalog Promo Unik</span>
+                  <span className="text-[10px] text-purple-600 font-semibold">BOGO & Diskon Khusus</span>
+                </div>
+              </Link>
+
+              <Link 
+                href="/barang-baru" 
+                onClick={() => setIsOpen(false)} 
+                className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-amber-50/60 active:bg-amber-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
+              >
+                <div className="w-9 h-9 bg-amber-100 text-amber-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                  <Sparkles className="w-4 h-4" />
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-sm">Barang Baru Masuk</span>
+                  <span className="text-[10px] text-amber-600 font-semibold">Koleksi Terkini Toko</span>
+                </div>
+              </Link>
+
+              <Link 
+                href="/cek-harga" 
+                onClick={() => setIsOpen(false)} 
+                className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-emerald-50/60 active:bg-emerald-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
+              >
+                <div className="w-9 h-9 bg-emerald-100 text-emerald-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                  <ScanBarcode className="w-4 h-4" />
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-sm">Kiosk Cek Harga</span>
+                  <span className="text-[10px] text-emerald-600 font-semibold">Tampilan Publik / Tablet</span>
+                </div>
+              </Link>
+
+              {(activeUser?.jobTitle === 'Gudang Stock' || activeUser?.role === 'SUPERVISOR') && (
+                <Link 
+                  href="/warehouse" 
+                  onClick={() => setIsOpen(false)} 
+                  className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-indigo-50/60 active:bg-indigo-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
+                >
+                  <div className="w-9 h-9 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                    <Package2 className="w-4 h-4" />
+                  </div>
+                  <span className="text-sm">Gudang & Stok</span>
+                </Link>
+              )}
+              
+              {activeUser?.role === 'SUPERVISOR' && (
+                <Link 
+                  href="/spv-gateway" 
+                  onClick={() => setIsOpen(false)} 
+                  className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-emerald-50/60 active:bg-emerald-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
+                >
+                  <div className="w-9 h-9 bg-emerald-100 text-emerald-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                    <ArrowLeft className="w-4 h-4" />
+                  </div>
+                  <span className="text-sm">Portal SPV</span>
+                </Link>
+              )}
+
+              {(activeUser?.role === 'SUPERVISOR' || (activeUser?.name && activeUser?.name.includes('Developer'))) && (
+                <Link 
+                  href="/super-admin" 
+                  onClick={() => setIsOpen(false)} 
+                  className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-rose-50/60 active:bg-rose-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
+                >
+                  <div className="w-9 h-9 bg-rose-100 text-rose-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                    <LayoutDashboard className="w-4 h-4" />
+                  </div>
+                  <span className="text-sm">Master Control</span>
+                </Link>
+              )}
+
+              {/* Section Pembaruan & Sinkronisasi */}
+              <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 px-1 pt-3">
+                Pembaruan & Sinkronisasi
+              </div>
+              
+              {/* Tombol Update Data Offline */}
+              <button 
+                onClick={handleManualSync}
+                disabled={isSyncing}
+                className="flex items-center justify-between p-3.5 bg-sky-50/60 hover:bg-sky-100/70 active:bg-sky-200/60 rounded-xl transition-all font-bold text-slate-700 text-left shadow-xs border border-sky-100 disabled:opacity-50 group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 bg-sky-500 text-white rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform shadow-xs">
+                    {isSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <CloudDownload className="w-4 h-4" />}
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-sm text-sky-900 leading-tight">Update Data Offline</span>
+                    <span className="text-[10px] text-slate-500 font-medium">
+                      {lastSyncDate ? `Tersinkron: ${lastSyncDate}` : 'Download data harga & promo'}
+                    </span>
+                  </div>
+                </div>
+                <div className="w-2 h-2 rounded-full bg-sky-500 shrink-0"></div>
+              </button>
+
+              {/* Tombol Update Versi Aplikasi & Bersihkan Cache */}
+              <button 
+                onClick={handleForceUpdateApp}
+                disabled={isClearingCache}
+                className="flex items-center justify-between p-3.5 bg-slate-50 hover:bg-slate-100 active:bg-slate-200/80 rounded-xl transition-all font-bold text-slate-700 text-left shadow-xs border border-slate-100 group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 bg-slate-200 text-slate-700 rounded-lg flex items-center justify-center shrink-0 group-hover:rotate-180 transition-transform duration-500">
+                    {isClearingCache ? <Loader2 className="w-4 h-4 animate-spin text-blue-600" /> : <RotateCw className="w-4 h-4" />}
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-sm leading-tight">Perbarui Versi Web</span>
+                    <span className="text-[10px] text-slate-400 font-medium">
+                      Versi {APP_VERSION} • Bersihkan Cache
+                    </span>
+                  </div>
+                </div>
+                <span className="text-[9px] bg-slate-200 text-slate-600 font-bold px-1.5 py-0.5 rounded">
+                  RELOAD
+                </span>
+              </button>
+
+            </div>
+            
+            {/* Drawer Footer dengan Safe Area iOS */}
+            <div className="p-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))] border-t border-slate-100 mt-auto bg-slate-50/80 shrink-0">
+              {activeUser ? (
+                <AnimatedLogoutButton onLogout={handleLogout} />
+              ) : (
+                <Link
+                  href="/login"
+                  onClick={() => setIsOpen(false)}
+                  className="w-full h-11 flex items-center justify-center gap-2 bg-blue-600 text-white font-bold rounded-xl shadow-sm text-sm"
+                >
+                  Masuk / Login
+                </Link>
+              )}
+              <div className="text-center text-[10px] text-slate-400 font-medium mt-2">
+                Max Display Pro • v{APP_VERSION}
+              </div>
+            </div>
+          </div>
+
+          {/* Full Screen Centered Logout Loader */}
+          {isLoggingOut && (
+            <div className="fixed inset-0 z-[99999] bg-slate-950/75 backdrop-blur-md flex flex-col items-center justify-center p-4 animate-in fade-in duration-300 select-none">
+              <div className="bg-white/95 backdrop-blur-xl border border-white/50 rounded-3xl p-8 sm:p-10 shadow-2xl flex flex-col items-center max-w-xs w-full text-center">
+                <ShiftLoader />
+                <div className="mt-8 flex flex-col items-center gap-1.5">
+                  <h3 className="text-base sm:text-lg font-black text-slate-800 tracking-wider">
+                    MENGAKHIRI SHIFT
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                    Menyimpan sesi & keluar dengan aman...
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Up To Date Modal */}
+          {showUpToDateModal && (
+            <div className="fixed inset-0 z-[99990] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-white rounded-3xl p-6 shadow-2xl max-w-sm w-full animate-in zoom-in-95 duration-300">
+                <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4 shadow-inner">
+                  <ShieldCheck className="w-8 h-8" />
+                </div>
+                <h2 className="text-xl font-bold text-slate-800 mb-2 text-center">Data Sudah Terupdate!</h2>
+                <p className="text-sm text-slate-500 mb-6 leading-relaxed text-center font-medium">
+                  Data harga dan promo di perangkat ini sudah menggunakan versi terbaru yang sama dengan server. Tidak perlu mengunduh ulang.
+                </p>
+                <button
+                  onClick={() => setShowUpToDateModal(false)}
+                  className="w-full h-12 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-all"
+                >
+                  Tutup
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Full Screen Download Overlay if Syncing */}
+          {isSyncing && (
+            <div className="fixed inset-0 z-[99999] bg-slate-950/75 backdrop-blur-md flex flex-col items-center justify-center p-4 animate-in fade-in duration-300 select-none">
+              <div className="bg-white/95 backdrop-blur-xl border border-white/50 rounded-3xl p-8 sm:p-10 shadow-2xl flex flex-col items-center max-w-xs w-full text-center">
+                <ShiftLoader progress={syncProgress} />
+                <div className="mt-8 flex flex-col items-center gap-1.5">
+                  <h3 className="text-base sm:text-lg font-black text-slate-800 tracking-wider">
+                    MENYINKRONKAN DATA
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                    Mengunduh data harga, promo & gambar terbaru...
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+        </>,
+        document.body
       )}
     </>
   );

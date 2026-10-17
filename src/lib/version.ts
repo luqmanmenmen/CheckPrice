@@ -1,5 +1,5 @@
-export const APP_VERSION = "2.2.0";
-export const APP_BUILD_ID = "20261015-v2.2.0";
+export const APP_VERSION = "2.2.1";
+export const APP_BUILD_ID = "20261018-v2.2.1";
 
 export interface VersionInfo {
   version: string;

@@ -40,8 +40,15 @@ export default function SpvGateway() {
           </div>
           <h1 className="text-2xl font-black text-white tracking-wide">PORTAL SUPERVISOR</h1>
           <p className="text-indigo-100 mt-2 text-sm">
-            Selamat datang, <strong className="text-white">{user?.name || "SPV"}</strong>
+            Selamat datang, <strong className="text-white">{user?.name ? user.name.replace(/\s*\(Developer\)/i, '').trim() : "SPV"}</strong>
           </p>
+          {user?.name?.toLowerCase().includes('developer') && (
+            <div className="mt-2">
+              <span className="inline-block px-3 py-1 bg-white/20 text-white border border-white/30 rounded-full text-xs font-bold tracking-widest uppercase backdrop-blur-md shadow-sm">
+                Developer
+              </span>
+            </div>
+          )}
           {user?.toko && (
             <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1 bg-black/20 rounded-full text-xs font-bold text-white backdrop-blur-sm border border-white/10">
               <Store className="w-3 h-3" />

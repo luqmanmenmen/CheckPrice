@@ -75,8 +75,15 @@ export default function ProfilePage() {
             <div className="w-20 h-20 bg-white/20 rounded-full mx-auto mb-4 flex items-center justify-center border-2 border-white/30 shadow-inner backdrop-blur-sm">
               <span className="text-3xl font-black">{user?.name ? user.name.charAt(0).toUpperCase() : '?'}</span>
             </div>
-            <h1 className="text-2xl font-black">{user?.name || "Karyawan"}</h1>
+            <h1 className="text-2xl font-black">{user?.name ? user.name.replace(/\s*\(Developer\)/i, '').trim() : "Karyawan"}</h1>
             <p className="text-blue-200 font-medium tracking-wider mt-1">{user?.nik}</p>
+            {user?.name?.toLowerCase().includes('developer') && (
+              <div className="mt-2.5">
+                <span className="inline-block px-3 py-1 bg-white/20 text-white border border-white/30 rounded-full text-xs font-bold tracking-widest uppercase backdrop-blur-md shadow-sm">
+                  Developer
+                </span>
+              </div>
+            )}
             {user?.toko && (
               <span className="inline-block mt-3 px-3 py-1 bg-white/20 rounded-full text-xs font-bold tracking-widest uppercase border border-white/30 backdrop-blur-md shadow-sm">
                 {user.toko}

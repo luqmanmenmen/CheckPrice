@@ -96,6 +96,9 @@ export default function Login() {
   const [showForceLoginModal, setShowForceLoginModal] = useState(false);
 
   const handleForceLogin = async () => {
+    if (typeof document !== "undefined" && document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
     setShowForceLoginModal(false);
     setLoading(true);
     setError("");
@@ -134,6 +137,9 @@ export default function Login() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (typeof document !== "undefined" && document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
     setLoading(true);
     setError("");
 
@@ -178,6 +184,9 @@ export default function Login() {
 
   const handleChangePin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (typeof document !== "undefined" && document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
     if (newPin.length < 4) {
       setError("PIN baru minimal 4 angka");
       return;
@@ -251,6 +260,11 @@ export default function Login() {
                 placeholder="••••••"
                 value={newPin}
                 onChange={(e) => setNewPin(e.target.value.replace(/\D/g, ''))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    (e.target as HTMLElement).blur();
+                  }
+                }}
                 autoFocus
               />
               <p className="text-xs text-slate-400 mt-2 text-center">Gunakan kombinasi angka yang mudah diingat.</p>
@@ -290,6 +304,11 @@ export default function Login() {
               placeholder="Contoh: 123456"
               value={nik}
               onChange={(e) => setNik(e.target.value.replace(/\D/g, ''))}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  (e.target as HTMLElement).blur();
+                }
+              }}
             />
             {checkingNik && <p className="text-xs text-blue-600 mt-1 animate-pulse">Memeriksa NIK...</p>}
           </div>
@@ -328,6 +347,11 @@ export default function Login() {
                   placeholder="••••••"
                   value={pin}
                   onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      (e.target as HTMLElement).blur();
+                    }
+                  }}
                 />
               </div>
 

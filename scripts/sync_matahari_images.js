@@ -146,6 +146,18 @@ async function fullSync() {
   for (const [handle, { colorVariants, galleries }] of productColorGalleries.entries()) {
     const p = productMap.get(handle);
 
+    // Kumpulkan percontohan 1 foto dari artikel ini untuk warna yang belum difoto oleh Matahari
+    let sampleArticlePhoto = null;
+    for (const gal of Object.values(galleries)) {
+      if (gal && gal.length > 0) {
+        sampleArticlePhoto = gal[0];
+        break;
+      }
+    }
+    if (!sampleArticlePhoto && p.images && p.images.length > 0) {
+      sampleArticlePhoto = p.images[0].src.startsWith('//') ? `https:${p.images[0].src}` : p.images[0].src;
+    }
+
     for (const v of p.variants) {
       if (!v.sku) continue;
       const sku = v.sku.trim();
@@ -177,13 +189,17 @@ async function fullSync() {
       }
 
       const finalGallery = distinctGallery.length > 0 ? distinctGallery : gallery;
-      const primaryImg = finalGallery.length > 0 ? finalGallery[0] : null;
+      const hasOwnPhotos = finalGallery.length > 0;
 
-      // JANGAN PERNAH PINJAM WARNA LAIN!
+      // Jika warna ini punya foto sendiri: tampilkan SELURUH sudut fotonya!
+      // Jika warna ini belum ada foto di Matahari: beri 1 foto percontohan dari artikel agar tidak kosong!
+      const primaryImg = hasOwnPhotos ? finalGallery[0] : sampleArticlePhoto;
+      const finalImages = hasOwnPhotos ? finalGallery : (sampleArticlePhoto ? [sampleArticlePhoto] : []);
+
       skuImageRecords.push({
         sku,
-        imageUrl: primaryImg, // null jika tidak ada foto asli untuk warna ini
-        images: finalGallery   // [] jika tidak ada foto asli untuk warna ini
+        imageUrl: primaryImg,
+        images: finalImages
       });
     }
   }
@@ -222,6 +238,28 @@ async function fullSync() {
     } catch (err) {
       console.error(`\n❌ Error pada chunk ${i}:`, err.message);
     }
+  }
+
+  // Backfill SKU tersisa yang artikelnya punya foto tetapi SKU warna tersebut masih kosong
+  console.log(`\n🔄 [Backfill] Mengisi sisa SKU yang kosong dengan 1 foto percontohan dari artikel yang sama...`);
+  try {
+    const backfilled = await prisma.$executeRawUnsafe(`
+      UPDATE "Product" AS target
+      SET "imageUrl" = sub.sample_img,
+          "images" = ARRAY[sub.sample_img]::text[],
+          "updatedAt" = NOW()
+      FROM (
+        SELECT DISTINCT ON (article) article, "imageUrl" AS sample_img
+        FROM "Product"
+        WHERE "imageUrl" IS NOT NULL AND article IS NOT NULL
+        ORDER BY article, sku
+      ) AS sub
+      WHERE target.article = sub.article 
+        AND target."imageUrl" IS NULL;
+    `);
+    console.log(`✅ [Backfill] Berhasil mengisi percontohan 1 foto untuk ${backfilled} SKU tersisa.`);
+  } catch (err) {
+    console.error("Backfill error:", err.message);
   }
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(2);
