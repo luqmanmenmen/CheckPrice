@@ -2,7 +2,7 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
 async function syncImages() {
-  console.log("🚀 [Sync Images] Memulai penarikan galeri multi-foto resmi SUKO dari Matahari.com...");
+  console.log("🚀 [Sync Images] Memulai penarikan galeri foto akurat per SKU & Warna dari Matahari.com...");
   const startTime = Date.now();
 
   const res = await fetch("https://matahari.com/collections/hp-brand-suko/products.json?limit=250", {
@@ -22,70 +22,64 @@ async function syncImages() {
   const skuImageRecords = [];
 
   for (const p of products) {
-    const productImages = (p.images || []).map(img => {
-      const src = img.src.startsWith('//') ? `https:${img.src}` : img.src;
-      return { id: img.id, src, variant_ids: img.variant_ids || [] };
-    });
+    const defaultImg = p.images && p.images.length > 0
+      ? (p.images[0].src.startsWith('//') ? `https:${p.images[0].src}` : p.images[0].src)
+      : null;
 
-    const defaultImg = productImages.length > 0 ? productImages[0].src : null;
-
-    // Kelompokkan SKU berdasarkan warna
-    const variantSkusByColor = {};
+    // 1. Kelompokkan varian per warna & kumpulkan kode photoshoot spesifik warna tersebut
+    const colorMap = {};
     p.variants.forEach(v => {
       const color = (v.title.split('/')[0] || '').trim().toUpperCase();
-      if (!variantSkusByColor[color]) variantSkusByColor[color] = [];
-      if (v.sku) variantSkusByColor[color].push(v.sku.trim());
-    });
-
-    // Petakan gambar per warna
-    const colorImagesMap = {};
-    for (const color of Object.keys(variantSkusByColor)) {
-      colorImagesMap[color] = new Set();
-    }
-
-    // Masukkan featured_image masing-masing varian terlebih dahulu (prioritas utama)
-    p.variants.forEach(v => {
-      const color = (v.title.split('/')[0] || '').trim().toUpperCase();
+      if (!colorMap[color]) {
+        colorMap[color] = {
+          color,
+          codes: new Set(),
+          featuredImage: null,
+          images: []
+        };
+      }
+      if (v.sku) colorMap[color].codes.add(v.sku.trim());
       if (v.featured_image && v.featured_image.src) {
         const clean = v.featured_image.src.startsWith('//') ? `https:${v.featured_image.src}` : v.featured_image.src;
-        if (colorImagesMap[color]) colorImagesMap[color].add(clean);
+        if (!colorMap[color].featuredImage) colorMap[color].featuredImage = clean;
+        const filename = clean.split('?')[0].split('/').pop();
+        const matches = filename.match(/\d{6,12}/g);
+        if (matches) matches.forEach(m => colorMap[color].codes.add(m));
       }
     });
 
-    // Cocokkan seluruh gambar produk ke warna yang relevan
-    productImages.forEach(img => {
-      let matchedAny = false;
-      for (const [color, skus] of Object.entries(variantSkusByColor)) {
-        const matchesSku = skus.some(s => img.src.includes(s));
-        const matchesVariantId = img.variant_ids.some(vid => p.variants.some(v => v.id === vid && (v.title.split('/')[0] || '').trim().toUpperCase() === color));
-        if (matchesSku || matchesVariantId) {
-          colorImagesMap[color].add(img.src);
-          matchedAny = true;
-        }
-      }
+    // 2. Cocokkan foto hanya ke warna yang sesuai (TANPA bocor ke warna lain)
+    p.images.forEach(img => {
+      const cleanSrc = img.src.startsWith('//') ? `https:${img.src}` : img.src;
+      const filename = cleanSrc.split('?')[0].split('/').pop();
 
-      // Gambar umum (lifestyle/tampak belakang tanpa spesifik varian ID) ditambahkan ke semua warna
-      if (!matchedAny && img.variant_ids.length === 0) {
-        for (const color of Object.keys(colorImagesMap)) {
-          colorImagesMap[color].add(img.src);
+      for (const [color, data] of Object.entries(colorMap)) {
+        const byVariantId = img.variant_ids && img.variant_ids.some(vid =>
+          p.variants.some(v => v.id === vid && (v.title.split('/')[0] || '').trim().toUpperCase() === color)
+        );
+        const byCode = Array.from(data.codes).some(code => filename.includes(code));
+
+        if (byVariantId || byCode) {
+          if (!data.images.includes(cleanSrc)) {
+            data.images.push(cleanSrc);
+          }
         }
       }
     });
 
-    // Sekarang buat record per variant SKU
+    // 3. Bangun galeri per variant SKU
     for (const v of p.variants) {
       if (!v.sku) continue;
       const sku = v.sku.trim();
       const color = (v.title.split('/')[0] || '').trim().toUpperCase();
 
-      // Featured image spesifik varian
-      let primaryImg = v.featured_image ? v.featured_image.src : null;
-      if (primaryImg && primaryImg.startsWith('//')) primaryImg = `https:${primaryImg}`;
+      let primaryImg = v.featured_image
+        ? (v.featured_image.src.startsWith('//') ? `https:${v.featured_image.src}` : v.featured_image.src)
+        : colorMap[color]?.featuredImage;
 
-      // Daftar galeri gambar warna ini
-      let gallery = Array.from(colorImagesMap[color] || []);
+      let gallery = colorMap[color]?.images ? [...colorMap[color].images] : [];
 
-      // Pastikan primaryImg berada di urutan pertama (index 0)
+      // Pastikan primaryImg berada di index 0
       if (primaryImg) {
         gallery = [primaryImg, ...gallery.filter(u => u !== primaryImg)];
       } else if (gallery.length > 0) {
@@ -93,12 +87,6 @@ async function syncImages() {
       } else if (defaultImg) {
         primaryImg = defaultImg;
         gallery = [defaultImg];
-      }
-
-      // Fallback jika masih kosong: gunakan semua gambar produk
-      if (gallery.length === 0 && productImages.length > 0) {
-        gallery = productImages.map(i => i.src);
-        primaryImg = gallery[0];
       }
 
       if (primaryImg && gallery.length > 0) {
@@ -111,9 +99,9 @@ async function syncImages() {
     }
   }
 
-  console.log(`🖼️ [Sync Images] Siap mengupdate ${skuImageRecords.length} SKU dengan galeri foto slide.`);
+  console.log(`🖼️ [Sync Images] Siap mengupdate ${skuImageRecords.length} SKU dengan galeri foto akurat per warna.`);
 
-  // Update ke database dalam chunks 200 row
+  // Update ke PostgreSQL Supabase dalam chunk 200 row
   const chunkSize = 200;
   let totalUpdated = 0;
 
@@ -146,7 +134,7 @@ async function syncImages() {
   }
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-  console.log(`\n✅ [Sync Images] SELESAI dalam ${duration} detik! Berhasil mengupdate ${totalUpdated} SKU dengan galeri multi-foto slide.`);
+  console.log(`\n✅ [Sync Images] SELESAI dalam ${duration} detik! Berhasil memperbarui ${totalUpdated} SKU dengan galeri foto akurat per warna.`);
 
   await prisma.$disconnect();
 }

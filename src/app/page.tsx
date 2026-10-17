@@ -1268,18 +1268,10 @@ export default function Home() {
 
             <div className="p-5 flex flex-col gap-4">
 
-              {/* Product Header: Photo Slider Gallery & Name */}
-              <div className="flex gap-4 items-start">
-                <div className="shrink-0">
-                  <ProductImageSlider
-                    images={product.images && product.images.length > 0 ? product.images : (product.imageUrl ? [product.imageUrl] : [])}
-                    alt={parsedInfo.name}
-                    className="w-24 h-32 sm:w-28 sm:h-36"
-                  />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h2 className="text-xl font-bold text-slate-800 leading-snug">{parsedInfo.name}</h2>
-                  <div className="flex flex-wrap gap-2 mt-2.5">
+              {/* Product Header: Title & Badges */}
+              <div>
+                <h2 className="text-xl font-bold text-slate-800 leading-snug">{parsedInfo.name}</h2>
+                <div className="flex flex-wrap gap-2 mt-2.5">
                   {parsedInfo.color && (
                     <div className="flex items-center overflow-hidden rounded-md border border-indigo-100 bg-indigo-50/50">
                       <span className="bg-indigo-100/80 px-2 py-1 text-[10px] font-bold text-indigo-800 uppercase tracking-wider border-r border-indigo-100">
@@ -1324,7 +1316,6 @@ export default function Home() {
                     </div>
                   )}
                 </div>
-              </div>
               </div>
 
               {/* Promo Banner di bawah Deskripsi — Aman dan Tidak Pernah Ter-crop */}
@@ -1426,6 +1417,26 @@ export default function Home() {
                     {product.stok ?? 0} <span className="text-[10px] font-bold uppercase opacity-80">pcs</span>
                   </span>
                 </div>
+              </div>
+
+              {/* ── 🖼️ BOX IMAGE: FOTO MODEL & DETAIL AKURAT PER SKU & WARNA ── */}
+              <div className="bg-slate-50/90 rounded-2xl p-4 sm:p-5 border border-slate-200/90 flex flex-col items-center shadow-xs">
+                <div className="w-full flex items-center justify-between mb-3 px-1">
+                  <span className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    Foto Model & Detail Produk
+                  </span>
+                  {parsedInfo.color && (
+                    <span className="text-[11px] font-black bg-white text-indigo-900 border border-indigo-200 px-2.5 py-0.5 rounded-full uppercase">
+                      Warna: {parsedInfo.color}
+                    </span>
+                  )}
+                </div>
+                <ProductImageSlider
+                  images={product.images && product.images.length > 0 ? product.images : (product.imageUrl ? [product.imageUrl] : [])}
+                  alt={`${parsedInfo.name} - ${parsedInfo.color || product.sku}`}
+                  className="w-48 h-64 sm:w-56 sm:h-72"
+                />
               </div>
 
               {/* Matrix Varian Produk (Siblings) */}

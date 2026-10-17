@@ -107,6 +107,7 @@ export default function CekHargaPage() {
   const [loading, setLoading] = useState(false);
   const [searchingFor, setSearchingFor] = useState("");
   const [product, setProduct] = useState<ProductData | null>(null);
+  const [siblings, setSiblings] = useState<ProductData[]>([]);
   const [error, setError] = useState("");
   const [countdown, setCountdown] = useState(25);
 
@@ -198,6 +199,7 @@ export default function CekHargaPage() {
   // Kembali ke mode scan
   const resetKiosk = useCallback(() => {
     setProduct(null);
+    setSiblings([]);
     setError("");
     setIsScanning(true);
     setCountdown(25);
@@ -266,12 +268,38 @@ export default function CekHargaPage() {
           images: foundLocal.images && foundLocal.images.length > 0 ? foundLocal.images : (foundLocal.imageUrl ? [foundLocal.imageUrl] : []),
         };
 
+        let sibs: ProductData[] = [prodData];
+        if (foundLocal.article) {
+          const localSibs = await db.products.where("article").equals(foundLocal.article).toArray();
+          if (localSibs && localSibs.length > 0) {
+            sibs = localSibs.map(s => ({
+              sku: s.sku,
+              barcode: s.barcode || null,
+              article: s.article || null,
+              description: s.description || s.name,
+              hargaNormal: s.hargaNormal,
+              hargaPromo: s.hargaPromo,
+              diskon: s.diskon,
+              discountType: s.discountType || null,
+              acara: s.acara || null,
+              brand: s.brand || null,
+              dept: s.dept || null,
+              color: s.color || null,
+              size: s.size || null,
+              toDate: s.toDate || null,
+              imageUrl: s.imageUrl || null,
+              images: s.images && s.images.length > 0 ? s.images : (s.imageUrl ? [s.imageUrl] : []),
+            }));
+          }
+        }
+
         playScanBeep();
         sessionCache.current.set(cacheKey, prodData);
         sessionCache.current.set(foundLocal.sku.toLowerCase(), prodData);
         if (foundLocal.barcode) sessionCache.current.set(foundLocal.barcode.toLowerCase(), prodData);
 
         setProduct(prodData);
+        setSiblings(sibs);
         setError("");
         setIsScanning(false);
         setLoading(false);
@@ -303,6 +331,7 @@ export default function CekHargaPage() {
           sessionCache.current.set(found.sku.toLowerCase(), found);
           if (found.barcode) sessionCache.current.set(found.barcode.toLowerCase(), found);
           setProduct(found);
+          setSiblings(data.siblings || [found]);
         } else {
           setError("SKU tidak ditemukan. Coba arahkan ulang ke angka SKU pada label.");
         }
@@ -315,6 +344,16 @@ export default function CekHargaPage() {
       setLoading(false);
       setSearchingFor("");
     }
+  };
+
+  // Pilih warna varian lain dari artikel yang sama
+  const handleSelectColor = (targetSku: string) => {
+    const target = siblings.find(s => s.sku === targetSku);
+    if (target) {
+      setProduct(target);
+      return;
+    }
+    searchProduct(targetSku);
   };
 
   // Handler TextScanner — dipanggil otomatis begitu SKU 8 digit terdeteksi
@@ -499,24 +538,44 @@ export default function CekHargaPage() {
             }
           }
 
+          // Ekstrak varian warna unik dari artikel ini (seperti katalog Matahari)
+          const availableColors: { color: string; sku: string; isActive: boolean }[] = [];
+          const seen = new Set<string>();
+          const currentColorUpper = (color || "").toUpperCase();
+
+          if (color) {
+            seen.add(currentColorUpper);
+            availableColors.push({ color, sku: product.sku, isActive: true });
+          }
+
+          siblings.forEach((s) => {
+            const { color: sColor } = parseProductInfo(s);
+            const col = (sColor || s.color || "").trim();
+            if (col && !seen.has(col.toUpperCase())) {
+              seen.add(col.toUpperCase());
+              availableColors.push({ color: col, sku: s.sku, isActive: false });
+            }
+          });
+
           return (
             <div className="fixed inset-0 z-[90] bg-gradient-to-b from-slate-50 via-white to-slate-100 flex flex-col items-center justify-between p-4 sm:p-6 overflow-y-auto">
               {/* Logo & Judul Toko */}
-              <header className="w-full max-w-lg text-center pt-2 mb-4 flex flex-col items-center">
-                <img src="/suko-logo.png" alt="SUKO" className="h-10 sm:h-12 object-contain drop-shadow-xs mb-2" />
+              <header className="w-full max-w-lg text-center pt-2 mb-3 flex flex-col items-center shrink-0">
+                <img src="/suko-logo.png" alt="SUKO" className="h-10 sm:h-11 object-contain drop-shadow-xs mb-1.5" />
                 <div className="inline-flex items-center gap-1.5 bg-slate-900 text-white px-3.5 py-1 rounded-full text-[11px] font-black tracking-widest uppercase">
                   <Sparkles className="w-3.5 h-3.5 text-amber-300" />
                   Cek Harga Resmi Toko
                 </div>
               </header>
 
-              {/* Kartu produk */}
-              <main className="w-full max-w-lg flex-1 flex flex-col justify-center">
-                <div className="w-full bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden animate-in slide-in-from-bottom-6 duration-300 flex flex-col">
-                  {/* Banner Promo Header: Tampil jika produk sedang promo (BOGO, BXGY, Diskon 60%, atau Harga Khusus) */}
+              {/* Main Content: BOX ATAS (HARGA) & BOX BAWAH (IMAGE) */}
+              <main className="w-full max-w-lg flex-1 flex flex-col justify-start gap-4 pb-8">
+                {/* ── 📦 1. BOX ATAS: KETERANGAN PRODUK & HARGA ── */}
+                <div className="w-full bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden animate-in slide-in-from-bottom-4 duration-300 flex flex-col">
+                  {/* Banner Promo Header */}
                   {isOnPromo && (
                     <div
-                      className={`px-5 py-3.5 flex items-center justify-between text-white ${
+                      className={`px-5 py-3 flex items-center justify-between text-white ${
                         isBogoPromo || isPercentPromo
                           ? "bg-gradient-to-r from-purple-600 via-indigo-600 to-rose-600"
                           : "bg-gradient-to-r from-rose-600 via-red-600 to-amber-600"
@@ -542,61 +601,52 @@ export default function CekHargaPage() {
                     </div>
                   )}
 
-                  <div className="p-6 sm:p-8 flex flex-col items-center text-center">
-                    <div className="inline-block bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-[11px] font-black tracking-widest uppercase mb-3">
+                  <div className="p-5 sm:p-7 flex flex-col items-center text-center">
+                    <div className="inline-block bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-[11px] font-black tracking-widest uppercase mb-2">
                       {product.brand || product.dept || "SUKO"}
                     </div>
 
-                    {/* Galeri Foto Multi-Slide Resmi Matahari */}
-                    <div className="mb-4 flex justify-center">
-                      <ProductImageSlider
-                        images={product.images && product.images.length > 0 ? product.images : (product.imageUrl ? [product.imageUrl] : [])}
-                        alt={name}
-                        className="w-40 h-52 sm:w-48 sm:h-64"
-                      />
-                    </div>
-
-                    {/* Judul Produk: Murni Item Description (Artikel sudah dibersihkan) */}
-                    <h1 className="text-xl sm:text-2xl md:text-3xl font-black text-slate-900 leading-snug mb-4 max-w-md">
+                    {/* Judul Produk */}
+                    <h1 className="text-xl sm:text-2xl font-black text-slate-900 leading-snug mb-3 max-w-md">
                       {name}
                     </h1>
 
-                    {/* Badges: Ukuran, Warna, Artikel, dan SKU bersebelahan */}
-                    <div className="flex flex-wrap justify-center items-center gap-2 mb-6">
-                      {size && (
-                        <span className="bg-blue-50 text-blue-700 border border-blue-200/60 px-3.5 py-1 rounded-full text-xs font-black tracking-wide">
-                          Ukuran: {size}
-                        </span>
-                      )}
+                    {/* Badges: Ukuran, Warna, Artikel, dan SKU */}
+                    <div className="flex flex-wrap justify-center items-center gap-2 mb-5">
                       {color && (
-                        <span className="bg-slate-100 text-slate-700 border border-slate-200 px-3.5 py-1 rounded-full text-xs font-black tracking-wide">
+                        <span className="bg-indigo-50 text-indigo-800 border border-indigo-200/80 px-3 py-1 rounded-full text-xs font-black tracking-wide flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-indigo-600" />
                           Warna: {color}
                         </span>
                       )}
+                      {size && (
+                        <span className="bg-blue-50 text-blue-700 border border-blue-200/60 px-3 py-1 rounded-full text-xs font-black tracking-wide">
+                          Ukuran: {size}
+                        </span>
+                      )}
                       {articleDisplay && (
-                        <span className="bg-amber-50 text-amber-800 border border-amber-200/80 font-mono px-3.5 py-1 rounded-full text-[11px] font-bold tracking-wide">
+                        <span className="bg-amber-50 text-amber-800 border border-amber-200/80 font-mono px-3 py-1 rounded-full text-[11px] font-bold tracking-wide">
                           Artikel: {articleDisplay}
                         </span>
                       )}
-                      <span className="bg-slate-50 text-slate-600 font-mono px-3.5 py-1 rounded-full text-[11px] font-bold border border-slate-200/80">
+                      <span className="bg-slate-50 text-slate-600 font-mono px-3 py-1 rounded-full text-[11px] font-bold border border-slate-200/80">
                         SKU: {product.sku}
                       </span>
                     </div>
 
-                    <div className="w-full max-w-[200px] h-px bg-slate-100 mb-6" />
+                    <div className="w-full max-w-[200px] h-px bg-slate-100 mb-5" />
 
-                    {/* ── AREA HARGA & PROMO (BOGO / DISKON 60% / BXGY / FLAT) ── */}
+                    {/* ── AREA HARGA (Besar, Jelas, & Kontras Tinggi) ── */}
                     <div className="flex flex-col items-center w-full">
                       {hasHargaPromo ? (
-                        // Kasus 1: Promo Potongan Harga Langsung (Flat Price)
                         <div className="flex flex-col items-center gap-1">
-                          <p className="text-[11px] font-black text-slate-400 tracking-widest uppercase mb-1">
+                          <p className="text-[11px] font-black text-slate-400 tracking-widest uppercase mb-0.5">
                             HARGA PROMO RESMI
                           </p>
                           <span className="text-lg sm:text-xl font-bold text-slate-400 line-through decoration-rose-500/60 decoration-2">
                             {formatRupiah(product.hargaNormal)}
                           </span>
-                          <span className="text-4xl sm:text-5xl md:text-6xl font-black text-rose-600 tracking-tight">
+                          <span className="text-4xl sm:text-5xl md:text-6xl font-black text-rose-600 tracking-tight leading-none my-1">
                             {formatRupiah(product.hargaPromo!)}
                           </span>
                           <div className="mt-3 flex items-center gap-2">
@@ -611,7 +661,6 @@ export default function CekHargaPage() {
                           </div>
                         </div>
                       ) : isOnPromo ? (
-                        // Kasus 2: Promo BOGO / BXGY / Beli 1 Diskon 60% (Tanpa Flat Price)
                         <div className="flex flex-col items-center gap-3 w-full max-w-sm">
                           <div>
                             <p className="text-[11px] font-black text-slate-400 tracking-widest uppercase mb-1">
@@ -621,8 +670,6 @@ export default function CekHargaPage() {
                               {formatRupiah(product.hargaNormal)}
                             </span>
                           </div>
-
-                          {/* Kartu Promo BOGO / Diskon 60% / BXGY */}
                           <div className="w-full bg-gradient-to-br from-purple-50 via-indigo-50/50 to-pink-50 border-2 border-purple-200/90 rounded-2xl p-4 flex flex-col items-center shadow-sm">
                             <div className="inline-flex items-center gap-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 text-white px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-wider shadow-sm mb-2">
                               {isBogoPromo ? <Gift className="w-3.5 h-3.5" /> : <Tag className="w-3.5 h-3.5 fill-white" />}
@@ -637,7 +684,6 @@ export default function CekHargaPage() {
                           </div>
                         </div>
                       ) : (
-                        // Kasus 3: Harga Normal (Tidak Ada Promo)
                         <div className="flex flex-col items-center">
                           <p className="text-[11px] font-black text-slate-400 tracking-widest uppercase mb-1">
                             HARGA RESMI
@@ -649,25 +695,75 @@ export default function CekHargaPage() {
                       )}
                     </div>
                   </div>
-
-                  {/* Footer tombol scan barang lain */}
-                  <div className="bg-slate-50 p-4 sm:p-6 border-t border-slate-100 flex flex-col gap-2.5 items-center">
-                    <button
-                      onClick={resetKiosk}
-                      className="w-full h-13 bg-slate-900 hover:bg-black text-white font-black text-base rounded-2xl shadow-xl transition-all active:scale-98 flex items-center justify-center gap-2.5"
-                    >
-                      <Camera className="w-5 h-5 text-amber-300" />
-                      Scan Barang Lain
-                    </button>
-                    <p className="text-[11px] text-slate-400 font-medium">
-                      Layar otomatis kembali dalam {countdown} detik
-                    </p>
-                  </div>
                 </div>
+
+                {/* ── 🖼️ 2. BOX BAWAH: BOX IMAGE PRODUK (AKURAT PER SKU & WARNA) ── */}
+                <div className="w-full bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden p-5 sm:p-6 flex flex-col items-center animate-in slide-in-from-bottom-6 duration-400">
+                  <div className="w-full flex items-center justify-between mb-3 px-1">
+                    <div className="flex items-center gap-2">
+                      <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                      <span className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                        Foto Model & Detail Produk
+                      </span>
+                    </div>
+                    {color && (
+                      <span className="text-[11px] font-black bg-indigo-50 text-indigo-800 border border-indigo-200/60 px-3 py-1 rounded-full uppercase">
+                        Warna: {color}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Slider Foto Akurat Sesuai SKU dan Warnanya */}
+                  <div className="w-full flex justify-center my-2">
+                    <ProductImageSlider
+                      images={product.images && product.images.length > 0 ? product.images : (product.imageUrl ? [product.imageUrl] : [])}
+                      alt={`${name} - ${color || product.sku}`}
+                      className="w-52 h-68 sm:w-60 sm:h-80"
+                    />
+                  </div>
+
+                  {/* Varian Warna Lain dari Artikel ini (Color Swatches seperti di Matahari) */}
+                  {availableColors.length > 1 && (
+                    <div className="w-full pt-4 mt-3 border-t border-slate-100 flex flex-col items-center">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2.5">
+                        WARNA LAIN PADA ARTIKEL INI ({availableColors.length} WARNA):
+                      </p>
+                      <div className="flex flex-wrap justify-center gap-2">
+                        {availableColors.map((c) => {
+                          const isSelected = c.isActive;
+                          return (
+                            <button
+                              key={c.sku}
+                              type="button"
+                              onClick={() => handleSelectColor(c.sku)}
+                              className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 border ${
+                                isSelected
+                                  ? "bg-slate-900 text-white border-slate-900 shadow-md scale-105"
+                                  : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100 hover:border-slate-300 active:scale-95"
+                              }`}
+                            >
+                              <span className={`w-2 h-2 rounded-full ${isSelected ? "bg-amber-400" : "bg-slate-400"}`} />
+                              {c.color}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Tombol Scan Barang Lain */}
+                <button
+                  onClick={resetKiosk}
+                  className="w-full h-14 bg-slate-900 hover:bg-black text-white font-black text-base rounded-2xl shadow-xl transition-all active:scale-98 flex items-center justify-center gap-2.5 mt-1"
+                >
+                  <Camera className="w-5 h-5 text-amber-300" />
+                  Scan Barang Lain ({countdown}s)
+                </button>
               </main>
 
               {/* Footer Bersih */}
-              <footer className="w-full max-w-lg text-center pt-4 pb-safe">
+              <footer className="w-full max-w-lg text-center pt-2 pb-safe shrink-0">
                 <span className="text-[11px] text-slate-400 font-medium">
                   SUKO Price Checker • Informasi Harga Akurat & Terkini
                 </span>

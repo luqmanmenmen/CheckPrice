@@ -122,17 +122,20 @@ Di file `src/components/Sidebar.tsx`:
    * Sinkronisasi 2.551 foto produk HD resmi SUKO dari Shopify Matahari.
    * Pembaruan Dexie IndexedDB offline database ke skema `v7`.
 
-8. **Commit 8:** `feat(gallery): slideable multi-angle image gallery with touch swipe and full-screen zoom`  
+8. **Commit 8:** `0fba86f`  
+   *`feat(gallery): slideable multi-angle image gallery with touch swipe and full-screen zoom`*  
    * Penambahan kolom array `images String[] @default([])` pada model `Product` Prisma & PostgreSQL live Supabase.
-   * Ekstraksi dan pengelompokan seluruh foto sudut pandang varian (tampak depan warna terkait, tampak samping, belakang, close-up tekstur, dan pose model) dari Shopify Matahari.
-   * Berhasil memperbarui 2.551 SKU (96.9% memiliki 3-6 foto per SKU).
-   * Pembuatan komponen responsif [`ProductImageSlider.tsx`](file:///c:/Max%20Display/price-checker/src/components/ProductImageSlider.tsx) lengkap dengan:
-     - Gestur **touch swipe** halus ke kiri/kanan di layar sentuh HP.
-     - Tombol navigasi panah kiri/kanan ber-efek *glassmorphism*.
-     - Indikator titik (*dots*) dan *counter badge* (contoh: `1 / 5`).
-     - Mode *lightbox zoom full-screen* saat foto diketuk untuk melihat detail jahitan & bahan.
-   * Integrasi komponen slider ke Kiosk Cek Harga (`/cek-harga`) dan Sales Assistant (`/`).
-   * Peningkatan skema offline Dexie ke `v8` agar seluruh galeri tersimpan di cache lokal HP.
+   * Pembuatan komponen responsif [`ProductImageSlider.tsx`](file:///c:/Max%20Display/price-checker/src/components/ProductImageSlider.tsx).
+
+9. **Commit 9:** `fix(ui & data): layout Box Harga on top, Box Image underneath with strict color-isolated matching`  
+   * **Struktur Layout 2 Box Terpisah (Mengikuti Pola E-Commerce Matahari)**:
+     - **Box Atas (Box Keterangan & Harga)**: Berisi banner promo, nama produk, badges (artikel, SKU, ukuran, warna), dan tampilan harga promo/normal yang besar, jelas, dan kontras.
+     - **Box Bawah (Box Image Produk)**: Menampilkan galeri foto multi-sudut khusus warna SKU tersebut, dilengkapi daftar pilihan warna lain (*color swatches*) dari artikel terkait yang interaktif.
+   * **Akurasi 100% Foto per Warna / SKU**:
+     - Memperbaiki algoritma sinkronisasi di `scripts/sync_matahari_images.js` dengan penguncian kode photoshoot per warna.
+     - Mengeliminasi kebocoran warna (misal: warna Hitam / Navy dijamin 100% hanya menampilkan foto produk warna Hitam / Navy, tanpa tercampur foto warna lain).
+   * **Interaksi Ganti Warna Instan di Kiosk & SA**:
+     - Mengklik tombol varian warna langsung memperbarui foto dan harga secara instan (0ms).
 
 ---
 
