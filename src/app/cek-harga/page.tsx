@@ -23,6 +23,7 @@ type ProductData = {
   color?: string | null;
   size?: string | null;
   toDate?: string | null;
+  imageUrl?: string | null;
 };
 
 function formatRupiah(angka: number) {
@@ -120,9 +121,9 @@ export default function CekHargaPage() {
         const count = await db.products.count();
         const localSchema = typeof window !== "undefined" ? localStorage.getItem("suko_db_schema_version") : null;
 
-        // 1. Jika pertama kali buka atau skema belum v6:
+        // 1. Jika pertama kali buka atau skema belum v7:
         // Tampilkan loading sync cepat (~0.5 - 1 detik untuk unduh 180 KB)
-        if (count < 500 || localSchema !== "v6") {
+        if (count < 500 || localSchema !== "v7") {
           if (isMounted) setDbState("syncing");
           await syncOfflineDatabase((syncing, prog) => {
             if (isMounted && prog !== undefined) setSyncProgress(prog);
@@ -259,6 +260,7 @@ export default function CekHargaPage() {
           color: foundLocal.color || null,
           size: foundLocal.size || null,
           toDate: foundLocal.toDate || null,
+          imageUrl: foundLocal.imageUrl || null,
         };
 
         playScanBeep();
@@ -541,6 +543,19 @@ export default function CekHargaPage() {
                     <div className="inline-block bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-[11px] font-black tracking-widest uppercase mb-3">
                       {product.brand || product.dept || "SUKO"}
                     </div>
+
+                    {/* Foto Produk HD Matahari Official */}
+                    {product.imageUrl && (
+                      <div className="relative w-36 h-44 sm:w-44 sm:h-52 mb-4 rounded-2xl overflow-hidden bg-slate-100 shadow-md border border-slate-200/80 group">
+                        <img
+                          src={product.imageUrl}
+                          alt={name}
+                          loading="lazy"
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover object-top transition-transform duration-300 group-hover:scale-105"
+                        />
+                      </div>
+                    )}
 
                     {/* Judul Produk: Murni Item Description (Artikel sudah dibersihkan) */}
                     <h1 className="text-xl sm:text-2xl md:text-3xl font-black text-slate-900 leading-snug mb-4 max-w-md">

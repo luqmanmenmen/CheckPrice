@@ -60,19 +60,34 @@ export default function ClientBarangBaruList({ groupedItems }: { groupedItems: a
                 </div>
               </div>
               
-              <h3 className="text-lg font-black text-slate-800 leading-tight mb-2 group-hover/card:text-emerald-600 transition-colors">
-                {group.articleName}
-              </h3>
-              
-              <div className="flex items-center gap-2 mb-4 flex-wrap">
-                <span className="bg-slate-100 text-slate-600 font-bold px-2 py-0.5 rounded text-[10px]">
-                  {group.items.length} SKU
-                </span>
-                {colors.length > 0 && (
-                  <span className="bg-indigo-50 text-indigo-600 font-bold px-2 py-0.5 rounded text-[10px]">
-                    {colors.length} Warna
-                  </span>
+              <div className="flex gap-3.5 items-start mb-3">
+                {firstItem.imageUrl && (
+                  <div className="w-16 h-20 rounded-xl overflow-hidden bg-slate-100 border border-slate-200 shrink-0 shadow-xs">
+                    <img
+                      src={firstItem.imageUrl}
+                      alt={group.articleName}
+                      loading="lazy"
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover object-top"
+                    />
+                  </div>
                 )}
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-lg font-black text-slate-800 leading-tight mb-2 group-hover/card:text-emerald-600 transition-colors">
+                    {group.articleName}
+                  </h3>
+                  
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="bg-slate-100 text-slate-600 font-bold px-2 py-0.5 rounded text-[10px]">
+                      {group.items.length} SKU
+                    </span>
+                    {colors.length > 0 && (
+                      <span className="bg-indigo-50 text-indigo-600 font-bold px-2 py-0.5 rounded text-[10px]">
+                        {colors.length} Warna
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
               
               <div className="pt-3 border-t border-slate-100 flex items-center justify-between mt-auto">

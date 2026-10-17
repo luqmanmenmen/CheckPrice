@@ -24,6 +24,7 @@ export async function GET() {
         acara: true,
         stok: true,
         toDate: true,
+        imageUrl: true,
       },
     });
 
@@ -78,6 +79,7 @@ export async function GET() {
         acara: p.acara || null,
         stok: p.stok || 0,
         toDate: p.toDate || null,
+        imageUrl: p.imageUrl || null,
       };
     });
 

@@ -17,6 +17,7 @@ export interface CachedProduct {
   acara?: string | null;
   stok: number;
   toDate: string | null;
+  imageUrl?: string | null;
 }
 
 class SukoDatabase extends Dexie {
@@ -36,6 +37,9 @@ class SukoDatabase extends Dexie {
     this.version(6).stores({
       products: 'sku, barcode, article, name, description, brand, dept, color, size, hargaNormal, hargaPromo, diskon, discountType, acara, stok, toDate',
     });
+    this.version(7).stores({
+      products: 'sku, barcode, article, name, description, brand, dept, color, size, hargaNormal, hargaPromo, diskon, discountType, acara, stok, toDate, imageUrl',
+    });
   }
 }
 
@@ -52,7 +56,7 @@ export async function checkIfUpdateAvailable(): Promise<boolean> {
 
     if (checkData.success) {
       const serverVersion = checkData.lastUpdate.toString();
-      if (localDbSchema !== "v6" || localVersion !== serverVersion || count < 1000) {
+      if (localDbSchema !== "v7" || localVersion !== serverVersion || count < 1000) {
         return true;
       }
     }
@@ -78,7 +82,7 @@ export async function syncOfflineDatabase(
     if (checkData.success) {
       const serverVersion = checkData.lastUpdate.toString();
 
-      if (forceSync || localDbSchema !== "v6" || localVersion !== serverVersion || count < 1000) {
+      if (forceSync || localDbSchema !== "v7" || localVersion !== serverVersion || count < 1000) {
         if (onSyncStateChange) onSyncStateChange(true, 10);
 
         let progress = 10;
@@ -99,8 +103,8 @@ export async function syncOfflineDatabase(
 
           if (onSyncStateChange) onSyncStateChange(true, 100);
           localStorage.setItem("suko_server_version", serverVersion);
-          localStorage.setItem("suko_db_schema_version", "v6");
-          console.log(`[OfflineDB] Berhasil sync ${result.data.length} produk v6 (versi: ${serverVersion})`);
+          localStorage.setItem("suko_db_schema_version", "v7");
+          console.log(`[OfflineDB] Berhasil sync ${result.data.length} produk v7 dengan foto resmi (versi: ${serverVersion})`);
           return true;
         }
       } else {

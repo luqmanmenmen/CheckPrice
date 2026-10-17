@@ -35,6 +35,7 @@ type ProductData = {
   size?: string | null;
   stok: number;
   promoFileName: string | null;
+  imageUrl?: string | null;
 };
 
 // Parse product info to get clean product name, color, and size
@@ -510,7 +511,8 @@ export default function Home() {
           color: localData.color || null,
           size: localData.size || null,
           stok: localData.stok ?? 0,
-          promoFileName: null
+          promoFileName: null,
+          imageUrl: localData.imageUrl || null
         };
         setProduct(localProduct);
 
@@ -537,7 +539,8 @@ export default function Home() {
               color: s.color || null,
               size: s.size || null,
               stok: s.stok ?? 0,
-              promoFileName: null
+              promoFileName: null,
+              imageUrl: s.imageUrl || null
             }));
           }
         }
@@ -597,7 +600,8 @@ export default function Home() {
               discountType: item.discountType || null,
               acara: item.acara || null,
               stok: item.stok ?? 0,
-              toDate: item.toDate || null
+              toDate: item.toDate || null,
+              imageUrl: item.imageUrl || null
             }));
             db.products.bulkPut(items).catch(() => {});
           });
@@ -1128,29 +1132,42 @@ export default function Home() {
                     setManualInput(p.sku);
                     searchProduct(p.sku);
                   }}
-                  className="text-left p-3 border rounded-xl hover:bg-blue-50 hover:border-blue-200 transition-colors"
+                  className="text-left p-3 border rounded-xl hover:bg-blue-50 hover:border-blue-200 transition-colors flex gap-3 items-center"
                 >
-                  <p className="font-bold text-slate-800">{info.name}</p>
-                  {(info.color || info.size) && (
-                    <div className="flex flex-wrap gap-1.5 mt-1.5">
-                      {info.color && (
-                        <span className="text-[10px] font-bold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded border border-indigo-100">
-                          Warna: {info.color}
-                        </span>
-                      )}
-                      {info.size && (
-                        <span className="text-[10px] font-bold bg-slate-100 text-slate-700 px-2 py-0.5 rounded border border-slate-200">
-                          Ukuran: {info.size}
-                        </span>
-                      )}
+                  {p.imageUrl && (
+                    <div className="w-12 h-16 rounded-lg overflow-hidden bg-slate-100 border border-slate-200 shrink-0">
+                      <img
+                        src={p.imageUrl}
+                        alt={info.name}
+                        loading="lazy"
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover object-top"
+                      />
                     </div>
                   )}
-                  <div className="flex gap-2 mt-2 items-center flex-wrap">
-                    <span className="text-[10px] font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-600">SKU: {p.sku}</span>
-                    <span className="text-[10px] font-bold text-blue-600">{formatRupiah(p.hargaPromo || p.hargaNormal)}</span>
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${(p.stok ?? 0) > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                      Stok: {p.stok ?? 0} pcs
-                    </span>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-slate-800 truncate">{info.name}</p>
+                    {(info.color || info.size) && (
+                      <div className="flex flex-wrap gap-1.5 mt-1.5">
+                        {info.color && (
+                          <span className="text-[10px] font-bold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded border border-indigo-100">
+                            Warna: {info.color}
+                          </span>
+                        )}
+                        {info.size && (
+                          <span className="text-[10px] font-bold bg-slate-100 text-slate-700 px-2 py-0.5 rounded border border-slate-200">
+                            Ukuran: {info.size}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    <div className="flex gap-2 mt-2 items-center flex-wrap">
+                      <span className="text-[10px] font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-600">SKU: {p.sku}</span>
+                      <span className="text-[10px] font-bold text-blue-600">{formatRupiah(p.hargaPromo || p.hargaNormal)}</span>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${(p.stok ?? 0) > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                        Stok: {p.stok ?? 0} pcs
+                      </span>
+                    </div>
                   </div>
                 </button>
               );
@@ -1246,10 +1263,22 @@ export default function Home() {
 
             <div className="p-5 flex flex-col gap-4">
 
-              {/* Product Name */}
-              <div>
-                <h2 className="text-xl font-bold text-slate-800 leading-snug">{parsedInfo.name}</h2>
-                <div className="flex flex-wrap gap-2 mt-2.5">
+              {/* Product Header: Photo & Name */}
+              <div className="flex gap-4 items-start">
+                {product.imageUrl && (
+                  <div className="w-20 h-28 sm:w-24 sm:h-32 rounded-xl overflow-hidden bg-slate-100 border border-slate-200/80 shrink-0 shadow-xs">
+                    <img
+                      src={product.imageUrl}
+                      alt={parsedInfo.name}
+                      loading="lazy"
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover object-top"
+                    />
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <h2 className="text-xl font-bold text-slate-800 leading-snug">{parsedInfo.name}</h2>
+                  <div className="flex flex-wrap gap-2 mt-2.5">
                   {parsedInfo.color && (
                     <div className="flex items-center overflow-hidden rounded-md border border-indigo-100 bg-indigo-50/50">
                       <span className="bg-indigo-100/80 px-2 py-1 text-[10px] font-bold text-indigo-800 uppercase tracking-wider border-r border-indigo-100">
@@ -1294,6 +1323,7 @@ export default function Home() {
                     </div>
                   )}
                 </div>
+              </div>
               </div>
 
               {/* Promo Banner di bawah Deskripsi — Aman dan Tidak Pernah Ter-crop */}

@@ -104,16 +104,29 @@ Di file `src/components/Sidebar.tsx`:
    * Loop scheduler resilient (anti-dead-loop) dengan heartbeat timer.
    * Cooldown 60 detik pada update check Kiosk saat tab aktif kembali untuk menghemat kuota & daya baterai.
 
-5. **Commit 5:** `fix(sa): remove barcode scanner and camera icon from SA app, unify 100% pure TextScanner`  
+5. **Commit 5:** `acc0e0f`  
+   *`fix(sa): remove barcode scanner and camera icon from SA app, unify 100% pure TextScanner`*  
    * Menghapus icon kamera barcode dari input search bar aplikasi SA (`src/app/page.tsx`).
    * Menghapus komponen dynamic import `Scanner.tsx` barcode dari aplikasi SA.
    * Menyatukan pengalaman pemindaian staf SA menjadi murni dedicated 1 tombol `ScanText` (SKU 8 Digit).
    * Memastikan optimasi baterai dan instant wake-up aktif penuh untuk staf SA.
 
+6. **Commit 6:** `26685f9`  
+   *`fix(ui): numeric-only keypad for NIK and developer badge under name`*  
+   * Input NIK di halaman login (`/login`) dan admin user management (`/super-admin/users`) dikhususkan untuk keyboard numerik mobile (`inputMode="numeric"`, `pattern="[0-9]*"`, dan auto-strip karakter non-angka).
+   * Badge "Developer" dipindahkan ke bawah nama "Luqman Arif" di halaman login, sidebar menu, dan super-admin.
+
+7. **Commit 7:** `feat(products): sync official Matahari images and display in Kiosk and SA apps`  
+   * Penambahan kolom `imageUrl String?` pada model `Product` di Prisma schema & migrasi live Supabase.
+   * Sinkronisasi 2.551 foto produk HD resmi SUKO dari Shopify Matahari (`https://matahari.com/collections/hp-brand-suko/products.json?limit=250`).
+   * Sesuai arahan: 4 SKU yang belum ada di database fisik tidak ditambahkan dummy-nya; akan masuk natural saat update PQ dan promo baru.
+   * Pembaruan Dexie IndexedDB offline database ke skema `v7` dengan kolom `imageUrl`.
+   * Tampilan foto produk premium di Kiosk (`/cek-harga`), Sales Assistant (`/`), daftar pilihan pencarian, dan halaman Barang Baru (`/barang-baru`).
+
 ---
 
 ## 📝 4. Rencana Kerja Selanjutnya (Besok)
 * Pengujian lapangan (*field-testing*) langsung di toko menggunakan perangkat di Pakuwon Mall.
-* Verifikasi integrasi upload file PQ dan Promo baru ketika ada artikel/warna musiman baru yang masuk.
+* Verifikasi integrasi upload file PQ dan Promo baru ketika ada artikel/warna musiman baru yang masuk (foto & harga akan langsung tersinkronisasi).
 * Pemantauan performa auto-deploy di Vercel dan Railway.
 
