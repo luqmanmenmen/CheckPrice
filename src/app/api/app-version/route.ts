@@ -8,8 +8,8 @@ export async function GET() {
   const versionInfo = {
     version: APP_VERSION,
     buildId: APP_BUILD_ID,
-    releaseDate: "2026-10-15T01:30:00+07:00",
-    notes: "UI/UX enhancements for smaller mobile screens (iPhone XR) and app version update/clear cache system."
+    releaseDate: "2026-10-18T05:15:00+07:00",
+    notes: "Pembaruan Scanner 60 FPS: Dual-Engine Hardware Barcode & AI OCR Super Cepat (Bebas Freeze & Bebas Lemot)."
   };
 
   return NextResponse.json(versionInfo, {
