@@ -33,6 +33,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
   const blacklistedSkus = useRef<Set<string>>(new Set());
   const invalidSkus = useRef<Set<string>>(new Set());
   const pendingChecks = useRef<Set<string>>(new Set());
+  const lastWrongFeedbackTime = useRef(0);
 
   const [status, setStatus] = useState("Menyiapkan Pemindai Teks SKU...");
   const [torchOn, setTorchOn] = useState(false);
@@ -242,11 +243,27 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
       if (validSku) {
         await handleSuccess(validSku);
+      } else {
+        // Jika kamera mendeteksi angka atau teks tetapi bukan SKU yang valid
+        const cleanRaw = raw.trim();
+        const hasNumbersOrCode = /\b\d{4,}\b/.test(cleanRaw) || cleanRaw.length > 5;
+        const now = Date.now();
+        if (hasNumbersOrCode && now - lastWrongFeedbackTime.current > 1500 && scanFeedback === "idle") {
+          lastWrongFeedbackTime.current = now;
+          setScanFeedback("wrong_target");
+          setStatus("Bukan SKU! Arahkan ke 8 digit SKU hangtag");
+          setTimeout(() => {
+            setScanFeedback("idle");
+            if (!isHandlingResult.current) {
+              setStatus("Arahkan angka SKU (8 Digit) ke garis merah");
+            }
+          }, 800);
+        }
       }
     } catch {
       // Abaikan frame drop sesaat
     }
-  }, [resolveSku, handleSuccess]);
+  }, [resolveSku, handleSuccess, scanFeedback]);
 
   // Loop Kamera 60 FPS (Bebas Freeze karena OCR berjalan asinkron dan tidak memblokir render)
   const frameLoop = useCallback(() => {
@@ -461,7 +478,11 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
             {/* Efek Flash Merah jika Salah Target */}
             {scanFeedback === "wrong_target" && (
-              <div className="absolute inset-0 bg-red-500/20 animate-pulse z-10" />
+              <div className="absolute inset-0 bg-red-600/25 animate-pulse z-10 flex items-center justify-center">
+                <span className="bg-red-600 text-white text-[10px] font-black tracking-widest px-2.5 py-0.5 rounded-full shadow-lg border border-white/20 uppercase">
+                  Bukan SKU
+                </span>
+              </div>
             )}
           </div>
         )}
