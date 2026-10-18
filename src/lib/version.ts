@@ -1,5 +1,5 @@
-export const APP_VERSION = "2.4.0";
-export const APP_BUILD_ID = "20261018-v2.4.0-pubsub-sync-fix";
+export const APP_VERSION = "2.5.1";
+export const APP_BUILD_ID = "20261018-v2.5.1-fast-barcode-and-fast-db";
 
 export interface VersionInfo {
   version: string;
@@ -89,9 +89,10 @@ export async function forceAppUpdate(options?: { clearOfflineData?: boolean }) {
     // 4. Jika diminta bersihkan offline database juga
     if (options?.clearOfflineData) {
       localStorage.removeItem('suko_server_version');
+      localStorage.removeItem('suko_db_schema_version');
       try {
-        const { db } = await import('@/lib/offlineDb');
-        await db.products.clear();
+        const Dexie = (await import('dexie')).default;
+        await Dexie.delete('SukoScannerDB');
       } catch (e) {
         console.error("Gagal mengosongkan offline db:", e);
       }

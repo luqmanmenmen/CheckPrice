@@ -3,11 +3,10 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { Tag, Sparkles, AlertCircle, Camera, RefreshCw, Zap, Gift, Percent } from "lucide-react";
-import { DetectedSku } from "@/components/TextScanner";
 import ProductImageSlider from "@/components/ProductImageSlider";
 
-// Engine TextScanner — scan teks SKU 8 digit
-const TextScanner = dynamic(() => import("@/components/TextScanner"), { ssr: false });
+// Engine Scanner (Barcode 1D/2D)
+const Scanner = dynamic(() => import("@/components/Scanner"), { ssr: false });
 
 type ProductData = {
   sku: string;
@@ -114,19 +113,19 @@ export default function CekHargaPage() {
   // In-memory session cache — scan ulang produk yang sama = instan (0ms)
   const sessionCache = useRef<Map<string, ProductData>>(new Map());
 
-  // Inisialisasi Database Offline di awal kunjungan (Download Cache 180 KB)
+  // Inisialisasi Database Offline di awal kunjungan
   useEffect(() => {
     let isMounted = true;
 
     const initDb = async () => {
       try {
-        const { db, syncOfflineDatabase, checkIfUpdateAvailable } = await import("@/lib/offlineDb");
-        const count = await db.products.count();
+        const { db, syncOfflineDatabase, checkIfUpdateAvailable, ensureDbOpenSafe } = await import("@/lib/offlineDb");
+        await ensureDbOpenSafe();
+        const count = await db.products.count().catch(() => 0);
         const localSchema = typeof window !== "undefined" ? localStorage.getItem("suko_db_schema_version") : null;
 
-        // 1. Jika pertama kali buka atau skema belum v9:
-        // Tampilkan loading sync cepat
-        if (count < 500 || localSchema !== "v9") {
+        // 1. Jika pertama kali buka atau skema belum v10:
+        if (count < 500 || localSchema !== "v10") {
           if (isMounted) setDbState("syncing");
           await syncOfflineDatabase((syncing, prog) => {
             if (isMounted && prog !== undefined) setSyncProgress(prog);
@@ -356,9 +355,9 @@ export default function CekHargaPage() {
     searchProduct(targetSku);
   };
 
-  // Handler TextScanner — dipanggil otomatis begitu SKU 8 digit terdeteksi
-  const handleTextScanSuccess = (sku: string, _detected: DetectedSku) => {
-    if (sku) searchProduct(sku);
+  // Handler Barcode Scanner — dipanggil otomatis begitu barcode garis terdeteksi (Super Cepat <50ms)
+  const handleBarcodeSuccess = (decodedBarcode: string) => {
+    if (decodedBarcode) searchProduct(decodedBarcode);
   };
 
   // Auto-search dari URL params (?sku= / ?barcode= / ?q=)
@@ -465,25 +464,26 @@ export default function CekHargaPage() {
 
   return (
     <div className="min-h-[100dvh] bg-black flex flex-col font-sans">
-      {/* ── SCANNING VIEW (Full Screen TextScanner SKU) ── */}
+      {/* ── SCANNING VIEW (Barcode Scanner) ── */}
       {isScanning && (
         <div className="fixed inset-0 z-[100] bg-black flex flex-col">
-          {/* Header bersih — TANPA tombol login staff */}
-          <div className="flex justify-between items-center px-4 py-3 bg-slate-900/90 backdrop-blur-md text-white z-10">
+          {/* Header bersih */}
+          <div className="flex justify-between items-center px-4 py-3 bg-slate-900/95 backdrop-blur-md text-white z-10 border-b border-slate-800">
             <div className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-amber-300" />
-              <span className="font-black text-sm tracking-wide">CEK HARGA • Scan Teks SKU</span>
+              <span className="font-black text-sm tracking-wide">CEK HARGA</span>
             </div>
-            {/* Status Kecepatan Offline 0ms */}
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-[10px] font-bold text-emerald-400">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              Mode Cepat 0ms
-            </div>
+            <span className="text-xs font-bold text-slate-400">Barcode Scanner</span>
           </div>
 
-          {/* TextScanner full height — Murni Scan Teks SKU 8 Digit */}
-          <div className="flex-1 overflow-hidden">
-            <TextScanner onScanResult={handleTextScanSuccess} />
+          {/* Scanner Area */}
+          <div className="flex-1 overflow-hidden relative flex flex-col items-center justify-center bg-black">
+            <div className="w-full h-full max-w-md mx-auto flex flex-col justify-center px-4">
+              <Scanner onScanSuccess={handleBarcodeSuccess} />
+              <p className="text-center text-xs font-bold text-slate-400 mt-4">
+                Arahkan kamera ke barcode garis produk
+              </p>
+            </div>
           </div>
         </div>
       )}

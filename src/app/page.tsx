@@ -2,8 +2,7 @@
 
 import { useState, useRef } from "react";
 import dynamic from "next/dynamic";
-import { Search, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle, ScanText, ArrowLeft, CloudDownload, Loader2, Menu, Sparkles, ArrowRight, Gift } from "lucide-react";
-import { DetectedSku } from "@/components/TextScanner";
+import { Search, Camera, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle, ArrowLeft, CloudDownload, Loader2, Menu, Sparkles, ArrowRight, Gift } from "lucide-react";
 import { useEffect } from "react";
 import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
 import PullToRefresh from "@/components/PullToRefresh";
@@ -17,7 +16,7 @@ import { createPortal } from "react-dom";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
-const TextScanner = dynamic(() => import("@/components/TextScanner"), { ssr: false });
+const Scanner = dynamic(() => import("@/components/Scanner"), { ssr: false });
 
 type ProductData = {
   id: number;
@@ -242,25 +241,32 @@ export default function Home() {
 
   const hasNewUpdate = Boolean(serverVersion && (!localVersion || serverVersion !== localVersion));
 
-  // Cek apakah database lokal masih kosong (<500 produk) saat pertama kali buka aplikasi
+  // Auto-sync database lokal di background saat halaman dibuka atau jika ada update harga/promo baru
   useEffect(() => {
     let isMounted = true;
-    const checkInitialDb = async () => {
+    const autoSync = async () => {
       try {
-        const { syncOfflineDatabase, db } = await import('@/lib/offlineDb');
-        const count = await db.products.count().catch(() => 0);
-        if (count < 500) {
+        const { checkIfUpdateAvailable, syncOfflineDatabase, db } = await import('@/lib/offlineDb');
+        const count = await db.products.count();
+        const hasUpdate = await checkIfUpdateAvailable();
+        
+        // Jika database belum lengkap atau terdeteksi promo baru di server
+        if (count < 1000 || hasUpdate) {
           if (isMounted) setIsSyncing(true);
           await syncOfflineDatabase(undefined, true);
+          if (serverVersion) {
+            localStorage.setItem("suko_server_version", serverVersion);
+            setLocalVersion(serverVersion);
+          }
           if (isMounted) setIsSyncing(false);
         }
       } catch (e) {
         if (isMounted) setIsSyncing(false);
       }
     };
-    checkInitialDb();
+    autoSync();
     return () => { isMounted = false; };
-  }, []);
+  }, [serverVersion]);
 
   const lastUpdateDate = updateData?.lastUpdate 
     ? new Date(updateData.lastUpdate).toLocaleString('id-ID', {
@@ -274,18 +280,14 @@ export default function Home() {
     showToast("Mengupdate database lokal...", "success");
     try {
       const { syncOfflineDatabase } = await import('@/lib/offlineDb');
-      const success = await syncOfflineDatabase((syncing) => {
+      await syncOfflineDatabase((syncing) => {
         setIsSyncing(syncing);
       }, true);
-      if (success) {
-        if (serverVersion) {
-          localStorage.setItem("suko_server_version", serverVersion);
-          setLocalVersion(serverVersion);
-        }
-        showToast("Data Offline berhasil diupdate!", "success");
-      } else {
-        showToast("Gagal update data offline", "error");
+      if (serverVersion) {
+        localStorage.setItem("suko_server_version", serverVersion);
+        setLocalVersion(serverVersion);
       }
+      showToast("Data Offline berhasil diupdate!", "success");
     } catch (e) {
       showToast("Gagal update data offline", "error");
     } finally {
@@ -640,11 +642,9 @@ export default function Home() {
     }
   };
 
-  const handleTextScanSuccess = (sku: string) => {
-    if (sku) {
-      setManualInput(sku);
-      searchProduct(sku);
-    }
+  const handleBarcodeSuccess = (result: string) => {
+    setManualInput(result);
+    searchProduct(result);
     setIsScanning(false);
   };
 
@@ -1117,10 +1117,10 @@ export default function Home() {
                 <button 
                   type="button"
                   onClick={() => setIsScanning(!isScanning)}
-                  title="Scan SKU (OCR Teks 8 Digit)"
-                  className={`p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 transition-colors ${isScanning ? "text-indigo-600 bg-indigo-50" : ""}`}
+                  title="Scan Barcode Garis"
+                  className={`p-1.5 rounded-lg text-slate-400 hover:text-blue-600 transition-colors ${isScanning ? "text-blue-600 bg-blue-50" : ""}`}
                 >
-                  <ScanText className="w-5 h-5" />
+                  <Camera className="w-5 h-5" />
                 </button>
               )}
             </div>
@@ -1136,21 +1136,19 @@ export default function Home() {
 
       </div>
 
-      {/* Full Screen Scanner Views (Murni TextScanner SKU 8 Digit) */}
+      {/* Full Screen Barcode Scanner */}
       {isScanning && (
         <div className="fixed inset-0 z-[100] bg-black flex flex-col animate-in fade-in zoom-in-95 duration-300">
           <div className="flex justify-between items-center p-4 bg-slate-900 text-white shadow-md z-10">
-            <div className="flex items-center gap-2">
-              <ScanText className="w-5 h-5 text-indigo-400" />
-              <h3 className="font-bold">Scan Teks (SKU 8 Digit)</h3>
-            </div>
+            <h3 className="font-bold">Scan Barcode Garis</h3>
             <button onClick={() => setIsScanning(false)} className="p-2 bg-slate-800 rounded-full hover:bg-slate-700 transition-colors">
               <X className="w-6 h-6 text-white" />
             </button>
           </div>
           <div className="flex-1 relative overflow-hidden bg-black flex items-center justify-center">
             <div className="w-full h-full max-w-2xl mx-auto flex flex-col justify-center px-4">
-              <TextScanner onScanResult={handleTextScanSuccess} />
+              <Scanner onScanSuccess={handleBarcodeSuccess} />
+              <p className="text-center text-sm font-bold text-slate-300 mt-6 absolute bottom-12 w-full left-0">Arahkan kamera ke barcode garis</p>
             </div>
           </div>
         </div>

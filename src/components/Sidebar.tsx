@@ -17,8 +17,7 @@ import {
   CheckCircle2,
   RefreshCw,
   UserCircle2,
-  ScanBarcode,
-  AlertCircle
+  ScanBarcode
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -33,8 +32,6 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [isClearingCache, setIsClearingCache] = useState(false);
   const [syncProgress, setSyncProgress] = useState<number | undefined>(undefined);
-  const [syncStatusMsg, setSyncStatusMsg] = useState<string>("Mengunduh data harga, promo & gambar terbaru...");
-  const [syncError, setSyncError] = useState<string | null>(null);
   const [showUpToDateModal, setShowUpToDateModal] = useState(false);
   const [cachedUser, setCachedUser] = useState<any>(null);
   const [lastSyncDate, setLastSyncDate] = useState<string | null>(null);
@@ -82,21 +79,16 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
 
   const handleManualSync = async () => {
     setIsSyncing(true);
-    setSyncProgress(5);
-    setSyncError(null);
-    setSyncStatusMsg("Menyiapkan sinkronisasi data...");
+    setSyncProgress(0);
     setIsOpen(false);
     try {
       const { syncOfflineDatabase } = await import('@/lib/offlineDb');
-      const success = await syncOfflineDatabase((syncing, prog, msg) => {
+      const success = await syncOfflineDatabase((syncing, prog) => {
         setIsSyncing(syncing);
         if (prog !== undefined) setSyncProgress(prog);
-        if (msg) setSyncStatusMsg(msg);
       }, true);
 
-      if (!success) {
-        setSyncError("Gagal memperbarui database offline. Pastikan koneksi internet stabil.");
-      } else {
+      if (success) {
         // Refresh status tanggal sync
         const storedVer = localStorage.getItem("suko_server_version");
         if (storedVer) {
@@ -111,16 +103,18 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
           }
         }
       }
-    } catch (e: any) {
+    } catch (e) {
       console.error(e);
-      setSyncError(e?.message || "Terjadi kesalahan saat sinkronisasi data.");
+      setIsSyncing(false);
+    } finally {
+      setSyncProgress(undefined);
     }
   };
 
   const handleForceUpdateApp = async () => {
-    if (confirm("Perbarui aplikasi dan bersihkan cache? Aplikasi akan memuat ulang versi terbaru.")) {
+    if (confirm("Perbarui aplikasi dan bersihkan semua cache & database offline? Aplikasi akan memuat ulang versi terbaru.")) {
       setIsClearingCache(true);
-      await forceAppUpdate({ clearOfflineData: false });
+      await forceAppUpdate({ clearOfflineData: true });
     }
   };
 
@@ -409,76 +403,19 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
             </div>
           )}
 
-          {/* Full Screen Download Overlay if Syncing or Sync Error */}
-          {(isSyncing || syncError) && (
+          {/* Full Screen Download Overlay if Syncing */}
+          {isSyncing && (
             <div className="fixed inset-0 z-[99999] bg-slate-950/75 backdrop-blur-md flex flex-col items-center justify-center p-4 animate-in fade-in duration-300 select-none">
-              <div className="bg-white/95 backdrop-blur-xl border border-white/50 rounded-3xl p-6 sm:p-8 shadow-2xl flex flex-col items-center max-w-xs w-full text-center">
-                {syncError ? (
-                  <>
-                    <div className="w-14 h-14 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-3">
-                      <AlertCircle className="w-7 h-7" />
-                    </div>
-                    <h3 className="text-base font-bold text-slate-800 mb-1">
-                      Sinkronisasi Gagal
-                    </h3>
-                    <p className="text-xs text-slate-500 mb-5 leading-relaxed">
-                      {syncError}
-                    </p>
-                    <div className="flex gap-2 w-full">
-                      <button
-                        onClick={() => {
-                          setSyncError(null);
-                          handleManualSync();
-                        }}
-                        className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all"
-                      >
-                        Coba Lagi
-                      </button>
-                      <button
-                        onClick={() => {
-                          setSyncError(null);
-                          setIsSyncing(false);
-                        }}
-                        className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all"
-                      >
-                        Tutup
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <ShiftLoader progress={syncProgress} />
-                    <div className="mt-6 flex flex-col items-center gap-1.5 w-full">
-                      <div className="flex items-center justify-between w-full px-1">
-                        <span className="text-xs font-black tracking-wider text-slate-800">
-                          MENYINKRONKAN DATA
-                        </span>
-                        <span className="text-xs font-bold font-mono text-blue-600">
-                          {syncProgress ?? 0}%
-                        </span>
-                      </div>
-
-                      {/* Visible Progress Bar */}
-                      <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden mt-1 border border-slate-200/50">
-                        <div
-                          className="h-full bg-gradient-to-r from-blue-500 to-indigo-600 rounded-full transition-all duration-300"
-                          style={{ width: `${Math.max(5, syncProgress ?? 0)}%` }}
-                        />
-                      </div>
-
-                      <p className="text-[11px] text-slate-500 font-medium leading-relaxed mt-2 truncate w-full">
-                        {syncStatusMsg}
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => setIsSyncing(false)}
-                        className="mt-3 text-[11px] font-semibold text-slate-400 hover:text-slate-600 transition-colors py-1 px-3 rounded-lg hover:bg-slate-100"
-                      >
-                        Lanjutkan di Latar Belakang
-                      </button>
-                    </div>
-                  </>
-                )}
+              <div className="bg-white/95 backdrop-blur-xl border border-white/50 rounded-3xl p-8 sm:p-10 shadow-2xl flex flex-col items-center max-w-xs w-full text-center">
+                <ShiftLoader progress={syncProgress} />
+                <div className="mt-8 flex flex-col items-center gap-1.5">
+                  <h3 className="text-base sm:text-lg font-black text-slate-800 tracking-wider">
+                    MENYINKRONKAN DATA
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                    Mengunduh data harga, promo & gambar terbaru...
+                  </p>
+                </div>
               </div>
             </div>
           )}

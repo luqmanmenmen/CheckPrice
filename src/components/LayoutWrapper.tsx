@@ -83,7 +83,6 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   const [isSyncing, setIsSyncing] = useState(false);
   const [showDbUpdateModal, setShowDbUpdateModal] = useState(false);
   const [syncProgress, setSyncProgress] = useState<number | undefined>(undefined);
-  const [syncStatusMsg, setSyncStatusMsg] = useState<string>("Mengunduh data harga & promo terbaru...");
   
   useEffect(() => {
     if (!isAuth && !isCekHarga && data?.user) {
@@ -98,19 +97,18 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   const handleStartDbUpdate = async () => {
     setShowDbUpdateModal(false);
     setIsSyncing(true);
-    setSyncProgress(10);
-    setSyncStatusMsg("Mengunduh data harga & promo terbaru...");
+    setSyncProgress(0);
     try {
       const { syncOfflineDatabase } = await import("@/lib/offlineDb");
-      await syncOfflineDatabase((syncing, prog, msg) => {
+      await syncOfflineDatabase((syncing, prog) => {
         setIsSyncing(syncing);
         if (prog !== undefined) setSyncProgress(prog);
-        if (msg) setSyncStatusMsg(msg);
       }, true);
     } catch (e) {
       console.error(e);
-    } finally {
       setIsSyncing(false);
+    } finally {
+      setSyncProgress(undefined);
     }
   };
 
@@ -213,36 +211,9 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
       
       {/* Full Screen Download Overlay if Syncing */}
       {isSyncing && (
-        <div className="fixed inset-0 z-[200] bg-slate-950/75 backdrop-blur-md flex flex-col items-center justify-center p-4 transition-all duration-300">
-          <div className="bg-white/95 backdrop-blur-xl border border-white/50 rounded-3xl p-6 sm:p-8 shadow-2xl flex flex-col items-center max-w-xs w-full text-center">
-            <ShiftLoader progress={syncProgress} />
-            <div className="mt-6 flex flex-col items-center gap-1.5 w-full">
-              <div className="flex items-center justify-between w-full px-1">
-                <span className="text-xs font-black tracking-wider text-slate-800">
-                  MENYINKRONKAN DATA
-                </span>
-                <span className="text-xs font-bold font-mono text-blue-600">
-                  {syncProgress ?? 0}%
-                </span>
-              </div>
-              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden mt-1 border border-slate-200/50">
-                <div
-                  className="h-full bg-gradient-to-r from-blue-500 to-indigo-600 rounded-full transition-all duration-300"
-                  style={{ width: `${Math.max(5, syncProgress ?? 0)}%` }}
-                />
-              </div>
-              <p className="text-[11px] text-slate-500 font-medium leading-relaxed mt-2 truncate w-full">
-                {syncStatusMsg}
-              </p>
-              <button
-                type="button"
-                onClick={() => setIsSyncing(false)}
-                className="mt-3 text-[11px] font-semibold text-slate-400 hover:text-slate-600 transition-colors py-1 px-3 rounded-lg hover:bg-slate-100"
-              >
-                Lanjutkan di Latar Belakang
-              </button>
-            </div>
-          </div>
+        <div className="fixed inset-0 z-[200] bg-white flex flex-col items-center justify-center transition-all duration-500 ease-out opacity-100 visible">
+          <ShiftLoader progress={syncProgress} />
+          <p className="text-slate-800 font-bold mt-16 text-sm tracking-[0.3em] animate-pulse">MENYINKRONKAN DATA...</p>
         </div>
       )}
 

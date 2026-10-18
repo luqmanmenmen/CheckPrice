@@ -28,12 +28,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
   const isOcrRunningRef = useRef(false);
   const lastOcrTimeRef = useRef(0);
   const animationFrameIdRef = useRef<number | null>(null);
-
-  // Cache SKU yang sudah pernah diperiksa agar tidak query berulang-ulang
   const blacklistedSkus = useRef<Set<string>>(new Set());
-  const invalidSkus = useRef<Set<string>>(new Set());
-  const pendingChecks = useRef<Set<string>>(new Set());
-  const lastWrongFeedbackTime = useRef(0);
 
   const [status, setStatus] = useState("Menyiapkan Pemindai Teks SKU...");
   const [torchOn, setTorchOn] = useState(false);
@@ -41,101 +36,64 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
   const [foundSku, setFoundSku] = useState<string | null>(null);
   const [scanFeedback, setScanFeedback] = useState<"idle" | "wrong_target">("idle");
 
-  // Helper cek SKU ke server endpoint Next.js jika belum ada di Dexie lokal
-  async function checkRemoteSku(sku: string): Promise<"FOUND" | "NOT_FOUND" | "NETWORK_ERROR"> {
-    try {
-      const res = await fetch(`/api/product/${encodeURIComponent(sku)}?page=1`, {
-        cache: "no-store",
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data && (data.data || (Array.isArray(data) && data.length > 0))) {
-          return "FOUND";
-        }
-        return "NOT_FOUND";
-      }
-      if (res.status === 404) {
-        return "NOT_FOUND";
-      }
-    } catch {
-      return "NETWORK_ERROR";
-    }
-    return "NOT_FOUND";
-  }
-
-  // Validasi teks hasil OCR: Ekstrak SKU 8 digit tanpa terblokir kode pabrik ber-strip
+  // Validasi apakah string adalah SKU toko 8 digit yang sah (Cek Dexie IndexedDB <0.05ms)
   const resolveSku = useCallback(async (text: string): Promise<string | null> => {
     if (!text) return null;
     const clean = text.trim();
 
-    // 1. Bersihkan kode pabrik / nomor artikel ber-strip (misal "602-12156403", "605-12218278")
-    // PENTING: Jangan abort/return null jika ada kode pabrik! Kode pabrik dibersihkan dari string
-    // agar deretan angka SKU 8 digit asli di baris bawah atau sampingnya dapat terbaca dengan sempurna.
-    const textWithoutHyphens = clean.replace(/\b\d{2,4}\s*-\s*\d{5,10}\b/g, " ");
-
-    // 2. Kumpulkan seluruh kandidat angka 8 digit
-    const candidates: string[] = [];
-
-    // Cari pola angka 8 digit murni dengan boundary
-    const regex8 = /\b\d{8}\b/g;
-    let match: RegExpExecArray | null;
-    while ((match = regex8.exec(textWithoutHyphens)) !== null) {
-      const val = match[0];
-      if (!candidates.includes(val) && !blacklistedSkus.current.has(val) && !invalidSkus.current.has(val)) {
-        candidates.push(val);
-      }
+    // 1. FILTER ANTI-ARTIKEL (KODE PABRIK): Misal "605-12218278" atau format dengan tanda strip
+    if (/\b\d{3,4}\s*-\s*\d{6,10}\b/.test(clean)) {
+      return null;
     }
 
-    // Fallback: pecah token jika ada karakter pemisah yang menempel (misal "S 15728804" atau "15728804.")
-    const tokens = textWithoutHyphens.replace(/[^0-9\s]/g, " ").split(/\s+/);
+    // 2. Cek apakah teks adalah 8 digit murni
+    if (/^\d{8}$/.test(clean)) {
+      if (blacklistedSkus.current.has(clean)) return null;
+      try {
+        const product = await db.products.get(clean);
+        if (product) return product.sku;
+      } catch {}
+
+      // Fallback API server jika cache IndexedDB lokal belum siap
+      const existsOnServer = await checkRemoteSku(clean);
+      if (existsOnServer) return clean;
+      return null;
+    }
+
+    // 3. Pecah berdasarkan spasi/baris untuk mengambil deretan angka
+    const tokens = clean.replace(/[^0-9-\s]/g, " ").split(/\s+/);
     for (const token of tokens) {
-      if (
-        token.length === 8 &&
-        /^\d{8}$/.test(token) &&
-        !candidates.includes(token) &&
-        !blacklistedSkus.current.has(token) &&
-        !invalidSkus.current.has(token)
-      ) {
-        candidates.push(token);
-      }
-    }
+      if (!token || token.includes("-")) continue;
+      const digits = token.replace(/\D/g, "");
 
-    if (candidates.length === 0) return null;
+      // HANYA terima jika tepat 8 digit angka murni
+      if (digits.length === 8) {
+        if (blacklistedSkus.current.has(digits)) continue;
+        try {
+          const product = await db.products.get(digits);
+          if (product) return product.sku;
+        } catch {}
 
-    // 3. Verifikasi kandidat: Cek IndexedDB lokal (<0.05ms) terlebih dahulu untuk respon instan
-    for (const cand of candidates) {
-      try {
-        const product = await db.products.get(cand);
-        if (product && product.sku) {
-          return product.sku;
-        }
-      } catch { }
-    }
-
-    // 4. Jika belum ada di cache Dexie lokal, cek ke Server API
-    for (const cand of candidates) {
-      if (pendingChecks.current.has(cand)) continue;
-      pendingChecks.current.add(cand);
-
-      try {
-        const checkResult = await checkRemoteSku(cand);
-        pendingChecks.current.delete(cand);
-
-        if (checkResult === "FOUND") {
-          return cand;
-        } else if (checkResult === "NOT_FOUND") {
-          invalidSkus.current.add(cand);
-        } else if (checkResult === "NETWORK_ERROR" && candidates.length === 1) {
-          // Jika offline atau jaringan terputus dan hanya ada 1 kandidat 8 digit murni, terima langsung
-          return cand;
-        }
-      } catch {
-        pendingChecks.current.delete(cand);
+        const existsOnServer = await checkRemoteSku(digits);
+        if (existsOnServer) return digits;
       }
     }
 
     return null;
   }, []);
+
+  async function checkRemoteSku(sku: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/product/${encodeURIComponent(sku)}?page=1`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && (data.data || (Array.isArray(data) && data.length > 0))) {
+          return true;
+        }
+      }
+    } catch {}
+    return false;
+  }
 
   // Eksekusi jika SKU 8 digit berhasil dikenali
   const handleSuccess = useCallback(async (sku: string) => {
@@ -152,7 +110,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     if (typeof navigator !== "undefined" && navigator.vibrate) {
       try {
         navigator.vibrate(50);
-      } catch { }
+      } catch {}
     }
 
     setFoundSku(sku);
@@ -176,61 +134,35 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
     setTimeout(() => {
       onScanResult(sku, { text: sku, bbox: { x0: 0, y0: 0, x1: 0, y1: 0 }, rawText: sku }, snapshot);
-    }, 400);
+    }, 600);
   }, [onScanResult]);
 
-  // Eksekusi OCR Ringan, Cepat, & Presisi (Proyeksi Viewfinder 1:1, PSM SINGLE_BLOCK, GPU Filter)
+  // Eksekusi OCR Ringan & Super Cepat (Non-blocking, GPU Filter, Single Line PSM 7)
   const runOcrPass = useCallback(async (video: HTMLVideoElement) => {
     if (!workerRef.current || !canvasRef.current || isHandlingResult.current) return;
 
     const vw = video.videoWidth;
     const vh = video.videoHeight;
-    const cw = video.clientWidth;
-    const ch = video.clientHeight;
-    if (!vw || !vh || !cw || !ch) return;
-
-    // Hitung proyeksi koordinat viewfinder UI ke buffer video kamera (akurat untuk CSS object-cover)
-    const scale = Math.max(cw / vw, ch / vh);
-    const renderedW = vw * scale;
-    const renderedH = vh * scale;
-    const offsetX = (cw - renderedW) / 2;
-    const offsetY = (ch - renderedH) / 2;
-
-    // Posisi kotak merah di layar: lebar 84%, tinggi 20% (min 80px), vertikal di tengah
-    const overlayW = cw * 0.84;
-    const overlayH = Math.max(ch * 0.20, 80);
-    const overlayX = (cw - overlayW) / 2;
-    const overlayY = (ch - overlayH) / 2;
-
-    // Konversi ke koordinat video asli dengan margin ekstra 10-15% agar teks di dekat sudut tetap tertangkap
-    const rawX = (overlayX - offsetX) / scale;
-    const rawY = (overlayY - offsetY) / scale;
-    const rawW = overlayW / scale;
-    const rawH = overlayH / scale;
-
-    const padX = rawW * 0.08;
-    const padY = rawH * 0.15;
-
-    const startX = Math.max(0, rawX - padX);
-    const startY = Math.max(0, rawY - padY);
-    const roiW = Math.min(vw - startX, rawW + padX * 2);
-    const roiH = Math.min(vh - startY, rawH + padY * 2);
-    if (roiW <= 0 || roiH <= 0) return;
-
-    // Ukuran target canvas: pertahankan aspect ratio murni tanpa stretch/squash distorsi!
-    // Standarisasi lebar 600px -> tinggi font ideal ~35-45px untuk neural net LSTM Tesseract
-    const targetW = 600;
-    const targetH = Math.max(70, Math.round(targetW * (roiH / roiW)));
+    if (!vw || !vh) return;
 
     const canvas = canvasRef.current;
+    // Ukuran canvas OCR kecil & presisi (360x64 px) -> Tesseract proses dalam ~35ms tanpa beban CPU
+    const targetW = 360;
+    const targetH = 64;
     if (canvas.width !== targetW) canvas.width = targetW;
     if (canvas.height !== targetH) canvas.height = targetH;
 
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return;
 
-    // Filter kontras GPU yang natural: hitamkan teks di atas label putih tanpa merusak ketebalan garis font
-    ctx.filter = "contrast(135%) grayscale(100%) brightness(102%)";
+    // ROI Presisi: Bagian tengah di mana garis merah Alfagift berada
+    const roiW = vw * 0.75;
+    const roiH = Math.max(vh * 0.15, 60);
+    const startX = (vw - roiW) / 2;
+    const startY = (vh - roiH) / 2;
+
+    // Filter Kontras GPU Hardware (0% CPU! Tidak ada loop pixel manual di JavaScript)
+    ctx.filter = "contrast(200%) grayscale(100%) brightness(105%)";
     ctx.drawImage(video, startX, startY, roiW, roiH, 0, 0, targetW, targetH);
     ctx.filter = "none";
 
@@ -243,27 +175,11 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
       if (validSku) {
         await handleSuccess(validSku);
-      } else {
-        // Jika kamera mendeteksi angka atau teks tetapi bukan SKU yang valid
-        const cleanRaw = raw.trim();
-        const hasNumbersOrCode = /\b\d{4,}\b/.test(cleanRaw) || cleanRaw.length > 5;
-        const now = Date.now();
-        if (hasNumbersOrCode && now - lastWrongFeedbackTime.current > 1500 && scanFeedback === "idle") {
-          lastWrongFeedbackTime.current = now;
-          setScanFeedback("wrong_target");
-          setStatus("Bukan SKU! Arahkan ke 8 digit SKU hangtag");
-          setTimeout(() => {
-            setScanFeedback("idle");
-            if (!isHandlingResult.current) {
-              setStatus("Arahkan angka SKU (8 Digit) ke garis merah");
-            }
-          }, 800);
-        }
       }
     } catch {
-      // Abaikan frame drop sesaat
+      // Abaikan frame drop
     }
-  }, [resolveSku, handleSuccess, scanFeedback]);
+  }, [resolveSku, handleSuccess]);
 
   // Loop Kamera 60 FPS (Bebas Freeze karena OCR berjalan asinkron dan tidak memblokir render)
   const frameLoop = useCallback(() => {
@@ -277,8 +193,9 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
     const now = performance.now();
 
-    // Jalankan OCR jika tidak ada pass aktif dan sudah lewat 200ms
-    if (workerRef.current && !isOcrRunningRef.current && now - lastOcrTimeRef.current >= 200) {
+    // Jalankan OCR hanya jika tidak ada OCR yang sedang aktif dan sudah lewat 280ms
+    // Ini memberi CPU HP waktu istirahat sehingga kamera tetap mulus 60 FPS & tidak panas
+    if (workerRef.current && !isOcrRunningRef.current && now - lastOcrTimeRef.current >= 280) {
       isOcrRunningRef.current = true;
       lastOcrTimeRef.current = now;
 
@@ -318,19 +235,13 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
           streamRef.current = localStream;
           videoRef.current.srcObject = localStream;
 
-          const startPlayback = () => {
-            videoRef.current?.play().catch(() => { });
+          videoRef.current.onloadedmetadata = () => {
+            videoRef.current?.play().catch(() => {});
             setStatus("Arahkan angka SKU (8 Digit) ke garis merah");
-            if (isLoopRunningRef.current && !animationFrameIdRef.current) {
+            if (isLoopRunningRef.current) {
               animationFrameIdRef.current = requestAnimationFrame(frameLoop);
             }
           };
-
-          if (videoRef.current.readyState >= HTMLMediaElement.HAVE_METADATA) {
-            startPlayback();
-          } else {
-            videoRef.current.onloadedmetadata = startPlayback;
-          }
 
           const track = localStream.getVideoTracks()[0];
           if (track) {
@@ -338,7 +249,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
             if (capabilities?.torch) setHasTorch(true);
 
             if (capabilities?.focusMode?.includes("continuous")) {
-              track.applyConstraints({ advanced: [{ focusMode: "continuous" } as any] }).catch(() => { });
+              track.applyConstraints({ advanced: [{ focusMode: "continuous" } as any] }).catch(() => {});
             }
           }
         }
@@ -348,18 +259,18 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       }
     };
 
-    // 2. Inisialisasi Tesseract Worker: SINGLE_BLOCK untuk multi-baris pada label harga
+    // 2. Inisialisasi Tesseract Worker: Murni Angka 0-9 & Single Line PSM
     const initWorker = async () => {
       try {
-        setStatus("Memuat AI OCR Teks SKU...");
+        setStatus("Memuat AI OCR 8 Digit...");
         const worker = await Tesseract.createWorker("eng");
         await worker.setParameters({
-          tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
+          tessedit_char_whitelist: "0123456789-",
+          tessedit_pageseg_mode: Tesseract.PSM.SINGLE_LINE,
         });
 
         if (isMounted) {
           workerRef.current = worker;
-          setStatus("Arahkan angka SKU (8 Digit) ke garis merah");
         } else {
           worker.terminate();
         }
@@ -370,13 +281,13 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
     Promise.all([startCamera(), initWorker()]);
 
-    // Lifecycle Visibility: 0% CPU saat minimize, bangun instan saat buka kembali
+    // Lifecycle Visibility: 0% CPU saat minimize, bangun instan saat buka
     const handleVisibilityChange = async () => {
       if (document.visibilityState === "visible") {
         isLoopRunningRef.current = true;
 
         if (videoRef.current && videoRef.current.paused) {
-          videoRef.current.play().catch(() => { });
+          videoRef.current.play().catch(() => {});
         }
 
         const tracks = streamRef.current?.getVideoTracks();
@@ -384,7 +295,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
         if (!isTrackAlive) {
           await startCamera();
-        } else if (!animationFrameIdRef.current) {
+        } else {
           animationFrameIdRef.current = requestAnimationFrame(frameLoop);
         }
       } else {
@@ -437,40 +348,45 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     <div className="flex flex-col gap-3">
       {/* Container Video Utama */}
       <div
-        className={`relative rounded-3xl overflow-hidden shadow-2xl border-4 transition-colors duration-300 bg-black ${foundSku
-          ? "border-green-500 ring-4 ring-green-500/20"
-          : scanFeedback === "wrong_target"
+        className={`relative rounded-3xl overflow-hidden shadow-2xl border-4 transition-colors duration-300 bg-black ${
+          foundSku
+            ? "border-green-500 ring-4 ring-green-500/20"
+            : scanFeedback === "wrong_target"
             ? "border-red-500"
             : "border-slate-800"
-          }`}
+        }`}
       >
         <video
           ref={videoRef}
           playsInline
           muted
           autoPlay
-          className="w-full min-h-[320px] sm:min-h-[420px] object-cover"
+          className="w-full min-h-[300px] sm:min-h-[400px] object-cover"
         />
 
-        {/* Kotak ROI (Viewfinder Tengah) Presisi */}
+        {/* Kotak ROI (Overlay Tengah) bergaya Alfagift */}
         {!foundSku && (
-          <div className="absolute top-1/2 left-[8%] right-[8%] h-[20%] min-h-[80px] -translate-y-1/2 shadow-[0_0_0_9999px_rgba(0,0,0,0.6)] z-10 pointer-events-none overflow-hidden">
+          <div className="absolute top-1/2 left-[10%] right-[10%] h-[15%] min-h-[60px] -translate-y-1/2 shadow-[0_0_0_9999px_rgba(0,0,0,0.6)] z-10 pointer-events-none overflow-hidden">
             {/* 4 Sudut Merah (Corners) */}
             <div
-              className={`absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 transition-colors duration-300 ${scanFeedback === "wrong_target" ? "border-red-600" : "border-red-500"
-                } rounded-tl-lg`}
+              className={`absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 transition-colors duration-300 ${
+                scanFeedback === "wrong_target" ? "border-red-600" : "border-red-500"
+              } rounded-tl-lg`}
             />
             <div
-              className={`absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 transition-colors duration-300 ${scanFeedback === "wrong_target" ? "border-red-600" : "border-red-500"
-                } rounded-tr-lg`}
+              className={`absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 transition-colors duration-300 ${
+                scanFeedback === "wrong_target" ? "border-red-600" : "border-red-500"
+              } rounded-tr-lg`}
             />
             <div
-              className={`absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 transition-colors duration-300 ${scanFeedback === "wrong_target" ? "border-red-600" : "border-red-500"
-                } rounded-bl-lg`}
+              className={`absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 transition-colors duration-300 ${
+                scanFeedback === "wrong_target" ? "border-red-600" : "border-red-500"
+              } rounded-bl-lg`}
             />
             <div
-              className={`absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 transition-colors duration-300 ${scanFeedback === "wrong_target" ? "border-red-600" : "border-red-500"
-                } rounded-br-lg`}
+              className={`absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 transition-colors duration-300 ${
+                scanFeedback === "wrong_target" ? "border-red-600" : "border-red-500"
+              } rounded-br-lg`}
             />
 
             {/* Garis Merah Laser Animasi dengan Gradient */}
@@ -478,11 +394,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
             {/* Efek Flash Merah jika Salah Target */}
             {scanFeedback === "wrong_target" && (
-              <div className="absolute inset-0 bg-red-600/25 animate-pulse z-10 flex items-center justify-center">
-                <span className="bg-red-600 text-white text-[10px] font-black tracking-widest px-2.5 py-0.5 rounded-full shadow-lg border border-white/20 uppercase">
-                  Bukan SKU
-                </span>
-              </div>
+              <div className="absolute inset-0 bg-red-500/20 animate-pulse z-10" />
             )}
           </div>
         )}
@@ -522,8 +434,9 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
           ) : (
             <>
               <div
-                className={`flex items-center gap-2 font-bold mb-0.5 ${scanFeedback === "wrong_target" ? "text-red-600" : "text-blue-600"
-                  }`}
+                className={`flex items-center gap-2 font-bold mb-0.5 ${
+                  scanFeedback === "wrong_target" ? "text-red-600" : "text-blue-600"
+                }`}
               >
                 <Loader2 className={`w-4 h-4 ${scanFeedback === "wrong_target" ? "" : "animate-spin"}`} />
                 <span className="text-sm">{scanFeedback === "wrong_target" ? "Target Salah!" : "Siap Memindai"}</span>
