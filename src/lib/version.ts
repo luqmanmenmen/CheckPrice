@@ -1,5 +1,5 @@
-export const APP_VERSION = "2.3.0";
-export const APP_BUILD_ID = "20261018-v2.3.0-ultra-scanner";
+export const APP_VERSION = "2.4.0";
+export const APP_BUILD_ID = "20261018-v2.4.0-pubsub-sync-fix";
 
 export interface VersionInfo {
   version: string;

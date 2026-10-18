@@ -8,8 +8,8 @@ export async function GET() {
   const versionInfo = {
     version: APP_VERSION,
     buildId: APP_BUILD_ID,
-    releaseDate: "2026-10-18T05:15:00+07:00",
-    notes: "Pembaruan Scanner 60 FPS: Dual-Engine Hardware Barcode & AI OCR Super Cepat (Bebas Freeze & Bebas Lemot)."
+    releaseDate: "2026-10-18T13:05:00+07:00",
+    notes: "Pembaruan v2.4.0: Pub/Sub Sync Manager, Failsafe Offline Database, dan AI OCR Target Feedback."
   };
 
   return NextResponse.json(versionInfo, {
