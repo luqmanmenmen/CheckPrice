@@ -250,30 +250,35 @@ export default function Home() {
     (serverVersion && (!localVersion || serverVersion !== localVersion)) || hasAppCodeUpdate
   );
 
-  // Auto-sync database lokal di background saat halaman dibuka atau jika ada update harga/promo baru
+  // Download awal otomatis hanya jika database lokal masih kosong (produk < 1000)
   useEffect(() => {
     let isMounted = true;
-    const autoSync = async () => {
+    const initialSyncIfEmpty = async () => {
       try {
-        const { checkIfUpdateAvailable, syncOfflineDatabase, db } = await import('@/lib/offlineDb');
+        const { syncOfflineDatabase, db } = await import('@/lib/offlineDb');
         const count = await db.products.count();
-        const hasUpdate = await checkIfUpdateAvailable();
-        
-        // Jika database belum lengkap atau terdeteksi promo baru di server
-        if (count < 1000 || hasUpdate) {
+        if (count < 1000) {
           if (isMounted) setIsSyncing(true);
-          await syncOfflineDatabase(undefined, true);
+          await syncOfflineDatabase((syncing, prog) => {
+            if (isMounted) {
+              setIsSyncing(syncing);
+              if (prog !== undefined) setSyncProgress(prog);
+            }
+          }, true);
           if (serverVersion) {
             localStorage.setItem("suko_server_version", serverVersion);
             setLocalVersion(serverVersion);
           }
-          if (isMounted) setIsSyncing(false);
+          if (isMounted) {
+            setIsSyncing(false);
+            setSyncProgress(undefined);
+          }
         }
       } catch (e) {
         if (isMounted) setIsSyncing(false);
       }
     };
-    autoSync();
+    initialSyncIfEmpty();
     return () => { isMounted = false; };
   }, [serverVersion]);
 
@@ -302,6 +307,11 @@ export default function Home() {
         setLocalVersion(serverVersion);
       }
 
+      // Hapus tracker batas toleransi 1 hari setelah berhasil update
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("suko_update_detected_at");
+      }
+
       // Jika ada update versi kode UI/UX, perbarui juga bundle cache aplikasi
       const { checkAppVersion, forceAppUpdate } = await import('@/lib/version');
       const verCheck = await checkAppVersion();
@@ -318,6 +328,32 @@ export default function Home() {
       setSyncProgress(undefined);
     }
   };
+
+  // ── Penegakan Pembaruan: Jika lewat 1 hari (24 jam) belum update, sistem paksa download otomatis ──
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    if (!hasNewUpdate) {
+      localStorage.removeItem("suko_update_detected_at");
+      return;
+    }
+
+    const ONE_DAY_MS = 24 * 60 * 60 * 1000; // 24 Jam
+    const now = Date.now();
+    const detectedAt = localStorage.getItem("suko_update_detected_at");
+
+    if (!detectedAt) {
+      // Catat pertama kali update terdeteksi
+      localStorage.setItem("suko_update_detected_at", now.toString());
+    } else {
+      const elapsed = now - parseInt(detectedAt, 10);
+      if (elapsed >= ONE_DAY_MS && !isSyncing) {
+        // SUDAH LEWAT 1 HARI! Paksa download dan sinkronisasi otomatis
+        console.warn("[UPDATE] Melebihi 24 jam belum update versi, memaksa download otomatis...");
+        handleManualSync();
+      }
+    }
+  }, [hasNewUpdate, isSyncing]);
 
   // Logout Summary States
   const [showSummary, setShowSummary] = useState(false);
