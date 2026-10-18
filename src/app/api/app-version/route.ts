@@ -8,8 +8,8 @@ export async function GET() {
   const versionInfo = {
     version: APP_VERSION,
     buildId: APP_BUILD_ID,
-    releaseDate: "2026-10-19T00:26:00+07:00",
-    notes: "Pembaruan v2.5.3: Pemindai SKU (8 Digit) zero-freeze, anti-kode artikel ber-strip (605-12218278), dan pembacaan multi-baris presisi."
+    releaseDate: "2026-10-19T01:30:00+07:00",
+    notes: "Pembaruan v2.5.4: Penyederhanaan trigger update data, penghapusan modal pop-up putih duplikat, dan penanganan navigasi tombol Back di halaman portal."
   };
 
   return NextResponse.json(versionInfo, {

@@ -275,13 +275,17 @@ export default function Home() {
       }) 
     : 'Memuat...';
 
+  const [syncProgress, setSyncProgress] = useState<number | undefined>(undefined);
+
   const handleManualSync = async () => {
     setIsSyncing(true);
+    setSyncProgress(0);
     showToast("Mengupdate database lokal...", "success");
     try {
       const { syncOfflineDatabase } = await import('@/lib/offlineDb');
-      await syncOfflineDatabase((syncing) => {
+      await syncOfflineDatabase((syncing, prog) => {
         setIsSyncing(syncing);
+        if (prog !== undefined) setSyncProgress(prog);
       }, true);
       if (serverVersion) {
         localStorage.setItem("suko_server_version", serverVersion);
@@ -292,6 +296,7 @@ export default function Home() {
       showToast("Gagal update data offline", "error");
     } finally {
       setIsSyncing(false);
+      setSyncProgress(undefined);
     }
   };
 
@@ -438,6 +443,65 @@ export default function Home() {
       window.location.href = "/login";
     }, 700);
   };
+
+  // ── Penanganan Tombol Back (Hardware / Browser) & Pencegahan Back Rancu ke Login ──
+  const isScanningRef = useRef(isScanning);
+  const productRef = useRef(product);
+  const productsListRef = useRef(productsList);
+  const showSummaryRef = useRef(showSummary);
+
+  useEffect(() => {
+    isScanningRef.current = isScanning;
+    productRef.current = product;
+    productsListRef.current = productsList;
+    showSummaryRef.current = showSummary;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    // Trap navigasi back di beranda portal
+    try {
+      window.history.pushState({ portalRoot: true }, "", window.location.href);
+    } catch (e) {}
+
+    const handlePopState = () => {
+      // 1. Jika modal logout/shift summary sedang terbuka -> tutup modalnya
+      if (showSummaryRef.current) {
+        setShowSummary(false);
+        try { window.history.pushState({ portalRoot: true }, "", window.location.href); } catch (e) {}
+        return;
+      }
+
+      // 2. Jika kamera scanner sedang terbuka -> tutup kamera
+      if (isScanningRef.current) {
+        setIsScanning(false);
+        try { window.history.pushState({ portalRoot: true }, "", window.location.href); } catch (e) {}
+        return;
+      }
+
+      // 3. Jika sedang melihat detail produk / list hasil pencarian -> tutup dan reset ke beranda
+      if (productRef.current || (productsListRef.current && productsListRef.current.length > 0)) {
+        setProduct(null);
+        setProductsList([]);
+        setManualInput("");
+        setError("");
+        try { window.history.pushState({ portalRoot: true }, "", window.location.href); } catch (e) {}
+        return;
+      }
+
+      // 4. Jika sudah di beranda paling awal (portal) dan tombol back ditekan lagi:
+      // Tahan history agar tidak tembus ke /login dan tampilkan popup konfirmasi logout!
+      try { window.history.pushState({ portalRoot: true }, "", window.location.href); } catch (e) {}
+      handleLogoutClick();
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, []);
+
 
   const markAsCompleted = async (ticketId: string) => {
     try {
@@ -889,8 +953,8 @@ export default function Home() {
         <div className="fixed inset-0 bg-slate-950/75 backdrop-blur-sm z-[99990] p-4 flex flex-col justify-center items-center">
           <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden flex flex-col shadow-2xl animate-in zoom-in-95 duration-200 border border-slate-100">
             <div className="bg-gradient-to-r from-slate-800 to-slate-900 p-6 text-white text-center">
-              <h2 className="text-xl font-black">Rekapan Shift Anda</h2>
-              <p className="text-slate-300 text-xs mt-1">Aktivitas (Daily Activity) Hari Ini</p>
+              <h2 className="text-xl font-black">Ingin Mengakhiri Shift & Keluar?</h2>
+              <p className="text-slate-300 text-xs mt-1">Aktivitas Kerja (Daily Activity) Anda Hari Ini</p>
             </div>
             
             <div className="p-6 bg-slate-50">
@@ -927,16 +991,35 @@ export default function Home() {
             <div className="p-4 border-t flex flex-col gap-3 bg-white">
               <button 
                 onClick={confirmLogout}
-                className="w-full bg-red-600 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-red-200 hover:bg-red-700 transition-all active:scale-95"
+                className="w-full bg-red-600 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-red-200 hover:bg-red-700 transition-all active:scale-95 flex items-center justify-center gap-2"
               >
-                Konfirmasi Akhiri Shift
+                <LogOut className="w-4 h-4" />
+                Ya, Akhiri Shift & Logout
               </button>
               <button 
                 onClick={() => setShowSummary(false)}
                 className="w-full bg-slate-100 text-slate-700 font-bold py-3.5 rounded-xl hover:bg-slate-200 transition-all"
               >
-                Batal (Lanjut Shift)
+                Batal (Tetap di Aplikasi)
               </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Full Screen Download Overlay if Syncing Data Offline */}
+      {mounted && isSyncing && createPortal(
+        <div className="fixed inset-0 z-[99999] bg-slate-950/75 backdrop-blur-md flex flex-col items-center justify-center p-4 animate-in fade-in duration-300 select-none">
+          <div className="bg-white/95 backdrop-blur-xl border border-white/50 rounded-3xl p-8 sm:p-10 shadow-2xl flex flex-col items-center max-w-xs w-full text-center">
+            <ShiftLoader progress={syncProgress} />
+            <div className="mt-8 flex flex-col items-center gap-1.5">
+              <h3 className="text-base sm:text-lg font-black text-slate-800 tracking-wider">
+                MENYINKRONKAN DATA
+              </h3>
+              <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                Mengunduh data harga, promo & gambar terbaru...
+              </p>
             </div>
           </div>
         </div>,

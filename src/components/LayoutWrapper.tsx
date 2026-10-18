@@ -3,10 +3,9 @@
 import { useEffect, useState, useCallback } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { UploadCloud, Sparkles, RefreshCw, X } from "lucide-react";
+import { Sparkles, RefreshCw, X } from "lucide-react";
 import useSWR from "swr";
 import Sidebar from "./Sidebar";
-import ShiftLoader from "./ShiftLoader";
 import { checkAppVersion, forceAppUpdate, APP_VERSION } from "@/lib/version";
 
 const fetcher = (url: string) => fetch(url, { credentials: "same-origin" }).then(res => res.json());
@@ -79,39 +78,6 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
     };
   }, [verifyAppVersion]);
 
-  // 2. Deteksi Pembaruan Data Offline (Database Server Timestamp)
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [showDbUpdateModal, setShowDbUpdateModal] = useState(false);
-  const [syncProgress, setSyncProgress] = useState<number | undefined>(undefined);
-  
-  useEffect(() => {
-    if (!isAuth && !isCekHarga && data?.user) {
-      import("@/lib/offlineDb").then(({ checkIfUpdateAvailable }) => {
-        checkIfUpdateAvailable().then((isAvailable) => {
-          if (isAvailable) setShowDbUpdateModal(true);
-        });
-      });
-    }
-  }, [isAuth, isCekHarga, data]);
-
-  const handleStartDbUpdate = async () => {
-    setShowDbUpdateModal(false);
-    setIsSyncing(true);
-    setSyncProgress(0);
-    try {
-      const { syncOfflineDatabase } = await import("@/lib/offlineDb");
-      await syncOfflineDatabase((syncing, prog) => {
-        setIsSyncing(syncing);
-        if (prog !== undefined) setSyncProgress(prog);
-      }, true);
-    } catch (e) {
-      console.error(e);
-      setIsSyncing(false);
-    } finally {
-      setSyncProgress(undefined);
-    }
-  };
-
   const handleApplyAppUpdate = async () => {
     await forceAppUpdate({ clearOfflineData: false });
   };
@@ -176,44 +142,6 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
               <X className="w-4 h-4" />
             </button>
           </div>
-        </div>
-      )}
-
-      {/* Modal Pembaruan Data Offline Tersedia */}
-      {showDbUpdateModal && (
-        <div className="fixed inset-0 z-[200] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 shadow-2xl max-w-sm w-full animate-in zoom-in-95 duration-300">
-            <div className="w-14 h-14 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4 shadow-inner">
-              <UploadCloud className="w-7 h-7" />
-            </div>
-            <h2 className="text-lg font-bold text-slate-800 mb-1.5 text-center">Pembaruan Data Tersedia!</h2>
-            <p className="text-xs text-slate-500 mb-5 leading-relaxed text-center font-medium">
-              Terdapat data harga dan promo terbaru dari server. Unduh sekarang agar database offline selalu akurat saat tidak ada sinyal.
-            </p>
-            
-            <div className="flex flex-col gap-2.5">
-              <button
-                onClick={handleStartDbUpdate}
-                className="w-full h-11 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold rounded-xl shadow-md shadow-blue-500/20 text-sm active:scale-98 transition-all"
-              >
-                Ya, Unduh Sekarang
-              </button>
-              <button
-                onClick={() => setShowDbUpdateModal(false)}
-                className="w-full h-11 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl text-sm transition-all"
-              >
-                Nanti Saja
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      
-      {/* Full Screen Download Overlay if Syncing */}
-      {isSyncing && (
-        <div className="fixed inset-0 z-[200] bg-white flex flex-col items-center justify-center transition-all duration-500 ease-out opacity-100 visible">
-          <ShiftLoader progress={syncProgress} />
-          <p className="text-slate-800 font-bold mt-16 text-sm tracking-[0.3em] animate-pulse">MENYINKRONKAN DATA...</p>
         </div>
       )}
 

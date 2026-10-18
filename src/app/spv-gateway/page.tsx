@@ -9,6 +9,7 @@ export default function SpvGateway() {
   const router = useRouter();
   const [user, setUser] = useState<{name: string, toko: string} | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
 
   useEffect(() => {
     fetch("/api/auth/me", { credentials: "same-origin" })
@@ -18,7 +19,26 @@ export default function SpvGateway() {
       });
   }, []);
 
+  // Cegah back tembus ke /login dan tampilkan konfirmasi logout
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.history.pushState({ spvRoot: true }, "", window.location.href);
+    } catch (e) {}
+
+    const handlePopState = () => {
+      try {
+        window.history.pushState({ spvRoot: true }, "", window.location.href);
+      } catch (e) {}
+      setShowConfirm(true);
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
   const handleLogout = async () => {
+    setShowConfirm(false);
     setLoggingOut(true);
     
     try {
@@ -105,15 +125,44 @@ export default function SpvGateway() {
         
         <div className="p-4 bg-slate-50 border-t border-slate-100">
           <button 
-            onClick={handleLogout}
+            onClick={() => setShowConfirm(true)}
             disabled={loggingOut}
             className="w-full py-3 flex items-center justify-center gap-2 text-sm font-bold text-slate-500 hover:text-red-600 transition-colors disabled:opacity-50"
           >
             <LogOut className="w-4 h-4" />
-            {loggingOut ? "Keluar..." : "Logout & Akhiri Sesi"}
+            Logout & Akhiri Sesi
           </button>
         </div>
       </div>
+
+      {/* Confirmation Modal */}
+      {showConfirm && (
+        <div className="fixed inset-0 z-[190] bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl p-6 shadow-2xl max-w-sm w-full animate-in zoom-in-95 duration-200 border border-slate-100 text-center">
+            <div className="w-14 h-14 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4 shadow-inner">
+              <LogOut className="w-7 h-7" />
+            </div>
+            <h2 className="text-lg font-bold text-slate-800 mb-1.5">Keluar dari Portal SPV?</h2>
+            <p className="text-xs text-slate-500 mb-5 leading-relaxed font-medium">
+              Apakah Anda yakin ingin mengakhiri sesi kerja dan keluar dari Portal Supervisor?
+            </p>
+            <div className="flex flex-col gap-2.5">
+              <button
+                onClick={handleLogout}
+                className="w-full h-11 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl shadow-md text-sm active:scale-98 transition-all"
+              >
+                Ya, Logout & Keluar
+              </button>
+              <button
+                onClick={() => setShowConfirm(false)}
+                className="w-full h-11 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-sm transition-all"
+              >
+                Batal (Tetap di Portal)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Full Screen Logout Loader */}
       {loggingOut && (
