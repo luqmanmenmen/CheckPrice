@@ -469,6 +469,13 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
                       <p className="text-[11px] text-slate-500 font-medium leading-relaxed mt-2 truncate w-full">
                         {syncStatusMsg}
                       </p>
+                      <button
+                        type="button"
+                        onClick={() => setIsSyncing(false)}
+                        className="mt-3 text-[11px] font-semibold text-slate-400 hover:text-slate-600 transition-colors py-1 px-3 rounded-lg hover:bg-slate-100"
+                      >
+                        Lanjutkan di Latar Belakang
+                      </button>
                     </div>
                   </>
                 )}

@@ -242,32 +242,25 @@ export default function Home() {
 
   const hasNewUpdate = Boolean(serverVersion && (!localVersion || serverVersion !== localVersion));
 
-  // Auto-sync database lokal di background saat halaman dibuka atau jika ada update harga/promo baru
+  // Cek apakah database lokal masih kosong (<500 produk) saat pertama kali buka aplikasi
   useEffect(() => {
     let isMounted = true;
-    const autoSync = async () => {
+    const checkInitialDb = async () => {
       try {
-        const { checkIfUpdateAvailable, syncOfflineDatabase, db } = await import('@/lib/offlineDb');
-        const count = await db.products.count();
-        const hasUpdate = await checkIfUpdateAvailable();
-        
-        // Jika database belum lengkap atau terdeteksi promo baru di server
-        if (count < 1000 || hasUpdate) {
+        const { syncOfflineDatabase, db } = await import('@/lib/offlineDb');
+        const count = await db.products.count().catch(() => 0);
+        if (count < 500) {
           if (isMounted) setIsSyncing(true);
           await syncOfflineDatabase(undefined, true);
-          if (serverVersion) {
-            localStorage.setItem("suko_server_version", serverVersion);
-            setLocalVersion(serverVersion);
-          }
           if (isMounted) setIsSyncing(false);
         }
       } catch (e) {
         if (isMounted) setIsSyncing(false);
       }
     };
-    autoSync();
+    checkInitialDb();
     return () => { isMounted = false; };
-  }, [serverVersion]);
+  }, []);
 
   const lastUpdateDate = updateData?.lastUpdate 
     ? new Date(updateData.lastUpdate).toLocaleString('id-ID', {

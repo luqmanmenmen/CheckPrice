@@ -34,6 +34,8 @@ export async function GET() {
         { success: true, data: cachedPayload, version: cachedVersion, cached: true },
         {
           headers: {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
             "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300",
           },
         }
@@ -126,6 +128,8 @@ export async function GET() {
       { success: true, data: parsedProducts, version: cachedVersion, cached: false },
       {
         headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
           "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300",
         },
       }
@@ -136,9 +140,9 @@ export async function GET() {
     if (cachedPayload) {
       return NextResponse.json(
         { success: true, data: cachedPayload, version: cachedVersion, cached: true, fallback: true },
-        { headers: { "Cache-Control": "public, s-maxage=30" } }
+        { headers: { "Access-Control-Allow-Origin": "*", "Cache-Control": "public, s-maxage=30" } }
       );
     }
-    return NextResponse.json({ success: false, error: "Gagal mengambil data produk" }, { status: 500 });
+    return NextResponse.json({ success: false, error: "Gagal mengambil data produk" }, { status: 500, headers: { "Access-Control-Allow-Origin": "*" } });
   }
 }

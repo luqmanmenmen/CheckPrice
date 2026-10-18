@@ -98,8 +98,8 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   const handleStartDbUpdate = async () => {
     setShowDbUpdateModal(false);
     setIsSyncing(true);
-    setSyncProgress(5);
-    setSyncStatusMsg("Menyiapkan sinkronisasi data...");
+    setSyncProgress(10);
+    setSyncStatusMsg("Mengunduh data harga & promo terbaru...");
     try {
       const { syncOfflineDatabase } = await import("@/lib/offlineDb");
       await syncOfflineDatabase((syncing, prog, msg) => {
@@ -109,6 +109,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
       }, true);
     } catch (e) {
       console.error(e);
+    } finally {
       setIsSyncing(false);
     }
   };
@@ -233,6 +234,13 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
               <p className="text-[11px] text-slate-500 font-medium leading-relaxed mt-2 truncate w-full">
                 {syncStatusMsg}
               </p>
+              <button
+                type="button"
+                onClick={() => setIsSyncing(false)}
+                className="mt-3 text-[11px] font-semibold text-slate-400 hover:text-slate-600 transition-colors py-1 px-3 rounded-lg hover:bg-slate-100"
+              >
+                Lanjutkan di Latar Belakang
+              </button>
             </div>
           </div>
         </div>
