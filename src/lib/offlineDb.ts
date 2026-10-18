@@ -44,6 +44,11 @@ class SukoDatabase extends Dexie {
     this.version(8).stores({
       products: 'sku, barcode, article, name, description, brand, dept, color, size, hargaNormal, hargaPromo, diskon, discountType, acara, stok, toDate, imageUrl',
     });
+    // Versi 9: Optimasi Performa Ekstrem — Hanya indeks kolom yang benar-benar di-query (sku PK, barcode, article)
+    // 14 kolom lainnya tetap tersimpan utuh di objek data tanpa membebani IndexedDB dengan 160.000+ index writes!
+    this.version(9).stores({
+      products: 'sku, barcode, article',
+    });
   }
 }
 
@@ -51,76 +56,140 @@ export const db = new SukoDatabase();
 
 export async function checkIfUpdateAvailable(): Promise<boolean> {
   try {
-    const count = await db.products.count();
+    const count = await db.products.count().catch(() => 0);
     const localVersion = localStorage.getItem("suko_server_version");
     const localDbSchema = localStorage.getItem("suko_db_schema_version");
 
-    const checkRes = await fetch(`/api/check-update?t=${Date.now()}`, { cache: "no-store" });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+    const checkRes = await fetch(`/api/check-update?t=${Date.now()}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!checkRes.ok) return false;
+
     const checkData = await checkRes.json();
 
     if (checkData.success) {
       const serverVersion = checkData.lastUpdate.toString();
-      if (localDbSchema !== "v8" || localVersion !== serverVersion || count < 1000) {
+      if (localDbSchema !== "v9" || localVersion !== serverVersion || count < 1000) {
         return true;
       }
     }
     return false;
-  } catch (e) {
+  } catch {
     return false;
   }
 }
 
+let isSyncInProgress = false;
+
 export async function syncOfflineDatabase(
-  onSyncStateChange?: (isSyncing: boolean, progress?: number) => void,
+  onSyncStateChange?: (isSyncing: boolean, progress?: number, message?: string) => void,
   forceSync: boolean = false
 ): Promise<boolean> {
-  let progressInterval: NodeJS.Timeout | null = null;
+  if (isSyncInProgress) {
+    console.warn("[OfflineDB] Sinkronisasi sudah sedang berjalan, mengabaikan pemicu duplikat.");
+    return true;
+  }
+
+  isSyncInProgress = true;
   try {
-    const count = await db.products.count();
+    if (onSyncStateChange) onSyncStateChange(true, 5, "Memeriksa versi database...");
+
+    const count = await db.products.count().catch(() => 0);
     const localVersion = localStorage.getItem("suko_server_version");
     const localDbSchema = localStorage.getItem("suko_db_schema_version");
 
-    const checkRes = await fetch(`/api/check-update?t=${Date.now()}`, { cache: "no-store" });
-    const checkData = await checkRes.json();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const checkRes = await fetch(`/api/check-update?t=${Date.now()}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
 
-    if (checkData.success) {
-      const serverVersion = checkData.lastUpdate.toString();
-
-      if (forceSync || localDbSchema !== "v8" || localVersion !== serverVersion || count < 1000) {
-        if (onSyncStateChange) onSyncStateChange(true, 10);
-
-        let progress = 10;
-        progressInterval = setInterval(() => {
-          progress += (90 - progress) * 0.2;
-          if (onSyncStateChange) onSyncStateChange(true, Math.round(progress));
-        }, 120);
-
-        const res = await fetch(`/api/export-products?t=${Date.now()}`, { cache: "no-store" });
-        const result = await res.json();
-
-        if (progressInterval) clearInterval(progressInterval);
-
-        if (result.success && Array.isArray(result.data)) {
-          if (onSyncStateChange) onSyncStateChange(true, 92);
-          await db.products.clear();
-          await db.products.bulkPut(result.data);
-
-          if (onSyncStateChange) onSyncStateChange(true, 100);
-          localStorage.setItem("suko_server_version", serverVersion);
-          localStorage.setItem("suko_db_schema_version", "v8");
-          console.log(`[OfflineDB] Berhasil sync ${result.data.length} produk v8 dengan galeri multi-foto slide (versi: ${serverVersion})`);
-          return true;
-        }
-      } else {
-        return true;
+    let serverVersion = Date.now().toString();
+    if (checkRes.ok) {
+      const checkData = await checkRes.json();
+      if (checkData.success && checkData.lastUpdate) {
+        serverVersion = checkData.lastUpdate.toString();
       }
     }
-    return false;
-  } catch (e) {
+
+    const needsSync = forceSync || localDbSchema !== "v9" || localVersion !== serverVersion || count < 1000;
+
+    if (!needsSync) {
+      if (onSyncStateChange) onSyncStateChange(true, 100, "Database sudah versi terbaru!");
+      await new Promise((r) => setTimeout(r, 400));
+      return true;
+    }
+
+    if (onSyncStateChange) onSyncStateChange(true, 20, "Mengunduh katalog produk terbaru...");
+
+    const exportController = new AbortController();
+    const exportTimeout = setTimeout(() => exportController.abort(), 60000); // 60s
+    const res = await fetch(`/api/export-products?t=${Date.now()}`, {
+      cache: "no-store",
+      signal: exportController.signal,
+    });
+    clearTimeout(exportTimeout);
+
+    if (!res.ok) {
+      throw new Error(`Gagal mengunduh katalog (HTTP ${res.status})`);
+    }
+
+    const result = await res.json();
+    if (!result.success || !Array.isArray(result.data) || result.data.length === 0) {
+      throw new Error("Data produk dari server kosong atau tidak valid");
+    }
+
+    const products: CachedProduct[] = result.data;
+    const total = products.length;
+
+    if (onSyncStateChange) onSyncStateChange(true, 40, `Menyiapkan ${total.toLocaleString("id-ID")} produk...`);
+
+    // Bersihkan database lama setelah data baru dipastikan berhasil diunduh
+    await db.products.clear().catch(() => { });
+
+    // Simpan dalam batch 500 item agar browser HP tidak kehabisan memori atau freeze
+    const CHUNK_SIZE = 500;
+    for (let i = 0; i < total; i += CHUNK_SIZE) {
+      const chunk = products.slice(i, i + CHUNK_SIZE);
+      await db.products.bulkPut(chunk);
+
+      const processed = Math.min(i + CHUNK_SIZE, total);
+      const currentPercent = 40 + Math.round((processed / total) * 58); // range 40% - 98%
+      if (onSyncStateChange) {
+        onSyncStateChange(
+          true,
+          currentPercent,
+          `Menyimpan data (${processed.toLocaleString("id-ID")} / ${total.toLocaleString("id-ID")})...`
+        );
+      }
+      // Beri jeda 8ms ke event loop browser agar rendering progress bar dan animasi tetap 60 FPS di HP
+      await new Promise((r) => setTimeout(r, 8));
+    }
+
+    localStorage.setItem("suko_server_version", serverVersion);
+    localStorage.setItem("suko_db_schema_version", "v9");
+
+    if (onSyncStateChange) {
+      onSyncStateChange(true, 100, "Sinkronisasi berhasil!");
+    }
+    await new Promise((r) => setTimeout(r, 600));
+
+    console.log(`[OfflineDB] Berhasil sync ${total} produk v9 (versi: ${serverVersion})`);
+    return true;
+  } catch (e: any) {
     console.error("Failed to sync offline DB", e);
+    if (onSyncStateChange) {
+      onSyncStateChange(false, undefined, e?.message || "Gagal sinkronisasi data");
+    }
     return false;
   } finally {
-    if (progressInterval) clearInterval(progressInterval);
+    isSyncInProgress = false;
     if (onSyncStateChange) onSyncStateChange(false);
   }
 }

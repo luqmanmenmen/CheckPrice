@@ -281,14 +281,18 @@ export default function Home() {
     showToast("Mengupdate database lokal...", "success");
     try {
       const { syncOfflineDatabase } = await import('@/lib/offlineDb');
-      await syncOfflineDatabase((syncing) => {
+      const success = await syncOfflineDatabase((syncing) => {
         setIsSyncing(syncing);
       }, true);
-      if (serverVersion) {
-        localStorage.setItem("suko_server_version", serverVersion);
-        setLocalVersion(serverVersion);
+      if (success) {
+        if (serverVersion) {
+          localStorage.setItem("suko_server_version", serverVersion);
+          setLocalVersion(serverVersion);
+        }
+        showToast("Data Offline berhasil diupdate!", "success");
+      } else {
+        showToast("Gagal update data offline", "error");
       }
-      showToast("Data Offline berhasil diupdate!", "success");
     } catch (e) {
       showToast("Gagal update data offline", "error");
     } finally {

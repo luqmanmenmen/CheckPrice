@@ -124,9 +124,9 @@ export default function CekHargaPage() {
         const count = await db.products.count();
         const localSchema = typeof window !== "undefined" ? localStorage.getItem("suko_db_schema_version") : null;
 
-        // 1. Jika pertama kali buka atau skema belum v8:
-        // Tampilkan loading sync cepat (~0.5 - 1 detik untuk unduh 180 KB)
-        if (count < 500 || localSchema !== "v8") {
+        // 1. Jika pertama kali buka atau skema belum v9:
+        // Tampilkan loading sync cepat
+        if (count < 500 || localSchema !== "v9") {
           if (isMounted) setDbState("syncing");
           await syncOfflineDatabase((syncing, prog) => {
             if (isMounted && prog !== undefined) setSyncProgress(prog);

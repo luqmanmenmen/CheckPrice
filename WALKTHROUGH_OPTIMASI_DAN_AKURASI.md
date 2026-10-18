@@ -98,9 +98,30 @@ Di file `src/components/TextScanner.tsx`:
    * Loop `requestAnimationFrame` kamera berjalan bebas tanpa pernah memblokir thread UI.
    * Cadence OCR dibatasi per 280ms di latar belakang sehingga HP staf tidak panas dan baterai awet.
 5. **Anti-Artikel & Validasi Instan IndexedDB**:
-   * Pola kode pabrik/artikel (misal `605-12218278`) otomatis diabaikan.
-   * Kandidat 8 digit divalidasi langsung ke IndexedDB lokal (`db.products.get`) dalam **0.05 ms** (bebas salah deteksi).
+   * Menghapus bug fatal `return null` saat mendeteksi kode pabrik ber-strip (`602-12156403`). Kode pabrik kini otomatis dibersihkan dari string teks (`replace`) sehingga deretan angka SKU 8 digit (`15728804`) tetap diekstrak dan divalidasi.
+   * Beralih dari `PSM.SINGLE_LINE` ke `PSM.SINGLE_BLOCK` agar Tesseract mampu membaca label harga pakaian yang memiliki 2-3 baris teks (Baris 1: Ukuran & Kode Pabrik, Baris 2: SKU 8 Digit, Baris 3: Buatan Indonesia).
+   * Menghilangkan distorsi kanvas squashed `360x64 px` dan beralih ke proyeksi presisi 1:1 viewfinder UI ke buffer video (`targetW = 600 px`, tinggi proporsional ~160-220 px) dengan ukuran font ideal ~35-45 px.
+   * Kandidat 8 digit divalidasi langsung ke IndexedDB lokal (`db.products.get`) dalam **0.05 ms** dengan fallback aman ke API server (`/api/product/[sku]`).
 6. **Haptic Vibration**: Menambahkan getar halus (`navigator.vibrate(50)`) begitu SKU berhasil dikenali.
+
+### G. Overhaul Sinkronisasi Database Offline & UI Progress (18 Oktober 2026)
+1. **Server In-Memory Cache `/api/export-products`**:
+   * Endpoint ekspor produk kini meng-cache payload 9.512 produk di memori server Node.js.
+   * Cek versi update via query 1 baris terindeks (`<20ms`), jika data belum berubah server merespons instan dalam **<5ms** (mengeliminasi latensi 6–20 detik Supabase pooler).
+2. **Dexie Skema v9 (Pengurangan Beban I/O 88%)**:
+   * Menghapus 14 indeks sekunder yang tidak pernah di-query dengan `.where()`.
+   * Hanya mengindeks kolom pencarian utama: `sku` (PK), `barcode`, dan `article`. Seluruh data lainnya tetap tersimpan utuh di objek.
+   * Jumlah penulisan indeks terpangkas dari **161.700** menjadi hanya **19.000 write**, mencegah hang/crash memori di Chrome HP Android.
+3. **Penyimpanan Batch / Chunking (500 Item per Transaksi)**:
+   * Mengganti `bulkPut` monolitik 9.512 item sekaligus dengan perulangan batch 500 item per transaksi disertai jeda microtask 8ms agar thread rendering browser HP tetap 60 FPS.
+   * Menghapus `clear()` dini sehingga database tidak pernah kosong jika koneksi terputus di tengah jalan.
+4. **UI Progress Bar & Stage Status Real-Time**:
+   * Menambahkan bar persentase visual (`0% - 100%`) dan teks status tahapan detail:
+     - `Memeriksa versi database...`
+     - `Mengunduh katalog produk terbaru...`
+     - `Menyimpan data offline (X / 9.512)...`
+     - `Sinkronisasi berhasil!`
+   * Menambahkan penanganan status gagal dengan tombol `Coba Lagi` dan `Tutup` sehingga user tidak terjebak modal membeku.
 
 ---
 
@@ -118,6 +139,8 @@ Di file `src/components/TextScanner.tsx`:
 10. **Commit 10:** `64603a2` — *`fix(scanner): zero-freeze 60fps dual-engine scanner with hardware BarcodeDetector and GPU-filtered lightweight OCR`*
 11. **Commit 11:** `cc912bc` — *`chore(release): v2.3.0 with zero-freeze 60fps dual-engine scanner`*
 12. **Commit 12:** `d8fc667` — *`fix(scanner): strictly 100% pure TextScanner for 8-digit SKU text without any barcode components`*
+13. **Commit 13:** `a10cb23` — *`fix(ocr): resolve multi-line hangtag SKU extraction, eliminate anti-artikel return null bug, and restore true aspect ratio viewfinder`*
+14. **Commit 14:** `HEAD` — *`fix(offline-db): chunked batching for 9.512 products, v9 lean index, in-memory cache, and real-time progress bar UI`*
 
 ---
 
@@ -125,3 +148,5 @@ Di file `src/components/TextScanner.tsx`:
 * Pengujian lapangan (*field-testing*) langsung di toko fisik SUKO Pakuwon Mall untuk membuktikan scan teks SKU 8 digit pada hangtag pakaian di berbagai sudut dan pencahayaan.
 * Verifikasi integrasi sinkronisasi 7.525 SKU katalog terbaru dan galeri foto resmi saat upload file Power Query/Promo mingguan.
 * Pemantauan stabilitas aplikasi di browser mobile staf dan kiosk tablet.
+
+

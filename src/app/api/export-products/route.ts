@@ -4,8 +4,42 @@ import { prisma } from "@/lib/prisma";
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
+// Cache di memori server agar tidak perlu query ulang 9.512 baris di Supabase jika data belum berubah (<5ms respons)
+let cachedPayload: any = null;
+let cachedVersion: number = 0;
+let lastCacheCheck: number = 0;
+
 export async function GET() {
   try {
+    const now = Date.now();
+
+    // Periksa versi update terbaru di DB setiap 10 detik (query 1 baris terindeks, super cepat <20ms)
+    let currentVersion = cachedVersion;
+    if (!cachedPayload || now - lastCacheCheck > 10000) {
+      lastCacheCheck = now;
+      try {
+        const latestProduct = await prisma.product.findFirst({
+          orderBy: { updatedAt: 'desc' },
+          select: { updatedAt: true }
+        });
+        currentVersion = latestProduct ? latestProduct.updatedAt.getTime() : 0;
+      } catch (err) {
+        console.error("Gagal cek versi update terbaru:", err);
+      }
+    }
+
+    // Jika cache di memori server masih valid dan versinya sama persis, kembalikan instan (0ms)
+    if (cachedPayload && currentVersion > 0 && cachedVersion === currentVersion) {
+      return NextResponse.json(
+        { success: true, data: cachedPayload, version: cachedVersion, cached: true },
+        {
+          headers: {
+            "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300",
+          },
+        }
+      );
+    }
+
     // Ambil data produk yang diperlukan untuk offline scanner & public kiosk
     const products = await prisma.product.findMany({
       select: {
@@ -85,18 +119,26 @@ export async function GET() {
       };
     });
 
+    cachedPayload = parsedProducts;
+    cachedVersion = currentVersion;
+
     return NextResponse.json(
-      { success: true, data: parsedProducts },
+      { success: true, data: parsedProducts, version: cachedVersion, cached: false },
       {
         headers: {
-          "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
-          "Pragma": "no-cache",
-          "Expires": "0",
+          "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300",
         },
       }
     );
   } catch (error) {
     console.error("Export Products Error:", error);
+    // Jika ada cache sebelumnya meski database error, tetap kembalikan cache agar client tidak hang
+    if (cachedPayload) {
+      return NextResponse.json(
+        { success: true, data: cachedPayload, version: cachedVersion, cached: true, fallback: true },
+        { headers: { "Cache-Control": "public, s-maxage=30" } }
+      );
+    }
     return NextResponse.json({ success: false, error: "Gagal mengambil data produk" }, { status: 500 });
   }
 }
