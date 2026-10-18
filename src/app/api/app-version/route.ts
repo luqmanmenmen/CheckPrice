@@ -8,8 +8,8 @@ export async function GET() {
   const versionInfo = {
     version: APP_VERSION,
     buildId: APP_BUILD_ID,
-    releaseDate: "2026-10-18T14:25:00+07:00",
-    notes: "Pembaruan v2.5.2: Pemindai SKU (8 Digit) super cepat ~40ms, filter anti-strip pabrik (-), notice merah target salah, dan IndexedDB v10 instan."
+    releaseDate: "2026-10-19T00:26:00+07:00",
+    notes: "Pembaruan v2.5.3: Pemindai SKU (8 Digit) zero-freeze, anti-kode artikel ber-strip (605-12218278), dan pembacaan multi-baris presisi."
   };
 
   return NextResponse.json(versionInfo, {
