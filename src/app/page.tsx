@@ -12,6 +12,7 @@ import Link from "next/link";
 import { ChipLoader } from "@/components/ChipLoader";
 import ProductImageSlider from "@/components/ProductImageSlider";
 import ShiftLoader from "@/components/ShiftLoader";
+import ImageLightboxModal from "@/components/ImageLightboxModal";
 import { createPortal } from "react-dom";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
@@ -1882,46 +1883,14 @@ export default function Home() {
       </div>
     </div>
 
-    {/* SA Order Image Lightbox Modal */}
-    {orderPreviewImage && (
-      <div 
-        className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200"
-        onClick={() => setOrderPreviewImage(null)}
-      >
-        <div 
-          className="bg-white rounded-2xl max-w-md w-full overflow-hidden shadow-2xl relative animate-in zoom-in-95 duration-200"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="p-3.5 bg-slate-900 text-white flex items-center justify-between">
-            <div className="min-w-0 pr-2">
-              <span className="text-[10px] font-black uppercase tracking-wider text-blue-400 bg-blue-950/60 px-2 py-0.5 rounded border border-blue-800">
-                SKU {orderPreviewImage.sku}
-              </span>
-              <h3 className="text-sm font-bold truncate text-white mt-1">{orderPreviewImage.title}</h3>
-            </div>
-            <button 
-              onClick={() => setOrderPreviewImage(null)}
-              className="p-1.5 rounded-full hover:bg-slate-800 text-slate-400 hover:text-white transition-colors shrink-0"
-              title="Tutup"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-          <div className="relative bg-slate-100 flex items-center justify-center min-h-[300px] max-h-[70vh] p-3">
-            <img 
-              src={orderPreviewImage.url} 
-              alt={orderPreviewImage.title}
-              className="max-h-[66vh] w-auto max-w-full object-contain rounded-lg shadow-sm"
-            />
-          </div>
-          <div className="p-3 bg-slate-50 border-t border-slate-200 text-center">
-            <p className="text-xs text-slate-500 font-medium">
-              Ketuk di luar gambar atau tombol silang untuk menutup
-            </p>
-          </div>
-        </div>
-      </div>
-    )}
+    {/* SA Order Image Lightbox Modal with pinch-to-zoom & pan */}
+    <ImageLightboxModal 
+      isOpen={Boolean(orderPreviewImage)}
+      onClose={() => setOrderPreviewImage(null)}
+      imageUrl={orderPreviewImage?.url || ""}
+      title={orderPreviewImage?.title || ""}
+      sku={orderPreviewImage?.sku}
+    />
     </>
   );
 }

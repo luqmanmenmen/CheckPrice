@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, TouchEvent } from "react";
 import { ChevronLeft, ChevronRight, Maximize2, X, Image as ImageIcon } from "lucide-react";
+import ImageLightboxModal from "@/components/ImageLightboxModal";
 
 interface ProductImageSliderProps {
   images?: string[] | null;
@@ -189,101 +190,14 @@ export default function ProductImageSlider({
         )}
       </div>
 
-      {/* Modal Lightbox Zoom (Bisa Geser Fullscreen) */}
-      {isZoomed && (
-        <div
-          className="fixed inset-0 z-[300] bg-black/95 backdrop-blur-xl flex flex-col items-center justify-between p-4 sm:p-6 animate-in fade-in duration-200 select-none"
-          onClick={() => setIsZoomed(false)}
-        >
-          {/* Header Zoom Modal */}
-          <div className="w-full max-w-2xl flex items-center justify-between text-white py-2 z-10" onClick={(e) => e.stopPropagation()}>
-            <div className="flex flex-col">
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Detail Foto Produk</span>
-              <span className="text-sm font-black truncate max-w-[240px] sm:max-w-md">{alt}</span>
-            </div>
-            <div className="flex items-center gap-3">
-              {isMulti && (
-                <span className="text-xs font-bold bg-white/10 px-3 py-1 rounded-full">
-                  {currentIndex + 1} / {cleanImages.length}
-                </span>
-              )}
-              <button
-                type="button"
-                onClick={() => setIsZoomed(false)}
-                className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
-                aria-label="Tutup"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-          </div>
-
-          {/* Area Foto Zoom Fullscreen */}
-          <div
-            className="flex-1 w-full max-w-2xl flex items-center justify-center relative overflow-hidden py-4"
-            onClick={(e) => e.stopPropagation()}
-            onTouchStart={onTouchStart}
-            onTouchMove={onTouchMove}
-            onTouchEnd={onTouchEnd}
-          >
-            <img
-              src={currentSrc}
-              alt={`${alt} Fullscreen`}
-              referrerPolicy="no-referrer"
-              className="max-w-full max-h-[75vh] object-contain rounded-2xl shadow-2xl transition-all duration-300"
-            />
-
-            {isMulti && (
-              <>
-                <button
-                  type="button"
-                  onClick={handlePrev}
-                  className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-white/20 hover:bg-white/30 backdrop-blur-md text-white flex items-center justify-center shadow-lg"
-                  aria-label="Sebelumnya"
-                >
-                  <ChevronLeft className="w-6 h-6" />
-                </button>
-                <button
-                  type="button"
-                  onClick={handleNext}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-white/20 hover:bg-white/30 backdrop-blur-md text-white flex items-center justify-center shadow-lg"
-                  aria-label="Selanjutnya"
-                >
-                  <ChevronRight className="w-6 h-6" />
-                </button>
-              </>
-            )}
-          </div>
-
-          {/* Thumbnail Bar di Bagian Bawah Modal */}
-          {isMulti && (
-            <div
-              className="w-full max-w-md flex items-center justify-center gap-2 overflow-x-auto py-2 px-4 z-10"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {cleanImages.map((src, idx) => (
-                <button
-                  key={src + idx}
-                  type="button"
-                  onClick={() => setCurrentIndex(idx)}
-                  className={`relative w-12 h-16 rounded-lg overflow-hidden border-2 transition-all shrink-0 ${
-                    idx === currentIndex
-                      ? "border-amber-400 scale-105 shadow-md"
-                      : "border-transparent opacity-60 hover:opacity-100"
-                  }`}
-                >
-                  <img
-                    src={src}
-                    alt={`Thumb ${idx + 1}`}
-                    referrerPolicy="no-referrer"
-                    className="w-full h-full object-cover object-top"
-                  />
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+      {/* Modal Lightbox Zoom with centered portal, pinch-to-zoom & mouse wheel */}
+      <ImageLightboxModal 
+        isOpen={isZoomed}
+        onClose={() => setIsZoomed(false)}
+        images={cleanImages}
+        initialIndex={currentIndex}
+        title={alt}
+      />
     </>
   );
 }
