@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
 
     const updatedUser = await prisma.user.update({
       where: { id: session.userId },
-      data: { status }
+      data: { status, lastActive: new Date() }
     });
 
     return NextResponse.json({ success: true, status: updatedUser.status });

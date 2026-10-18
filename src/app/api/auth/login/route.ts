@@ -22,8 +22,18 @@ export async function POST(req: NextRequest) {
     
     if (!user) {
       if (nik === "22054178" && pin === "220117") {
-        // @ts-ignore
-        user = await prisma.user.create({ data: { nik: "22054178", pin: "220117", name: "Luqman Arif (Developer)", role: "SUPERVISOR", toko: "Server", sessionId } });
+        user = await prisma.user.create({ 
+          data: { 
+            nik: "22054178", 
+            pin: "220117", 
+            name: "Luqman Arif (Developer)", 
+            role: "SUPERVISOR", 
+            toko: "Server", 
+            sessionId,
+            lastLogin: new Date(),
+            lastActive: new Date()
+          } 
+        });
       } else {
         return NextResponse.json({ error: "Akun tidak terdaftar. Silakan hubungi Developer." }, { status: 404 });
       }
@@ -33,7 +43,6 @@ export async function POST(req: NextRequest) {
       }
       
       // Jika user sudah punya sessionId dan force belum true, kembalikan status conflict (409)
-      // @ts-ignore
       if (user.sessionId && !force) {
         return NextResponse.json({ 
           error: "Sesi Aktif Ditemukan", 
@@ -41,15 +50,15 @@ export async function POST(req: NextRequest) {
         }, { status: 409 });
       }
       
-      // Update role if changed (unless they are super admin) and update sessionId
+      // Update role if changed (unless they are super admin) and update sessionId & login timestamps
       user = await prisma.user.update({
         where: { id: user.id },
         data: { 
-          // @ts-ignore - Ignore stale prisma types in IDE
           ...(user.role !== "SUPERVISOR" && user.role !== role ? { role: role as any } : {}),
-          // @ts-ignore
           sessionId,
-          status: "ACTIVE" // @ts-ignore
+          status: "ACTIVE",
+          lastLogin: new Date(),
+          lastActive: new Date()
         }
       });
     }

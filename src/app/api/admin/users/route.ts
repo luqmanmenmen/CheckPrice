@@ -23,8 +23,9 @@ export async function GET(req: NextRequest) {
         role: true,
         status: true,
         pin: true,
-        // @ts-ignore
         toko: true,
+        lastLogin: true,
+        lastActive: true,
         createdAt: true,
         shifts: {
           where: { endTime: null },

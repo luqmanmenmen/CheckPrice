@@ -6,13 +6,46 @@ import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
 import Link from "next/link";
 
 type User = {
-  id: number;
+  id: string | number;
   nik: string;
   name: string;
   role: string;
   status: string;
-  lastActive: string | null;
+  lastLogin?: string | null;
+  lastActive?: string | null;
 };
+
+function formatRelativeTime(dateString: string | null | undefined): { text: string; isRecent: boolean; fullDate: string } {
+  if (!dateString) return { text: "Belum pernah", isRecent: false, fullDate: "-" };
+  const d = new Date(dateString);
+  if (isNaN(d.getTime())) return { text: "-", isRecent: false, fullDate: "-" };
+
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHour = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHour / 24);
+
+  const fullDate = d.toLocaleString("id-ID", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+
+  if (diffSec < 60) return { text: "Baru saja", isRecent: true, fullDate };
+  if (diffMin < 60) return { text: `${diffMin} mnt lalu`, isRecent: diffMin <= 5, fullDate };
+  if (diffHour < 24) return { text: `${diffHour} jam lalu`, isRecent: false, fullDate };
+  if (diffDay === 1) return { text: `Kemarin, ${d.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}`, isRecent: false, fullDate };
+  if (diffDay < 7) return { text: `${diffDay} hari lalu`, isRecent: false, fullDate };
+  return { 
+    text: d.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" }), 
+    isRecent: false, 
+    fullDate 
+  };
+}
 
 export default function SuperAdminDashboard() {
   const [users, setUsers] = useState<User[]>([]);
@@ -258,24 +291,34 @@ export default function SuperAdminDashboard() {
           <div className="p-8 text-center text-slate-500 text-sm">Tidak ada staff yang sedang bertugas.</div>
         ) : (
           <div className="divide-y divide-slate-100">
-            {filteredUsers.filter(u => u.role !== 'SUPERVISOR' && u.status !== 'INACTIVE').map((user) => (
+            {filteredUsers.filter(u => u.role !== 'SUPERVISOR' && u.status !== 'INACTIVE').map((user) => {
+              const loginInfo = formatRelativeTime(user.lastLogin);
+              const activeInfo = formatRelativeTime(user.lastActive);
+              return (
               <div key={user.id} className="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
                 <div className="flex flex-col">
                   <span className="font-bold text-slate-800 text-sm">{user.name}</span>
                   <span className="text-xs text-slate-500 font-medium">{user.nik} &bull; {user.role === 'CREW_STORE' ? 'Sales Area' : 'Gudang'}</span>
+                  <div className="flex items-center gap-3 mt-1.5 text-[11px] text-slate-400">
+                    <span title={`Login: ${loginInfo.fullDate}`}>🔑 Login: <strong className="text-slate-600 font-medium">{loginInfo.text}</strong></span>
+                    <span title={`Aktivitas: ${activeInfo.fullDate}`}>⚡ Aktif: <strong className={activeInfo.isRecent ? "text-emerald-600 font-bold" : "text-slate-600 font-medium"}>{activeInfo.text}</strong></span>
+                  </div>
                 </div>
                 <div>
-                  <div className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border flex items-center gap-1 ${
-                    user.status === 'ACTIVE' 
-                      ? 'bg-green-50 text-green-600 border-green-200' 
-                      : 'bg-amber-50 text-amber-600 border-amber-200'
+                  <div className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border flex items-center gap-1.5 ${
+                    activeInfo.isRecent
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : user.status === 'ACTIVE' 
+                        ? 'bg-green-50 text-green-600 border-green-200' 
+                        : 'bg-amber-50 text-amber-600 border-amber-200'
                   }`}>
-                    <div className={`w-1.5 h-1.5 rounded-full ${user.status === 'ACTIVE' ? 'bg-green-500' : 'bg-amber-500'}`} />
-                    {user.status === 'ACTIVE' ? 'Aktif' : 'Rehat'}
+                    <div className={`w-1.5 h-1.5 rounded-full ${activeInfo.isRecent ? 'bg-emerald-500 animate-pulse' : user.status === 'ACTIVE' ? 'bg-green-500' : 'bg-amber-500'}`} />
+                    {activeInfo.isRecent ? 'Online' : user.status === 'ACTIVE' ? 'Aktif' : 'Rehat'}
                   </div>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

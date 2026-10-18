@@ -70,6 +70,8 @@ model User {
   status    UserStatus @default(ACTIVE)
   toko      String?
   sessionId String?
+  lastLogin DateTime?
+  lastActive DateTime?
   shifts    Shift[]
   tickets   Ticket[]
   syncHistory SyncHistory[]

@@ -1,8 +1,51 @@
 "use client";
 import { useState, useEffect } from "react";
 import useSWR from "swr";
-import { Trash2, Plus, UserPlus, Store, Edit, X } from "lucide-react";
+import { Trash2, Plus, UserPlus, Store, Edit, X, LogIn, Activity } from "lucide-react";
 import { AlertModal } from "@/components/AlertModal";
+
+function formatRelativeTime(dateString: string | null | undefined): { text: string; isRecent: boolean; fullDate: string } {
+  if (!dateString) return { text: "Belum pernah", isRecent: false, fullDate: "-" };
+  const d = new Date(dateString);
+  if (isNaN(d.getTime())) return { text: "-", isRecent: false, fullDate: "-" };
+
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHour = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHour / 24);
+
+  const fullDate = d.toLocaleString("id-ID", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+
+  if (diffSec < 60) {
+    return { text: "Baru saja", isRecent: true, fullDate };
+  }
+  if (diffMin < 60) {
+    return { text: `${diffMin} mnt lalu`, isRecent: diffMin <= 5, fullDate };
+  }
+  if (diffHour < 24) {
+    return { text: `${diffHour} jam lalu`, isRecent: false, fullDate };
+  }
+  if (diffDay === 1) {
+    return { text: `Kemarin, ${d.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}`, isRecent: false, fullDate };
+  }
+  if (diffDay < 7) {
+    return { text: `${diffDay} hari lalu`, isRecent: false, fullDate };
+  }
+  return { 
+    text: d.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" }), 
+    isRecent: false, 
+    fullDate 
+  };
+}
 
 const fetcher = (url: string) => fetch(url).then(res => res.json());
 
@@ -233,12 +276,17 @@ export default function UsersManagement() {
                 <th className="p-4">Toko</th>
                 <th className="p-4">Hak Akses</th>
                 <th className="p-4">Status</th>
+                <th className="p-4">Terakhir Login</th>
+                <th className="p-4">Terakhir Aktif</th>
                 <th className="p-4">Terdaftar</th>
                 {isTopBoss && <th className="p-4 text-right">Aksi</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {users.map((user: any) => (
+              {users.map((user: any) => {
+                const loginTime = formatRelativeTime(user.lastLogin);
+                const activeTime = formatRelativeTime(user.lastActive);
+                return (
                 <tr key={user.id} className="hover:bg-slate-50 transition-colors">
                   <td className="p-4 font-mono font-bold text-slate-700">{user.nik}</td>
                   <td className="p-4 font-bold text-slate-800">{user.name}</td>
@@ -276,6 +324,44 @@ export default function UsersManagement() {
                       </span>
                     )}
                   </td>
+
+                  {/* Terakhir Login (Masuk Akun) */}
+                  <td className="p-4">
+                    <div className="flex flex-col" title={`Login: ${loginTime.fullDate}`}>
+                      <span className="font-semibold text-slate-700 text-xs flex items-center gap-1">
+                        <LogIn className="w-3.5 h-3.5 text-blue-500" />
+                        {loginTime.text}
+                      </span>
+                      {user.lastLogin && (
+                        <span className="text-[10px] text-slate-400 font-mono mt-0.5">
+                          {new Date(user.lastLogin).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+
+                  {/* Terakhir Aktif (Menggunakan Sistem) */}
+                  <td className="p-4">
+                    <div className="flex flex-col" title={`Aktivitas Terakhir: ${activeTime.fullDate}`}>
+                      {activeTime.isRecent ? (
+                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold text-xs w-fit">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                          Online
+                        </span>
+                      ) : (
+                        <span className="font-semibold text-slate-600 text-xs flex items-center gap-1">
+                          <Activity className="w-3.5 h-3.5 text-slate-400" />
+                          {activeTime.text}
+                        </span>
+                      )}
+                      {user.lastActive && (
+                        <span className="text-[10px] text-slate-400 font-mono mt-0.5">
+                          {new Date(user.lastActive).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+
                   <td className="p-4 text-xs text-slate-500">
                     {new Date(user.createdAt).toLocaleDateString('id-ID', {day: 'numeric', month: 'short', year: 'numeric'})}
                   </td>
@@ -298,10 +384,11 @@ export default function UsersManagement() {
                     </td>
                   )}
                 </tr>
-              ))}
+                );
+              })}
               {users.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-slate-400 italic">Belum ada karyawan terdaftar</td>
+                  <td colSpan={10} className="p-8 text-center text-slate-400 italic">Belum ada karyawan terdaftar</td>
                 </tr>
               )}
             </tbody>

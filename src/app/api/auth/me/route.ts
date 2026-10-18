@@ -18,15 +18,28 @@ export async function GET(req: NextRequest) {
 
     const dbUser = await prisma.user.findUnique({
       where: { id: session.userId },
-      select: { status: true, sessionId: true, name: true, role: true }
+      select: { status: true, sessionId: true, name: true, role: true, lastActive: true }
     });
 
+    if (!dbUser) {
+      return NextResponse.json({ user: null });
+    }
+
     // Use loose inequality (!=) so that null and undefined are considered equal for legacy tokens
-    if (dbUser?.sessionId != session.sessionId) {
-      console.log("[AUTH ME] Session ID mismatch! DB:", dbUser?.sessionId, "JWT:", session.sessionId);
+    if (dbUser.sessionId != session.sessionId) {
+      console.log("[AUTH ME] Session ID mismatch! DB:", dbUser.sessionId, "JWT:", session.sessionId);
       const response = NextResponse.json({ user: null });
       response.cookies.set("token", "", { maxAge: 0, path: "/" });
       return response;
+    }
+
+    // Perbarui lastActive jika sudah lebih dari 60 detik yang lalu (throttled agar hemat database)
+    const now = new Date();
+    if (!dbUser.lastActive || now.getTime() - new Date(dbUser.lastActive).getTime() > 60000) {
+      prisma.user.update({
+        where: { id: session.userId },
+        data: { lastActive: now }
+      }).catch((err) => console.error("[AUTH ME] Gagal update lastActive:", err));
     }
 
     return NextResponse.json({ 
