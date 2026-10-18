@@ -603,6 +603,31 @@ async def gmail_webhook(
         gc.collect()
 
 
+# ─────────────────────────────────────────────────────────────
+#  Image Audit & Quality Control Endpoints
+# ─────────────────────────────────────────────────────────────
+@app.get("/api/audit-images")
+def audit_images_endpoint(limit: int = 10000):
+    """Analisis kecocokan foto dengan SKU produk."""
+    try:
+        from audit_images import analyze_sku_images
+        return analyze_sku_images(limit=limit)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+class CleanImagesRequest(BaseModel):
+    category: str = "BAGS_AND_ACCESSORIES"
+
+@app.post("/api/clean-mismatched-images")
+def clean_mismatched_images_endpoint(req: CleanImagesRequest):
+    """Bersihkan foto-foto yang tidak sesuai dengan model produk."""
+    try:
+        from audit_images import clean_mismatched_images
+        return clean_mismatched_images(category=req.category)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
