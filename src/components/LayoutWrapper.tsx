@@ -1,12 +1,11 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { Sparkles, RefreshCw, X } from "lucide-react";
 import useSWR from "swr";
 import Sidebar from "./Sidebar";
-import { checkAppVersion, forceAppUpdate, APP_VERSION } from "@/lib/version";
+import { forceAppUpdate, APP_VERSION } from "@/lib/version";
 
 const fetcher = (url: string) => fetch(url, { credentials: "same-origin" }).then(res => res.json());
 
@@ -43,45 +42,6 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
     }
   }, [isAuth, isLoading, entryFade]);
 
-  // 1. Deteksi Pembaruan Versi Aplikasi (Frontend Code / Web App Version)
-  const [appUpdateInfo, setAppUpdateInfo] = useState<{ hasUpdate: boolean; serverVersion: string } | null>(null);
-
-  const verifyAppVersion = useCallback(async () => {
-    try {
-      const res = await checkAppVersion();
-      if (res.hasUpdate) {
-        setAppUpdateInfo({ hasUpdate: true, serverVersion: res.serverVersion });
-      }
-    } catch (e) {
-      // ignore check error
-    }
-  }, []);
-
-  useEffect(() => {
-    // Cek saat mount
-    verifyAppVersion();
-
-    // Cek berkala tiap 3 menit
-    const interval = setInterval(verifyAppVersion, 180000);
-
-    // Cek saat user kembali membuka tab browser di HP
-    const handleVisibility = () => {
-      if (document.visibilityState === "visible") {
-        verifyAppVersion();
-      }
-    };
-    document.addEventListener("visibilitychange", handleVisibility);
-
-    return () => {
-      clearInterval(interval);
-      document.removeEventListener("visibilitychange", handleVisibility);
-    };
-  }, [verifyAppVersion]);
-
-  const handleApplyAppUpdate = async () => {
-    await forceAppUpdate({ clearOfflineData: false });
-  };
-
   if (isAuth || isCekHarga) {
     return (
       <main className="w-full min-h-[100dvh]">
@@ -114,36 +74,6 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
           </div>
         </div>
       </header>
-
-      {/* Floating Banner Notifikasi Versi Baru Aplikasi (Bila Code Baru Dirilis) */}
-      {appUpdateInfo?.hasUpdate && (
-        <div className="fixed bottom-4 left-4 right-4 md:left-auto md:right-6 md:w-96 z-[150] bg-gradient-to-r from-blue-600 to-indigo-700 text-white p-3.5 rounded-2xl shadow-2xl border border-white/20 animate-in slide-in-from-bottom-5 duration-300 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5 overflow-hidden">
-            <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center shrink-0">
-              <Sparkles className="w-4 h-4 text-amber-300 animate-spin" />
-            </div>
-            <div className="truncate">
-              <p className="text-xs font-black tracking-wide leading-tight">Pembaruan Versi {appUpdateInfo.serverVersion}</p>
-              <p className="text-[10px] text-blue-100 font-medium leading-tight">Tersedia perbaikan UI & fitur baru.</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={handleApplyAppUpdate}
-              className="px-3 py-1.5 bg-white text-blue-700 font-black text-xs rounded-lg shadow-sm hover:bg-blue-50 active:scale-95 transition-all"
-            >
-              Perbarui
-            </button>
-            <button
-              onClick={() => setAppUpdateInfo(null)}
-              className="p-1 text-white/70 hover:text-white"
-              aria-label="Tutup"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl mx-auto w-full p-0 lg:p-8 bg-white shadow-xs min-h-[calc(100dvh-56px-50px)] flex flex-col">

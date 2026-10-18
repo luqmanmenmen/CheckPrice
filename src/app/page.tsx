@@ -232,14 +232,23 @@ export default function Home() {
   const serverVersion = updateData?.lastUpdate ? new Date(updateData.lastUpdate).getTime().toString() : null;
   
   const [localVersion, setLocalVersion] = useState<string | null>(null);
+  const [hasAppCodeUpdate, setHasAppCodeUpdate] = useState(false);
   
   useEffect(() => {
     if (typeof window !== "undefined") {
       setLocalVersion(localStorage.getItem("suko_server_version"));
     }
+    // Cek juga update kode aplikasi / UI / fitur baru
+    import("@/lib/version").then(({ checkAppVersion }) => {
+      checkAppVersion().then(res => {
+        if (res.hasUpdate) setHasAppCodeUpdate(true);
+      }).catch(() => {});
+    });
   }, []);
 
-  const hasNewUpdate = Boolean(serverVersion && (!localVersion || serverVersion !== localVersion));
+  const hasNewUpdate = Boolean(
+    (serverVersion && (!localVersion || serverVersion !== localVersion)) || hasAppCodeUpdate
+  );
 
   // Auto-sync database lokal di background saat halaman dibuka atau jika ada update harga/promo baru
   useEffect(() => {
@@ -280,18 +289,28 @@ export default function Home() {
   const handleManualSync = async () => {
     setIsSyncing(true);
     setSyncProgress(0);
-    showToast("Mengupdate database lokal...", "success");
+    showToast("Memperbarui data & sistem...", "success");
     try {
       const { syncOfflineDatabase } = await import('@/lib/offlineDb');
       await syncOfflineDatabase((syncing, prog) => {
         setIsSyncing(syncing);
         if (prog !== undefined) setSyncProgress(prog);
       }, true);
+
       if (serverVersion) {
         localStorage.setItem("suko_server_version", serverVersion);
         setLocalVersion(serverVersion);
       }
-      showToast("Data Offline berhasil diupdate!", "success");
+
+      // Jika ada update versi kode UI/UX, perbarui juga bundle cache aplikasi
+      const { checkAppVersion, forceAppUpdate } = await import('@/lib/version');
+      const verCheck = await checkAppVersion();
+      if (verCheck.hasUpdate) {
+        await forceAppUpdate({ clearOfflineData: false });
+        return;
+      }
+
+      showToast("Semua data & sistem berhasil diperbarui!", "success");
     } catch (e) {
       showToast("Gagal update data offline", "error");
     } finally {
@@ -915,8 +934,8 @@ export default function Home() {
               <div className="flex items-center gap-3">
                 <CloudDownload className="w-6 h-6 text-white animate-bounce shrink-0" />
                 <div>
-                  <p className="text-white font-black text-sm uppercase tracking-wide leading-tight">Data Baru Tersedia!</p>
-                  <p className="text-rose-100 text-[10px] font-medium leading-tight mt-0.5">Silakan update database agar promo terbaru muncul.</p>
+                  <p className="text-white font-black text-sm uppercase tracking-wide leading-tight">Pembaruan Tersedia!</p>
+                  <p className="text-rose-100 text-[10px] font-medium leading-tight mt-0.5">Update data promo, harga, dan fitur sistem terbaru.</p>
                 </div>
               </div>
               <button 
