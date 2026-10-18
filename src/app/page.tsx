@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react";
 import dynamic from "next/dynamic";
-import { Search, ScanText, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle, ArrowLeft, CloudDownload, Loader2, Menu, Sparkles, ArrowRight, Gift } from "lucide-react";
+import { Search, ScanText, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle, ArrowLeft, CloudDownload, Loader2, Menu, Sparkles, ArrowRight, Gift, Maximize2 } from "lucide-react";
 import { useEffect } from "react";
 import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
 import PullToRefresh from "@/components/PullToRefresh";
@@ -212,6 +212,7 @@ export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [orderPreviewImage, setOrderPreviewImage] = useState<{ url: string; title: string; sku: string } | null>(null);
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -777,7 +778,7 @@ export default function Home() {
       type,
       qty,
       size,
-      photoUrl: null,
+      photoUrl: product.imageUrl || null,
       ocrData: null
     }]);
     setProduct(null);
@@ -1193,19 +1194,41 @@ export default function Home() {
             </div>
           ) : (
             <div className="flex flex-col gap-3">
-              {activeTickets.map((t: any) => (
+              {activeTickets.map((t: any) => {
+                const itemImage = t.imageUrl || t.photoUrl;
+                return (
                 <div key={t.id} className="bg-white border shadow-sm p-4 rounded-xl flex flex-col gap-3">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <span className="text-[10px] font-bold uppercase text-slate-400">{t.type === 'REQUEST' ? 'Request' : 'Tanya Stok'}</span>
-                      <p className="font-black text-lg text-slate-800">{t.sku}</p>
-                      <p className="text-sm font-bold text-slate-600 max-w-[280px] leading-tight">{t.productName}</p>
-                      {t.hargaNormal > 0 && (
-                        <p className="text-xs font-semibold text-blue-600 mt-0.5">Rp {t.hargaNormal.toLocaleString('id-ID')}</p>
+                  <div className="flex justify-between items-start gap-3">
+                    <div className="flex items-start gap-3 flex-1 min-w-0">
+                      {itemImage && (
+                        <div 
+                          onClick={() => setOrderPreviewImage({ url: itemImage, title: t.productName || t.sku, sku: t.sku })}
+                          className="w-16 h-16 rounded-xl overflow-hidden shrink-0 border border-slate-200 cursor-pointer group relative bg-slate-50"
+                          title="Perbesar foto"
+                        >
+                          <img 
+                            src={itemImage} 
+                            alt={t.sku} 
+                            className="w-full h-full object-cover transition-transform group-hover:scale-105"
+                          />
+                          <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                            <Maximize2 className="w-3.5 h-3.5 drop-shadow" />
+                          </div>
+                        </div>
                       )}
-                      <p className="text-xs font-medium text-slate-500 mt-0.5">{new Date(t.createdAt).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</p>
+                      <div className="flex-1 min-w-0">
+                        <span className="text-[10px] font-bold uppercase text-slate-400">
+                          {t.type === 'REQUEST' ? 'Request' : t.type === 'FACING_OUT' ? 'Facing Out' : 'Tanya Stok'}
+                        </span>
+                        <p className="font-black text-lg text-slate-800">{t.sku}</p>
+                        <p className="text-sm font-bold text-slate-600 truncate leading-tight">{t.productName}</p>
+                        {t.hargaNormal > 0 && (
+                          <p className="text-xs font-semibold text-blue-600 mt-0.5">Rp {t.hargaNormal.toLocaleString('id-ID')}</p>
+                        )}
+                        <p className="text-xs font-medium text-slate-500 mt-0.5">{new Date(t.createdAt).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</p>
+                      </div>
                     </div>
-                    <span className={`text-[10px] font-bold px-3 py-1.5 rounded-full border uppercase tracking-wider ${
+                    <span className={`text-[10px] font-bold px-3 py-1.5 rounded-full border uppercase tracking-wider shrink-0 ${
                       t.status === 'READY' ? 'bg-green-50 text-green-700 border-green-200' :
                       t.status === 'OOS' ? 'bg-red-50 text-red-700 border-red-200' :
                       'bg-amber-50 text-amber-700 border-amber-200'
@@ -1224,7 +1247,8 @@ export default function Home() {
                     </button>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -1857,6 +1881,47 @@ export default function Home() {
 
       </div>
     </div>
+
+    {/* SA Order Image Lightbox Modal */}
+    {orderPreviewImage && (
+      <div 
+        className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200"
+        onClick={() => setOrderPreviewImage(null)}
+      >
+        <div 
+          className="bg-white rounded-2xl max-w-md w-full overflow-hidden shadow-2xl relative animate-in zoom-in-95 duration-200"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="p-3.5 bg-slate-900 text-white flex items-center justify-between">
+            <div className="min-w-0 pr-2">
+              <span className="text-[10px] font-black uppercase tracking-wider text-blue-400 bg-blue-950/60 px-2 py-0.5 rounded border border-blue-800">
+                SKU {orderPreviewImage.sku}
+              </span>
+              <h3 className="text-sm font-bold truncate text-white mt-1">{orderPreviewImage.title}</h3>
+            </div>
+            <button 
+              onClick={() => setOrderPreviewImage(null)}
+              className="p-1.5 rounded-full hover:bg-slate-800 text-slate-400 hover:text-white transition-colors shrink-0"
+              title="Tutup"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="relative bg-slate-100 flex items-center justify-center min-h-[300px] max-h-[70vh] p-3">
+            <img 
+              src={orderPreviewImage.url} 
+              alt={orderPreviewImage.title}
+              className="max-h-[66vh] w-auto max-w-full object-contain rounded-lg shadow-sm"
+            />
+          </div>
+          <div className="p-3 bg-slate-50 border-t border-slate-200 text-center">
+            <p className="text-xs text-slate-500 font-medium">
+              Ketuk di luar gambar atau tombol silang untuk menutup
+            </p>
+          </div>
+        </div>
+      </div>
+    )}
     </>
   );
 }

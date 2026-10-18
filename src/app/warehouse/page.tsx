@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useMemo } from "react";
-import { UserCircle2, CheckCircle2, XCircle, Clock, ChevronDown, ChevronUp, PackageOpen, Search } from "lucide-react";
+import { UserCircle2, CheckCircle2, XCircle, Clock, ChevronDown, ChevronUp, PackageOpen, Search, Image as ImageIcon, X, Maximize2 } from "lucide-react";
 import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
 import PullToRefresh from "@/components/PullToRefresh";
 import Link from "next/link";
@@ -23,6 +23,8 @@ type Ticket = {
   hargaNormal?: number;
   color?: string | null;
   productSize?: string | null;
+  imageUrl?: string | null;
+  photoUrl?: string | null;
 };
 
 // Parse the description to get a clean product name and its variants (color/size)
@@ -52,6 +54,7 @@ export default function WarehouseDashboard() {
   const previousTicketIds = useRef<Set<string>>(new Set());
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [batchSelections, setBatchSelections] = useState<Record<string, "READY" | "OOS">>({});
+  const [previewImage, setPreviewImage] = useState<{ url: string; title: string; sku: string } | null>(null);
 
   // Fetch tickets every 10 seconds to reduce DB load
   const { data, mutate } = useSWR("/api/tickets", fetcher, { refreshInterval: 10000 });
@@ -325,59 +328,104 @@ export default function WarehouseDashboard() {
                   {/* Expanded Items */}
                   {isExpanded && (
                     <div className="border-t border-slate-100 bg-slate-50/50 p-4 flex flex-col gap-3 rounded-b-xl">
-                      {group.tickets.map(ticket => (
+                      {group.tickets.map(ticket => {
+                        const itemImage = ticket.imageUrl || ticket.photoUrl;
+                        return (
                         <div key={ticket.id} className={`bg-white p-3.5 rounded-lg border shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-3 transition-colors ${
                           batchSelections[ticket.id] === 'READY' ? 'border-green-300 bg-green-50/30' : 
                           batchSelections[ticket.id] === 'OOS' ? 'border-red-300 bg-red-50/30' : ''
                         }`}>
-                          <div>
-                            <span className={`text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wider ${
-                              ticket.type === "REQUEST" ? "bg-indigo-100 text-indigo-700" : 
-                              ticket.type === "FACING_OUT" ? "bg-amber-100 text-amber-700" : "bg-sky-100 text-sky-700"
-                            }`}>
-                              {ticket.type === "REQUEST" ? "Request Barang" : 
-                               ticket.type === "FACING_OUT" ? "Facing Out" : "Cek Stok"}
-                            </span>
-                            <h4 className="font-black text-lg text-slate-800 mt-1.5">{ticket.sku}</h4>
-                            
-                            {(() => {
-                              const { name, variants } = parseDescription(ticket.productName || "");
-                              return (
-                                <div className="mt-1">
-                                  <p className="text-sm font-bold text-slate-600 max-w-full leading-tight">{name}</p>
-                                  {variants.length > 0 && (
-                                    <div className="flex flex-wrap gap-1.5 mt-2">
-                                      {variants.map((v, i) => (
-                                        <span key={i} className="text-xs font-black bg-blue-100 text-blue-800 px-2 py-1 rounded-md border border-blue-200 shadow-sm uppercase">
-                                          {v}
-                                        </span>
-                                      ))}
-                                    </div>
-                                  )}
-                                  
-                                  {/* Detailed Colors and Sizes if they exist */}
-                                  {(ticket.color || ticket.productSize) && (
-                                    <div className="flex flex-wrap gap-2 mt-2">
-                                      {ticket.color && (
-                                        <span className="text-xs font-bold bg-pink-100 text-pink-800 px-2 py-1 rounded-md border border-pink-200">
-                                          Warna: {ticket.color}
-                                        </span>
-                                      )}
-                                      {ticket.productSize && (
-                                        <span className="text-xs font-bold bg-purple-100 text-purple-800 px-2 py-1 rounded-md border border-purple-200">
-                                          Ukuran: {ticket.productSize}
-                                        </span>
-                                      )}
-                                    </div>
-                                  )}
+                          <div className="flex items-start gap-3 flex-1 min-w-0 w-full md:w-auto">
+                            {/* Product Image Thumbnail */}
+                            <div 
+                              onClick={(e) => {
+                                if (itemImage) {
+                                  e.stopPropagation();
+                                  setPreviewImage({
+                                    url: itemImage,
+                                    title: ticket.productName || ticket.sku,
+                                    sku: ticket.sku
+                                  });
+                                }
+                              }}
+                              className={`w-20 h-20 sm:w-24 sm:h-24 rounded-xl overflow-hidden shrink-0 border border-slate-200 relative group select-none ${
+                                itemImage ? 'cursor-pointer bg-white shadow-sm hover:ring-2 hover:ring-blue-500 transition-all' : 'bg-slate-100 flex items-center justify-center'
+                              }`}
+                              title={itemImage ? "Ketuk untuk memperbesar foto" : "Belum ada foto produk"}
+                            >
+                              {itemImage ? (
+                                <>
+                                  <img 
+                                    src={itemImage} 
+                                    alt={ticket.sku}
+                                    className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                                    loading="lazy"
+                                  />
+                                  <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                                    <Maximize2 className="w-5 h-5 drop-shadow" />
+                                  </div>
+                                  <span className="absolute bottom-1 right-1 bg-black/60 text-[9px] text-white px-1.5 py-0.5 rounded font-bold backdrop-blur-xs flex items-center gap-0.5">
+                                    <Maximize2 className="w-2.5 h-2.5" /> Zoom
+                                  </span>
+                                </>
+                              ) : (
+                                <div className="flex flex-col items-center justify-center text-slate-400 p-1 text-center w-full h-full">
+                                  <ImageIcon className="w-7 h-7 stroke-1 text-slate-300" />
+                                  <span className="text-[9px] font-semibold text-slate-400 mt-1">No Foto</span>
                                 </div>
-                              );
-                            })()}
+                              )}
+                            </div>
 
-                            {ticket.hargaNormal && ticket.hargaNormal > 0 ? (
-                                <p className="text-xs font-semibold text-blue-600 mt-1.5">Rp {ticket.hargaNormal.toLocaleString('id-ID')}</p>
-                            ) : null}
-                            {ticket.qty && <p className="text-sm font-semibold text-slate-500 mt-1">Qty: {ticket.qty}</p>}
+                            {/* Ticket Info */}
+                            <div className="flex-1 min-w-0">
+                              <span className={`text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wider inline-block ${
+                                ticket.type === "REQUEST" ? "bg-indigo-100 text-indigo-700" : 
+                                ticket.type === "FACING_OUT" ? "bg-amber-100 text-amber-700" : "bg-sky-100 text-sky-700"
+                              }`}>
+                                {ticket.type === "REQUEST" ? "Request Barang" : 
+                                 ticket.type === "FACING_OUT" ? "Facing Out" : "Cek Stok"}
+                              </span>
+                              <h4 className="font-black text-lg text-slate-800 mt-1">{ticket.sku}</h4>
+                              
+                              {(() => {
+                                const { name, variants } = parseDescription(ticket.productName || "");
+                                return (
+                                  <div className="mt-1">
+                                    <p className="text-sm font-bold text-slate-600 max-w-full leading-tight">{name}</p>
+                                    {variants.length > 0 && (
+                                      <div className="flex flex-wrap gap-1.5 mt-2">
+                                        {variants.map((v, i) => (
+                                          <span key={i} className="text-xs font-black bg-blue-100 text-blue-800 px-2 py-1 rounded-md border border-blue-200 shadow-sm uppercase">
+                                            {v}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
+                                    
+                                    {/* Detailed Colors and Sizes if they exist */}
+                                    {(ticket.color || ticket.productSize) && (
+                                      <div className="flex flex-wrap gap-2 mt-2">
+                                        {ticket.color && (
+                                          <span className="text-xs font-bold bg-pink-100 text-pink-800 px-2 py-1 rounded-md border border-pink-200">
+                                            Warna: {ticket.color}
+                                          </span>
+                                        )}
+                                        {ticket.productSize && (
+                                          <span className="text-xs font-bold bg-purple-100 text-purple-800 px-2 py-1 rounded-md border border-purple-200">
+                                            Ukuran: {ticket.productSize}
+                                          </span>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })()}
+
+                              {ticket.hargaNormal && ticket.hargaNormal > 0 ? (
+                                  <p className="text-xs font-semibold text-blue-600 mt-1.5">Rp {ticket.hargaNormal.toLocaleString('id-ID')}</p>
+                              ) : null}
+                              {ticket.qty && <p className="text-sm font-semibold text-slate-500 mt-1">Qty: {ticket.qty}</p>}
+                            </div>
                           </div>
 
                           {ticket.status === "PENDING" ? (
@@ -423,7 +471,8 @@ export default function WarehouseDashboard() {
                             </div>
                           )}
                         </div>
-                      ))}
+                        );
+                      })}
                       
                       {group.hasPending && (
                         <div className="mt-3">
@@ -444,6 +493,47 @@ export default function WarehouseDashboard() {
         )}
       </div>
       </div>
+
+      {/* Lightbox Preview Modal */}
+      {previewImage && (
+        <div 
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200"
+          onClick={() => setPreviewImage(null)}
+        >
+          <div 
+            className="bg-white rounded-2xl max-w-md w-full overflow-hidden shadow-2xl relative animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-3.5 bg-slate-900 text-white flex items-center justify-between">
+              <div className="min-w-0 pr-2">
+                <span className="text-[10px] font-black uppercase tracking-wider text-blue-400 bg-blue-950/60 px-2 py-0.5 rounded border border-blue-800">
+                  SKU {previewImage.sku}
+                </span>
+                <h3 className="text-sm font-bold truncate text-white mt-1">{previewImage.title}</h3>
+              </div>
+              <button 
+                onClick={() => setPreviewImage(null)}
+                className="p-1.5 rounded-full hover:bg-slate-800 text-slate-400 hover:text-white transition-colors shrink-0"
+                title="Tutup"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="relative bg-slate-100 flex items-center justify-center min-h-[300px] max-h-[70vh] p-3">
+              <img 
+                src={previewImage.url} 
+                alt={previewImage.title}
+                className="max-h-[66vh] w-auto max-w-full object-contain rounded-lg shadow-sm"
+              />
+            </div>
+            <div className="p-3 bg-slate-50 border-t border-slate-200 text-center">
+              <p className="text-xs text-slate-500 font-medium">
+                Ketuk di luar gambar atau tombol silang untuk menutup
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       <AlertModal 
         isOpen={alert.isOpen}

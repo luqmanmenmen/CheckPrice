@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
     const skus = [...new Set(tickets.map((t: any) => t.sku))];
     const products = await prisma.product.findMany({
       where: { sku: { in: skus } },
-      select: { sku: true, description: true, hargaNormal: true, color: true, size: true }
+      select: { sku: true, description: true, hargaNormal: true, color: true, size: true, imageUrl: true }
     });
     
     const productMap = Object.fromEntries(
@@ -56,7 +56,8 @@ export async function GET(req: NextRequest) {
         name: p.description, 
         hargaNormal: p.hargaNormal,
         color: p.color,
-        productSize: p.size
+        productSize: p.size,
+        imageUrl: p.imageUrl
       }])
     );
 
@@ -65,7 +66,8 @@ export async function GET(req: NextRequest) {
       productName: productMap[t.sku]?.name || "Produk Tidak Diketahui",
       hargaNormal: productMap[t.sku]?.hargaNormal || 0,
       color: productMap[t.sku]?.color || null,
-      productSize: productMap[t.sku]?.productSize || null
+      productSize: productMap[t.sku]?.productSize || null,
+      imageUrl: productMap[t.sku]?.imageUrl || null
     }));
 
     return NextResponse.json({ success: true, tickets: ticketsWithProduct });
