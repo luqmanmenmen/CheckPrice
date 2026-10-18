@@ -1,5 +1,5 @@
-export const APP_VERSION = "2.5.1";
-export const APP_BUILD_ID = "20261018-v2.5.1-fast-barcode-and-fast-db";
+export const APP_VERSION = "2.5.2";
+export const APP_BUILD_ID = "20261018-v2.5.2-fast-sku-scanner";
 
 export interface VersionInfo {
   version: string;

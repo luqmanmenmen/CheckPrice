@@ -8,8 +8,8 @@ export async function GET() {
   const versionInfo = {
     version: APP_VERSION,
     buildId: APP_BUILD_ID,
-    releaseDate: "2026-10-18T13:55:00+07:00",
-    notes: "Pembaruan v2.5.1: Mesin Barcode Scanner 1D super cepat (<50ms), server-side caching export produk (<100ms), dan IndexedDB v10 self-healing anti-stuck."
+    releaseDate: "2026-10-18T14:25:00+07:00",
+    notes: "Pembaruan v2.5.2: Pemindai SKU (8 Digit) super cepat ~40ms, filter anti-strip pabrik (-), notice merah target salah, dan IndexedDB v10 instan."
   };
 
   return NextResponse.json(versionInfo, {

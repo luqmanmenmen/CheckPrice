@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react";
 import dynamic from "next/dynamic";
-import { Search, Camera, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle, ArrowLeft, CloudDownload, Loader2, Menu, Sparkles, ArrowRight, Gift } from "lucide-react";
+import { Search, ScanText, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle, ArrowLeft, CloudDownload, Loader2, Menu, Sparkles, ArrowRight, Gift } from "lucide-react";
 import { useEffect } from "react";
 import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
 import PullToRefresh from "@/components/PullToRefresh";
@@ -16,7 +16,7 @@ import { createPortal } from "react-dom";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
-const Scanner = dynamic(() => import("@/components/Scanner"), { ssr: false });
+const TextScanner = dynamic(() => import("@/components/TextScanner"), { ssr: false });
 
 type ProductData = {
   id: number;
@@ -642,10 +642,12 @@ export default function Home() {
     }
   };
 
-  const handleBarcodeSuccess = (result: string) => {
-    setManualInput(result);
-    searchProduct(result);
-    setIsScanning(false);
+  const handleTextScanSuccess = (sku: string) => {
+    if (sku) {
+      setManualInput(sku);
+      searchProduct(sku);
+      setIsScanning(false);
+    }
   };
 
   const addToCart = (type: string, qty: number, size: string) => {
@@ -1117,10 +1119,10 @@ export default function Home() {
                 <button 
                   type="button"
                   onClick={() => setIsScanning(!isScanning)}
-                  title="Scan Barcode Garis"
+                  title="Scan SKU (8 Digit)"
                   className={`p-1.5 rounded-lg text-slate-400 hover:text-blue-600 transition-colors ${isScanning ? "text-blue-600 bg-blue-50" : ""}`}
                 >
-                  <Camera className="w-5 h-5" />
+                  <ScanText className="w-5 h-5" />
                 </button>
               )}
             </div>
@@ -1136,19 +1138,21 @@ export default function Home() {
 
       </div>
 
-      {/* Full Screen Barcode Scanner */}
+      {/* Full Screen SKU Scanner */}
       {isScanning && (
         <div className="fixed inset-0 z-[100] bg-black flex flex-col animate-in fade-in zoom-in-95 duration-300">
           <div className="flex justify-between items-center p-4 bg-slate-900 text-white shadow-md z-10">
-            <h3 className="font-bold">Scan Barcode Garis</h3>
+            <div className="flex items-center gap-2">
+              <ScanText className="w-5 h-5 text-blue-400" />
+              <h3 className="font-bold">Scan SKU (8 Digit)</h3>
+            </div>
             <button onClick={() => setIsScanning(false)} className="p-2 bg-slate-800 rounded-full hover:bg-slate-700 transition-colors">
               <X className="w-6 h-6 text-white" />
             </button>
           </div>
           <div className="flex-1 relative overflow-hidden bg-black flex items-center justify-center">
             <div className="w-full h-full max-w-2xl mx-auto flex flex-col justify-center px-4">
-              <Scanner onScanSuccess={handleBarcodeSuccess} />
-              <p className="text-center text-sm font-bold text-slate-300 mt-6 absolute bottom-12 w-full left-0">Arahkan kamera ke barcode garis</p>
+              <TextScanner onScanResult={handleTextScanSuccess} />
             </div>
           </div>
         </div>
