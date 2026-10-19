@@ -11,6 +11,8 @@ type User = {
   name: string;
   role: string;
   status: string;
+  isOnline?: boolean;
+  loginCount?: number;
   lastLogin?: string | null;
   lastActive?: string | null;
 };
@@ -279,19 +281,28 @@ export default function SuperAdminDashboard() {
 
       {/* Staff On Duty List */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-        <div className="p-3 bg-slate-100 border-b border-slate-200">
-          <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Staff On Duty</h2>
+        <div className="p-3 bg-slate-100 border-b border-slate-200 flex justify-between items-center">
+          <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Staff On Duty (Online)</h2>
+          <span className="text-[10px] font-bold text-slate-400">
+            {filteredUsers.filter(u => u.role !== 'SUPERVISOR' && (u.status === 'ACTIVE' || u.status === 'BREAK')).length} Staf Aktif
+          </span>
         </div>
         
         {loading ? (
           <div className="p-8 flex justify-center">
             <div className="w-6 h-6 border-2 border-slate-900 border-t-transparent rounded-full animate-spin"></div>
           </div>
-        ) : filteredUsers.filter(u => u.role !== 'SUPERVISOR' && u.status !== 'INACTIVE').length === 0 ? (
-          <div className="p-8 text-center text-slate-500 text-sm">Tidak ada staff yang sedang bertugas.</div>
+        ) : filteredUsers.filter(u => u.role !== 'SUPERVISOR' && (u.status === 'ACTIVE' || u.status === 'BREAK')).length === 0 ? (
+          <div className="p-8 text-center text-slate-400 text-sm flex flex-col items-center justify-center gap-1.5">
+            <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 mb-1">
+              <Activity className="w-4 h-4" />
+            </div>
+            <p className="font-semibold text-slate-600">Tidak ada staff yang sedang online saat ini.</p>
+            <p className="text-xs text-slate-400">Staff yang sedang membuka aplikasi akan otomatis muncul di sini.</p>
+          </div>
         ) : (
           <div className="divide-y divide-slate-100">
-            {filteredUsers.filter(u => u.role !== 'SUPERVISOR' && u.status !== 'INACTIVE').map((user) => {
+            {filteredUsers.filter(u => u.role !== 'SUPERVISOR' && (u.status === 'ACTIVE' || u.status === 'BREAK')).map((user) => {
               const loginInfo = formatRelativeTime(user.lastLogin);
               const activeInfo = formatRelativeTime(user.lastActive);
               return (
@@ -300,20 +311,18 @@ export default function SuperAdminDashboard() {
                   <span className="font-bold text-slate-800 text-sm">{user.name}</span>
                   <span className="text-xs text-slate-500 font-medium">{user.nik} &bull; {user.role === 'CREW_STORE' ? 'Sales Area' : 'Gudang'}</span>
                   <div className="flex items-center gap-3 mt-1.5 text-[11px] text-slate-400">
-                    <span title={`Login: ${loginInfo.fullDate}`}>🔑 Login: <strong className="text-slate-600 font-medium">{loginInfo.text}</strong></span>
-                    <span title={`Aktivitas: ${activeInfo.fullDate}`}>⚡ Aktif: <strong className={activeInfo.isRecent ? "text-emerald-600 font-bold" : "text-slate-600 font-medium"}>{activeInfo.text}</strong></span>
+                    <span title={`Login: ${loginInfo.fullDate}`}>🔑 Login: <strong className="text-slate-600 font-semibold">{user.loginCount || 1}x ({loginInfo.text})</strong></span>
+                    <span title={`Aktivitas: ${activeInfo.fullDate}`}>⚡ Aktif: <strong className="text-emerald-600 font-bold">{activeInfo.text}</strong></span>
                   </div>
                 </div>
                 <div>
                   <div className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border flex items-center gap-1.5 ${
-                    activeInfo.isRecent
-                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                      : user.status === 'ACTIVE' 
-                        ? 'bg-green-50 text-green-600 border-green-200' 
-                        : 'bg-amber-50 text-amber-600 border-amber-200'
+                    user.status === 'ACTIVE' 
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                      : 'bg-amber-50 text-amber-600 border-amber-200'
                   }`}>
-                    <div className={`w-1.5 h-1.5 rounded-full ${activeInfo.isRecent ? 'bg-emerald-500 animate-pulse' : user.status === 'ACTIVE' ? 'bg-green-500' : 'bg-amber-500'}`} />
-                    {activeInfo.isRecent ? 'Online' : user.status === 'ACTIVE' ? 'Aktif' : 'Rehat'}
+                    <div className={`w-1.5 h-1.5 rounded-full ${user.status === 'ACTIVE' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+                    {user.status === 'ACTIVE' ? 'Online' : 'Rehat'}
                   </div>
                 </div>
               </div>

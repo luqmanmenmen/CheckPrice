@@ -72,11 +72,31 @@ model User {
   sessionId String?
   lastLogin DateTime?
   lastActive DateTime?
+  loginCount Int      @default(0)
+  loginLogs  LoginLog[]
   shifts    Shift[]
   tickets   Ticket[]
   syncHistory SyncHistory[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model LoginLog {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nik       String
+  name      String
+  role      Role     @default(CREW_STORE)
+  shift     Int?     // 1 or 2
+  jobTitle  String?  // Posisi yang dipilih saat login
+  toko      String?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
 }
 
 enum UserStatus {

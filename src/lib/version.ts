@@ -1,5 +1,5 @@
-export const APP_VERSION = "2.5.4";
-export const APP_BUILD_ID = "20261019-v2.5.4-clean-nav-and-sync";
+export const APP_VERSION = "2.5.5";
+export const APP_BUILD_ID = "20261020-v2.5.5-login-tracking-and-presence-fix";
 
 export interface VersionInfo {
   version: string;

@@ -8,8 +8,8 @@ export async function GET() {
   const versionInfo = {
     version: APP_VERSION,
     buildId: APP_BUILD_ID,
-    releaseDate: "2026-10-19T01:30:00+07:00",
-    notes: "Pembaruan v2.5.4: Penyederhanaan trigger update data, penghapusan modal pop-up putih duplikat, dan penanganan navigasi tombol Back di halaman portal."
+    releaseDate: "2026-10-20T02:15:00+07:00",
+    notes: "Pembaruan v2.5.5: Rekapitulasi frekuensi login karyawan, pencatatan log riwayat login, dan verifikasi status kehadiran online/offline riil berbasis aktivitas."
   };
 
   return NextResponse.json(versionInfo, {

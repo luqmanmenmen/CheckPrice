@@ -17,6 +17,10 @@ export async function POST(req: NextRequest) {
 
     const sessionId = crypto.randomUUID();
 
+    const ipAddress = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || null;
+    const userAgent = req.headers.get("user-agent") || null;
+    const parsedShift = shift ? parseInt(shift, 10) : null;
+
     // Cek user
     let user = await prisma.user.findUnique({ where: { nik } });
     
@@ -30,6 +34,7 @@ export async function POST(req: NextRequest) {
             role: "SUPERVISOR", 
             toko: "Server", 
             sessionId,
+            loginCount: 1,
             lastLogin: new Date(),
             lastActive: new Date()
           } 
@@ -58,10 +63,26 @@ export async function POST(req: NextRequest) {
           sessionId,
           status: "ACTIVE",
           lastLogin: new Date(),
-          lastActive: new Date()
+          lastActive: new Date(),
+          loginCount: { increment: 1 }
         }
       });
     }
+
+    // Catat riwayat login ke tabel LoginLog
+    await prisma.loginLog.create({
+      data: {
+        userId: user.id,
+        nik: user.nik,
+        name: user.name,
+        role: user.role,
+        shift: parsedShift,
+        jobTitle: jobTitle || (user.role === "SUPERVISOR" ? "Supervisor" : "Sales Area"),
+        toko: user.toko,
+        ipAddress,
+        userAgent
+      }
+    }).catch(err => console.error("Failed to save LoginLog:", err));
 
     // Create active shift if requested
     if (shift) {

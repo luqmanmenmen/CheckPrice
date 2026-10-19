@@ -24,6 +24,8 @@ export async function GET(req: NextRequest) {
         status: true,
         pin: true,
         toko: true,
+        sessionId: true,
+        loginCount: true,
         lastLogin: true,
         lastActive: true,
         createdAt: true,
@@ -42,42 +44,62 @@ export async function GET(req: NextRequest) {
     if (hour === 24) hour = 0;
 
     const users = await Promise.all(rawUsers.map(async (u: any) => {
-      let isOffline = u.shifts.length === 0;
-      
-      if (!isOffline) {
-        const activeShift = u.shifts[0];
+      const activeShift = u.shifts?.[0];
+      let shiftClosed = false;
+
+      // Auto-close shift jika sudah kedaluwarsa
+      if (activeShift) {
         let isExpired = false;
-        
-        // Cek apakah shift sudah kedaluwarsa berdasarkan jam dan tipe shift
-        // u.role "SUPERVISOR" tidak pernah expired otomatis
-        if (u.role !== "SUPERVISOR" && activeShift.type) {
+        const shiftAgeHours = (now.getTime() - new Date(activeShift.startTime).getTime()) / (1000 * 60 * 60);
+
+        // Shift lebih dari 14 jam selalu expired (berlaku untuk semua role termasuk SUPERVISOR)
+        if (shiftAgeHours > 14) {
+          isExpired = true;
+        } else if (u.role !== "SUPERVISOR" && activeShift.type) {
           if (activeShift.type === 1 && (hour >= 17 || hour < 8)) isExpired = true;
           if (activeShift.type === 2 && (hour >= 23 || hour < 14)) isExpired = true;
-          
-          // Fallback: Jika shift sudah berumur lebih dari 12 jam, anggap expired
-          const shiftAgeHours = (now.getTime() - activeShift.startTime.getTime()) / (1000 * 60 * 60);
-          if (shiftAgeHours > 12) isExpired = true;
+          if (shiftAgeHours > 10) isExpired = true;
         }
 
         if (isExpired) {
-          isOffline = true;
-          // Auto-close shift di database
+          shiftClosed = true;
           await prisma.shift.update({
-             where: { id: activeShift.id },
-             data: { endTime: new Date() }
-          });
-          // Ubah status user ke OFFLINE
-          await prisma.user.update({
-             where: { id: u.id },
-             // @ts-ignore - Prisma generate EPERM on Windows
-             data: { status: "OFFLINE", sessionId: null }
-          });
+            where: { id: activeShift.id },
+            data: { endTime: new Date() }
+          }).catch(console.error);
         }
+      }
+
+      // Hitung apakah user benar-benar aktif / online saat ini
+      // Kriteria Online: memiliki sessionId DAN lastActive dalam 5 menit terakhir
+      const lastActiveMs = u.lastActive ? now.getTime() - new Date(u.lastActive).getTime() : Infinity;
+      const isRecentlyActive = lastActiveMs <= 5 * 60 * 1000; // 5 menit
+      const isOnline = !!u.sessionId && isRecentlyActive;
+
+      // Bersihkan session yang sudah ditinggalkan (idle > 12 jam atau shift kedaluwarsa)
+      if (u.sessionId && (lastActiveMs > 12 * 60 * 60 * 1000 || (shiftClosed && lastActiveMs > 60 * 60 * 1000))) {
+        await prisma.user.update({
+          where: { id: u.id },
+          data: { status: "OFFLINE", sessionId: null }
+        }).catch(console.error);
+        u.sessionId = null;
+      }
+
+      // Tentukan status nyata yang akurat
+      let computedStatus: "ACTIVE" | "BREAK" | "OFFLINE" = "OFFLINE";
+      if (isOnline) {
+        computedStatus = u.status === "BREAK" ? "BREAK" : "ACTIVE";
+      } else if (u.status === "BREAK" && lastActiveMs <= 30 * 60 * 1000) {
+        computedStatus = "BREAK";
+      } else {
+        computedStatus = "OFFLINE";
       }
 
       return {
         ...u,
-        status: isOffline ? "OFFLINE" : u.status
+        status: computedStatus,
+        isOnline,
+        activeShift: shiftClosed ? null : activeShift || null
       };
     }));
 

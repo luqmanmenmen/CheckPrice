@@ -13,7 +13,10 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   const pathname = usePathname();
   const isAuth = pathname?.startsWith("/login");
   const isCekHarga = pathname?.startsWith("/cek-harga");
-  const { data, isLoading } = useSWR(isAuth || isCekHarga ? null : "/api/auth/me", fetcher);
+  const { data, isLoading } = useSWR(isAuth || isCekHarga ? null : "/api/auth/me", fetcher, {
+    refreshInterval: 60000, // Heartbeat setiap 1 menit saat aplikasi terbuka
+    revalidateOnFocus: true
+  });
 
   // Simpan info user ke localStorage agar siap seketika saat offline / refresh
   useEffect(() => {
