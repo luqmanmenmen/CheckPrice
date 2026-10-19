@@ -8,8 +8,8 @@ export async function GET() {
   const versionInfo = {
     version: APP_VERSION,
     buildId: APP_BUILD_ID,
-    releaseDate: "2026-10-20T02:15:00+07:00",
-    notes: "Pembaruan v2.5.5: Rekapitulasi frekuensi login karyawan, pencatatan log riwayat login, dan verifikasi status kehadiran online/offline riil berbasis aktivitas."
+    releaseDate: "2026-10-20T02:50:00+07:00",
+    notes: "Pembaruan v2.5.6: Desain responsif bertingkat untuk Best Seller, Stok Kritis, dan Slow Moving. Nominal omzet dan sisa stok rapi dalam box tanpa offside di HP, Tablet, maupun PC."
   };
 
   return NextResponse.json(versionInfo, {
