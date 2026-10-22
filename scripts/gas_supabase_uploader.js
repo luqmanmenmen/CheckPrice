@@ -48,15 +48,28 @@ function processEmailsAndUpload() {
         // Bersihkan subjek dari karakter aneh agar aman dijadikan nama folder
         const safeSubject = subject.replace(/[^a-zA-Z0-9 -_]/g, "").trim();
 
-        for (const attachment of message.getAttachments()) {
+        // 1. Kumpulkan semua lampiran valid
+        const attachments = message.getAttachments().filter(att => isAllowedFile(att.getName()));
+
+        if (attachments.length === 0) {
+          Logger.log("  Tidak ada lampiran valid di email ini.");
+          continue;
+        }
+
+        // 2. SMART SORT: Urutkan lampiran dari tanggal terlama/termuda ke tanggal terbaru!
+        //    Contoh: 16 Okt -> 18 Okt -> 19 Okt -> 20 Okt -> 21 Okt
+        attachments.sort(function(a, b) {
+          return extractDateFromFileName(a.getName()) - extractDateFromFileName(b.getName());
+        });
+
+        Logger.log("  [SMART SORT] Urutan file yang akan diproses (" + attachments.length + " file):");
+        attachments.forEach(function(att, idx) {
+          Logger.log("    " + (idx + 1) + ". " + att.getName());
+        });
+
+        // 3. Proses satu per satu secara berurutan
+        for (const attachment of attachments) {
           const fileName = attachment.getName();
-
-          if (!isAllowedFile(fileName)) {
-            Logger.log("  Skip: " + fileName);
-            continue;
-          }
-
-          // Format folder dinamis: PROMO/Promo 1-7 Oktober
           const dynamicFolder = rule.folder + "/" + safeSubject;
 
           Logger.log("  Memproses: " + fileName + " -> " + dynamicFolder);
@@ -71,8 +84,7 @@ function processEmailsAndUpload() {
           Logger.log("  Tersimpan: " + publicUrl);
           totalUploaded++;
           
-          // PENTING: Tetap kirim rule.folder aslinya ("PROMO" / "PQ") ke Python
-          // agar logika deteksi promo di backend tidak rusak.
+          // Kirim ke Python Engine berurutan
           triggerPythonEngine(publicUrl, fileName, rule.folder);
         }
 
@@ -82,6 +94,49 @@ function processEmailsAndUpload() {
   }
 
   Logger.log("Selesai. Total upload: " + totalUploaded);
+}
+
+// ─── HELPER: SMART DATE PARSER UNTUK PENGURUTAN FILE ─────────
+const MONTH_MAP = {
+  "JANUARI": 1, "JANUARY": 1, "JAN": 1,
+  "FEBRUARI": 2, "FEBRUARY": 2, "FEB": 2,
+  "MARET": 3, "MARCH": 3, "MAR": 3,
+  "APRIL": 4, "APR": 4,
+  "MEI": 5, "MAY": 5,
+  "JUNI": 6, "JUNE": 6, "JUN": 6,
+  "JULI": 7, "JULY": 7, "JUL": 7,
+  "AGUSTUS": 8, "AUGUST": 8, "AGU": 8, "AUG": 8,
+  "SEPTEMBER": 9, "SEP": 9,
+  "OKTOBER": 10, "OCTOBER": 10, "OKT": 10, "OCT": 10,
+  "NOVEMBER": 11, "NOV": 11,
+  "DESEMBER": 12, "DECEMBER": 12, "DES": 12, "DEC": 12
+};
+
+function extractDateFromFileName(fileName) {
+  if (!fileName) return 0;
+  const upper = fileName.toUpperCase();
+
+  // Pola 1: "POWER QUERY 16 OKTOBER 2026.csv" atau "06 OKTOBER 2026"
+  const match1 = upper.match(/(\d{1,2})\s+([A-Z]+)\s+(\d{4})/);
+  if (match1) {
+    const day = parseInt(match1[1], 10);
+    const month = MONTH_MAP[match1[2]];
+    const year = parseInt(match1[3], 10);
+    if (month && !isNaN(day) && !isNaN(year)) {
+      return new Date(year, month - 1, day).getTime();
+    }
+  }
+
+  // Pola 2: "2026-10-16" atau "2026_10_16"
+  const match2 = upper.match(/(\d{4})[-_](\d{2})[-_](\d{2})/);
+  if (match2) {
+    const year = parseInt(match2[1], 10);
+    const month = parseInt(match2[2], 10);
+    const day = parseInt(match2[3], 10);
+    return new Date(year, month - 1, day).getTime();
+  }
+
+  return 0; // fallback jika format tanggal tidak dikenali
 }
 
 function uploadToSupabase(blob, fileName, folder) {

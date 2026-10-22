@@ -627,7 +627,26 @@ def clean_mismatched_images_endpoint(req: CleanImagesRequest):
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
+# ─────────────────────────────────────────────────────────────
+#  Reprocess Storage PQ Sequentially
+# ─────────────────────────────────────────────────────────────
+@app.get("/api/reprocess-storage-pq")
+@app.post("/api/reprocess-storage-pq")
+async def reprocess_storage_pq_endpoint(background_tasks: BackgroundTasks, start_date: str = "2026-10-10"):
+    """
+    Mengurutkan seluruh file PQ di Supabase Storage dari tanggal tertua ke terbaru
+    mulai dari start_date (default 2026-10-10) dan memprosesnya secara berurutan.
+    """
+    from reprocess_storage_pq import run_sequential_reprocess
+    background_tasks.add_task(run_sequential_reprocess, start_date_str=start_date)
+    return {
+        "success": True,
+        "message": f"Reproses sekuensial seluruh file PQ dari Supabase Storage (mulai {start_date}) telah dijalankan di background.",
+        "start_date": start_date
+    }
+
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+

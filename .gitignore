@@ -41,3 +41,10 @@ yarn-error.log*
 next-env.d.ts
 
 .vercel
+
+# python temp and cache
+__pycache__/
+*.pyc
+.venv/
+temp_*
+*.csv
