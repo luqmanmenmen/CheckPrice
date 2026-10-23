@@ -50,6 +50,20 @@ export default function ImageLightboxModal({
   const lastTapRef = useRef<number>(0);
   const swipeStartXRef = useRef<number | null>(null);
 
+  // ─── Mirror state ke refs agar handler non-passive bisa baca nilai terkini ───
+  // React passive listener tidak bisa memanggil preventDefault(). Solusinya:
+  // kita daftarkan touch listener langsung ke DOM dengan { passive: false }.
+  // Handler tersebut perlu membaca state via ref, bukan via closure stale.
+  const scaleRef = useRef(1);
+  const positionRef = useRef({ x: 0, y: 0 });
+  const isDraggingRef = useRef(false);
+  const cleanImagesRef = useRef(cleanImages);
+
+  useEffect(() => { scaleRef.current = scale; }, [scale]);
+  useEffect(() => { positionRef.current = position; }, [position]);
+  useEffect(() => { isDraggingRef.current = isDragging; }, [isDragging]);
+  useEffect(() => { cleanImagesRef.current = cleanImages; }, [cleanImages]);
+
   useEffect(() => {
     setMounted(true);
   }, []);
@@ -63,16 +77,14 @@ export default function ImageLightboxModal({
     setPosition({ x: 0, y: 0 });
     setIsDragging(false);
     setIsPinching(false);
+    scaleRef.current = 1;
+    positionRef.current = { x: 0, y: 0 };
 
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
-      if (scale === 1 && cleanImages.length > 1) {
-        if (e.key === "ArrowLeft") handlePrev();
-        if (e.key === "ArrowRight") handleNext();
-      }
     };
     window.addEventListener("keydown", handleKeyDown);
 
@@ -80,31 +92,38 @@ export default function ImageLightboxModal({
       document.body.style.overflow = prevOverflow;
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isOpen, initialIndex, cleanImages.length, scale, onClose]);
+  }, [isOpen, initialIndex, onClose]);
 
   const handleResetZoom = useCallback(() => {
     setScale(1);
     setPosition({ x: 0, y: 0 });
+    scaleRef.current = 1;
+    positionRef.current = { x: 0, y: 0 };
   }, []);
 
   const handlePrev = useCallback(() => {
     handleResetZoom();
-    setCurrentIndex((prev) => (prev > 0 ? prev - 1 : cleanImages.length - 1));
-  }, [cleanImages.length, handleResetZoom]);
+    setCurrentIndex((prev) => (prev > 0 ? prev - 1 : cleanImagesRef.current.length - 1));
+  }, [handleResetZoom]);
 
   const handleNext = useCallback(() => {
     handleResetZoom();
-    setCurrentIndex((prev) => (prev < cleanImages.length - 1 ? prev + 1 : 0));
-  }, [cleanImages.length, handleResetZoom]);
+    setCurrentIndex((prev) => (prev < cleanImagesRef.current.length - 1 ? prev + 1 : 0));
+  }, [handleResetZoom]);
 
   const handleZoomIn = useCallback(() => {
-    setScale((prev) => Math.min(prev + 0.5, 5));
+    setScale((prev) => {
+      const next = Math.min(prev + 0.5, 5);
+      scaleRef.current = next;
+      return next;
+    });
   }, []);
 
   const handleZoomOut = useCallback(() => {
     setScale((prev) => {
       const next = Math.max(prev - 0.5, 1);
-      if (next === 1) setPosition({ x: 0, y: 0 });
+      scaleRef.current = next;
+      if (next === 1) { setPosition({ x: 0, y: 0 }); positionRef.current = { x: 0, y: 0 }; }
       return next;
     });
   }, []);
@@ -116,100 +135,132 @@ export default function ImageLightboxModal({
     const delta = e.deltaY < 0 ? 0.35 : -0.35;
     setScale((prev) => {
       const next = Math.min(Math.max(prev + delta, 1), 5);
-      if (next === 1) setPosition({ x: 0, y: 0 });
+      scaleRef.current = next;
+      if (next === 1) { setPosition({ x: 0, y: 0 }); positionRef.current = { x: 0, y: 0 }; }
       return next;
     });
   };
 
   // Double tap / double click to toggle zoom
-  const handleToggleZoom = () => {
-    if (scale > 1.2) {
+  const handleToggleZoom = useCallback(() => {
+    if (scaleRef.current > 1.2) {
       handleResetZoom();
     } else {
       setScale(2.5);
+      scaleRef.current = 2.5;
     }
-  };
+  }, [handleResetZoom]);
 
-  // Touch handlers for mobile pinch-to-zoom, pan, & swipe navigation
-  const handleTouchStart = (e: React.TouchEvent) => {
-    if (e.touches.length === 2) {
-      // 2 fingers: Pinch to zoom
-      setIsPinching(true);
-      setIsDragging(false);
-      swipeStartXRef.current = null;
-      const dist = Math.hypot(
-        e.touches[0].clientX - e.touches[1].clientX,
-        e.touches[0].clientY - e.touches[1].clientY
-      );
-      initialPinchDistRef.current = dist;
-      initialScaleRef.current = scale;
-    } else if (e.touches.length === 1) {
-      // Check for double tap
-      const now = Date.now();
-      if (now - lastTapRef.current < 320) {
-        handleToggleZoom();
-        lastTapRef.current = 0;
-        return;
+  // ─────────────────────────────────────────────────────────────
+  //  NON-PASSIVE NATIVE TOUCH HANDLERS
+  //  WAJIB untuk pinch-to-zoom di HP/tablet:
+  //  React mendaftarkan semua handler sebagai { passive: true }
+  //  sehingga e.preventDefault() diblokir dan browser mobile
+  //  mengambil alih gesture pinch untuk scroll/zoom halaman.
+  //  Solusi: daftar langsung ke DOM dengan { passive: false }.
+  // ─────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!isOpen) return;
+    const el = containerRef.current;
+    if (!el) return;
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        e.preventDefault();
+        setIsPinching(true);
+        setIsDragging(false);
+        isDraggingRef.current = false;
+        swipeStartXRef.current = null;
+        const dist = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+        initialPinchDistRef.current = dist;
+        initialScaleRef.current = scaleRef.current;
+      } else if (e.touches.length === 1) {
+        const now = Date.now();
+        if (now - lastTapRef.current < 320) {
+          handleToggleZoom();
+          lastTapRef.current = 0;
+          return;
+        }
+        lastTapRef.current = now;
+        if (scaleRef.current > 1) {
+          isDraggingRef.current = true;
+          setIsDragging(true);
+          dragStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+          posStartRef.current = { ...positionRef.current };
+        } else {
+          swipeStartXRef.current = e.touches[0].clientX;
+        }
       }
-      lastTapRef.current = now;
+    };
 
-      if (scale > 1) {
-        // 1 finger: pan when zoomed in
-        setIsDragging(true);
-        dragStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-        posStartRef.current = { ...position };
-      } else {
-        // Track start for horizontal swipe when not zoomed
-        swipeStartXRef.current = e.touches[0].clientX;
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length === 2 && initialPinchDistRef.current !== null) {
+        e.preventDefault();
+        const dist = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+        const factor = dist / initialPinchDistRef.current;
+        const newScale = Math.min(Math.max(initialScaleRef.current * factor, 1), 5);
+        scaleRef.current = newScale;
+        setScale(newScale);
+        if (newScale <= 1) {
+          setPosition({ x: 0, y: 0 });
+          positionRef.current = { x: 0, y: 0 };
+        }
+      } else if (e.touches.length === 1 && isDraggingRef.current && scaleRef.current > 1) {
+        e.preventDefault();
+        const dx = e.touches[0].clientX - dragStartRef.current.x;
+        const dy = e.touches[0].clientY - dragStartRef.current.y;
+        const newPos = { x: posStartRef.current.x + dx, y: posStartRef.current.y + dy };
+        positionRef.current = newPos;
+        setPosition(newPos);
       }
-    }
-  };
+    };
 
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (e.touches.length === 2 && initialPinchDistRef.current) {
-      // Pinching
-      const dist = Math.hypot(
-        e.touches[0].clientX - e.touches[1].clientX,
-        e.touches[0].clientY - e.touches[1].clientY
-      );
-      const factor = dist / initialPinchDistRef.current;
-      const newScale = Math.min(Math.max(initialScaleRef.current * factor, 1), 5);
-      setScale(newScale);
-      if (newScale === 1) setPosition({ x: 0, y: 0 });
-    } else if (e.touches.length === 1 && isDragging && scale > 1) {
-      // Panning
-      const dx = e.touches[0].clientX - dragStartRef.current.x;
-      const dy = e.touches[0].clientY - dragStartRef.current.y;
-      setPosition({
-        x: posStartRef.current.x + dx,
-        y: posStartRef.current.y + dy,
-      });
-    }
-  };
-
-  const handleTouchEnd = (e: React.TouchEvent) => {
-    if (e.touches.length < 2) {
-      setIsPinching(false);
-      initialPinchDistRef.current = null;
-    }
-    if (e.touches.length === 0) {
-      setIsDragging(false);
-      if (scale <= 1) {
-        setPosition({ x: 0, y: 0 });
-        // Handle horizontal swipe between images if not zoomed
-        if (swipeStartXRef.current !== null && cleanImages.length > 1) {
-          const endX = e.changedTouches[0]?.clientX;
-          if (endX !== undefined) {
-            const diff = swipeStartXRef.current - endX;
-            if (Math.abs(diff) > 50) {
-              if (diff > 0) handleNext();
-              else handlePrev();
+    const onTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) {
+        setIsPinching(false);
+        initialPinchDistRef.current = null;
+      }
+      if (e.touches.length === 0) {
+        isDraggingRef.current = false;
+        setIsDragging(false);
+        if (scaleRef.current <= 1) {
+          setPosition({ x: 0, y: 0 });
+          positionRef.current = { x: 0, y: 0 };
+          if (swipeStartXRef.current !== null && cleanImagesRef.current.length > 1) {
+            const endX = e.changedTouches[0]?.clientX;
+            if (endX !== undefined) {
+              const diff = swipeStartXRef.current - endX;
+              if (Math.abs(diff) > 50) {
+                if (diff > 0) handleNext();
+                else handlePrev();
+              }
             }
           }
         }
+        swipeStartXRef.current = null;
       }
-      swipeStartXRef.current = null;
-    }
+    };
+
+    el.addEventListener("touchstart", onTouchStart, { passive: false });
+    el.addEventListener("touchmove",  onTouchMove,  { passive: false });
+    el.addEventListener("touchend",   onTouchEnd,   { passive: false });
+
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove",  onTouchMove);
+      el.removeEventListener("touchend",   onTouchEnd);
+    };
+  }, [isOpen, handleNext, handlePrev, handleToggleZoom]);
+
+  // Placeholder agar deklarasi lama tidak digunakan (digantikan useEffect di atas)
+  const _handleTouchStart = (e: React.TouchEvent) => {
+    // (kosong — touch handling dilakukan oleh non-passive listener di useEffect di atas)
   };
 
   // Mouse handlers for PC pan
@@ -243,7 +294,8 @@ export default function ImageLightboxModal({
 
   return createPortal(
     <div
-      className="fixed inset-0 w-screen h-[100dvh] z-[99999] bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-5 touch-none select-none animate-in fade-in duration-200"
+      className="fixed inset-0 w-screen h-[100dvh] z-[99999] bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-5 select-none animate-in fade-in duration-200"
+      style={{ touchAction: "none" }}
       onClick={onClose}
     >
       <div
@@ -278,18 +330,16 @@ export default function ImageLightboxModal({
           </button>
         </div>
 
-        {/* Image Canvas with Touch / Wheel / Pan */}
+        {/* Image Canvas — Touch via non-passive useEffect | Wheel & Mouse via React */}
         <div
           ref={containerRef}
           onWheel={handleWheel}
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
           onDoubleClick={() => handleToggleZoom()}
+          style={{ touchAction: "none" }}
           className={`relative flex-1 bg-black/60 overflow-hidden flex items-center justify-center min-h-[320px] max-h-[62dvh] p-2 ${
             scale > 1
               ? isDragging
@@ -407,7 +457,7 @@ export default function ImageLightboxModal({
           </div>
 
           <p className="text-[11px] text-slate-400 text-center leading-relaxed">
-            💡 Cubit 2 jari / scroll mouse untuk zoom • Geser untuk keliling • Ketuk 2x untuk toggle zoom
+            🤏 Cubit 2 jari untuk zoom • Ketuk 2x toggle • Geser saat sudah zoom
           </p>
         </div>
       </div>
