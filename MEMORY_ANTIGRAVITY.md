@@ -128,3 +128,17 @@ Setiap pencarian kini otomatis mengindeks 4 kolom ritel dari PQ:
 * **Verifikasi Live**:
   * Tes API: `curl -L https://luqmanganteng.my.id/api/product/nayoung`
   * Hasil: Mengembalikan 23 produk Nayoung dengan departemen dan stok akurat.
+
+---
+
+## 8. Blueprint Migrasi Backend ke GitHub Actions (100% Gratis & No CC)
+
+* **Dokumentasi Lengkap**: [`WALKTHROUGH_MIGRASI_SERVER_GITHUB_ACTIONS.md`](file:///c:/Max%20Display/price-checker/WALKTHROUGH_MIGRASI_SERVER_GITHUB_ACTIONS.md)
+* **Status**: **Disimpan sebagai Rencana Resmi (Siap Eksekusi Kapan Saja)**.
+* **Tujuan**: Menggantikan ketergantungan Railway jika kuota/kredit berbayar habis.
+* **Strategi**:
+  1. Frontend tetap di Vercel (`luqmanganteng.my.id`).
+  2. Database tetap di Supabase PostgreSQL.
+  3. Pemrosesan file Power Query & Promo dialihkan ke **GitHub Actions Runner (Ubuntu, 7 GB RAM, 2 vCPU, kuota 2.000 menit/bulan)** via `repository_dispatch` webhook dari Google Apps Script.
+  4. 100% Bebas Kartu Kredit selamanya dan kebal penutupan platform pihak ketiga.
+
