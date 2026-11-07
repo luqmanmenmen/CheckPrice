@@ -258,52 +258,8 @@ export default function UpdateProdukPage() {
   };
 
   // ============================================================
-  // TRIGGER 1: Sync MDS BISA → Supabase
-  // ============================================================
-  const handleMdsBisaSync = async () => {
-    setIsMdsSyncing(true);
-    setMdsSyncResult(null);
-    try {
-      const res = await fetch("/api/admin/trigger/mds-bisa", { method: "POST" });
-      const data = await res.json();
-      if (res.status === 409) {
-        // Toko tutup
-        setMdsSyncResult({ success: false, message: data.error || "Toko sedang tutup (di luar jam 09:00-21:30 WIB)." });
-      } else if (res.ok && data.success) {
-        setMdsSyncResult({ success: true, message: data.message, stats: data.stats });
-      } else {
-        setMdsSyncResult({ success: false, message: data.error || "Sync gagal." });
-      }
-    } catch (err: any) {
-      setMdsSyncResult({ success: false, message: err.message || "Kesalahan jaringan." });
-    } finally {
-      setIsMdsSyncing(false);
-    }
-  };
-
-  // ============================================================
-  // TRIGGER 2: Sync Foto dari matahari.com → Supabase
-  // ============================================================
-  const handlePhotoSync = async () => {
-    setIsPhotoSyncing(true);
-    setPhotoSyncResult(null);
-    try {
-      const res = await fetch("/api/admin/trigger/photos", { method: "POST" });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setPhotoSyncResult({ success: true, message: data.message, stats: data.stats });
-      } else {
-        setPhotoSyncResult({ success: false, message: data.error || "Sync foto gagal." });
-      }
-    } catch (err: any) {
-      setPhotoSyncResult({ success: false, message: err.message || "Kesalahan jaringan." });
-    } finally {
-      setIsPhotoSyncing(false);
-    }
-  };
-
-  // ============================================================
-  // TRIGGER 3: Dispatch ke GitHub Actions Cloud Runner
+  // DISPATCH ENGINE: Memicu GitHub Actions Cloud Runner
+  // Mengalihkan beban berat (MDS BISA, Foto, Promo) ke Cloud (Bebas Limit 10s Vercel)
   // ============================================================
   const handleGitHubDispatch = async (action: 'all' | 'mds-bisa' | 'photos' | 'promo' = 'all') => {
     setIsGhDispatching(true);
@@ -314,7 +270,15 @@ export default function UpdateProdukPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, force: true }),
       });
-      const data = await res.json();
+      
+      const text = await res.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { success: false, error: text || "Server tidak merespons JSON valid" };
+      }
+
       if (res.ok && data.success) {
         setGhDispatchResult({ success: true, message: data.message, actionsUrl: data.actionsUrl });
       } else {
@@ -326,6 +290,9 @@ export default function UpdateProdukPage() {
       setIsGhDispatching(false);
     }
   };
+
+  const handleMdsBisaSync = () => handleGitHubDispatch('mds-bisa');
+  const handlePhotoSync = () => handleGitHubDispatch('photos');
 
   const handleFullResync = async (isAuto = false): Promise<boolean> => {
     setIsFullResyncing(true);
@@ -522,78 +489,33 @@ export default function UpdateProdukPage() {
           <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-3 bg-indigo-50 rounded-xl border border-indigo-100">
             <div className="flex-1 min-w-0">
               <p className="font-bold text-indigo-800 text-sm">🏪 Trigger 1 — Sync Data Produk (MDS BISA)</p>
-              <p className="text-xs text-indigo-600 mt-0.5">Update barcode UPC, style code, stok toko 719, dan harga normal (09:00–21:30 WIB)</p>
+              <p className="text-xs text-indigo-600 mt-0.5">Update barcode UPC, style code, stok toko 719, dan harga normal via Cloud</p>
             </div>
             <button
               onClick={handleMdsBisaSync}
-              disabled={isMdsSyncing || isPhotoSyncing}
+              disabled={isGhDispatching}
               className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-colors disabled:opacity-50 shrink-0 shadow-sm"
             >
-              {isMdsSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-              {isMdsSyncing ? "Menarik data..." : "Jalankan Sync"}
+              {isGhDispatching ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              {isGhDispatching ? "Menyalakan Cloud..." : "Jalankan Sync"}
             </button>
           </div>
-
-          {/* Result Trigger 1 */}
-          {mdsSyncResult && (
-            <div className={`flex items-start gap-2 p-3 rounded-lg text-xs font-medium border ${
-              mdsSyncResult.success
-                ? "bg-green-50 border-green-200 text-green-800"
-                : "bg-rose-50 border-rose-200 text-rose-800"
-            }`}>
-              {mdsSyncResult.success
-                ? <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
-                : <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              }
-              <div>
-                <p className="font-bold">{mdsSyncResult.message}</p>
-                {mdsSyncResult.stats && (
-                  <p className="mt-0.5 opacity-80">
-                    Total: {mdsSyncResult.stats.total} | Berhasil: {mdsSyncResult.stats.success} | Error: {mdsSyncResult.stats.errors}
-                    {mdsSyncResult.stats.storeOffline > 0 && ` | Toko offline: ${mdsSyncResult.stats.storeOffline}`}
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
 
           {/* Trigger 2: Foto */}
           <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-3 bg-purple-50 rounded-xl border border-purple-100">
             <div className="flex-1 min-w-0">
               <p className="font-bold text-purple-800 text-sm">🖼️ Trigger 2 — Sync Foto Produk</p>
-              <p className="text-xs text-purple-600 mt-0.5">Ambil foto produk resmi dari katalog matahari.com (Shopify CDN)</p>
+              <p className="text-xs text-purple-600 mt-0.5">Ambil foto produk resmi dari katalog matahari.com via Cloud Runner</p>
             </div>
             <button
               onClick={handlePhotoSync}
-              disabled={isPhotoSyncing || isMdsSyncing}
+              disabled={isGhDispatching}
               className="flex items-center gap-2 px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-xl transition-colors disabled:opacity-50 shrink-0 shadow-sm"
             >
-              {isPhotoSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Image className="w-4 h-4" />}
-              {isPhotoSyncing ? "Mengambil foto..." : "Sync Foto"}
+              {isGhDispatching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Image className="w-4 h-4" />}
+              {isGhDispatching ? "Menyalakan Cloud..." : "Sync Foto"}
             </button>
           </div>
-
-          {/* Result Trigger 2 */}
-          {photoSyncResult && (
-            <div className={`flex items-start gap-2 p-3 rounded-lg text-xs font-medium border ${
-              photoSyncResult.success
-                ? "bg-green-50 border-green-200 text-green-800"
-                : "bg-rose-50 border-rose-200 text-rose-800"
-            }`}>
-              {photoSyncResult.success
-                ? <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
-                : <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              }
-              <div>
-                <p className="font-bold">{photoSyncResult.message}</p>
-                {photoSyncResult.stats && (
-                  <p className="mt-0.5 opacity-80">
-                    DB: {photoSyncResult.stats.total} | Update: {photoSyncResult.stats.updated} | CDN probe: {photoSyncResult.stats.cdnFallback} | Tanpa foto: {photoSyncResult.stats.noPhoto}
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
 
           {/* Trigger 3: GitHub Actions Cloud Runner */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-gradient-to-r from-slate-900 to-indigo-950 text-white rounded-xl shadow-sm border border-slate-800 mt-1">
