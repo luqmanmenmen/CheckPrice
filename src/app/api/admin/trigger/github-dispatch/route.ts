@@ -70,7 +70,7 @@ export async function POST(req: Request) {
     await prisma.syncHistory.create({
       data: {
         userId: user.id,
-        type: action === 'photos' ? 'PHOTO_SYNC_TRIGGER' : 'MDS_BISA_SYNC_TRIGGER',
+        type: action === 'photos' ? 'PHOTO_SYNC_TRIGGER' : (action === 'promo' ? 'PROMO_SYNC_TRIGGER' : 'MDS_BISA_SYNC_TRIGGER'),
         fileName: `github-actions-${action}-${new Date().toISOString().slice(0, 10)}`,
         status: 'SUCCESS',
         records: 0,

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { ArrowLeft, UploadCloud, FileType, CheckCircle2, AlertTriangle, Loader2, Trash2 } from "lucide-react";
+import { ArrowLeft, UploadCloud, FileType, CheckCircle2, AlertTriangle, Loader2, Trash2, Zap, Play, ExternalLink, AlertCircle, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { PinModal } from "@/components/PinModal";
 import { AlertModal } from "@/components/AlertModal";
@@ -25,6 +25,37 @@ export default function UpdateHargaPage() {
   const [blobFiles, setBlobFiles] = useState<any[]>([]);
   const autoSyncTriggered = useRef(false);
   const processedBlobs = useRef<Set<string>>(new Set());
+
+  // GitHub Actions Cloud Dispatch
+  const [isGhDispatching, setIsGhDispatching] = useState(false);
+  const [ghDispatchResult, setGhDispatchResult] = useState<{ success: boolean; message: string; actionsUrl?: string; help?: string } | null>(null);
+
+  const handleGitHubDispatch = async (action: string = 'promo') => {
+    setIsGhDispatching(true);
+    setGhDispatchResult(null);
+    try {
+      const res = await fetch("/api/admin/trigger/github-dispatch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setGhDispatchResult({ success: true, message: data.message, actionsUrl: data.actionsUrl });
+      } else {
+        setGhDispatchResult({
+          success: false,
+          message: data.error || "Gagal memicu GitHub Actions.",
+          actionsUrl: data.manualUrl || "https://github.com/luqmanmenmen/CheckPrice/actions",
+          help: data.help,
+        });
+      }
+    } catch (err: any) {
+      setGhDispatchResult({ success: false, message: err.message || "Kesalahan jaringan." });
+    } finally {
+      setIsGhDispatching(false);
+    }
+  };
 
   const fetchSyncHistory = async () => {
     try {
@@ -420,6 +451,71 @@ export default function UpdateHargaPage() {
             Bersihkan Semua
           </button>
         </div>
+      </div>
+
+      {/* TRIGGER CLOUD PROMO SECTION (PYTHON ENGINE VIA GITHUB ACTIONS) */}
+      <div className="bg-gradient-to-r from-slate-900 to-indigo-950 rounded-2xl p-4 text-white shadow-md border border-slate-800">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="px-2 py-0.5 text-[10px] font-extrabold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full flex items-center gap-1">
+                <Zap className="w-2.5 h-2.5 text-emerald-400" /> MESIN CLOUD PYTHON
+              </span>
+              <h2 className="text-sm font-bold text-slate-100">Trigger Update Promo (Cloud Engine)</h2>
+            </div>
+            <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+              Jalankan mesin Python di GitHub Actions untuk menyedot file promo terbaru, membedah diskon/acara promo, dan mengupdate Supabase tanpa menyentuh stok fisik/barcode.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => handleGitHubDispatch('promo')}
+              disabled={isGhDispatching}
+              className="flex items-center gap-1.5 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 text-xs font-black rounded-xl transition-colors disabled:opacity-50 shadow-sm"
+            >
+              {isGhDispatching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+              {isGhDispatching ? "Mengirim sinyal..." : "Picu Update Promo"}
+            </button>
+            <a
+              href="https://github.com/luqmanmenmen/CheckPrice/actions"
+              target="_blank"
+              rel="noreferrer"
+              className="p-2 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-xl transition-colors border border-slate-700"
+              title="Buka tab GitHub Actions"
+            >
+              <ExternalLink className="w-4 h-4" />
+            </a>
+          </div>
+        </div>
+
+        {ghDispatchResult && (
+          <div className={`mt-3 flex items-start gap-2 p-3 rounded-xl text-xs font-medium border ${
+            ghDispatchResult.success
+              ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+              : "bg-amber-500/10 border-amber-500/30 text-amber-300"
+          }`}>
+            {ghDispatchResult.success
+              ? <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-400" />
+              : <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-400" />
+            }
+            <div className="flex-1">
+              <p className="font-bold">{ghDispatchResult.message}</p>
+              {ghDispatchResult.actionsUrl && (
+                <a
+                  href={ghDispatchResult.actionsUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-emerald-300 hover:underline font-bold mt-1 text-[11px]"
+                >
+                  Pantau proses live di GitHub Actions <ExternalLink className="w-3 h-3" />
+                </a>
+              )}
+              {ghDispatchResult.help && (
+                <p className="text-[11px] opacity-90 mt-1">{ghDispatchResult.help}</p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {isFullResyncing && (

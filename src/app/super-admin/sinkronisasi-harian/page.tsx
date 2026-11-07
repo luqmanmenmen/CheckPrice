@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { ArrowLeft, UploadCloud, FileType, CheckCircle2, AlertCircle, Loader2, Trash2, RefreshCw, Image, ExternalLink, Play, Zap } from "lucide-react";
+import { ArrowLeft, UploadCloud, FileType, CheckCircle2, AlertCircle, Loader2, Trash2, RefreshCw, Image, ExternalLink, Play, Zap, Tag } from "lucide-react";
 import Link from "next/link";
 import { PinModal } from "@/components/PinModal";
 import { AlertModal } from "@/components/AlertModal";
@@ -305,7 +305,7 @@ export default function UpdateProdukPage() {
   // ============================================================
   // TRIGGER 3: Dispatch ke GitHub Actions Cloud Runner
   // ============================================================
-  const handleGitHubDispatch = async (action: 'all' | 'mds-bisa' | 'photos' = 'all') => {
+  const handleGitHubDispatch = async (action: 'all' | 'mds-bisa' | 'photos' | 'promo' = 'all') => {
     setIsGhDispatching(true);
     setGhDispatchResult(null);
     try {
@@ -681,14 +681,23 @@ export default function UpdateProdukPage() {
                 Jalankan full sync di server GitHub (bebas batas waktu 60 detik Vercel, tahan hingga 6 jam). Otomatis aktif setiap 09:30 WIB.
               </p>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                onClick={() => handleGitHubDispatch('promo')}
+                disabled={isGhDispatching}
+                className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg transition-colors disabled:opacity-50 shadow-sm"
+                title="Picu hanya pembaruan harga Promo dari file email terbaru"
+              >
+                {isGhDispatching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Tag className="w-3.5 h-3.5" />}
+                Picu Promo
+              </button>
               <button
                 onClick={() => handleGitHubDispatch('all')}
                 disabled={isGhDispatching}
                 className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 text-xs font-black rounded-lg transition-colors disabled:opacity-50 shadow-sm"
               >
                 {isGhDispatching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current" />}
-                {isGhDispatching ? "Mengirim sinyal..." : "Picu Cloud Sync"}
+                {isGhDispatching ? "Mengirim sinyal..." : "Picu Semua (All)"}
               </button>
               <a
                 href="https://github.com/luqmanmenmen/CheckPrice/actions"

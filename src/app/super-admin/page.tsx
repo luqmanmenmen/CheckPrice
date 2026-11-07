@@ -170,8 +170,8 @@ export default function SuperAdminDashboard() {
                 <FileSpreadsheet className="w-5 h-5" />
               </div>
               <div>
-                <p className="font-bold text-slate-800 text-sm">Sinkronisasi Harian (PQ)</p>
-                <p className="text-[10px] text-slate-500">Update Produk Baru, Stok Sisa (EOH), dan Status Fast/Slow Move</p>
+                <p className="font-bold text-slate-800 text-sm">Sinkronisasi Ritel (MDS BISA & Foto)</p>
+                <p className="text-[10px] text-slate-500">Tarik Barcode UPC, Style Code, Stok Toko 719, dan Foto Produk</p>
               </div>
             </div>
             <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-blue-600 transition-colors" />
@@ -184,8 +184,8 @@ export default function SuperAdminDashboard() {
                 <DollarSign className="w-5 h-5" />
               </div>
               <div>
-                <p className="font-bold text-slate-800 text-sm">Update Harga & Promo</p>
-                <p className="text-[10px] text-slate-500">Sinkronisasi harga mingguan (Rabu Malam)</p>
+                <p className="font-bold text-slate-800 text-sm">Update Harga & Promo (Cloud Engine)</p>
+                <p className="text-[10px] text-slate-500">Sinkronisasi diskon mingguan via Python Cloud Engine & Storage</p>
               </div>
             </div>
             <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-emerald-600 transition-colors" />
