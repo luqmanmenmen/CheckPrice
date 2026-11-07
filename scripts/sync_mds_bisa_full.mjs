@@ -365,6 +365,51 @@ function extractProductFields(data) {
 }
 
 // ============================================================
+// HEALTH-CHECK: PROBE SERVER TOKO 719 & TUNGGU JIKA IT TELAT
+// ============================================================
+async function waitForStoreOnline(initialCookie, maxWaitMinutes = 35) {
+  console.log('🔍 [HEALTH-CHECK] Memeriksa apakah server SQL toko 719 sudah online...');
+  const startTime = Date.now();
+  const maxWaitMs = maxWaitMinutes * 60 * 1000;
+  const TEST_SKU = '53805640'; // SKU uji cepat
+  let currentCookie = initialCookie;
+  let attempt = 1;
+
+  while (Date.now() - startTime < maxWaitMs) {
+    let detail = await fetchItemDetail(TEST_SKU, currentCookie);
+
+    if (detail._sessionExpired) {
+      try {
+        currentCookie = await autoLogin();
+        detail = await fetchItemDetail(TEST_SKU, currentCookie);
+      } catch (e) {
+        console.warn('⚠️ Gagal refresh session saat menunggu server:', e.message);
+      }
+    }
+
+    // Jika server toko sudah online (bukan _storeOffline)
+    if (!detail._storeOffline) {
+      const waitSecs = Math.round((Date.now() - startTime) / 1000);
+      if (waitSecs > 5) {
+        console.log(`\n🟢 [SERVER ONLINE] Server toko 719 SUDAH MENYALA! (Setelah menunggu ${waitSecs} detik)`);
+      } else {
+        console.log(`🟢 [SERVER ONLINE] Server toko 719 aktif & online.`);
+      }
+      return { online: true, cookie: currentCookie };
+    }
+
+    const elapsedMins = Math.round((Date.now() - startTime) / 60000);
+    console.log(`⏳ [Percobaan ${attempt}] Server toko 719 masih offline (belum dinyalakan IT). Menunggu 2 menit lagi... (${elapsedMins}/${maxWaitMinutes} mnt)`);
+    attempt++;
+    await delay(120000); // Tunggu 2 menit sebelum cek ulang
+  }
+
+  console.warn(`\n⚠️ [TIMEOUT] Server toko 719 belum dinyalakan oleh IT setelah ${maxWaitMinutes} menit.`);
+  console.warn('   Menghentikan proses agar kuota GitHub Actions tidak terbuang sia-sia.');
+  return { online: false, cookie: currentCookie };
+}
+
+// ============================================================
 // STEP 3: UPSERT KE SUPABASE
 // ============================================================
 async function upsertProduct(sku, fields) {
@@ -487,6 +532,17 @@ async function main() {
       console.error('   5. Jalankan ulang script ini\n');
       process.exit(1);
     }
+  }
+
+  // --- HEALTH CHECK: Tunggu server toko jika IT telat menyalakan komputer ---
+  if (!isDryRun && !targetSku && !isForce) {
+    const health = await waitForStoreOnline(cookie, 35);
+    if (!health.online) {
+      console.log('🛑 Selesai (Server toko offline). Stok & data di Supabase tetap aman terjaga.\n');
+      await prisma.$disconnect();
+      process.exit(0);
+    }
+    cookie = health.cookie;
   }
 
   // --- STEP 2: Ambil list SKU dari Supabase ---

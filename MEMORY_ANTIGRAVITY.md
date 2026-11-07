@@ -305,6 +305,19 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   - Tombol **`⚡ Live MDS`** di samping kotak `Sisa Stok (EOH)` pada [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx).
   - Mengambil data stok riil 1 SKU ke StoreHub dalam **300ms**, langsung mengupdate angka stok di Supabase dan layar kasir dengan indikator status hijau. Menggunakan **0 menit kuota GitHub Actions**.
 
+## 23. Proteksi Keterlambatan IT Toko 719: Health-Check Probe & Auto-Wait
+
+* **Akar Masalah Operasional Lapangan:**
+  - Sering kali staf IT / EDP toko fisik 719 telat menyalakan komputer server kasir lokal (baru dinyalakan jam 09:45 atau 10:00 WIB).
+  - Jika runner langsung keluar saat offline, sesi sinkronisasi pagi akan terlewat.
+* **Solusi Pintar: Pre-Flight Health-Check Probe (`waitForStoreOnline`):**
+  - Runner tidak langsung memproses 9.500 SKU jika server toko masih mati.
+  - Runner melakukan tes probe cepat ke 1 SKU uji. Jika server offline, runner otomatis menunggu dengan interval pengecekan per 2 menit hingga batas maksimal 35 menit.
+  - Begitu staf IT menyalakan komputer server (misal jam 10:00 WIB), runner seketika mendeteksi status online dan langsung memulai Full Sync.
+  - Jadwal pagi disesuaikan ke **09:45 WIB** dengan rentang toleransi hingga **10:20 WIB**.
+  - Jika setelah 35 menit server tetap mati (misal toko tutup/listrik padam), runner keluar dengan bersih (*exit 0*) agar kuota tidak terbuang.
+
+
 
 
 

@@ -2,8 +2,8 @@ name: Retail Sync Engine (MDS BISA & Matahari Catalog)
 
 on:
   schedule:
-    # 02:30 UTC = 09:30 WIB (Pagi buka toko: Full Sync MDS BISA & Promo)
-    - cron: '30 2 * * *'
+    # 02:45 UTC = 09:45 WIB (Pagi buka toko: Full Sync MDS BISA & Promo, toleransi IT toko telat s/d 10:20 WIB)
+    - cron: '45 2 * * *'
     # 14:00 UTC = 21:00 WIB (Malam closing toko: Full Sync MDS BISA & Sisa Stok)
     - cron: '0 14 * * *'
 
