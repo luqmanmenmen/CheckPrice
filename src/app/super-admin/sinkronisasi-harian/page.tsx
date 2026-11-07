@@ -621,6 +621,163 @@ export default function UpdateProdukPage() {
             </div>
           )}
         </div>
+
+        {/* CARD RIWAYAT UPDATE TERAKHIR (Database Supabase & Cloud Runner) */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200/80 p-5 sm:p-6 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_#10b981]" />
+                <h3 className="font-bold text-slate-800 text-sm sm:text-base">
+                  Riwayat Eksekusi Update Terakhir
+                </h3>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Status data riil yang telah sukses diperbarui oleh program otomatis (Jadwal 09:45 & 21:00 WIB)
+              </p>
+            </div>
+            <button
+              onClick={() => fetchCloudStatus(true)}
+              className="self-start sm:self-auto px-3 py-1.5 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1.5"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoadingStatus ? 'animate-spin' : ''}`} />
+              Segarkan Riwayat
+            </button>
+          </div>
+
+          {/* 3 Status Pilar Terakhir */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {/* Pilar 1: MDS BISA */}
+            <div className="p-3.5 rounded-xl border border-cyan-100 bg-gradient-to-br from-cyan-50/70 to-white">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-700 flex items-center gap-1">
+                  <Database className="w-3.5 h-3.5 text-cyan-600" /> MDS BISA & Stok
+                </span>
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                  SUKSES
+                </span>
+              </div>
+              <p className="text-xs font-bold text-slate-800">
+                {cloudStatus.syncHistory.find(h => h.type === 'MDS_BISA_SYNC' || h.type === 'STOCK_SYNC') 
+                  ? `${cloudStatus.syncHistory.find(h => h.type === 'MDS_BISA_SYNC' || h.type === 'STOCK_SYNC')?.records.toLocaleString('id-ID')} Produk SOH`
+                  : 'Aktif Terjadwal'}
+              </p>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                {cloudStatus.syncHistory.find(h => h.type === 'MDS_BISA_SYNC' || h.type === 'STOCK_SYNC')
+                  ? new Date(cloudStatus.syncHistory.find(h => h.type === 'MDS_BISA_SYNC' || h.type === 'STOCK_SYNC')!.createdAt).toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + ' WIB'
+                  : '09:45 & 21:00 WIB'}
+              </p>
+            </div>
+
+            {/* Pilar 2: Foto CDN */}
+            <div className="p-3.5 rounded-xl border border-purple-100 bg-gradient-to-br from-purple-50/70 to-white">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-purple-700 flex items-center gap-1">
+                  <Image className="w-3.5 h-3.5 text-purple-600" /> Foto & Collage Online
+                </span>
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                  SUKSES
+                </span>
+              </div>
+              <p className="text-xs font-bold text-slate-800">
+                {cloudStatus.syncHistory.find(h => h.type === 'PHOTO_SYNC')
+                  ? `${cloudStatus.syncHistory.find(h => h.type === 'PHOTO_SYNC')?.records.toLocaleString('id-ID')} Galeri Foto`
+                  : 'Up-to-Date'}
+              </p>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                {cloudStatus.syncHistory.find(h => h.type === 'PHOTO_SYNC')
+                  ? new Date(cloudStatus.syncHistory.find(h => h.type === 'PHOTO_SYNC')!.createdAt).toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + ' WIB'
+                  : 'Katalog Matahari.com'}
+              </p>
+            </div>
+
+            {/* Pilar 3: Promo Retail */}
+            <div className="p-3.5 rounded-xl border border-sky-100 bg-gradient-to-br from-sky-50/70 to-white">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-sky-700 flex items-center gap-1">
+                  <Tag className="w-3.5 h-3.5 text-sky-600" /> Promo Retail (Python)
+                </span>
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                  AKTIF
+                </span>
+              </div>
+              <p className="text-xs font-bold text-slate-800">
+                {cloudStatus.syncHistory.find(h => h.type === 'UPDATE_PROMO')
+                  ? `${cloudStatus.syncHistory.find(h => h.type === 'UPDATE_PROMO')?.records.toLocaleString('id-ID')} Promo Termutakhir`
+                  : 'Aktif Berjalan'}
+              </p>
+              <p className="text-[11px] text-slate-500 mt-0.5 truncate">
+                {cloudStatus.syncHistory.find(h => h.type === 'UPDATE_PROMO')
+                  ? new Date(cloudStatus.syncHistory.find(h => h.type === 'UPDATE_PROMO')!.createdAt).toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + ' WIB'
+                  : 'Sinkronisasi Mingguan'}
+              </p>
+            </div>
+          </div>
+
+          {/* Tabel Riwayat Eksekusi */}
+          <div className="overflow-x-auto border border-slate-100 rounded-xl">
+            <table className="w-full text-left text-xs text-slate-600">
+              <thead className="bg-slate-50 text-[10px] uppercase font-bold text-slate-400 border-b border-slate-100">
+                <tr>
+                  <th className="px-3.5 py-2.5">Waktu Eksekusi</th>
+                  <th className="px-3.5 py-2.5">Tipe Pekerjaan</th>
+                  <th className="px-3.5 py-2.5">Deskripsi / Target</th>
+                  <th className="px-3.5 py-2.5 text-right">Data Diperbarui</th>
+                  <th className="px-3.5 py-2.5 text-center">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {cloudStatus.syncHistory.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="text-center py-4 text-slate-400 text-xs">
+                      Belum ada riwayat sync di database
+                    </td>
+                  </tr>
+                ) : (
+                  cloudStatus.syncHistory.map((item) => (
+                    <tr key={item.id} className="hover:bg-slate-50/70 transition-colors">
+                      <td className="px-3.5 py-2.5 font-mono text-[11px] text-slate-500 whitespace-nowrap">
+                        {new Date(item.createdAt).toLocaleString("id-ID", {
+                          day: "numeric",
+                          month: "short",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                          second: "2-digit",
+                        })} WIB
+                      </td>
+                      <td className="px-3.5 py-2.5 font-bold text-slate-800 whitespace-nowrap">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] ${
+                          item.type.includes('MDS') || item.type.includes('STOCK')
+                            ? 'bg-cyan-50 text-cyan-700 border border-cyan-200'
+                            : item.type.includes('PHOTO')
+                            ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                            : 'bg-sky-50 text-sky-700 border border-sky-200'
+                        }`}>
+                          {item.type}
+                        </span>
+                      </td>
+                      <td className="px-3.5 py-2.5 text-slate-600 truncate max-w-xs">
+                        {item.fileName}
+                      </td>
+                      <td className="px-3.5 py-2.5 text-right font-mono font-bold text-slate-700 whitespace-nowrap">
+                        {item.records.toLocaleString("id-ID")} item
+                      </td>
+                      <td className="px-3.5 py-2.5 text-center whitespace-nowrap">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          item.status === 'SUCCESS'
+                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                            : 'bg-rose-100 text-rose-800 border border-rose-200'
+                        }`}>
+                          {item.status === 'SUCCESS' ? 'SUKSES' : 'GAGAL'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   );

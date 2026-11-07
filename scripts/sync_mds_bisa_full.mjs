@@ -705,24 +705,36 @@ async function main() {
   console.log('══════════════════════════════════════════');
   console.log('');
 
-  // Log ke SyncHistory
+  // Log ke SyncHistory (Riwayat Sukses Update Terakhir)
   if (!isDryRun) {
     try {
-      // Cari user M223515 atau supervisor di DB untuk log
       const user = await prisma.user.findFirst({
-        where: { OR: [{ nik: 'M223515' }, { role: 'SUPERVISOR' }, { role: 'ADMIN' }] },
-      });
+        where: {
+          OR: [
+            { nik: '22054178' },
+            { nik: '223515' },
+            { role: 'SUPERVISOR' },
+          ]
+        },
+      }) || await prisma.user.findFirst();
+
       if (user) {
+        const syncType = isStockOnly ? 'STOCK_SYNC' : 'MDS_BISA_SYNC';
+        const syncFileName = isStockOnly 
+          ? 'Fast Stock Update (Toko 719)' 
+          : 'MDS BISA Full Catalog & Stok';
+        const syncStatus = (stats.errors > stats.success && stats.success === 0) ? 'FAILED' : 'SUCCESS';
+
         await prisma.syncHistory.create({
           data: {
             userId: user.id,
-            type: 'MDS_BISA_SYNC',
-            fileName: 'sync_mds_bisa_full.mjs',
-            status: stats.errors > stats.success ? 'FAILED' : 'SUCCESS',
+            type: syncType,
+            fileName: syncFileName,
+            status: syncStatus,
             records: stats.success,
           },
         });
-        console.log('📝 Log sync disimpan ke SyncHistory.');
+        console.log(`📝 Log sync berhasil dicatat ke SyncHistory (${syncType} ➔ ${stats.success} item, status: ${syncStatus}).`);
       }
     } catch (logErr) {
       console.warn('⚠️  Tidak bisa log ke SyncHistory:', logErr.message);

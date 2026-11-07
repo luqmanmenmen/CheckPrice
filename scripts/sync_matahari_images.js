@@ -372,18 +372,27 @@ async function fullSync() {
 
   // Catat log ke tabel SyncHistory
   try {
-    const user = await prisma.user.findFirst({ where: { role: 'SUPERVISOR' } });
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { nik: '22054178' },
+          { nik: '223515' },
+          { role: 'SUPERVISOR' },
+        ]
+      }
+    }) || await prisma.user.findFirst();
     if (user) {
+      const totalProcessed = totalUpdated + (newProductsToCreate ? newProductsToCreate.length : 0);
       await prisma.syncHistory.create({
         data: {
           userId: user.id,
           type: 'PHOTO_SYNC',
           fileName: 'Matahari Shopify CDN Photos',
           status: 'SUCCESS',
-          records: totalUpdated
+          records: totalProcessed
         }
       });
-      console.log("📝 Log sinkronisasi tersimpan di tabel SyncHistory.");
+      console.log(`📝 Log sinkronisasi tersimpan di tabel SyncHistory (${totalProcessed} produk).`);
     }
   } catch (logErr) {
     console.warn("⚠️ Gagal mencatat SyncHistory:", logErr.message);

@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react";
 import dynamic from "next/dynamic";
-import { Search, ScanText, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle, ArrowLeft, CloudDownload, Loader2, Menu, Sparkles, ArrowRight, Gift, Maximize2, Zap } from "lucide-react";
+import { Search, ScanText, Barcode, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle, ArrowLeft, CloudDownload, Loader2, Menu, Sparkles, ArrowRight, Gift, Maximize2, Zap } from "lucide-react";
 import { useEffect } from "react";
 import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
 import PullToRefresh from "@/components/PullToRefresh";
@@ -1069,19 +1069,48 @@ export default function Home() {
             </div>
           )}
 
-          <div className="flex items-center justify-between bg-white rounded-xl p-3 border border-slate-200 shadow-sm">
-            <div className="flex items-center gap-2">
-              <div className={`w-2 h-2 rounded-full ${lastUpdateDate === 'Memuat...' ? 'bg-amber-400 animate-pulse' : 'bg-emerald-500'}`} />
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-white rounded-2xl p-3.5 border border-slate-200/90 shadow-sm gap-2">
+            <div className="flex items-start sm:items-center gap-2.5">
+              <div className={`w-2.5 h-2.5 rounded-full mt-1 sm:mt-0 shrink-0 ${lastUpdateDate === 'Memuat...' ? 'bg-amber-400 animate-pulse' : 'bg-emerald-500 shadow-[0_0_8px_#10b981]'}`} />
               <div>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Update Data Terakhir</p>
-                <p className="text-xs font-semibold text-slate-700">{lastUpdateDate}</p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Status Update Sistem</p>
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200/80">
+                    Otomatis 09:45 & 21:00 WIB
+                  </span>
+                </div>
+                <p className="text-xs font-bold text-slate-800 mt-0.5">
+                  Terakhir Diperbarui: <span className="text-blue-600">{lastUpdateDate}</span>
+                </p>
+
+                {/* Indikator Pilar Sync Terakhir */}
+                {updateData?.pillars && (
+                  <div className="flex items-center gap-2 mt-1.5 flex-wrap text-[10px] text-slate-500">
+                    {updateData.pillars.mdsBisa && (
+                      <span className="inline-flex items-center gap-1 bg-cyan-50 text-cyan-700 px-2 py-0.5 rounded-full border border-cyan-100 font-medium">
+                        📦 MDS BISA: {updateData.pillars.mdsBisa.records.toLocaleString('id-ID')} item ({updateData.pillars.mdsBisa.status})
+                      </span>
+                    )}
+                    {updateData.pillars.photos && (
+                      <span className="inline-flex items-center gap-1 bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full border border-purple-100 font-medium">
+                        🖼️ Foto: {updateData.pillars.photos.records.toLocaleString('id-ID')} ({updateData.pillars.photos.status})
+                      </span>
+                    )}
+                    {updateData.pillars.promo && (
+                      <span className="inline-flex items-center gap-1 bg-sky-50 text-sky-700 px-2 py-0.5 rounded-full border border-sky-100 font-medium">
+                        🏷️ Promo: {updateData.pillars.promo.records.toLocaleString('id-ID')} item ({updateData.pillars.promo.status})
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
             {!hasNewUpdate && (
               <button 
                 onClick={() => handleManualSync()}
                 disabled={isSyncing}
-                className={`p-2 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-500 transition-colors ${isSyncing ? 'opacity-50' : ''}`}
+                title="Sinkronkan database offline lokal"
+                className={`self-end sm:self-center p-2 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-500 transition-colors border border-slate-200 shrink-0 ${isSyncing ? 'opacity-50' : ''}`}
               >
                 <CloudDownload className={`w-4 h-4 ${isSyncing ? 'animate-bounce text-blue-500' : ''}`} />
               </button>
@@ -1356,10 +1385,10 @@ export default function Home() {
                 <button 
                   type="button"
                   onClick={() => setIsScanning(!isScanning)}
-                  title="Scan SKU (8 Digit)"
-                  className={`p-1.5 rounded-lg text-slate-400 hover:text-blue-600 transition-colors ${isScanning ? "text-blue-600 bg-blue-50" : ""}`}
+                  title="Scan Barcode Produk"
+                  className={`p-1.5 rounded-lg text-slate-400 hover:text-emerald-600 transition-colors ${isScanning ? "text-emerald-600 bg-emerald-50" : ""}`}
                 >
-                  <ScanText className="w-5 h-5" />
+                  <Barcode className="w-5 h-5" />
                 </button>
               )}
             </div>
@@ -1375,13 +1404,13 @@ export default function Home() {
 
       </div>
 
-      {/* Full Screen SKU Scanner */}
+      {/* Full Screen Barcode Scanner */}
       {isScanning && (
         <div className="fixed inset-0 z-[100] bg-black flex flex-col animate-in fade-in zoom-in-95 duration-300">
-          <div className="flex justify-between items-center p-4 bg-slate-900 text-white shadow-md z-10">
+          <div className="flex justify-between items-center p-4 bg-slate-900 text-white shadow-md z-10 border-b border-slate-800">
             <div className="flex items-center gap-2">
-              <ScanText className="w-5 h-5 text-blue-400" />
-              <h3 className="font-bold">Scan SKU (8 Digit)</h3>
+              <Barcode className="w-5 h-5 text-emerald-400" />
+              <h3 className="font-bold text-sm sm:text-base">Scan Barcode Produk (EAN-13 / UPC)</h3>
             </div>
             <button onClick={() => setIsScanning(false)} className="p-2 bg-slate-800 rounded-full hover:bg-slate-700 transition-colors">
               <X className="w-6 h-6 text-white" />

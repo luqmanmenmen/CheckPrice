@@ -342,6 +342,26 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   - **Tombol Trigger 1 & 2 di Website Admin:**
     - Halaman `/super-admin/sinkronisasi-harian` 100% siap memicu Trigger 1A (MDS BISA), Trigger 1B (Stock Only), Trigger 2 (Foto), Trigger 3 (Promo), atau Trigger 4 (All) secara instan via GitHub Actions kapan pun diperlukan di luar jam otomatis.
 
+---
+
+## 26. Finalisasi Mode Murni Scan Barcode & Dashboard Riwayat Update Sukses Terakhir
+
+* **Mode Scan Murni Barcode (Zero Option, Langsung Barcode 1D):**
+  - Seluruh label tombol dan antarmuka pemindai di [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx) dan [`src/app/cek-harga/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/cek-harga/page.tsx) diubah menjadi **"Scan Barcode Produk (EAN-13 / UPC)"** dengan ikon barcode.
+  - Pemindai kamera langsung mengunci garis barcode vendor danhangtag ritel secara instan tanpa opsi teks SKU OCR yang memperlambat.
+
+* **Dashboard & Indikator Riwayat Update Terakhir:**
+  - **Endpoint API [`/api/last-update`](file:///c:/Max%20Display/price-checker/src/app/api/last-update/route.ts):**
+    - Menyediakan informasi waktu update terakhir (`lastUpdate`) dan riwayat 10 eksekusi terakhir dari tabel `SyncHistory`.
+    - Mengelompokkan status 3 pilar: `pillars.mdsBisa`, `pillars.photos`, dan `pillars.promo` lengkap dengan jumlah rekaman dan status `SUCCESS`.
+  - **Layar Beranda Kasir (`src/app/page.tsx`):**
+    - Kotak informasi status sistem kini menampilkan badge hijau, waktu update terakhir (WIB), serta rincian 3 pilar: MDS BISA (item SOH), Foto (galeri terupdate), dan Promo.
+  - **Layar Kiosk Cek Harga (`src/app/cek-harga/page.tsx`):**
+    - Header pemindai menampilkan status waktu update terakhir produk secara elegan di samping badge `Mode Cepat 0ms`.
+  - **Layar Super Admin (`src/app/super-admin/sinkronisasi-harian/page.tsx`):**
+    - Kartu Eksekutif **"Riwayat Eksekusi Update Terakhir"** dengan 3 kartu status pilar (MDS BISA, Foto Online, Promo Python) dan tabel riwayat lengkap 10 eksekusi terakhir dari tabel `SyncHistory` (waktu WIB, tipe pilar, nama berkas, jumlah item, dan status badge hijau `SUKSES`).
+
+
 
 
 

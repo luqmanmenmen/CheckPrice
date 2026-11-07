@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
-import { Tag, Sparkles, AlertCircle, Camera, RefreshCw, Zap, Gift, Percent } from "lucide-react";
+import { Tag, Sparkles, AlertCircle, Camera, RefreshCw, Zap, Gift, Percent, Barcode } from "lucide-react";
 import ProductImageSlider from "@/components/ProductImageSlider";
 
 // Engine TextScanner — scan teks SKU 8 digit
@@ -109,9 +109,28 @@ export default function CekHargaPage() {
   const [siblings, setSiblings] = useState<ProductData[]>([]);
   const [error, setError] = useState("");
   const [countdown, setCountdown] = useState(25);
+  const [lastUpdateText, setLastUpdateText] = useState<string>("");
 
   // In-memory session cache — scan ulang produk yang sama = instan (0ms)
   const sessionCache = useRef<Map<string, ProductData>>(new Map());
+
+  // Ambil riwayat update terakhir saat kiosk dimuat
+  useEffect(() => {
+    fetch("/api/last-update")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.lastUpdate) {
+          const dt = new Date(d.lastUpdate).toLocaleString("id-ID", {
+            day: "numeric",
+            month: "short",
+            hour: "2-digit",
+            minute: "2-digit",
+          });
+          setLastUpdateText(dt);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Inisialisasi Database Offline di awal kunjungan
   useEffect(() => {
@@ -492,17 +511,25 @@ export default function CekHargaPage() {
           {/* Header bersih */}
           <div className="flex justify-between items-center px-4 py-3 bg-slate-900/90 backdrop-blur-md text-white z-10 border-b border-slate-800">
             <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-amber-300" />
-              <span className="font-black text-sm tracking-wide">CEK HARGA • Scan SKU</span>
+              <Barcode className="w-5 h-5 text-emerald-400" />
+              <span className="font-black text-sm tracking-wide">CEK HARGA • Scan Barcode</span>
             </div>
-            {/* Status Kecepatan Offline 0ms */}
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-[10px] font-bold text-emerald-400">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              Mode Cepat 0ms
+            {/* Status Update Terakhir & Kecepatan Offline 0ms */}
+            <div className="flex items-center gap-2">
+              {lastUpdateText && (
+                <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800 text-[10px] font-medium text-slate-300 border border-slate-700">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  Update: {lastUpdateText}
+                </div>
+              )}
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-[10px] font-bold text-emerald-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                Mode Cepat 0ms
+              </div>
             </div>
           </div>
 
-          {/* TextScanner full height — Murni Scan Teks SKU 8 Digit */}
+          {/* Barcode Scanner full height — Murni Scan Barcode 1D (EAN/UPC) */}
           <div className="flex-1 overflow-hidden">
             <TextScanner onScanResult={handleTextScanSuccess} />
           </div>

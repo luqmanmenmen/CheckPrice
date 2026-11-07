@@ -222,11 +222,11 @@ export async function GET(req: Request) {
       };
     });
 
-    // 5. Ambil 5 riwayat SyncHistory dari Database Supabase
+    // 5. Ambil 10 riwayat SyncHistory dari Database Supabase
     let dbSyncHistory: any[] = [];
     try {
       dbSyncHistory = await prisma.syncHistory.findMany({
-        take: 5,
+        take: 10,
         orderBy: { createdAt: 'desc' },
         select: {
           id: true,
