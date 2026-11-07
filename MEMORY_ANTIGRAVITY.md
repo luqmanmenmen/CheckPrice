@@ -301,7 +301,7 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
 
 * **Fitur On-Demand "⚡ Live MDS" di Layar Kasir/Detail Barang:**
   - Modul client: [`src/lib/mdsBisaClient.ts`](file:///c:/Max%20Display/price-checker/src/lib/mdsBisaClient.ts) dengan in-memory cookie caching.
-  - Endpoint API: [`src/app/api/product/live-stock/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/product/live-stock/route.ts)
+  - Endpoint API: [`src/app/api/live-stock/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/live-stock/route.ts) (independen dari route dynamic `[identifier]`)
   - Tombol **`⚡ Live MDS`** di samping kotak `Sisa Stok (EOH)` pada [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx).
   - Mengambil data stok riil 1 SKU ke StoreHub dalam **300ms**, langsung mengupdate angka stok di Supabase dan layar kasir dengan indikator status hijau. Menggunakan **0 menit kuota GitHub Actions**.
 
