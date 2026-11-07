@@ -235,8 +235,23 @@ export default function Home() {
       const data = await res.json();
       if (data.success && data.stok !== undefined) {
         setProduct((prev) => prev ? { ...prev, stok: data.stok } : null);
-        setLiveStockVerified(`Live: ${data.stok} pcs`);
-        showToast(`Stok terverifikasi live StoreHub: ${data.stok} pcs`, "success");
+
+        // Update seluruh siblings (varian warna & ukuran dalam 1 artikel yang sama)
+        if (data.variants && data.variants.length > 0) {
+          const stockMap = new Map<string, number>(data.variants.map((v: any) => [v.sku, v.stok]));
+          setSiblings((prevSiblings) =>
+            prevSiblings.map((sib) => {
+              if (stockMap.has(sib.sku)) {
+                return { ...sib, stok: stockMap.get(sib.sku)! };
+              }
+              return sib;
+            })
+          );
+        }
+
+        const countText = data.totalVariantsUpdated > 1 ? ` (${data.totalVariantsUpdated} varian)` : '';
+        setLiveStockVerified(`Live: ${data.stok} pcs${countText}`);
+        showToast(`Stok seluruh varian artikel ${data.article || product.article || ''} terverifikasi live!`, "success");
       } else if (data.storeOffline) {
         showToast(data.message || "Komputer toko 719 offline (buka 09:00 - 21:30 WIB)", "error");
       } else {

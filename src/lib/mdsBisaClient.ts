@@ -86,6 +86,8 @@ export async function checkSingleItemStock(sku: string): Promise<{
   barcode?: string | null;
   article?: string | null;
   hargaNormal?: number | null;
+  totalVariantsUpdated?: number;
+  variants?: Array<{ sku: string; color?: string | null; size?: string | null; stok: number }>;
   storeOffline?: boolean;
   message?: string;
 }> {
@@ -172,29 +174,30 @@ export async function checkSingleItemStock(sku: string): Promise<{
       };
     }
 
-    // Ekstraksi nilai stok
-    let stok = 0;
+    // 1. Ekstraksi nilai stok untuk SKU saat ini
+    let currentSkuStok = 0;
     const directStok = itemData.stockOnHand ?? itemData.stock_on_hand ?? itemData.StockOnHand ?? itemData.soh;
     if (directStok !== undefined && directStok !== null) {
-      stok = parseInt(String(directStok), 10) || 0;
-    } else if (itemData.relatedStock && typeof itemData.relatedStock === 'object') {
-      for (const color of Object.values(itemData.relatedStock)) {
-        if (typeof color === 'object' && color !== null) {
-          for (const qty of Object.values(color as Record<string, any>)) {
-            stok += parseInt(String(qty), 10) || 0;
-          }
-        }
-      }
+      currentSkuStok = parseInt(String(directStok), 10) || 0;
     }
 
     const barcode = itemData.vendorBarcode || itemData.barcode || itemData.upc || null;
     const article = itemData.styleCode || itemData.article || itemData.style || null;
     const hargaNormal = parseFloat(itemData.retailPrice || itemData.price) || null;
 
-    // Simpan pemutakhiran langsung ke Supabase
+    // 2. Cari seluruh varian produk dari ARTIKEL ini di database Supabase
+    let articleToSearch = article;
+    if (!articleToSearch) {
+      const existing = await prisma.product.findUnique({ where: { sku: cleanSku }, select: { article: true } });
+      articleToSearch = existing?.article || null;
+    }
+
+    const updatedVariants: Array<{ sku: string; color?: string | null; size?: string | null; stok: number }> = [];
+
+    // Update SKU saat ini terlebih dahulu
     try {
       const updateData: any = {
-        stok,
+        stok: currentSkuStok,
         updatedAt: new Date(),
       };
       if (barcode) updateData.barcode = String(barcode).trim();
@@ -205,17 +208,69 @@ export async function checkSingleItemStock(sku: string): Promise<{
         where: { sku: cleanSku },
         data: updateData,
       });
-    } catch (dbErr) {
-      console.warn('Gagal update database produk:', dbErr);
+      updatedVariants.push({ sku: cleanSku, stok: currentSkuStok });
+    } catch (e) {
+      console.warn('Gagal update main SKU:', e);
+    }
+
+    // 3. Jika ada artikel dan relatedStock dari StoreHub: perbarui SELURUH varian (warna & ukuran)
+    if (articleToSearch && itemData.relatedStock && typeof itemData.relatedStock === 'object') {
+      try {
+        const siblings = await prisma.product.findMany({
+          where: { article: articleToSearch },
+          select: { id: true, sku: true, color: true, size: true, stok: true },
+        });
+
+        const normalize = (s: any) => String(s || '').trim().toUpperCase();
+
+        for (const sib of siblings) {
+          if (sib.sku === cleanSku) continue; // sudah diupdate di atas
+
+          const sibColor = normalize(sib.color);
+          const sibSize = normalize(sib.size);
+
+          // Cari di relatedStock
+          let foundQty: number | null = null;
+
+          for (const [relColorKey, sizesObj] of Object.entries(itemData.relatedStock)) {
+            const relColor = normalize(relColorKey);
+            // Cocokkan warna (exact atau mengandung)
+            if (relColor === sibColor || relColor.includes(sibColor) || sibColor.includes(relColor)) {
+              if (sizesObj && typeof sizesObj === 'object') {
+                for (const [relSizeKey, qtyVal] of Object.entries(sizesObj as Record<string, any>)) {
+                  const relSize = normalize(relSizeKey);
+                  if (relSize === sibSize || relSize.includes(sibSize) || sibSize.includes(relSize)) {
+                    foundQty = parseInt(String(qtyVal), 10) || 0;
+                    break;
+                  }
+                }
+              }
+            }
+            if (foundQty !== null) break;
+          }
+
+          if (foundQty !== null) {
+            await prisma.product.update({
+              where: { id: sib.id },
+              data: { stok: foundQty, updatedAt: new Date() },
+            });
+            updatedVariants.push({ sku: sib.sku, color: sib.color, size: sib.size, stok: foundQty });
+          }
+        }
+      } catch (sibErr) {
+        console.warn('Gagal update sibling variants:', sibErr);
+      }
     }
 
     return {
       success: true,
       sku: cleanSku,
-      stok,
+      article: articleToSearch,
+      stok: currentSkuStok,
       barcode,
-      article,
       hargaNormal,
+      totalVariantsUpdated: updatedVariants.length,
+      variants: updatedVariants,
       storeOffline: false,
     };
   } catch (err: any) {
@@ -226,3 +281,4 @@ export async function checkSingleItemStock(sku: string): Promise<{
     };
   }
 }
+

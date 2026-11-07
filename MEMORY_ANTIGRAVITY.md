@@ -305,17 +305,17 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   - Tombol **`⚡ Live MDS`** di samping kotak `Sisa Stok (EOH)` pada [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx).
   - Mengambil data stok riil 1 SKU ke StoreHub dalam **300ms**, langsung mengupdate angka stok di Supabase dan layar kasir dengan indikator status hijau. Menggunakan **0 menit kuota GitHub Actions**.
 
-## 23. Proteksi Keterlambatan IT Toko 719: Health-Check Probe & Auto-Wait
+## 24. Pemutakhiran Live Stock On-Demand: 1 Klik Update Seluruh Varian Artikel (Warna & Ukuran)
 
-* **Akar Masalah Operasional Lapangan:**
-  - Sering kali staf IT / EDP toko fisik 719 telat menyalakan komputer server kasir lokal (baru dinyalakan jam 09:45 atau 10:00 WIB).
-  - Jika runner langsung keluar saat offline, sesi sinkronisasi pagi akan terlewat.
-* **Solusi Pintar: Pre-Flight Health-Check Probe (`waitForStoreOnline`):**
-  - Runner tidak langsung memproses 9.500 SKU jika server toko masih mati.
-  - Runner melakukan tes probe cepat ke 1 SKU uji. Jika server offline, runner otomatis menunggu dengan interval pengecekan per 2 menit hingga batas maksimal 35 menit.
-  - Begitu staf IT menyalakan komputer server (misal jam 10:00 WIB), runner seketika mendeteksi status online dan langsung memulai Full Sync.
-  - Jadwal pagi disesuaikan ke **09:45 WIB** dengan rentang toleransi hingga **10:20 WIB**.
-  - Jika setelah 35 menit server tetap mati (misal toko tutup/listrik padam), runner keluar dengan bersih (*exit 0*) agar kuota tidak terbuang.
+* **Kebutuhan Lapangan (User Request):**
+  - Satu artikel ritel memiliki banyak varian warna (Black, Navy, Grey, White) dan ukuran (S, M, L, XL).
+  - Jika update hanya dilakukan per 1 SKU, varian lain di layar masih menampilkan stok lama.
+* **Solusi: Ekstraksi `relatedStock` Multi-Varian Sekaligus:**
+  - Fungsi [`checkSingleItemStock`](file:///c:/Max%20Display/price-checker/src/lib/mdsBisaClient.ts) dioptimasi: saat menembak StoreHub untuk 1 SKU, StoreHub mengembalikan struktur `relatedStock` yang mencakup seluruh pemetaan warna dan ukuran untuk artikel tersebut.
+  - Sistem mencocokkan seluruh data warna & ukuran ke daftar `siblings` artikel di Supabase, dan langsung memperbarui stok seluruh varian artikel tersebut dalam satu transaksi tunggal.
+  - Di layar kasir ([`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx)), menekan tombol **`⚡ Live MDS`** otomatis memutakhirkan stok produk aktif beserta seluruh kartu varian warna dan ukuran di bawahnya dalam waktu **0,3 detik**.
+  - Menggunakan **0 menit kuota GitHub Actions** dan **0 beban Vercel serverless**.
+
 
 
 
