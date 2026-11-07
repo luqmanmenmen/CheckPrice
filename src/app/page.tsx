@@ -227,7 +227,7 @@ export default function Home() {
     if (!product?.sku || checkingLiveStock) return;
     setCheckingLiveStock(true);
     try {
-      const res = await fetch("/api/product/live-stock", {
+      const res = await fetch("/api/live-stock", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sku: product.sku }),
