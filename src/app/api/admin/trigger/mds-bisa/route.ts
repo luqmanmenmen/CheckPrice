@@ -9,6 +9,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { cookies } from 'next/headers';
+import { verifyToken } from '@/lib/auth';
 
 // ============================================================
 // KONFIGURASI MDS BISA
@@ -165,18 +166,25 @@ function extractFields(data: any) {
 export async function POST(req: Request) {
   // Verifikasi user super-admin dari session
   const cookieStore = await cookies();
-  const sessionId = cookieStore.get('sessionId')?.value;
-  
-  if (!sessionId) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  const token = cookieStore.get('token')?.value;
+  const legacySessionId = cookieStore.get('sessionId')?.value;
+
+  let user = null;
+  if (token) {
+    const session = await verifyToken(token);
+    if (session?.userId) {
+      user = await prisma.user.findUnique({ where: { id: session.userId } });
+    }
+  } else if (legacySessionId) {
+    user = await prisma.user.findFirst({ where: { sessionId: legacySessionId, status: 'ACTIVE' } });
   }
 
-  const user = await prisma.user.findFirst({
-    where: { sessionId, status: 'ACTIVE' },
-  });
+  if (!user) {
+    return NextResponse.json({ success: false, error: 'Unauthorized - Silakan login kembali' }, { status: 401 });
+  }
 
-  if (!user || user.role !== 'SUPERVISOR') {
-    return NextResponse.json({ success: false, error: 'Forbidden - Supervisor only' }, { status: 403 });
+  if (user.role !== 'SUPERVISOR') {
+    return NextResponse.json({ success: false, error: 'Forbidden - Khusus Supervisor' }, { status: 403 });
   }
 
   // Cek jam operasional (kecuali ada ?force=true)

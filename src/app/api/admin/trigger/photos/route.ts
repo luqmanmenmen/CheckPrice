@@ -7,6 +7,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { cookies } from 'next/headers';
+import { verifyToken } from '@/lib/auth';
 
 const COLLECTIONS = [
   'suko',
@@ -48,12 +49,22 @@ async function probeCdnPhotos(skus: string[]): Promise<string[]> {
 export async function POST(req: Request) {
   // Auth check
   const cookieStore = await cookies();
-  const sessionId = cookieStore.get('sessionId')?.value;
-  if (!sessionId) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  const token = cookieStore.get('token')?.value;
+  const legacySessionId = cookieStore.get('sessionId')?.value;
 
-  const user = await prisma.user.findFirst({ where: { sessionId, status: 'ACTIVE' } });
-  if (!user || user.role !== 'SUPERVISOR') {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
+  let user = null;
+  if (token) {
+    const session = await verifyToken(token);
+    if (session?.userId) {
+      user = await prisma.user.findUnique({ where: { id: session.userId } });
+    }
+  } else if (legacySessionId) {
+    user = await prisma.user.findFirst({ where: { sessionId: legacySessionId, status: 'ACTIVE' } });
+  }
+
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized - Silakan login kembali' }, { status: 401 });
+  if (user.role !== 'SUPERVISOR') {
+    return NextResponse.json({ success: false, error: 'Forbidden - Khusus Supervisor' }, { status: 403 });
   }
 
   console.log(`[TRIGGER-PHOTOS] Dimulai oleh: ${user.nik}`);

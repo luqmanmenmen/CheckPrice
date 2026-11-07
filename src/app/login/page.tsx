@@ -310,12 +310,7 @@ export default function Login() {
               onChange={(e) => setNik(e.target.value.replace(/\D/g, ''))}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
-                  e.preventDefault();
-                  if (pinRef.current) {
-                    pinRef.current.focus();
-                  } else {
-                    (e.target as HTMLElement).blur();
-                  }
+                  (e.target as HTMLElement).blur();
                 }
               }}
             />
@@ -358,11 +353,7 @@ export default function Login() {
                   onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
-                      e.preventDefault();
-                      if (!loading && nik && pin.length >= 4) {
-                        (e.target as HTMLElement).blur();
-                        handleLogin(e);
-                      }
+                      (e.target as HTMLElement).blur();
                     }
                   }}
                 />
