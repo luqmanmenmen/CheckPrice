@@ -16,6 +16,12 @@ on:
           - all
           - mds-bisa
           - photos
+          - promo
+      promo_url:
+        description: 'URL file promo (opsional, jika kosong akan ambil file terbaru di Storage)'
+        required: false
+        default: ''
+        type: string
       force:
         description: 'Paksa sinkronisasi walau di luar jam operasional toko (force bypass)'
         required: false
@@ -23,7 +29,7 @@ on:
         type: boolean
 
   repository_dispatch:
-    types: [trigger-sync-engine, trigger-mds-bisa, trigger-photos]
+    types: [trigger-sync-engine, trigger-mds-bisa, trigger-photos, trigger-promo]
 
 concurrency:
   group: retail-sync-group
@@ -45,9 +51,20 @@ jobs:
           node-version: 20
           cache: 'npm'
 
+      - name: 🐍 Setup Python Environment (v3.11)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'python-engine/requirements.txt'
+
       - name: 📦 Install Node Dependencies
         run: |
           npm install --no-audit --prefer-offline
+
+      - name: 📦 Install Python Engine Dependencies
+        run: |
+          pip install -r python-engine/requirements.txt
 
       - name: ⚙️ Generate Prisma Client
         run: |
@@ -73,3 +90,15 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
+
+      - name: 🏷️ Run Trigger 3 — Python Promo Parser Engine (Pilar Promo Email)
+        if: ${{ github.event.inputs.action == 'all' || github.event.inputs.action == 'promo' || github.event.action == 'trigger-promo' || github.event.action == 'trigger-sync-engine' }}
+        run: |
+          PROMO_FLAG="${{ github.event.inputs.promo_url != '' && format('--file={0}', github.event.inputs.promo_url) || '' }}"
+          python python-engine/run_promo_sync.py $PROMO_FLAG
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

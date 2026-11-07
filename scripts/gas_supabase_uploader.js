@@ -15,7 +15,7 @@
 const CONFIG = {
   // --- Supabase Storage ---
   SUPABASE_URL:         "https://lzynugpistiyhxqkgwmk.supabase.co",
-  SUPABASE_SERVICE_KEY: PropertiesService.getScriptProperties().getProperty("SUPABASE_SERVICE_KEY") || "BELUM_DISET",
+  SUPABASE_SERVICE_KEY: PropertiesService.getScriptProperties().getProperty("SUPABASE_SERVICE_KEY") || "PASTE_SUPABASE_SERVICE_ROLE_KEY_HERE",
   BUCKET_NAME:          "excel-uploads",
 
   // --- Production Vercel URL (Menggantikan Railway) ---
