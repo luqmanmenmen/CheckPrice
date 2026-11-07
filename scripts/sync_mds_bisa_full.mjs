@@ -284,6 +284,16 @@ function parseServerActionResponse(text, sku, type = 'detail') {
   }
   
   // Kalau tidak ada data bermakna
+  if (text.trim() === '{}' || text.trim() === '') {
+    const nowUtc = new Date();
+    const wibHour = (nowUtc.getUTCHours() + 7) % 24;
+    const isOutsideHours = wibHour < 9 || wibHour >= 22;
+    if (isOutsideHours) {
+      return { _storeOffline: true, error: 'Toko 719 sedang offline (di luar jam operasional 09:00 - 21:30 WIB)' };
+    }
+    return { _notFound: true, error: 'Item tidak ditemukan di StoreHub toko 719' };
+  }
+
   return { _rawText: text.substring(0, 200), _error: 'Format response tidak dikenal' };
 }
 
@@ -506,11 +516,13 @@ async function main() {
     if (rawDetail._storeOffline) {
       stats.storeOffline++;
       if (stats.storeOffline === 1) {
-        // Hanya tampilkan sekali
-        console.error(`\n❌ TOKO OFFLINE: SQL Server 172.24.12.41:1433 tidak terjangkau.`);
-        console.error(`   Sync harus dijalankan saat toko buka (09:00-21:30 WIB).\n`);
+        console.warn(`\n🏪 [INFO] TOKO 719 OFFLINE: SQL Server lokal tidak terjangkau (di luar jam 09:00-21:30 WIB).`);
+        console.warn(`   Melewati sync MDS BISA. Stok & barcode di Supabase tetap aman terjaga.\n`);
       }
-      stats.errors++;
+      if (stats.storeOffline >= 3) {
+        console.log(`🛑 Menghentikan sync MDS BISA karena komputer toko sedang offline/tutup. Menunggu jam operasional buka (09:00 WIB).`);
+        break;
+      }
       continue;
     }
 

@@ -65,6 +65,7 @@ async function fullSync() {
           }
         }
         p++;
+        await new Promise((r) => setTimeout(r, 250));
       } catch (err) {
         console.error(`Error fetching ${col} page ${p}:`, err.message);
         break;
@@ -258,8 +259,63 @@ async function fullSync() {
         AND target."imageUrl" IS NULL;
     `);
     console.log(`✅ [Backfill] Berhasil mengisi percontohan 1 foto untuk ${backfilled} SKU tersisa.`);
+
+    // Backfill kategori esensial yang masih belum ada fotonya sama sekali di artikelnya
+    const socksImg = 'https://cdn.shopify.com/s/files/1/0666/9212/0727/files/48265305-IMG1.jpg';
+    const boxerImg = 'https://cdn.shopify.com/s/files/1/0666/9212/0727/files/53805668-1.jpg';
+    const nayoungImg = 'https://cdn.shopify.com/s/files/1/0666/9212/0727/files/71408365-1.jpg';
+
+    const socksBackfilled = await prisma.$executeRawUnsafe(`
+      UPDATE "Product"
+      SET "imageUrl" = '${socksImg}',
+          "images" = ARRAY['${socksImg}']::text[],
+          "updatedAt" = NOW()
+      WHERE "imageUrl" IS NULL 
+        AND ("description" ILIKE '%KAOS KAKI%' OR "description" ILIKE '%SOCKS%');
+    `);
+    console.log(`🧦 [Backfill Kaos Kaki] Mengisi foto resmi untuk ${socksBackfilled} SKU kaos kaki.`);
+
+    const boxerBackfilled = await prisma.$executeRawUnsafe(`
+      UPDATE "Product"
+      SET "imageUrl" = '${boxerImg}',
+          "images" = ARRAY['${boxerImg}']::text[],
+          "updatedAt" = NOW()
+      WHERE "imageUrl" IS NULL 
+        AND ("description" ILIKE '%BOXER%' OR "description" ILIKE '%UNDERWEAR%');
+    `);
+    console.log(`🩲 [Backfill Underwear] Mengisi foto resmi untuk ${boxerBackfilled} SKU boxer/underwear.`);
+
+    const nayoungBackfilled = await prisma.$executeRawUnsafe(`
+      UPDATE "Product"
+      SET "imageUrl" = '${nayoungImg}',
+          "images" = ARRAY['${nayoungImg}']::text[],
+          "updatedAt" = NOW()
+      WHERE "imageUrl" IS NULL 
+        AND ("dept" = 'NAYOUNG' OR "brand" ILIKE '%NAYOUNG%' OR "description" ILIKE '%NAYOUNG%');
+    `);
+    console.log(`💄 [Backfill Nayoung] Mengisi foto resmi untuk ${nayoungBackfilled} SKU kosmetik Nayoung.`);
+
   } catch (err) {
     console.error("Backfill error:", err.message);
+  }
+
+  // Catat log ke tabel SyncHistory
+  try {
+    const user = await prisma.user.findFirst({ where: { role: 'SUPERVISOR' } });
+    if (user) {
+      await prisma.syncHistory.create({
+        data: {
+          userId: user.id,
+          type: 'PHOTO_SYNC',
+          fileName: 'Matahari Shopify CDN Photos',
+          status: 'SUCCESS',
+          records: totalUpdated
+        }
+      });
+      console.log("📝 Log sinkronisasi tersimpan di tabel SyncHistory.");
+    }
+  } catch (logErr) {
+    console.warn("⚠️ Gagal mencatat SyncHistory:", logErr.message);
   }
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(2);
