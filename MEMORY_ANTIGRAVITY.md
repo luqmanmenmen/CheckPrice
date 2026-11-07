@@ -191,13 +191,12 @@ Setiap pencarian kini otomatis mengindeks 4 kolom ritel dari PQ:
 
 ---
 
-## 12. Pipeline Promo Email: Integrasi Google Apps Script & GitHub Actions Python Engine
+## 13. Optimasi Gudang Stock & Tiket: Facing Out Only & Shift Scoping
 
-* **File Skrip GAS:** [`scripts/gas_supabase_uploader.js`](file:///c:/Max%20Display/price-checker/scripts/gas_supabase_uploader.js) (Filter khusus email promo, unggah lampiran ke Supabase Storage `PROMO/`).
-* **File Python Runner:** [`python-engine/run_promo_sync.py`](file:///c:/Max%20Display/price-checker/python-engine/run_promo_sync.py) (Ambil promo terbaru dari Storage, bedah multi-sheet Excel via `parser.py`, proteksi stok & barcode).
-* **Workflow GitHub Actions:** [`.github/workflows/retail-sync-engine.yml`](file:///c:/Max%20Display/price-checker/.github/workflows/retail-sync-engine.yml) (Trigger 3: `promo`).
-* **Kebutuhan GitHub Secret Tambahan:**
-  - `SUPABASE_KEY` = Sesuai nilai `SUPABASE_ANON_KEY` di berkas `.env` local.
+* **Hanya Hari Ini & Shift Aktif:** Gudang Stock hanya menampilkan tiket `PENDING`/`READY` dari hari ini (WIB) dengan shift SA yang masih aktif. Tiket kemarin otomatis di-close (`status: COMPLETED`).
+* **Facing Out Only:** Tab "Request Barang" dihapus dari SA, disederhanakan murni menjadi "Facing Out", "Tanya Stok", dan "Pesanan".
+* **Selesaikan Tiket Kilat (0ms):** Tombol penyelesaian tiket di SA dan Gudang dioptimasi dengan *Optimistic UI Update* (tiket langsung lenyap seketika di layar tanpa menunggu respons jaringan) dan backend diparalelkan via `Promise.all` dan `updateMany`.
+* **Tombol Bersihkan Manual:** Halaman Gudang (`/warehouse`) memiliki tombol `[Bersihkan Semua]` via `DELETE /api/tickets`.
 
 
 
