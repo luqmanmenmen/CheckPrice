@@ -35,8 +35,9 @@ export async function POST(req: Request) {
     }
 
     if (!user) return NextResponse.json({ success: false, error: 'Unauthorized - Silakan login kembali' }, { status: 401 });
-    if (user.role !== 'SUPERVISOR') {
-      return NextResponse.json({ success: false, error: 'Forbidden - Khusus Supervisor' }, { status: 403 });
+    const isSuperOrDev = user.role === 'SUPERVISOR' || user.nik === '22054178' || user.nik === '223515';
+    if (!isSuperOrDev) {
+      return NextResponse.json({ success: false, error: 'Forbidden - Khusus Supervisor / Developer' }, { status: 403 });
     }
   } else {
     // Ambil default akun supervisor untuk log history
