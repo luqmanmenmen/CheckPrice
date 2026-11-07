@@ -239,19 +239,25 @@ export default function Home() {
         // Update seluruh siblings (varian warna & ukuran dalam 1 artikel yang sama)
         if (data.variants && data.variants.length > 0) {
           const stockMap = new Map<string, number>(data.variants.map((v: any) => [v.sku, v.stok]));
-          setSiblings((prevSiblings) =>
-            prevSiblings.map((sib) => {
+          setSiblings((prevSiblings) => {
+            const updated = prevSiblings.map((sib) => {
               if (stockMap.has(sib.sku)) {
                 return { ...sib, stok: stockMap.get(sib.sku)! };
               }
               return sib;
-            })
-          );
+            });
+            // Update cache memory agar klik varian warna/ukuran selanjutnya instan 0ms membawa stok baru
+            updated.forEach(s => {
+              if (s.sku) sessionCacheRef.current.set(s.sku.toLowerCase(), { product: s, siblings: updated });
+              if (s.barcode) sessionCacheRef.current.set(s.barcode.toLowerCase(), { product: s, siblings: updated });
+            });
+            return updated;
+          });
         }
 
-        const countText = data.totalVariantsUpdated > 1 ? ` (${data.totalVariantsUpdated} varian)` : '';
+        const countText = data.totalVariantsUpdated > 1 ? ` (${data.totalVariantsUpdated} varian warna & ukuran)` : '';
         setLiveStockVerified(`Live: ${data.stok} pcs${countText}`);
-        showToast(`Stok seluruh varian artikel ${data.article || product.article || ''} terverifikasi live!`, "success");
+        showToast(`Stok seluruh warna & ukuran artikel ${data.article || product.article || ''} terverifikasi live StoreHub!`, "success");
       } else if (data.storeOffline) {
         showToast(data.message || "Komputer toko 719 offline (buka 09:00 - 21:30 WIB)", "error");
       } else {
@@ -1695,15 +1701,15 @@ export default function Home() {
                     <button
                       onClick={handleCheckLiveStock}
                       disabled={checkingLiveStock}
-                      title="Periksa stok langsung ke server kasir toko 719"
-                      className="flex items-center gap-1 px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-[11px] font-bold transition-all disabled:opacity-50 active:scale-95 shadow-2xs"
+                      title="Periksa stok langsung ke server kasir toko 719 untuk seluruh varian artikel ini"
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold transition-all disabled:opacity-50 active:scale-95 shadow-2xs"
                     >
                       {checkingLiveStock ? (
                         <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-600" />
                       ) : (
                         <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
                       )}
-                      <span>{checkingLiveStock ? "Cek..." : "Live MDS"}</span>
+                      <span>{checkingLiveStock ? "Cek Artikel..." : "⚡ Live Stok Artikel"}</span>
                     </button>
                     <span className={`px-4 py-1.5 rounded-lg text-lg font-black tracking-wide ${
                       (product.stok ?? 0) > 10 ? 'bg-green-100 text-green-700' :
