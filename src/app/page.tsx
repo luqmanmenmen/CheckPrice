@@ -222,7 +222,7 @@ export default function Home() {
 
   const [submitting, setSubmitting] = useState(false);
   const [qty, setQty] = useState(1);
-  const [activeTab, setActiveTab] = useState<"REQUEST" | "STOCK_CHECK" | "FACING_OUT" | "ORDERS">("REQUEST");
+  const [activeTab, setActiveTab] = useState<"FACING_OUT" | "STOCK_CHECK" | "ORDERS">("FACING_OUT");
   const [cart, setCart] = useState<any[]>([]);
   const [continuousMode, setContinuousMode] = useState(false);
   const [user, setUser] = useState<{name: string, nik: string, role: string, status?: string, jobTitle?: string} | null>(null);
@@ -561,6 +561,15 @@ export default function Home() {
 
 
   const markAsCompleted = async (ticketId: string) => {
+    // 1. Optimistic Update instan (0 milidetik langsung hilang dari daftar layar)
+    mutateTickets((currentData: any) => {
+      if (!currentData?.tickets) return currentData;
+      return {
+        ...currentData,
+        tickets: currentData.tickets.filter((t: any) => t.id !== ticketId)
+      };
+    }, false);
+
     try {
       await fetch("/api/tickets", {
         method: "PATCH",
@@ -570,6 +579,7 @@ export default function Home() {
       mutateTickets();
     } catch (error) {
       console.error("Failed to mark ticket as completed:", error);
+      mutateTickets();
     }
   };
 
@@ -1138,13 +1148,13 @@ export default function Home() {
         <h2 className="text-sm font-bold text-slate-500 uppercase mb-2">Pilih Mode Pemindaian</h2>
         <div className="relative flex p-1 bg-slate-200/80 rounded-xl shadow-inner overflow-x-auto gap-1">
           <button
-            onClick={() => setActiveTab("REQUEST")}
+            onClick={() => setActiveTab("FACING_OUT")}
             className={`relative flex-1 py-3 px-2 rounded-lg flex items-center justify-center gap-2 transition-all duration-300 z-10 ${
-              activeTab === "REQUEST" ? "bg-white shadow-sm text-blue-700 font-bold" : "text-slate-500 font-medium hover:text-slate-700"
+              activeTab === "FACING_OUT" ? "bg-white shadow-sm text-amber-600 font-bold" : "text-slate-500 font-medium hover:text-slate-700"
             }`}
           >
-            <HandHelping className="w-4 h-4" />
-            <span className="text-xs font-semibold whitespace-nowrap">Request Barang</span>
+            <Package2 className="w-4 h-4" />
+            <span className="text-xs font-semibold whitespace-nowrap">Facing Out</span>
           </button>
           <button
             onClick={() => setActiveTab("STOCK_CHECK")}
@@ -1154,15 +1164,6 @@ export default function Home() {
           >
             <MessageSquare className="w-4 h-4" />
             <span className="text-xs font-semibold whitespace-nowrap">Tanya Stok</span>
-          </button>
-          <button
-            onClick={() => setActiveTab("FACING_OUT")}
-            className={`relative flex-1 py-3 px-2 rounded-lg flex items-center justify-center gap-2 transition-all duration-300 z-10 ${
-              activeTab === "FACING_OUT" ? "bg-white shadow-sm text-amber-600 font-bold" : "text-slate-500 font-medium hover:text-slate-700"
-            }`}
-          >
-            <Package2 className="w-4 h-4" />
-            <span className="text-xs font-semibold whitespace-nowrap">Facing Out</span>
           </button>
           <button
             onClick={() => setActiveTab("ORDERS")}
@@ -1774,19 +1775,14 @@ export default function Home() {
                 </div>
                 
                 <div className="flex gap-2 mt-1">
-                  {activeTab === "REQUEST" && (
-                    <button onClick={() => addToCart("REQUEST", qty, parsedInfo.size || product.size || "")} className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 hover:bg-blue-700 shadow-md active:scale-95 transition-all">
-                      <HandHelping className="w-5 h-5" /> Request Barang
+                  {activeTab === "FACING_OUT" && (
+                    <button onClick={() => addToCart("FACING_OUT", qty, parsedInfo.size || product.size || "")} className="w-full bg-amber-500 text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 hover:bg-amber-600 shadow-md active:scale-95 transition-all">
+                      <Package2 className="w-5 h-5" /> Facing Out
                     </button>
                   )}
                   {activeTab === "STOCK_CHECK" && (
                     <button onClick={() => addToCart("STOCK_CHECK", qty, parsedInfo.size || product.size || "")} className="w-full bg-indigo-600 text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 hover:bg-indigo-700 shadow-md active:scale-95 transition-all">
                       <MessageSquare className="w-5 h-5" /> Tanya Stok
-                    </button>
-                  )}
-                  {activeTab === "FACING_OUT" && (
-                    <button onClick={() => addToCart("FACING_OUT", qty, parsedInfo.size || product.size || "")} className="w-full bg-amber-500 text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 hover:bg-amber-600 shadow-md active:scale-95 transition-all">
-                      <Package2 className="w-5 h-5" /> Facing Out
                     </button>
                   )}
                 </div>

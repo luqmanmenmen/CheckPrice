@@ -18,6 +18,18 @@ export async function POST(req: NextRequest) {
             where: { id: activeShift.id },
             data: { endTime: new Date() }
           });
+
+          // Tutup sisa tiket yang masih gantung saat SA selesai shift (biar tidak rancu ke shift berikutnya)
+          await prisma.ticket.updateMany({
+            where: {
+              shiftId: activeShift.id,
+              status: { in: ["PENDING", "READY"] }
+            },
+            data: {
+              status: "COMPLETED",
+              reason: "Shift Selesai (Logout)"
+            }
+          });
         }
         
         // Update user status to OFFLINE when logging out

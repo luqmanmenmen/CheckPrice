@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useMemo } from "react";
-import { UserCircle2, CheckCircle2, XCircle, Clock, ChevronDown, ChevronUp, PackageOpen, Search, Image as ImageIcon, X, Maximize2 } from "lucide-react";
+import { UserCircle2, CheckCircle2, XCircle, Clock, ChevronDown, ChevronUp, PackageOpen, Search, Image as ImageIcon, X, Maximize2, Trash2 } from "lucide-react";
 import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
 import PullToRefresh from "@/components/PullToRefresh";
 import Link from "next/link";
@@ -203,6 +203,32 @@ export default function WarehouseDashboard() {
       return;
     }
 
+    const updatedIds = new Set(updates.map(u => u.ticketId));
+
+    // Optimistic Update instan (0 milidetik!)
+    mutate((currentData: any) => {
+      if (!currentData?.tickets) return currentData;
+      return {
+        ...currentData,
+        tickets: currentData.tickets.map((t: any) => {
+          if (updatedIds.has(t.id)) {
+            return {
+              ...t,
+              status: batchSelections[t.id],
+              reason: batchSelections[t.id] === "OOS" ? "Kosong (Batch)" : undefined
+            };
+          }
+          return t;
+        })
+      };
+    }, false);
+
+    setBatchSelections(prev => {
+      const next = { ...prev };
+      updates.forEach(u => delete next[u.ticketId]);
+      return next;
+    });
+
     try {
       await fetch("/api/tickets", {
         method: "PATCH",
@@ -210,14 +236,30 @@ export default function WarehouseDashboard() {
         body: JSON.stringify({ updates }),
       });
       mutate();
-      
-      setBatchSelections(prev => {
-        const next = { ...prev };
-        updates.forEach(u => delete next[u.ticketId]);
-        return next;
-      });
     } catch (error) {
       console.error("Failed to batch update tickets:", error);
+      mutate();
+    }
+  };
+
+  const [clearing, setClearing] = useState(false);
+  const handleClearAllTickets = async () => {
+    if (!confirm("Bersihkan semua permintaan aktif di layar sekarang? Semua tiket lama akan ditutup agar tidak rancu.")) return;
+    setClearing(true);
+    // Optimistic clear
+    mutate({ success: true, tickets: [] }, false);
+    try {
+      const res = await fetch("/api/tickets", { method: "DELETE" });
+      const resData = await res.json();
+      if (res.ok) {
+        showAlert("Sukses", resData.message || "Semua tiket berhasil dibersihkan.", "success");
+      }
+      mutate();
+    } catch (err) {
+      console.error(err);
+      mutate();
+    } finally {
+      setClearing(false);
     }
   };
 
@@ -269,14 +311,27 @@ export default function WarehouseDashboard() {
 
       {/* Ticket List */}
       <div className="px-4 lg:px-0 flex flex-col gap-5">
-        <h2 className="text-sm font-bold text-slate-500 uppercase mb-3 flex items-center gap-2">
-          Tiket Masuk 
-          {tickets.filter(t => t.status === "PENDING").length > 0 && (
-            <span className="bg-red-500 text-white px-2 py-0.5 rounded-full text-[10px]">
-              {tickets.filter(t => t.status === "PENDING").length} Baru
-            </span>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2">
+            Tiket Masuk (Hari Ini) 
+            {tickets.filter(t => t.status === "PENDING").length > 0 && (
+              <span className="bg-red-500 text-white px-2 py-0.5 rounded-full text-[10px]">
+                {tickets.filter(t => t.status === "PENDING").length} Baru
+              </span>
+            )}
+          </h2>
+          {tickets.length > 0 && (
+            <button
+              onClick={handleClearAllTickets}
+              disabled={clearing}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-600 bg-white border border-slate-200 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 rounded-lg shadow-sm transition-colors disabled:opacity-50"
+              title="Bersihkan semua permintaan aktif di layar agar tidak rancu"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              {clearing ? "Membersihkan..." : "Bersihkan Semua"}
+            </button>
           )}
-        </h2>
+        </div>
 
         {ticketGroups.length === 0 ? (
           <div className="bg-white border-2 border-dashed border-slate-200 rounded-xl p-8 text-center text-slate-400">
