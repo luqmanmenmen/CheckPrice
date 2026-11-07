@@ -191,12 +191,19 @@ Setiap pencarian kini otomatis mengindeks 4 kolom ritel dari PQ:
 
 ---
 
-## 13. Optimasi Gudang Stock & Tiket: Facing Out Only & Shift Scoping
+## 14. Pemutakhiran Login & Google Apps Script (GAS) Promo Pipeline
 
-* **Hanya Hari Ini & Shift Aktif:** Gudang Stock hanya menampilkan tiket `PENDING`/`READY` dari hari ini (WIB) dengan shift SA yang masih aktif. Tiket kemarin otomatis di-close (`status: COMPLETED`).
-* **Facing Out Only:** Tab "Request Barang" dihapus dari SA, disederhanakan murni menjadi "Facing Out", "Tanya Stok", dan "Pesanan".
-* **Selesaikan Tiket Kilat (0ms):** Tombol penyelesaian tiket di SA dan Gudang dioptimasi dengan *Optimistic UI Update* (tiket langsung lenyap seketika di layar tanpa menunggu respons jaringan) dan backend diparalelkan via `Promise.all` dan `updateMany`.
-* **Tombol Bersihkan Manual:** Halaman Gudang (`/warehouse`) memiliki tombol `[Bersihkan Semua]` via `DELETE /api/tickets`.
+* **Login Keyboard Enter Langsung Mulai Shift:**
+  - Menekan tombol `Enter` pada input NIK otomatis memindahkan kursor ke input PIN (`pinRef.current?.focus()`).
+  - Menekan tombol `Enter` pada input PIN langsung memicu fungsi `handleLogin(e)` / "Mulai Shift" seketika tanpa menutup keyboard atau memerlukan sentuhan tombol fisik.
+  - Berlaku pula pada form ubah PIN pertama kali (`handleChangePin`).
+
+* **Google Apps Script (`Kode.gs`) Khusus Promo (Zero PQ & Zero Railway):**
+  - **Pemberhentian PQ & Railway:** Seluruh URL Railway (`checkprice-production.up.railway.app`) dan query Gmail `POWER QUERY` telah dihapus total dari GAS.
+  - **Hanya Membaca Promo:** Query Gmail difilter ketat khusus email `has:attachment subject:"Promo" is:unread`.
+  - **Kredensial Siap Pakai:** URL Supabase Storage (`https://lzynugpistiyhxqkgwmk.supabase.co`) dan Secret Key diisi langsung tanpa konfigurasi ScriptProperties yang rumit.
+  - **Dual Action Sinkronisasi:** Begitu file promo masuk ke Supabase Storage (`excel-uploads/PROMO/...`), GAS langsung memicu sinkronisasi harga promo instan di Vercel (`/api/upload/sync-latest-blob`) dan mengaktifkan webhook GitHub Actions runner (`/api/admin/trigger/github-dispatch`).
+
 
 
 
