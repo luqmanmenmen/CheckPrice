@@ -262,7 +262,11 @@ export default function Login() {
                 onChange={(e) => setNewPin(e.target.value.replace(/\D/g, ''))}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
-                    (e.target as HTMLElement).blur();
+                    e.preventDefault();
+                    if (newPin.length >= 4 && !changingPin) {
+                      (e.target as HTMLElement).blur();
+                      handleChangePin(e);
+                    }
                   }
                 }}
                 autoFocus
@@ -306,7 +310,12 @@ export default function Login() {
               onChange={(e) => setNik(e.target.value.replace(/\D/g, ''))}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
-                  (e.target as HTMLElement).blur();
+                  e.preventDefault();
+                  if (pinRef.current) {
+                    pinRef.current.focus();
+                  } else {
+                    (e.target as HTMLElement).blur();
+                  }
                 }
               }}
             />
@@ -349,7 +358,11 @@ export default function Login() {
                   onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
-                      (e.target as HTMLElement).blur();
+                      e.preventDefault();
+                      if (!loading && nik && pin.length >= 4) {
+                        (e.target as HTMLElement).blur();
+                        handleLogin(e);
+                      }
                     }
                   }}
                 />
