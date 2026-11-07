@@ -493,109 +493,36 @@ export default function UpdateProdukPage() {
   return (
     <div className="min-h-screen bg-slate-50 p-4 pb-24 max-w-2xl mx-auto flex flex-col gap-6">
       {/* Header */}
-      <div className="flex items-center gap-3 mb-2">
-        <Link href="/super-admin" className="p-2 rounded-full hover:bg-slate-200 transition-colors">
-          <ArrowLeft className="w-5 h-5 text-slate-700" />
-        </Link>
-        <div className="flex-1">
-          <h1 className="font-bold text-xl text-slate-800">Sinkronisasi Harian</h1>
-          <p className="text-xs text-slate-500">Update Produk Baru, Stok Sisa (EOH), dan Analitik Penjualan</p>
-        </div>
-        <div className="flex gap-2 items-center">
-          <button
-            onClick={() => setPinModalState({ isOpen: true, action: "sync" })}
-            disabled={isFullResyncing}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors disabled:opacity-50"
-            title="Baca semua file PQ dari Blob satu-satu berurutan (dari terlama ke terbaru) untuk hitung delta sales secara akurat"
-          >
-            {isFullResyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
-            {isFullResyncing ? `${fullResyncMsg.split(":")[0]}...` : "Sync dari Blob"}
-          </button>
-          <button
-            onClick={() => setPinModalState({ isOpen: true, action: "clean" })}
-            disabled={isFullResyncing}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 transition-colors disabled:opacity-50"
-            title="Hapus permanen semua file Excel dari penyimpanan Cloud untuk menghemat kuota storage"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            Bersihkan Blob
-          </button>
-        </div>
-      </div>
-
-      {isFullResyncing && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex gap-3 text-emerald-800 shadow-sm animate-pulse">
-          <Loader2 className="w-5 h-5 shrink-0 mt-0.5 animate-spin text-emerald-600" />
-          <div className="text-sm">
-            <p className="font-bold mb-1">🤖 Robot Sedang Bekerja Otomatis...</p>
-            <p className="opacity-90 text-xs">{fullResyncMsg}</p>
-          </div>
-        </div>
-      )}
-
-      {/* Blob Notification */}
-      {!isFullResyncing && blobFiles.length > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex gap-3 text-amber-800 shadow-sm">
-          <UploadCloud className="w-5 h-5 shrink-0 mt-0.5 text-amber-600 animate-bounce" />
-          <div className="text-sm w-full">
-            <p className="font-bold mb-1 text-amber-700">File Baru Tersedia di Cloud!</p>
-            <p className="text-xs mb-2">Terdapat {blobFiles.length} file PQ di penyimpanan yang siap di-sync.</p>
-            <div className="bg-amber-100/50 rounded-lg p-2 max-h-24 overflow-y-auto">
-              {blobFiles.map((b, idx) => (
-                <div key={idx} className="text-xs font-mono font-bold text-amber-900 border-b border-amber-200/50 last:border-0 py-1">
-                  {b.filename}
-                </div>
-              ))}
-            </div>
-            <p className="text-[10px] mt-2 italic text-amber-700">*Klik tombol hijau "Sync dari Blob" di atas untuk memprosesnya.</p>
-          </div>
-        </div>
-      )}
-
-      {/* Info Card */}
-      <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex gap-3 text-blue-800 shadow-sm">
-        <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
-        <div className="text-sm">
-          <p className="font-bold mb-1">Panduan Import PQ Harian:</p>
-          <ul className="list-disc pl-4 space-y-1 opacity-90 text-xs">
-            <li>Sistem akan mendeteksi SKU baru dan menambahkannya.</li>
-            <li>Sistem akan memperbarui Sisa Stok (<code className="bg-blue-100 px-1 rounded">EOH_UNIT</code>).</li>
-            <li>Sistem akan merekam penjualan (<code className="bg-blue-100 px-1 rounded">MTD</code>) untuk label Fast/Slow Move.</li>
-          </ul>
-        </div>
-      </div>
-
-      {lastSync && (
-        <div className="bg-white border border-slate-200 rounded-xl p-4 flex justify-between items-center shadow-sm">
+      <div className="flex items-center gap-3 mb-2 justify-between">
+        <div className="flex items-center gap-3">
+          <Link href="/super-admin" className="p-2 rounded-full hover:bg-slate-200 transition-colors">
+            <ArrowLeft className="w-5 h-5 text-slate-700" />
+          </Link>
           <div>
-            <p className="text-xs text-slate-500 mb-1">Nama File Terakhir</p>
-            <p className="font-bold text-slate-700 text-sm">{lastSync.date}</p>
-          </div>
-          <div className="text-right">
-            <p className="text-xs text-slate-500 mb-1">Oleh</p>
-            <p className="font-bold text-slate-700 text-sm">{lastSync.name}</p>
+            <h1 className="font-bold text-xl text-slate-800">Sinkronisasi Ritel</h1>
+            <p className="text-xs text-slate-500">Pusat Kendali Otomatis: MDS BISA, Foto Katalog & Promo Cloud</p>
           </div>
         </div>
-      )}
+      </div>
 
       {/* ============================================================ */}
-      {/* TRIGGER SECTION: MDS BISA & Foto */}
+      {/* TRIGGER SECTION: MDS BISA, Foto, & Cloud Engine (DI PALING ATAS) */}
       {/* ============================================================ */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="p-4 border-b border-slate-100 bg-gradient-to-r from-indigo-50 to-purple-50">
           <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
             <RefreshCw className="w-4 h-4 text-indigo-600" />
-            Sinkronisasi Otomatis (MDS BISA)
+            Sinkronisasi Otomatis Terpadu
           </h3>
-          <p className="text-xs text-slate-500 mt-0.5">Tarik data langsung dari StoreHub MDS BISA — menggantikan upload file PQ manual</p>
+          <p className="text-xs text-slate-500 mt-0.5">Tarik data langsung dari StoreHub MDS BISA, Shopify CDN, dan Email Promo</p>
         </div>
 
         <div className="p-4 flex flex-col gap-3">
           {/* Trigger 1: MDS BISA */}
           <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-3 bg-indigo-50 rounded-xl border border-indigo-100">
             <div className="flex-1 min-w-0">
-              <p className="font-bold text-indigo-800 text-sm">🏪 Trigger 1 — Sync Data Produk</p>
-              <p className="text-xs text-indigo-600 mt-0.5">Update barcode, style code, stok, dan harga normal dari MDS BISA (jam 09:00–21:30 WIB)</p>
+              <p className="font-bold text-indigo-800 text-sm">🏪 Trigger 1 — Sync Data Produk (MDS BISA)</p>
+              <p className="text-xs text-indigo-600 mt-0.5">Update barcode UPC, style code, stok toko 719, dan harga normal (09:00–21:30 WIB)</p>
             </div>
             <button
               onClick={handleMdsBisaSync}
@@ -634,7 +561,7 @@ export default function UpdateProdukPage() {
           <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-3 bg-purple-50 rounded-xl border border-purple-100">
             <div className="flex-1 min-w-0">
               <p className="font-bold text-purple-800 text-sm">🖼️ Trigger 2 — Sync Foto Produk</p>
-              <p className="text-xs text-purple-600 mt-0.5">Ambil foto terbaru dari katalog matahari.com (SUKO & koleksi lain)</p>
+              <p className="text-xs text-purple-600 mt-0.5">Ambil foto produk resmi dari katalog matahari.com (Shopify CDN)</p>
             </div>
             <button
               onClick={handlePhotoSync}
@@ -673,12 +600,12 @@ export default function UpdateProdukPage() {
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <span className="px-2 py-0.5 text-[10px] font-extrabold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full flex items-center gap-1">
-                  <Zap className="w-2.5 h-2.5 text-emerald-400" /> REKOMENDASI
+                  <Zap className="w-2.5 h-2.5 text-emerald-400" /> MESIN CLOUD PYTHON
                 </span>
                 <p className="font-bold text-sm text-slate-100">Mesin Cloud GitHub Actions</p>
               </div>
               <p className="text-xs text-slate-400 mt-1">
-                Jalankan full sync di server GitHub (bebas batas waktu 60 detik Vercel, tahan hingga 6 jam). Otomatis aktif setiap 09:30 WIB.
+                Jalankan full sync atau promo parser di cloud GitHub (bebas limit waktu, tahan hingga 6 jam). Otomatis aktif setiap 09:30 WIB.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -686,7 +613,7 @@ export default function UpdateProdukPage() {
                 onClick={() => handleGitHubDispatch('promo')}
                 disabled={isGhDispatching}
                 className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg transition-colors disabled:opacity-50 shadow-sm"
-                title="Picu hanya pembaruan harga Promo dari file email terbaru"
+                title="Picu pembaruan harga Promo dari email via mesin Python"
               >
                 {isGhDispatching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Tag className="w-3.5 h-3.5" />}
                 Picu Promo
@@ -697,7 +624,7 @@ export default function UpdateProdukPage() {
                 className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 text-xs font-black rounded-lg transition-colors disabled:opacity-50 shadow-sm"
               >
                 {isGhDispatching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current" />}
-                {isGhDispatching ? "Mengirim sinyal..." : "Picu Semua (All)"}
+                Picu Semua (All)
               </button>
               <a
                 href="https://github.com/luqmanmenmen/CheckPrice/actions"
@@ -743,104 +670,158 @@ export default function UpdateProdukPage() {
         </div>
       </div>
 
-      {/* Upload Zone */}
-      <div 
-        className={`border-2 border-dashed rounded-2xl p-8 flex flex-col items-center justify-center text-center transition-all ${
-          isDragging 
-            ? "border-indigo-500 bg-indigo-50" 
-            : file 
-              ? "border-slate-300 bg-white" 
-              : "border-slate-300 bg-white hover:border-indigo-400 hover:bg-slate-50"
-        }`}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        onClick={() => !file && fileInputRef.current?.click()}
-        style={{ cursor: file ? 'default' : 'pointer' }}
-      >
-        <input 
-          type="file" 
-          ref={fileInputRef}
-          onChange={handleFileChange}
-          accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel" 
-          className="hidden" 
-        />
-        
-        {file ? (
-          <div className="flex flex-col items-center w-full">
-            <div className="w-16 h-16 rounded-full bg-indigo-100 flex items-center justify-center mb-4 relative">
-              <FileType className="w-8 h-8 text-indigo-600" />
-              {status === "success" && (
-                <div className="absolute -bottom-1 -right-1 bg-white rounded-full p-0.5">
-                  <CheckCircle2 className="w-5 h-5 text-green-500" />
-                </div>
-              )}
-            </div>
-            <p className="font-bold text-slate-800 mb-1">{file.name}</p>
-            <p className="text-xs text-slate-500 mb-6">
-              {(file.size / (1024 * 1024)).toFixed(2)} MB
-            </p>
-
-            {status === "idle" && (
-              <div className="flex gap-2">
-                <button 
-                  onClick={(e) => { e.stopPropagation(); setFile(null); }}
-                  className="px-4 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100 transition-colors"
-                >
-                  Batal
-                </button>
-                <button 
-                  onClick={handleUploadClick}
-                  className="px-6 py-2 rounded-lg text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors shadow-md shadow-emerald-200"
-                >
-                  Mulai Import
-                </button>
-              </div>
-            )}
-
-            {status === "uploading" && (
-              <div className="w-full max-w-xs">
-                <div className="flex justify-between text-xs font-bold text-slate-600 mb-2">
-                  <span className="truncate flex-1 mr-2">{resultMsg || "Menganalisis..."}</span>
-                  <span className="w-8 text-right">{progress}%</span>
-                </div>
-                <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                  <div 
-                    className="h-full bg-indigo-600 transition-all duration-300"
-                    style={{ width: `${progress}%` }}
-                  />
-                </div>
-              </div>
-            )}
-
-            {status === "success" && (
-              <div className="text-center w-full mt-4">
-                <div className="bg-green-50 text-green-700 border border-green-200 rounded-lg p-3 text-sm font-medium mb-4">
-                  {resultMsg}
-                </div>
-                <button 
-                  onClick={() => { setFile(null); setStatus("idle"); }}
-                  className="text-indigo-600 text-sm font-bold hover:underline"
-                >
-                  Upload file lain
-                </button>
-              </div>
-            )}
-
+      {/* Bagian Arsip / Upload Manual (Collapsible / Tersembunyi Rapi) */}
+      <details className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm group">
+        <summary className="text-xs font-bold text-slate-500 hover:text-slate-800 cursor-pointer flex items-center justify-between list-none">
+          <span className="flex items-center gap-2">
+            <UploadCloud className="w-4 h-4 text-slate-400 group-open:text-indigo-600" />
+            Menu Manual / Arsip File PQ (Opsional)
+          </span>
+          <span className="text-[10px] text-slate-400 group-open:rotate-180 transition-transform">▼</span>
+        </summary>
+        <div className="pt-4 flex flex-col gap-4">
+          <div className="flex gap-2 items-center justify-end">
+            <button
+              onClick={() => setPinModalState({ isOpen: true, action: "sync" })}
+              disabled={isFullResyncing}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors disabled:opacity-50"
+            >
+              {isFullResyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
+              {isFullResyncing ? `${fullResyncMsg.split(":")[0]}...` : "Sync dari Blob"}
+            </button>
+            <button
+              onClick={() => setPinModalState({ isOpen: true, action: "clean" })}
+              disabled={isFullResyncing}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 transition-colors disabled:opacity-50"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Bersihkan Blob
+            </button>
           </div>
-        ) : (
-          <>
-            <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center mb-4">
-              <UploadCloud className="w-8 h-8 text-slate-400" />
+
+          {isFullResyncing && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex gap-3 text-emerald-800 shadow-sm animate-pulse">
+              <Loader2 className="w-5 h-5 shrink-0 mt-0.5 animate-spin text-emerald-600" />
+              <div className="text-sm">
+                <p className="font-bold mb-1">🤖 Robot Sedang Bekerja Otomatis...</p>
+                <p className="opacity-90 text-xs">{fullResyncMsg}</p>
+              </div>
             </div>
-            <p className="font-bold text-slate-700 text-sm mb-1">Tarik & Lepas file CSV disini</p>
-            <p className="text-xs text-slate-500 mb-4">atau klik untuk mencari file</p>
-            <span className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-xs font-medium text-slate-600 shadow-sm">
-              Pilih File
-            </span>
-          </>
-        )}
-      </div>
+          )}
+
+          {lastSync && (
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex justify-between items-center text-xs">
+              <div>
+                <p className="text-slate-400 mb-0.5">File Terakhir</p>
+                <p className="font-bold text-slate-700">{lastSync.date}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-slate-400 mb-0.5">Oleh</p>
+                <p className="font-bold text-slate-700">{lastSync.name}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Upload Zone */}
+          <div 
+            className={`border-2 border-dashed rounded-2xl p-8 flex flex-col items-center justify-center text-center transition-all ${
+              isDragging 
+                ? "border-indigo-500 bg-indigo-50" 
+                : file 
+                  ? "border-slate-300 bg-white" 
+                  : "border-slate-300 bg-white hover:border-indigo-400 hover:bg-slate-50"
+            }`}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            onClick={() => !file && fileInputRef.current?.click()}
+            style={{ cursor: file ? 'default' : 'pointer' }}
+          >
+            <input 
+              type="file" 
+              ref={fileInputRef}
+              onChange={handleFileChange}
+              accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel" 
+              className="hidden" 
+            />
+            
+            {file ? (
+              <div className="flex flex-col items-center w-full">
+                <div className="w-16 h-16 rounded-full bg-indigo-100 flex items-center justify-center mb-4 relative">
+                  <FileType className="w-8 h-8 text-indigo-600" />
+                  {status === "success" && (
+                    <div className="absolute -bottom-1 -right-1 bg-white rounded-full p-0.5">
+                      <CheckCircle2 className="w-5 h-5 text-green-500" />
+                    </div>
+                  )}
+                </div>
+                <p className="font-bold text-slate-800 mb-1">{file.name}</p>
+                <p className="text-xs text-slate-500 mb-6">
+                  {(file.size / (1024 * 1024)).toFixed(2)} MB
+                </p>
+
+                {status === "idle" && (
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); setFile(null); }}
+                      className="px-4 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+                    >
+                      Batal
+                    </button>
+                    <button 
+                      onClick={handleUploadClick}
+                      className="px-6 py-2 rounded-lg text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors shadow-md shadow-emerald-200"
+                    >
+                      Mulai Import
+                    </button>
+                  </div>
+                )}
+
+                {status === "uploading" && (
+                  <div className="w-full max-w-xs">
+                    <div className="flex justify-between text-xs font-bold text-slate-600 mb-2">
+                      <span className="truncate flex-1 mr-2">{resultMsg || "Menganalisis..."}</span>
+                      <span className="w-8 text-right">{progress}%</span>
+                    </div>
+                    <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-indigo-600 transition-all duration-300"
+                        style={{ width: `${progress}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {status === "success" && (
+                  <div className="text-center w-full mt-4">
+                    <div className="bg-green-50 text-green-700 border border-green-200 rounded-lg p-3 text-sm font-medium mb-4">
+                      {resultMsg}
+                    </div>
+                    <button 
+                      onClick={() => { setFile(null); setStatus("idle"); }}
+                      className="text-indigo-600 text-sm font-bold hover:underline"
+                    >
+                      Upload file lain
+                    </button>
+                  </div>
+                )}
+
+              </div>
+            ) : (
+              <>
+                <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center mb-4">
+                  <UploadCloud className="w-8 h-8 text-slate-400" />
+                </div>
+                <p className="font-bold text-slate-700 text-sm mb-1">Tarik & Lepas file CSV disini</p>
+                <p className="text-xs text-slate-500 mb-4">atau klik untuk mencari file</p>
+                <span className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-xs font-medium text-slate-600 shadow-sm">
+                  Pilih File
+                </span>
+              </>
+            )}
+          </div>
+        </div>
+      </details>
 
       {/* Riwayat Upload (Hanya untuk 22054178) */}
       {currentUserNik === "22054178" && historyList.length > 0 && (

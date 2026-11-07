@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { ArrowLeft, UserCircle2, LogOut, Search, Activity, PauseCircle, Database, PackagePlus, DollarSign, FileSpreadsheet, ChevronRight, Boxes, TrendingUp, Tag, PackageSearch, Sparkles } from "lucide-react";
+import { ArrowLeft, UserCircle2, LogOut, Search, Activity, PauseCircle, Database, PackagePlus, DollarSign, FileSpreadsheet, ChevronRight, Boxes, TrendingUp, Tag, PackageSearch, Sparkles, RefreshCw } from "lucide-react";
 import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
 import Link from "next/link";
 
@@ -147,8 +147,8 @@ export default function SuperAdminDashboard() {
           <h2 className="font-bold text-slate-800">Manajemen Data</h2>
         </div>
         <div className="flex flex-col gap-3">
-          {/* Menu Karyawan - HANYA UNTUK NIK 22054178 */}
-          {currentUserNik === "22054178" && (
+          {/* Menu Karyawan - Langsung tampil instan tanpa jeda delay */}
+          {(currentUserNik === null || currentUserNik === "22054178") && (
             <Link href="/super-admin/users" className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-purple-50 hover:border-purple-100 transition-all group">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center group-hover:scale-110 transition-transform">
@@ -163,32 +163,23 @@ export default function SuperAdminDashboard() {
             </Link>
           )}
 
-          {/* Menu Harian */}
-          <Link href="/super-admin/sinkronisasi-harian" className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-blue-50 hover:border-blue-100 transition-all group">
+          {/* Menu Tunggal: Sinkronisasi Ritel (MDS BISA, Foto, Promo Cloud) */}
+          <Link href="/super-admin/sinkronisasi-harian" className="flex items-center justify-between p-3.5 rounded-xl border border-slate-200/80 bg-gradient-to-r from-indigo-50/50 via-white to-blue-50/40 hover:border-indigo-300 hover:shadow-sm transition-all group">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center group-hover:scale-110 transition-transform">
-                <FileSpreadsheet className="w-5 h-5" />
+              <div className="w-11 h-11 rounded-xl bg-indigo-600 text-white flex items-center justify-center group-hover:scale-105 transition-transform shadow-md shadow-indigo-200">
+                <RefreshCw className="w-5 h-5" />
               </div>
               <div>
-                <p className="font-bold text-slate-800 text-sm">Sinkronisasi Ritel (MDS BISA & Foto)</p>
-                <p className="text-[10px] text-slate-500">Tarik Barcode UPC, Style Code, Stok Toko 719, dan Foto Produk</p>
+                <div className="flex items-center gap-2">
+                  <p className="font-bold text-slate-800 text-sm">Sinkronisasi Ritel</p>
+                  <span className="px-1.5 py-0.5 text-[9px] font-black bg-indigo-100 text-indigo-700 rounded-md uppercase tracking-wider">
+                    All-in-One
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5">MDS BISA (Barcode & Stok) • Foto Katalog • Promo Cloud</p>
               </div>
             </div>
-            <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-blue-600 transition-colors" />
-          </Link>
-
-          {/* Menu Mingguan */}
-          <Link href="/super-admin/update-promo" className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50 hover:bg-emerald-50 hover:border-emerald-100 transition-all group">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center group-hover:scale-110 transition-transform">
-                <DollarSign className="w-5 h-5" />
-              </div>
-              <div>
-                <p className="font-bold text-slate-800 text-sm">Update Harga & Promo (Cloud Engine)</p>
-                <p className="text-[10px] text-slate-500">Sinkronisasi diskon mingguan via Python Cloud Engine & Storage</p>
-              </div>
-            </div>
-            <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-emerald-600 transition-colors" />
+            <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-indigo-600 group-hover:translate-x-0.5 transition-all" />
           </Link>
         </div>
       </div>
