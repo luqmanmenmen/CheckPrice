@@ -216,9 +216,11 @@ Setiap pencarian kini otomatis mengindeks 4 kolom ritel dari PQ:
   - Bagian "Riwayat Upload Terakhir" (log CSV Power Query lama) dan panel arsip unggah manual PQ di [`src/app/super-admin/sinkronisasi-harian/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/sinkronisasi-harian/page.tsx) telah dihapus permanen.
   - Halaman Sinkronisasi Ritel kini 100% bersih, rapi, dan murni fokus pada 3 Pilar Otomatisasi: MDS BISA, Foto Shopify, dan Mesin Cloud GitHub Actions.
 
-* **Penyelesaian Otomatis `GITHUB_TOKEN` Tanpa Perlu Setup Manual di Vercel:**
-  - Endpoint `/api/admin/trigger/github-dispatch` kini dilengkapi fallback cerdas: jika `process.env.GITHUB_TOKEN` belum disetel di Vercel, server secara otomatis membaca token aman dari Supabase Storage (`excel-uploads/secrets/gh_token.txt`).
-  - Tombol **"Picu Promo"** dan **"Picu Semua (All)"** di halaman portal langsung memicu eksekusi `workflow_dispatch` GitHub Actions di cloud dengan respon HTTP 204 (Success) seketika tanpa perlu konfigurasi manual apa pun oleh pengguna.
+* **Penyelesaian Otomatis `GITHUB_TOKEN` & Eliminasi 10s Serverless Timeout:**
+  - **Akar Masalah "Unexpected token 'A', 'An error o'...":** Eksekusi batch scraping foto dan sync data di Vercel melebihi limit 10 detik runtime gratis (FUNCTION_INVOCATION_TIMEOUT) sehingga Vercel mengembalikan error HTML.
+  - **Solusi Unified Cloud Dispatch:** Seluruh tombol Trigger (Trigger 1: MDS BISA, Trigger 2: Foto Produk, dan Trigger 3: Promo) kini 100% dialihkan ke **GitHub Actions Cloud Runner** (`retail-sync-engine.yml`) yang memiliki kuota gratis 2.000 menit dan timeout hingga 6 jam.
+  - Response dispatch diterima UI dalam 500ms dan pekerjaan berat dijalankan aman di server Ubuntu GitHub Actions.
+
 
 
 
