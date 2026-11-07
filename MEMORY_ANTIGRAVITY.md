@@ -243,6 +243,21 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
 * **Status Terverifikasi Live di API (`luqmanganteng.my.id/api/product/53805640`):**
   - SKU `53805640` dan semua variannya (S, M, L, XL) berhasil terupdate dengan `hargaPromo = 49000`, `hargaNormal = 59900`, `discountType = 'HARGA SPESIAL 49000'`, periode aktif `2026-11-05` s/d `2026-11-11`. Stok MDS BISA (2 pcs) tetap aman.
 
+## 18. Fitur Realtime Live Monitor, Persentase & Log Eksekusi Cloud
+
+* **Tujuan:** Memberikan transparansi penuh bagi SPV/Admin saat menekan trigger sync tanpa harus membuka tab GitHub ("*kasih lah log proses di menunya jadi kita tau berapa persen dan lognya error apa engga*").
+* **Endpoint API Status:** [`src/app/api/admin/trigger/github-status/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/github-status/route.ts)
+  - Mengambil data realtime dari GitHub REST API workflow `retail-sync-engine.yml`.
+  - Mengkalkulasi persentase progres ($0\% - 100\%$), langkah aktif, durasi pengerjaan, dan mendeteksi error jika salah satu step berstatus `failure`.
+  - Mengambil 5 riwayat data sync terakhir dari tabel `SyncHistory` database Supabase.
+* **Komponen UI:** [`src/app/super-admin/sinkronisasi-harian/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/sinkronisasi-harian/page.tsx)
+  - **Badge Status:** 🟡 Berjalan (XX%) / 🟢 Selesai 100% / 🔴 Error.
+  - **Visual Progress Bar:** Bar dinamis responsif dengan persentase dan timer durasi.
+  - **Checklist Langkah:** Rincian status step per step (✅ Selesai, ⏳ Berjalan, ⏭️ Dilewati, ❌ Gagal).
+  - **Terminal Console Output:** Kotak konsol log bergaya dark-terminal dengan auto-scroll dan tombol Perluas/Ringkas.
+  - **Auto-Polling:** Polling otomatis setiap 3.5 detik saat proses sedang aktif, serta tombol manual "Segarkan".
+
+
 
 
 
