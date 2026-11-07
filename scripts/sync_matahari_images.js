@@ -35,8 +35,26 @@ async function probeCdnPhotos(skus) {
 }
 
 async function fullSync() {
-  console.log("🚀 [Sync] Memulai penarikan 100% lengkap seluruh katalog SUKO dari Matahari...");
+  console.log("🚀 [Sync] Memulai sinkronisasi katalog & foto Matahari (Konsep Collage & Audit)...");
   const startTime = Date.now();
+
+  // 1. Ambil status produk yang sudah ada di Supabase untuk menghemat kuota
+  console.log("🔍 [Collage] Mengambil inventori foto yang sudah tersimpan di database Supabase...");
+  const dbProducts = await prisma.product.findMany({
+    select: {
+      sku: true,
+      imageUrl: true,
+      images: true,
+    }
+  });
+
+  const existingSkuMap = new Map();
+  for (const p of dbProducts) {
+    const hasPhotos = Boolean(p.imageUrl && p.images && p.images.length > 0);
+    existingSkuMap.set(p.sku, hasPhotos);
+  }
+  const alreadyHavePhotosCount = Array.from(existingSkuMap.values()).filter(Boolean).length;
+  console.log(`📦 [DB Status] Ditemukan ${dbProducts.length} produk di database (${alreadyHavePhotosCount} sudah berfoto lengkap).`);
 
   const collections = [
     'suko',
@@ -73,11 +91,12 @@ async function fullSync() {
     }
   }
 
-  console.log(`📦 [Sync] Berhasil menghimpun ${productMap.size} artikel produk unik SUKO.`);
+  console.log(`📦 [Collage] Berhasil menghimpun ${productMap.size} artikel produk dari katalog online Matahari.`);
 
-  // 1. Petakan gambar dari p.images
-  const productColorGalleries = new Map(); // handle -> { color -> images[] }
+  // 2. Petakan gambar dari p.images & filter SKU yang belum punya foto saja (Collage)
+  const productColorGalleries = new Map(); // handle -> { colorVariants, galleries }
   const needsProbe = []; // { handle, color, skus }
+  let skippedAlreadyHaveCount = 0;
 
   for (const p of productMap.values()) {
     const colorVariants = {};
@@ -110,6 +129,13 @@ async function fullSync() {
     });
 
     for (const [color, skus] of Object.entries(colorVariants)) {
+      // PRINSIP COLLAGE: Jika seluruh SKU di warna ini sudah punya foto di Supabase, lewati!
+      const allSkusHavePhotos = skus.length > 0 && skus.every(sku => existingSkuMap.get(sku) === true);
+      if (allSkusHavePhotos) {
+        skippedAlreadyHaveCount += skus.length;
+        continue;
+      }
+
       if (galleries[color].length === 0) {
         needsProbe.push({ handle: p.handle, color, skus });
       }
@@ -118,7 +144,8 @@ async function fullSync() {
     productColorGalleries.set(p.handle, { colorVariants, galleries });
   }
 
-  console.log(`🔍 [Probe CDN] Terdeteksi ${needsProbe.length} warna belum punya foto di JSON. Mulai probing paralel ke CDN...`);
+  console.log(`⚡ [Prinsip Collage] Melewati ${skippedAlreadyHaveCount} SKU yang sudah berfoto lengkap.`);
+  console.log(`🔍 [Probe CDN] Terdeteksi ${needsProbe.length} warna belum punya foto. Mulai probing paralel ke CDN...`);
 
   // Probing CDN secara concurrent (batch 20)
   const probeBatchSize = 20;
@@ -141,8 +168,9 @@ async function fullSync() {
 
   console.log(`\n✨ [Probe CDN] Selesai probing! Berhasil menemukan ${probedFound} galeri foto warna asli dari CDN.`);
 
-  // 2. Bangun skuImageRecords
+  // 2. Bangun skuImageRecords & Kumpulkan Produk Baru (Collage)
   const skuImageRecords = [];
+  const newProductsToCreate = [];
 
   for (const [handle, { colorVariants, galleries }] of productColorGalleries.entries()) {
     const p = productMap.get(handle);
@@ -163,6 +191,7 @@ async function fullSync() {
       if (!v.sku) continue;
       const sku = v.sku.trim();
       const color = (v.title.split('/')[0] || '').trim().toUpperCase();
+      const size = (v.title.split('/')[1] || '').trim().toUpperCase();
 
       let gallery = galleries[color] || [];
 
@@ -192,53 +221,95 @@ async function fullSync() {
       const finalGallery = distinctGallery.length > 0 ? distinctGallery : gallery;
       const hasOwnPhotos = finalGallery.length > 0;
 
-      // Jika warna ini punya foto sendiri: tampilkan SELURUH sudut fotonya!
-      // Jika warna ini belum ada foto di Matahari: beri 1 foto percontohan dari artikel agar tidak kosong!
+      // Foto utama & galeri
       const primaryImg = hasOwnPhotos ? finalGallery[0] : sampleArticlePhoto;
       const finalImages = hasOwnPhotos ? finalGallery : (sampleArticlePhoto ? [sampleArticlePhoto] : []);
 
-      skuImageRecords.push({
-        sku,
-        imageUrl: primaryImg,
-        images: finalImages
-      });
+      // PRINSIP COLLAGE:
+      // A. Jika SKU ini belum ada di Supabase -> Kumpulkan sebagai PRODUK BARU!
+      if (!existingSkuMap.has(sku)) {
+        newProductsToCreate.push({
+          sku,
+          article: p.handle,
+          description: p.title || `SUKO ITEM ${sku}`,
+          brand: 'SUKO',
+          dept: 'SUKO ESSENTIALS',
+          color: color || null,
+          size: size || null,
+          hargaNormal: Math.round(parseFloat(v.price) || 0),
+          stok: 0,
+          imageUrl: primaryImg || null,
+          images: finalImages || [],
+          updatedAt: new Date(),
+        });
+        existingSkuMap.set(sku, Boolean(primaryImg));
+      } 
+      // B. Jika SKU sudah ada di Supabase tetapi fotonya belum ada -> Lengkapi fotonya!
+      else if (existingSkuMap.get(sku) === false && primaryImg) {
+        skuImageRecords.push({
+          sku,
+          imageUrl: primaryImg,
+          images: finalImages
+        });
+      }
+      // C. Jika SKU sudah ada dan fotonya sudah lengkap -> LEWATI (Hemat Kuota & Kecepatan 0ms)!
     }
   }
 
-  console.log(`🖼️ [Sync] Siap memperbarui ${skuImageRecords.length} SKU di PostgreSQL Supabase.`);
+  // Simpan Produk Baru (Collage Produk Baru)
+  if (newProductsToCreate.length > 0) {
+    console.log(`✨ [Collage Produk Baru] Ditemukan ${newProductsToCreate.length} SKU baru dari katalog Matahari! Menyimpan ke database...`);
+    try {
+      const createRes = await prisma.product.createMany({
+        data: newProductsToCreate,
+        skipDuplicates: true,
+      });
+      console.log(`✅ [Collage Produk Baru] Berhasil mendaftarkan ${createRes.count} produk baru.`);
+    } catch (createErr) {
+      console.warn("⚠️ Gagal createMany produk baru:", createErr.message);
+    }
+  } else {
+    console.log("👌 [Collage Produk Baru] Tidak ada SKU baru dari katalog online. Database sudah up-to-date.");
+  }
 
-  // Update Supabase PostgreSQL dalam batch 200
+  console.log(`🖼️ [Collage Foto] Siap memperbarui ${skuImageRecords.length} SKU yang belum berfoto di PostgreSQL Supabase.`);
+
+  // Update Supabase PostgreSQL dalam batch 200 jika ada SKU yang butuh foto
   const chunkSize = 200;
   let totalUpdated = 0;
 
-  for (let i = 0; i < skuImageRecords.length; i += chunkSize) {
-    const chunk = skuImageRecords.slice(i, i + chunkSize);
+  if (skuImageRecords.length > 0) {
+    for (let i = 0; i < skuImageRecords.length; i += chunkSize) {
+      const chunk = skuImageRecords.slice(i, i + chunkSize);
 
-    const valuesList = chunk.map(c => {
-      const safeSku = c.sku.replace(/'/g, "''");
-      const safePrimary = c.imageUrl ? `'${c.imageUrl.replace(/'/g, "''")}'` : 'NULL';
-      const arraySql = c.images && c.images.length > 0
-        ? `ARRAY[${c.images.map(img => `'${img.replace(/'/g, "''")}'`).join(', ')}]::text[]`
-        : `'{}'::text[]`;
-      return `('${safeSku}', ${safePrimary}, ${arraySql})`;
-    }).join(", ");
+      const valuesList = chunk.map(c => {
+        const safeSku = c.sku.replace(/'/g, "''");
+        const safePrimary = c.imageUrl ? `'${c.imageUrl.replace(/'/g, "''")}'` : 'NULL';
+        const arraySql = c.images && c.images.length > 0
+          ? `ARRAY[${c.images.map(img => `'${img.replace(/'/g, "''")}'`).join(', ')}]::text[]`
+          : `'{}'::text[]`;
+        return `('${safeSku}', ${safePrimary}, ${arraySql})`;
+      }).join(", ");
 
-    const sql = `
-      UPDATE "Product" AS p
-      SET "imageUrl" = c.img,
-          "images" = c.imgs,
-          "updatedAt" = NOW()
-      FROM (VALUES ${valuesList}) AS c(sku, img, imgs)
-      WHERE p.sku = c.sku
-    `;
+      const sql = `
+        UPDATE "Product" AS p
+        SET "imageUrl" = c.img,
+            "images" = c.imgs,
+            "updatedAt" = NOW()
+        FROM (VALUES ${valuesList}) AS c(sku, img, imgs)
+        WHERE p.sku = c.sku
+      `;
 
-    try {
-      const affected = await prisma.$executeRawUnsafe(sql);
-      totalUpdated += affected;
-      process.stdout.write(`⏳ Progres DB: ${totalUpdated} SKU terupdate (${Math.min(i + chunkSize, skuImageRecords.length)}/${skuImageRecords.length})...\r`);
-    } catch (err) {
-      console.error(`\n❌ Error pada chunk ${i}:`, err.message);
+      try {
+        const affected = await prisma.$executeRawUnsafe(sql);
+        totalUpdated += affected;
+        process.stdout.write(`⏳ Progres DB: ${totalUpdated} SKU terupdate (${Math.min(i + chunkSize, skuImageRecords.length)}/${skuImageRecords.length})...\r`);
+      } catch (err) {
+        console.error(`\n❌ Error pada chunk ${i}:`, err.message);
+      }
     }
+  } else {
+    console.log("⚡ [Collage Foto] Tidak ada SKU yang kekurangan foto. Probing CDN diabaikan.");
   }
 
   // Backfill SKU tersisa yang artikelnya punya foto tetapi SKU warna tersebut masih kosong

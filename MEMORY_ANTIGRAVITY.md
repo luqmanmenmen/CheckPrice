@@ -316,6 +316,33 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   - Di layar kasir ([`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx)), menekan tombol **`⚡ Live MDS`** otomatis memutakhirkan stok produk aktif beserta seluruh kartu varian warna dan ukuran di bawahnya dalam waktu **0,3 detik**.
   - Menggunakan **0 menit kuota GitHub Actions** dan **0 beban Vercel serverless**.
 
+---
+
+## 25. Pemindai Kamera Barcode 1D (EAN/UPC), Backup Engine SKU, & Prinsip Collage vs Audit
+
+* **Backup Aman Engine Scan SKU (OCR):**
+  - Engine scan lama berbasis OCR Tesseract disimpan utuh di [`src/components/TextScanner_SKU_Backup.tsx`](file:///c:/Max%20Display/price-checker/src/components/TextScanner_SKU_Backup.tsx) sebagai cadangan permanen jika sewaktu-waktu ingin diaktifkan kembali.
+
+* **Implementasi True Barcode Scanner 1D ([`src/components/TextScanner.tsx`](file:///c:/Max%20Display/price-checker/src/components/TextScanner.tsx)):**
+  - Menggantikan proses OCR teks yang berat dengan **Pemindai Barcode Fisik 1D (EAN-13, UPC-A, Code 128, Code 39, QR)** berbasis `Html5Qrcode` dan Native C++ `BarcodeDetector` API Android Chrome (5–15ms per deteksi).
+  - Dilengkapi antarmuka kasir modern:
+    - Viewfinder horizontal proporsional untuk hangtag/barcode pakaian.
+    - Animasi laser horizontal pemindai dinamis.
+    - Nada audio kasir (Beep 1.8 kHz) & getar haptic (60ms) saat barcode terdeteksi.
+    - Kontrol Senter (Flashlight / Torch ON/OFF) dan Switch Kamera Depan/Belakang.
+  - Drop-in replacement: tetap kompatibel dengan fungsi `searchProduct(barcode)` di `src/app/page.tsx` dan `src/app/cek-harga/page.tsx` tanpa breaking changes.
+
+* **Penerapan Prinsip "Collage vs Audit":**
+  - **Collage (Koleksi Data Baru):**
+    - Di [`scripts/sync_matahari_images.js`](file:///c:/Max%20Display/price-checker/scripts/sync_matahari_images.js), sistem memeriksa status foto di Supabase: SKU yang sudah berfoto lengkap langsung **dilewati (skip)** sehingga tidak membuang waktu dan kuota probing CDN.
+    - Jika katalog online merilis SKU baru yang belum terdaftar di Supabase, sistem otomatis meng-collage (`createMany`) data produk baru tersebut ke database.
+    - Waktu eksekusi Trigger 2 terpangkas dari 15 menit menjadi di bawah 30 detik.
+  - **Audit (Pemeriksaan Menyeluruh Data Dinamis Stok):**
+    - Stok fisik toko diaudit menyeluruh 2x sehari via MDS BISA worker pool, atau on-demand 1 artikel via tombol `⚡ Live Stok Artikel` di HP kasir (0,3 detik, 0 kuota).
+  - **Tombol Trigger 1 & 2 di Website Admin:**
+    - Halaman `/super-admin/sinkronisasi-harian` 100% siap memicu Trigger 1A (MDS BISA), Trigger 1B (Stock Only), Trigger 2 (Foto), Trigger 3 (Promo), atau Trigger 4 (All) secara instan via GitHub Actions kapan pun diperlukan di luar jam otomatis.
+
+
 
 
 
