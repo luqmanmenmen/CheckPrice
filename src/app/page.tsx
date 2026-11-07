@@ -609,8 +609,30 @@ export default function Home() {
     const currentSearch = ++searchCounterRef.current;
     setError("");
 
-    // 0. Cek Session Cache Memory (0ms instant!)
-    const inMemory = sessionCacheRef.current.get(trimmed);
+    // 0A. CEK SIBLING LANGSUNG (0ms INSTAN!):
+    // Jika yang di-scan adalah salah satu varian warna/ukuran dari produk yang sedang aktif di layar
+    if (page === 1 && siblings && siblings.length > 0) {
+      const existingSibling = siblings.find(
+        s => (s.sku && s.sku.toLowerCase() === trimmed.toLowerCase()) ||
+             (s.barcode && s.barcode.toLowerCase() === trimmed.toLowerCase())
+      );
+      if (existingSibling) {
+        setProduct(existingSibling);
+        setManualInput(existingSibling.sku);
+        setProductsList([]);
+        setLoading(false);
+        if (isScanning) setIsScanning(false);
+        sessionCacheRef.current.set(trimmed.toLowerCase(), { product: existingSibling, siblings });
+        sessionCacheRef.current.set(existingSibling.sku.toLowerCase(), { product: existingSibling, siblings });
+        if (existingSibling.barcode) {
+          sessionCacheRef.current.set(existingSibling.barcode.toLowerCase(), { product: existingSibling, siblings });
+        }
+        return;
+      }
+    }
+
+    // 0B. Cek Session Cache Memory (0ms instant!)
+    const inMemory = sessionCacheRef.current.get(trimmed.toLowerCase()) || sessionCacheRef.current.get(trimmed);
     if (inMemory && page === 1) {
       setProduct(inMemory.product);
       setSiblings(inMemory.siblings);
@@ -694,14 +716,14 @@ export default function Home() {
           }
         }
         setSiblings(currentSiblings);
-        sessionCacheRef.current.set(trimmed, { product: localProduct, siblings: currentSiblings });
+        // Daftarkan SEMUA varian ke memory cache agar scan berikutnya 0ms
+        currentSiblings.forEach((s) => {
+          if (s.sku) sessionCacheRef.current.set(s.sku.toLowerCase(), { product: s, siblings: currentSiblings });
+          if (s.barcode) sessionCacheRef.current.set(s.barcode.toLowerCase(), { product: s, siblings: currentSiblings });
+        });
 
         setProductsList([]);
         if (isScanning) setIsScanning(false);
-      } else if (page === 1) {
-        setProduct(null);
-        setSiblings([]);
-        setProductsList([]);
       }
 
       // 2. Minta data terbaru/live ke server
@@ -725,11 +747,12 @@ export default function Home() {
           setSiblings(serverSiblings);
           setProductsList([]);
 
-          // Simpan ke session cache agar klik/scan berikutnya 0ms
-          sessionCacheRef.current.set(data.data.sku, { product: data.data, siblings: serverSiblings });
-          if (data.data.barcode) {
-            sessionCacheRef.current.set(data.data.barcode, { product: data.data, siblings: serverSiblings });
-          }
+          // Simpan produk & SEMUA siblings ke session cache agar klik/scan varian berikutnya 0ms
+          sessionCacheRef.current.set(trimmed.toLowerCase(), { product: data.data, siblings: serverSiblings });
+          serverSiblings.forEach((s: ProductData) => {
+            if (s.sku) sessionCacheRef.current.set(s.sku.toLowerCase(), { product: s, siblings: serverSiblings });
+            if (s.barcode) sessionCacheRef.current.set(s.barcode.toLowerCase(), { product: s, siblings: serverSiblings });
+          });
 
           // Sinkronisasi data live produk & siblings ini ke Dexie agar harga promo selalu tersimpan
           import('@/lib/offlineDb').then(({ db }) => {
@@ -1453,7 +1476,7 @@ export default function Home() {
         });
 
         return (
-          <div className="bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden animate-in slide-in-from-bottom-6 duration-400">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden">
 
             {/* Discount Badge Header */}
             {isOnPromo && (
@@ -1673,11 +1696,11 @@ export default function Home() {
                             const bgStyle = cData ? { backgroundColor: cData.hex } : {};
                             
                             // Tentukan kelas berdasarkan apakah warna dikenali & apakah terpilih (current)
-                            let buttonClass = `flex flex-col border rounded-lg px-3 py-2.5 min-w-[130px] sm:min-w-[115px] shrink-0 snap-start text-left transition-all active:scale-95 border-black/10 `;
+                            let buttonClass = `flex flex-col border rounded-lg px-3 py-2.5 min-w-[130px] sm:min-w-[115px] shrink-0 snap-start text-left transition-colors duration-100 active:scale-95 border-black/10 `;
                             if (item.isCurrent) {
                               buttonClass += cData 
-                                ? 'ring-2 ring-indigo-500 ring-offset-2 ' 
-                                : 'bg-indigo-50 border-indigo-400 ring-1 ring-indigo-400 ';
+                                ? 'ring-2 ring-indigo-500 ring-offset-2 shadow-sm font-bold ' 
+                                : 'bg-indigo-50 border-indigo-500 ring-2 ring-indigo-500 shadow-sm font-bold ';
                             } else {
                               buttonClass += cData 
                                 ? 'hover:ring-2 hover:ring-slate-300 ' 

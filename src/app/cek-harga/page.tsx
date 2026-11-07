@@ -228,6 +228,25 @@ export default function CekHargaPage() {
 
     const cacheKey = trimmed.toLowerCase();
 
+    // 0. Cek varian (sibling) dari produk yang sedang tampil di layar (0ms Instan!)
+    if (siblings && siblings.length > 0) {
+      const existingSibling = siblings.find(
+        s => (s.sku && s.sku.toLowerCase() === cacheKey) ||
+             (s.barcode && s.barcode.toLowerCase() === cacheKey)
+      );
+      if (existingSibling) {
+        playScanBeep();
+        setProduct(existingSibling);
+        setError("");
+        setIsScanning(false);
+        setLoading(false);
+        sessionCache.current.set(cacheKey, existingSibling);
+        if (existingSibling.sku) sessionCache.current.set(existingSibling.sku.toLowerCase(), existingSibling);
+        if (existingSibling.barcode) sessionCache.current.set(existingSibling.barcode.toLowerCase(), existingSibling);
+        return;
+      }
+    }
+
     // 1. Cek in-memory cache sesi ini (Instan 0ms)
     const cached = sessionCache.current.get(cacheKey);
     if (cached) {
@@ -326,11 +345,14 @@ export default function CekHargaPage() {
 
         if (found) {
           playScanBeep();
+          const allSibs: ProductData[] = data.siblings || [found];
           sessionCache.current.set(cacheKey, found);
-          sessionCache.current.set(found.sku.toLowerCase(), found);
-          if (found.barcode) sessionCache.current.set(found.barcode.toLowerCase(), found);
+          allSibs.forEach(s => {
+            if (s.sku) sessionCache.current.set(s.sku.toLowerCase(), s);
+            if (s.barcode) sessionCache.current.set(s.barcode.toLowerCase(), s);
+          });
           setProduct(found);
-          setSiblings(data.siblings || [found]);
+          setSiblings(allSibs);
         } else {
           setError("SKU tidak ditemukan. Coba arahkan ulang ke angka SKU pada label.");
         }
