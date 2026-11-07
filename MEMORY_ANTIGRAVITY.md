@@ -216,6 +216,11 @@ Setiap pencarian kini otomatis mengindeks 4 kolom ritel dari PQ:
   - Bagian "Riwayat Upload Terakhir" (log CSV Power Query lama) dan panel arsip unggah manual PQ di [`src/app/super-admin/sinkronisasi-harian/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/sinkronisasi-harian/page.tsx) telah dihapus permanen.
   - Halaman Sinkronisasi Ritel kini 100% bersih, rapi, dan murni fokus pada 3 Pilar Otomatisasi: MDS BISA, Foto Shopify, dan Mesin Cloud GitHub Actions.
 
+* **Penyelesaian Otomatis `GITHUB_TOKEN` Tanpa Perlu Setup Manual di Vercel:**
+  - Endpoint `/api/admin/trigger/github-dispatch` kini dilengkapi fallback cerdas: jika `process.env.GITHUB_TOKEN` belum disetel di Vercel, server secara otomatis membaca token aman dari Supabase Storage (`excel-uploads/secrets/gh_token.txt`).
+  - Tombol **"Picu Promo"** dan **"Picu Semua (All)"** di halaman portal langsung memicu eksekusi `workflow_dispatch` GitHub Actions di cloud dengan respon HTTP 204 (Success) seketika tanpa perlu konfigurasi manual apa pun oleh pengguna.
+
+
 
 
 
