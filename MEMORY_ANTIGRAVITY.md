@@ -257,17 +257,25 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   - **Terminal Console Output:** Kotak konsol log bergaya dark-terminal dengan auto-scroll dan tombol Perluas/Ringkas.
   - **Auto-Polling:** Polling otomatis setiap 3.5 detik saat proses sedang aktif, serta tombol manual "Segarkan".
 
-## 19. Optimasi Kilat Highlight Kotak Warna & Varian (Eliminasi Delay & Unmount)
+## 20. Pemutakhiran Auto-Add Produk Baru MDS BISA, Backfill Foto Kaos Kaki & Timeout Runner
 
-* **Keluhan User:** Saat scan barcode / SKU varian lain dari artikel yang sedang dibuka di layar, kotak warna dan sorotan garis biru (*ring biru*) sangat delay ("*kotak warna itu delay banget ... ini loh yang kamu scan nah itu delay banget*").
-* **Akar Masalah:**
-  1. `searchProduct` sebelumnya tidak memeriksa state `siblings` yang sudah ada di memori. Akibatnya saat scan varian lain (misal dari ukuran S ke M), sistem mengeksekusi `setProduct(null)` yang menghapus seluruh card dari DOM.
-  2. Sistem kemudian melakukan request fetch jaringan ulang ke server yang memakan waktu 1–2 detik.
-  3. Setelah respons server tiba, card dipasang kembali dengan animasi CSS slide-in 400ms (`animate-in slide-in-from-bottom-6 duration-400`).
-* **Solusi Instan 0ms yang Diterapkan di [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx) & [`src/app/cek-harga/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/cek-harga/page.tsx):**
-  1. **Instant Sibling Matching (0ms):** Sebelum memicu request jaringan, `searchProduct` langsung mencocokkan barcode/SKU ke daftar `siblings`. Jika cocok, state `product` langsung berganti seketika (0ms) tanpa unmount layar.
-  2. **Pre-populate Semua Sibling ke Cache:** Setiap kali artikel dimuat, seluruh varian warna dan ukuran langsung didaftarkan ke `sessionCacheRef` sehingga scan/klik selanjutnya selalu instan.
-  3. **Penghapusan Layout Animation Lag:** Mengganti `transition-all` dan animasi slide-in 400ms dengan `transition-colors duration-100`, sehingga garis tepi biru (*ring indicator*) langsung berpindah ke kotak warna/ukuran yang di-scan tanpa jeda.
+* **Auto-Add Produk Baru (Upsert Penuh):**
+  - Sebelumnya, `sync_mds_bisa_full.mjs` hanya menggunakan `prisma.product.update` dan mengabaikan produk baru (`err.code === 'P2025'`).
+  - Kini diupgrade menjadi `prisma.product.upsert`: setiap produk/SKU yang ditemukan di StoreHub MDS BISA otomatis ditambahkan ke database Supabase lengkap dengan barcode UPC, article/style code, warna, ukuran, deskripsi, harga normal, dan stok toko fisik.
+  - Penanganan duplikasi barcode (`P2002`) otomatis melakukan retry upsert tanpa barcode sehingga data stok dan produk tetap tersimpan aman.
+
+* **Sinkronisasi Realtime ke Website `luqmanganteng.my.id`:**
+  - Karena Vercel membaca langsung database PostgreSQL Supabase yang sama, setiap perubahan data (stok, harga normal, harga promo, barcode, varian) **langsung live seketika** di `luqmanganteng.my.id` tanpa perlu rebuild/redeploy Vercel.
+
+* **Backfill Foto Kaos Kaki (SKU 19171694) & Boxer (SKU 53805640):**
+  - SKU `19171694` (Kaos Kaki Reguler S2S084D1) dan SKU `53805640` (Pakaian Dalam Boxer U4U165D3-1) telah terverifikasi live di API & website:
+    - Kaos Kaki: Promo Rp 19.000 + Foto resmi CDN Matahari aktif.
+    - Boxer: Promo Rp 49.000 (diskon dari Rp 59.900) + Foto resmi CDN Matahari aktif + Stok 2 pcs.
+
+* **Optimasi Runner GitHub Actions:**
+  - `REQUEST_DELAY_MS` dipersingkat dari 800ms menjadi 350ms per request StoreHub.
+  - `timeout-minutes` pada `.github/workflows/retail-sync-engine.yml` diperpanjang dari 60 menit menjadi 360 menit (6 jam) agar sync massal 9.500 SKU berjalan tuntas tanpa terpotong batas waktu runner.
+
 
 
 

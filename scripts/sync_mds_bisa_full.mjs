@@ -59,8 +59,8 @@ const CREDENTIALS = {
   tz: 'Asia/Jakarta',
 };
 
-// Delay antar request (ms) - jangan terlalu cepat biar ga kena rate limit
-const REQUEST_DELAY_MS = 800;
+// Delay antar request (ms) - hemat waktu & aman dari rate limit
+const REQUEST_DELAY_MS = 350;
 // Max retry per SKU jika gagal
 const MAX_RETRIES = 3;
 
@@ -378,36 +378,53 @@ async function upsertProduct(sku, fields) {
   }
 
   const updateData = {};
-  
   if (fields.barcode) updateData.barcode = String(fields.barcode).trim();
   if (fields.article) updateData.article = fields.article;
-  if (fields.stok !== null) updateData.stok = fields.stok;
+  if (fields.stok !== null && fields.stok !== undefined) updateData.stok = fields.stok;
   if (fields.hargaNormal) updateData.hargaNormal = fields.hargaNormal;
   if (fields.color) updateData.color = fields.color;
   if (fields.size) updateData.size = fields.size;
   if (fields.description) updateData.description = fields.description;
+  if (fields.dept) updateData.dept = fields.dept;
   updateData.updatedAt = new Date();
 
+  const createData = {
+    sku: String(sku).trim(),
+    barcode: fields.barcode ? String(fields.barcode).trim() : null,
+    article: fields.article || null,
+    description: fields.description || `SUKO ITEM ${sku}`,
+    brand: 'SUKO',
+    dept: fields.dept || 'SUKO ESSENTIALS',
+    color: fields.color || null,
+    size: fields.size || null,
+    hargaNormal: fields.hargaNormal || 0,
+    stok: fields.stok !== null && fields.stok !== undefined ? fields.stok : 0,
+    updatedAt: new Date(),
+  };
+
   try {
-    const result = await prisma.product.update({
+    const result = await prisma.product.upsert({
       where: { sku: String(sku) },
-      data: updateData,
+      update: updateData,
+      create: createData,
     });
     return { success: true, id: result.id };
   } catch (err) {
-    if (err.code === 'P2025') {
-      // Produk tidak ada di DB → ini produk baru dari MDS BISA
-      // Skip untuk sekarang (MVP: hanya update yang sudah ada)
-      return { notFound: true };
-    }
     if (err.code === 'P2002') {
-      // Duplicate barcode - mungkin barcode sama di 2 SKU berbeda
-      console.warn(`  ⚠️  SKU ${sku}: Duplicate barcode ${fields.barcode}, skip update barcode`);
+      // Duplicate barcode - retry tanpa barcode agar data produk & stok tetap masuk
+      console.warn(`  ⚠️  SKU ${sku}: Duplicate barcode ${fields.barcode}, skip barcode pada upsert`);
       delete updateData.barcode;
-      if (Object.keys(updateData).length > 1) {
-        await prisma.product.update({ where: { sku: String(sku) }, data: updateData });
+      createData.barcode = null;
+      try {
+        const retryResult = await prisma.product.upsert({
+          where: { sku: String(sku) },
+          update: updateData,
+          create: createData,
+        });
+        return { success: true, id: retryResult.id, duplicateBarcodeSkipped: true };
+      } catch (retryErr) {
+        return { error: retryErr.message };
       }
-      return { duplicateBarcode: true };
     }
     return { error: err.message };
   }
@@ -587,8 +604,10 @@ async function main() {
   // Log ke SyncHistory
   if (!isDryRun) {
     try {
-      // Cari user M223515 di DB untuk log
-      const user = await prisma.user.findFirst({ where: { nik: 'M223515' } });
+      // Cari user M223515 atau supervisor di DB untuk log
+      const user = await prisma.user.findFirst({
+        where: { OR: [{ nik: 'M223515' }, { role: 'SUPERVISOR' }, { role: 'ADMIN' }] },
+      });
       if (user) {
         await prisma.syncHistory.create({
           data: {
