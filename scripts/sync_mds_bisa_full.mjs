@@ -67,6 +67,7 @@ const MAX_RETRIES = 3;
 // Parse args
 const isDryRun = process.argv.includes('--dry-run');
 const isForce = process.argv.includes('--force');
+const isStockOnly = process.argv.includes('--stock-only');
 const targetSku = process.argv.find(a => a.startsWith('--sku='))?.split('=')[1];
 
 // ============================================================
@@ -377,6 +378,23 @@ async function upsertProduct(sku, fields) {
     return { dryRun: true };
   }
 
+  // Jika mode khusus update stok: hanya perbarui stok & updatedAt
+  if (isStockOnly) {
+    try {
+      const result = await prisma.product.update({
+        where: { sku: String(sku) },
+        data: {
+          stok: fields.stok !== null && fields.stok !== undefined ? fields.stok : 0,
+          updatedAt: new Date(),
+        },
+      });
+      return { success: true, id: result.id, stockOnly: true };
+    } catch (err) {
+      if (err.code === 'P2025') return { notFound: true };
+      return { error: err.message };
+    }
+  }
+
   const updateData = {};
   if (fields.barcode) updateData.barcode = String(fields.barcode).trim();
   if (fields.article) updateData.article = fields.article;
@@ -477,6 +495,20 @@ async function main() {
   if (targetSku) {
     skusToProcess = [targetSku];
     console.log(`🎯 Target SKU tunggal: ${targetSku}\n`);
+  } else if (isStockOnly) {
+    console.log('⚡ Mode Stock-Only: Mengambil list SKU aktif di toko 719...');
+    const products = await prisma.product.findMany({
+      where: {
+        OR: [
+          { stok: { gt: 0 } },
+          { updatedAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } }
+        ]
+      },
+      select: { sku: true },
+      orderBy: { updatedAt: 'asc' },
+    });
+    skusToProcess = products.map(p => p.sku);
+    console.log(`   Ditemukan ${skusToProcess.length} produk aktif untuk update stok cepat\n`);
   } else {
     console.log('📋 Mengambil list SKU dari Supabase...');
     const products = await prisma.product.findMany({

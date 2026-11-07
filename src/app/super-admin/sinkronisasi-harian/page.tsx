@@ -141,7 +141,7 @@ export default function UpdateProdukPage() {
   }, []);
 
   // DISPATCH ENGINE: Memicu GitHub Actions Cloud Runner
-  const handleGitHubDispatch = async (action: "all" | "mds-bisa" | "photos" | "promo") => {
+  const handleGitHubDispatch = async (action: "all" | "mds-bisa" | "stock-only" | "photos" | "promo") => {
     setIsGhDispatching(true);
     setActiveAction(action);
     setGhDispatchResult(null);
@@ -235,14 +235,14 @@ export default function UpdateProdukPage() {
         </div>
 
         <div className="p-4 flex flex-col gap-3">
-          {/* Trigger 1: MDS BISA */}
+          {/* Trigger 1A: MDS BISA Full */}
           <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-3.5 bg-indigo-50/70 rounded-xl border border-indigo-100 hover:border-indigo-300 transition-colors">
             <div className="flex-1 min-w-0">
               <p className="font-bold text-indigo-900 text-sm flex items-center gap-1.5">
-                🏪 Trigger 1 — Sync MDS BISA
+                🏪 Trigger 1A — MDS BISA Full Sync
               </p>
               <p className="text-xs text-indigo-600 mt-0.5">
-                Tarik barcode UPC, style code, stok toko 719, dan harga normal dari portal StoreHub
+                Scraping komplit 9.500 SKU: tambah produk baru otomatis, barcode UPC, style code, harga normal, dan stok fisik
               </p>
             </div>
             <button
@@ -251,7 +251,27 @@ export default function UpdateProdukPage() {
               className="flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-colors disabled:opacity-50 shrink-0 shadow-sm"
             >
               {isGhDispatching && activeAction === "mds-bisa" ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-              {isGhDispatching && activeAction === "mds-bisa" ? "Menyalakan..." : "Sync MDS Saja"}
+              {isGhDispatching && activeAction === "mds-bisa" ? "Menyalakan..." : "MDS BISA All"}
+            </button>
+          </div>
+
+          {/* Trigger 1B: Khusus Update Stok Saja (Fast Stock Sync) */}
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-3.5 bg-cyan-50/70 rounded-xl border border-cyan-100 hover:border-cyan-300 transition-colors">
+            <div className="flex-1 min-w-0">
+              <p className="font-bold text-cyan-900 text-sm flex items-center gap-1.5">
+                ⚡ Trigger 1B — Update Stok Saja (Fast Stock)
+              </p>
+              <p className="text-xs text-cyan-600 mt-0.5">
+                Khusus memperbarui sisa stok toko 719 untuk produk aktif (lebih cepat & hemat kuota runner)
+              </p>
+            </div>
+            <button
+              onClick={() => handleGitHubDispatch("stock-only")}
+              disabled={isGhDispatching || isRunning}
+              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-bold rounded-xl transition-colors disabled:opacity-50 shrink-0 shadow-sm"
+            >
+              {isGhDispatching && activeAction === "stock-only" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+              {isGhDispatching && activeAction === "stock-only" ? "Menyalakan..." : "Update Stok Saja"}
             </button>
           </div>
 

@@ -276,6 +276,31 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   - `REQUEST_DELAY_MS` dipersingkat dari 800ms menjadi 350ms per request StoreHub.
   - `timeout-minutes` pada `.github/workflows/retail-sync-engine.yml` diperpanjang dari 60 menit menjadi 360 menit (6 jam) agar sync massal 9.500 SKU berjalan tuntas tanpa terpotong batas waktu runner.
 
+## 21. Isolasi 100% Eksekusi di GitHub Actions & Pemisahan Trigger Fast Stock-Only
+
+* **Prinsip Utama (User Rule): "SEMUA BERJALAN DI GITHUB, JANGAN DI VERCEL":**
+  - Vercel strictly hanya bertindak sebagai Front-End / Display UI dan penerus sinyal webhook (0,5 detik via GitHub REST API `workflow_dispatch`).
+  - Seluruh komputasi batch berat, loop scraping StoreHub MDS BISA, pemutakhiran database Prisma PostgreSQL, parsing promo Python, dan katalog gambar Shopify dieksekusi 100% di server cloud **Ubuntu GitHub Actions Runner**.
+  - Beban komputasi serverless Vercel = 0. Tidak ada risiko timeout 10 detik.
+
+* **Pemisahan Trigger MDS BISA: Full vs Fast Stock:**
+  - **Trigger 1A — MDS BISA Full Sync (`action: 'mds-bisa'`):** Menjalankan loop penuh 9.500 SKU untuk mendeteksi & mendaftarkan produk baru, barcode UPC, style code, warna, ukuran, deskripsi, harga normal, dan stok fisik.
+  - **Trigger 1B — Fast Stock-Only Sync (`action: 'stock-only'` / flag `--stock-only`):** Khusus memperbarui angka stok fisik (`stok`) untuk SKU aktif toko 719 tanpa menimpa data master lainnya. Jauh lebih cepat, efisien, dan menghemat kuota runner.
+
+* **Jadwal Otomasi GitHub Actions yang Aman dari Limit Kuota:**
+  - Alih-alih polling setiap 10 menit non-stop yang dapat menghabiskan kuota gratis bulanan (2.000 menit) dalam hitungan jam, GitHub Actions dikonfigurasi terjadwal pada jam-jam kunci operasional toko 719:
+    1. **09:30 WIB:** Buka toko pagi (Full Sync MDS BISA + Promo).
+    2. **14:00 WIB:** Pergantian shift siang (Fast Stock-Only Sync).
+    3. **18:30 WIB:** Menjelang peak hours malam (Fast Stock-Only Sync).
+
+
+
+
+
+
+
+
+
 
 
 
