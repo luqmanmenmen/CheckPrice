@@ -221,6 +221,29 @@ Setiap pencarian kini otomatis mengindeks 4 kolom ritel dari PQ:
   - **Solusi Unified Cloud Dispatch:** Seluruh tombol Trigger (Trigger 1: MDS BISA, Trigger 2: Foto Produk, dan Trigger 3: Promo) kini 100% dialihkan ke **GitHub Actions Cloud Runner** (`retail-sync-engine.yml`) yang memiliki kuota gratis 2.000 menit dan timeout hingga 6 jam.
   - Response dispatch diterima UI dalam 500ms dan pekerjaan berat dijalankan aman di server Ubuntu GitHub Actions.
 
+## 16. Arsitektur 4 Trigger Cloud Mandiri & Bebas Timeout
+
+Halaman [`src/app/super-admin/sinkronisasi-harian/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/sinkronisasi-harian/page.tsx) kini memiliki 4 kontrol terpisah:
+1. **Trigger 1 — Sync Data Produk (MDS BISA Saja):** `action: 'mds-bisa'`
+2. **Trigger 2 — Sync Foto Produk (Shopify CDN Saja):** `action: 'photos'`
+3. **Trigger 3 — Sync Promo (Mesin Cloud Python Saja):** `action: 'promo'`
+4. **Trigger 4 — Full Sync (Semua Sekaligus):** `action: 'all'`
+
+Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani runtime Vercel.
+
+## 17. Pembaruan Multi-File Batch Promo & Penyelesaian SKU 53805640
+
+* **Penyebab Harga Belum Berubah:**
+  - File promo Week 45 berada di subfolder `PROMO 5 - 11 NOV 2026/3. PROMO 3344-SUKO ESSENTIALS WEEK45 SAS SIS 05-11NOV2026.xlsx` sheet `SP49`.
+  - Script lama hanya membaca 1 file pertama dari storage dan tidak mengurutkan nama folder secara kronologis.
+* **Perbaikan di `python-engine/run_promo_sync.py`:**
+  - Fungsi `parse_folder_date_score()` untuk mengurutkan folder promo berdasarkan tanggal rilis nyata.
+  - Fungsi `get_latest_promo_files_from_storage()` untuk mengekstrak dan memproses seluruh berkas promo dalam folder terbaru sekaligus.
+  - Penambahan kolom audit `updatedAt` dan `createdAt` dengan format UTC ISO string saat upsert ke Supabase.
+* **Status Terverifikasi Live di API (`luqmanganteng.my.id/api/product/53805640`):**
+  - SKU `53805640` dan semua variannya (S, M, L, XL) berhasil terupdate dengan `hargaPromo = 49000`, `hargaNormal = 59900`, `discountType = 'HARGA SPESIAL 49000'`, periode aktif `2026-11-05` s/d `2026-11-11`. Stok MDS BISA (2 pcs) tetap aman.
+
+
 
 
 
