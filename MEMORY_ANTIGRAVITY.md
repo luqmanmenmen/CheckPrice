@@ -178,4 +178,16 @@ Setiap pencarian kini otomatis mengindeks 4 kolom ritel dari PQ:
 - **Schema DB**: kolom `barcode String? @unique` sudah ada — tidak perlu migrasi.
 - **UI Trigger**: ada di halaman `/super-admin/sinkronisasi-harian` (section "Sinkronisasi Otomatis MDS BISA").
 
+---
+
+## 11. Pengalihan Beban Mesin: Dari Railway ke GitHub Actions
+
+* **Keputusan**: Railway dipensiunkan (shutdown) karena file PQ 52k baris sudah tidak digunakan lagi.
+* **Solusi**: Seluruh eksekusi tugas batch (MDS BISA Sync, Foto Sync, dan Parser Promo Email) dialihkan ke **GitHub Actions**.
+* **Keuntungan**:
+  1. Kuota **2.000 menit gratis setiap bulan** tanpa biaya langganan.
+  2. Batas waktu eksekusi (timeout) hingga **6 jam** per sesi (jauh melampaui limit Vercel 10–60 detik).
+  3. Dapat dijadwalkan otomatis (**jam 09:30 WIB** setiap pagi) dan dipicu manual via **tombol Trigger** di web admin melalui API `workflow_dispatch`.
+
+
 
