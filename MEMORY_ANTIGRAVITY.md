@@ -129,16 +129,53 @@ Setiap pencarian kini otomatis mengindeks 4 kolom ritel dari PQ:
   * Tes API: `curl -L https://luqmanganteng.my.id/api/product/nayoung`
   * Hasil: Mengembalikan 23 produk Nayoung dengan departemen dan stok akurat.
 
+
 ---
 
-## 8. Blueprint Migrasi Backend ke GitHub Actions (100% Gratis & No CC)
+## 9. Integrasi Barcode UPC & Style Code dari StoreHub MDS Retailing
 
-* **Dokumentasi Lengkap**: [`WALKTHROUGH_MIGRASI_SERVER_GITHUB_ACTIONS.md`](file:///c:/Max%20Display/price-checker/WALKTHROUGH_MIGRASI_SERVER_GITHUB_ACTIONS.md)
-* **Status**: **Disimpan sebagai Rencana Resmi (Siap Eksekusi Kapan Saja)**.
-* **Tujuan**: Menggantikan ketergantungan Railway jika kuota/kredit berbayar habis.
-* **Strategi**:
-  1. Frontend tetap di Vercel (`luqmanganteng.my.id`).
-  2. Database tetap di Supabase PostgreSQL.
-  3. Pemrosesan file Power Query & Promo dialihkan ke **GitHub Actions Runner (Ubuntu, 7 GB RAM, 2 vCPU, kuota 2.000 menit/bulan)** via `repository_dispatch` webhook dari Google Apps Script.
-  4. 100% Bebas Kartu Kredit selamanya dan kebal penutupan platform pihak ketiga.
+* **Aplikasi Sumber**: `https://storehub.mdsretailing.id/item-checker`
+* **Akun Otorisasi**: `M223515` (LUQMAN ARIF - SA/SPG Toko 719)
+* **Tujuan**: Menarik data mapping **SKU ↔ VENDOR BARCODE (UPC EAN-13)** dan **STYLE CODE** yang selama ini hilang dari CSV Power Query, agar scanner barcode fisik dan kamera kasir di toko dapat mengenali produk secara otomatis.
+* **Server Action Next.js yang Ditemukan**:
+  * `checkItemDetail`: ID `60fc4882ad969e8907c38a0c8aa2c93b06a8e5c526` (Input: `['sku'/'upc', identifier]`)
+  * `checkItemStock`: ID `60583352e1dc5a5d042e7557e6a166ae2d9e7e6130`
+  * `login`: ID `6071833df0be708d73972db0a7dc0c7c83eb3d41f3`
+  * `checkItemPromotion`: ID `604c571155331d51896a342c4afbc1c6e2091d8cb3`
+* **Karakteristik Infrastruktur Toko**:
+  * Server StoreHub cloud mengarahkan query detail barang ke database SQL Server lokal toko (`172.24.12.41:1433`) via VPN internal Matahari.
+  * Di luar jam operasional toko (larut malam saat toko tutup), koneksi VPN toko bisa offline (`no route to host`). Sinkronisasi massal dijalankan saat jam operasional toko buka atau VPN aktif (09:00–21:30 WIB).
+
+## 10. Arsitektur 2-Source Data (MDS BISA + matahari.com) — Menggantikan PQ
+
+> **PQ file pipeline DIHAPUS.** Semua data kini dari MDS BISA (Trigger 1) + matahari.com foto (Trigger 2).
+
+### File yang dibuat:
+
+| File | Fungsi |
+|---|---|
+| [`scripts/sync_mds_bisa_full.mjs`](file:///c:/Max%20Display/price-checker/scripts/sync_mds_bisa_full.mjs) | Script CLI utama: auto-login, loop SKU, upsert DB. Pakai `node scripts/sync_mds_bisa_full.mjs` |
+| [`src/app/api/admin/trigger/mds-bisa/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/mds-bisa/route.ts) | API Trigger 1: POST `/api/admin/trigger/mds-bisa` |
+| [`src/app/api/admin/trigger/photos/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/photos/route.ts) | API Trigger 2: POST `/api/admin/trigger/photos` |
+
+### Alur Trigger 1 (MDS BISA Sync):
+1. Auto-login ke StoreHub → ambil fresh cookie (atau pakai env `MDS_SESSION_COOKIE`)
+2. Loop semua SKU dari Supabase DB
+3. Per SKU: `checkItemDetail` → extract barcode, article, stok, hargaNormal
+4. Upsert ke `Product` table
+5. Log ke `SyncHistory` (type: `"MDS_BISA_SYNC"`)
+
+### Alur Trigger 2 (Foto Sync):
+1. Scrape `matahari.com/collections/suko/products.json` (dan variasi collection lain)
+2. Match SKU/article dari Shopify variants → foto CDN
+3. Fallback: probe CDN `cdn.shopify.com/.../files/{sku}-1.jpg`
+4. Update `imageUrl` dan `images[]` di `Product` table
+5. Log ke `SyncHistory` (type: `"PHOTO_SYNC"`)
+
+### Catatan penting:
+- **Session cookie expired ~15 menit**: auto-login sudah diimplementasi. Jika gagal, set env `MDS_SESSION_COOKIE` atau buat file `.mds_cookie` di root project.
+- **Toko harus buka**: `checkItemDetail` butuh SQL Server lokal toko aktif (09:00–21:30 WIB).
+- **Schema DB**: kolom `barcode String? @unique` sudah ada — tidak perlu migrasi.
+- **UI Trigger**: ada di halaman `/super-admin/sinkronisasi-harian` (section "Sinkronisasi Otomatis MDS BISA").
+
 
