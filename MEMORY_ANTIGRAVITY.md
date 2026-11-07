@@ -204,6 +204,19 @@ Setiap pencarian kini otomatis mengindeks 4 kolom ritel dari PQ:
   - **Kredensial Siap Pakai:** URL Supabase Storage (`https://lzynugpistiyhxqkgwmk.supabase.co`) dan Secret Key diisi langsung tanpa konfigurasi ScriptProperties yang rumit.
   - **Dual Action Sinkronisasi:** Begitu file promo masuk ke Supabase Storage (`excel-uploads/PROMO/...`), GAS langsung memicu sinkronisasi harga promo instan di Vercel (`/api/upload/sync-latest-blob`) dan mengaktifkan webhook GitHub Actions runner (`/api/admin/trigger/github-dispatch`).
 
+## 15. Perbaikan Otorisasi Trigger (401 Unauthorized) & Pembersihan Riwayat PQ
+
+* **Akar Masalah Error "Unauthorized" pada Trigger:**
+  - Ketiga API trigger (`/api/admin/trigger/photos`, `/api/admin/trigger/mds-bisa`, `/api/admin/trigger/github-dispatch`) sebelumnya memeriksa `cookieStore.get('sessionId')`.
+  - Sistem login aplikasi sebenarnya menyimpan autentikasi dalam cookie `token` (berisi JSON Web Token / JWT yang di-sign menggunakan `jose`).
+  - Akibatnya, pemanggilan dari browser admin selalu gagal verifikasi (401 Unauthorized) saat tombol ditekan.
+  - **Solusi:** Ketiga API rute trigger kini memvalidasi `token` menggunakan `verifyToken()` dari `@/lib/auth`, dan tetap mendukung token webhook GAS sebagai fallback otomatis. Tombol Trigger 1, Trigger 2, dan Trigger 3 kini berjalan mulus.
+
+* **Penghapusan Total Riwayat Upload & Seksi Manual PQ:**
+  - Bagian "Riwayat Upload Terakhir" (log CSV Power Query lama) dan panel arsip unggah manual PQ di [`src/app/super-admin/sinkronisasi-harian/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/sinkronisasi-harian/page.tsx) telah dihapus permanen.
+  - Halaman Sinkronisasi Ritel kini 100% bersih, rapi, dan murni fokus pada 3 Pilar Otomatisasi: MDS BISA, Foto Shopify, dan Mesin Cloud GitHub Actions.
+
+
 
 
 
