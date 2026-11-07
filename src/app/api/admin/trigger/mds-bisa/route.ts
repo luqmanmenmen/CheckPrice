@@ -75,6 +75,10 @@ async function autoLogin(): Promise<string | null> {
 }
 
 function parseServerActionResponse(text: string): any {
+  if (text.includes('504 Gateway') || text.includes('Gateway Time-out') || text.includes('502 Bad Gateway')) {
+    return { _storeOffline: true, error: '504 Gateway Timeout (Toko offline)' };
+  }
+
   const lines = text.split('\n');
   for (const line of lines) {
     if (line.startsWith('1:') || line.startsWith('0:')) {

@@ -253,6 +253,10 @@ async function fetchItemStock(sku, cookie) {
 // PARSER: Next.js Server Action Response
 // ============================================================
 function parseServerActionResponse(text, sku, type = 'detail') {
+  if (text.includes('504 Gateway') || text.includes('Gateway Time-out') || text.includes('502 Bad Gateway')) {
+    return { _storeOffline: true, error: '504 Gateway Time-out (Server toko 719 offline di luar jam operasional)' };
+  }
+
   const lines = text.split('\n');
   
   for (const line of lines) {
@@ -279,29 +283,14 @@ function parseServerActionResponse(text, sku, type = 'detail') {
   }
   
   // Kalau tidak ada data bermakna
-  return { _rawText: text.substring(0, 200) };
+  return { _rawText: text.substring(0, 200), _error: 'Format response tidak dikenal' };
 }
 
 // ============================================================
 // PARSER: Ekstrak field dari response checkItemDetail
-// Format response (dari screenshot user):
-// {
-//   sku: "34985474",
-//   color: "DARK DENIM",
-//   className: "",
-//   description: "CELANA PANJANG JEANS BARREL D2",
-//   retailPrice: 349900,
-//   size: "S",
-//   stockOnHand: 6,
-//   styleCode: "D2M4346J4",
-//   subclassName: "PANTS DENIM",
-//   vendorBarcode: "2340003266705",
-//   relatedStock: { "DARK DENIM": { L: 13, M: 10, S: 6, XL: 13 }, ... }
-// }
-// CATATAN: format persis bisa berbeda, kita handle beberapa kemungkinan
 // ============================================================
 function extractProductFields(data) {
-  if (!data || data._error || data._storeOffline || data._sessionExpired) return null;
+  if (!data || data._error || data._storeOffline || data._sessionExpired || data._rawText) return null;
   
   // Handle berbagai kemungkinan field name (camelCase, snake_case, Title Case)
   const get = (...keys) => {
@@ -310,6 +299,16 @@ function extractProductFields(data) {
     }
     return null;
   };
+
+  const barcode = get('vendorBarcode', 'vendor_barcode', 'VendorBarcode', 'barcode', 'upc', 'UPC');
+  const article = get('styleCode', 'style_code', 'StyleCode', 'article', 'style');
+  const description = get('description', 'Description', 'itemDescription', 'item_description');
+  const retailPrice = get('retailPrice', 'retail_price', 'RetailPrice', 'price', 'harga');
+
+  // Jika semua field esensial kosong, berarti data tidak valid
+  if (!barcode && !article && !description && retailPrice === null) {
+    return null;
+  }
 
   // Parse harga - bisa format "Rp 349.900" atau angka
   const parseHarga = (val) => {
@@ -598,10 +597,15 @@ async function main() {
 }
 
 // ============================================================
-// RUN
+// EXPORTS & RUN
 // ============================================================
-main().catch(async (err) => {
-  console.error('💥 Fatal error:', err);
-  await prisma.$disconnect();
-  process.exit(1);
-});
+export { autoLogin, fetchItemDetail, fetchItemStock, parseServerActionResponse, extractProductFields };
+
+if (process.argv[1]?.endsWith('sync_mds_bisa_full.mjs')) {
+  main().catch(async (err) => {
+    console.error('💥 Fatal error:', err);
+    await prisma.$disconnect();
+    process.exit(1);
+  });
+}
+
