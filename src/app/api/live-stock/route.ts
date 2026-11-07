@@ -31,3 +31,4 @@ export async function GET(req: NextRequest) {
   const result = await checkSingleItemStock(String(sku));
   return NextResponse.json(result);
 }
+
