@@ -1,0 +1,75 @@
+name: Retail Sync Engine (MDS BISA & Matahari Catalog)
+
+on:
+  schedule:
+    # 02:30 UTC = 09:30 WIB (Toko 719 baru buka setiap hari)
+    - cron: '30 2 * * *'
+
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Pilih aksi sinkronisasi yang dijalankan'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - mds-bisa
+          - photos
+      force:
+        description: 'Paksa sinkronisasi walau di luar jam operasional toko (force bypass)'
+        required: false
+        default: false
+        type: boolean
+
+  repository_dispatch:
+    types: [trigger-sync-engine, trigger-mds-bisa, trigger-photos]
+
+concurrency:
+  group: retail-sync-group
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Run Synchronization Engine
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js Environment (v20)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: 📦 Install Node Dependencies
+        run: |
+          npm install --no-audit --prefer-offline
+
+      - name: ⚙️ Generate Prisma Client
+        run: |
+          npx prisma generate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+
+      - name: 🏪 Run Trigger 1 — MDS BISA Sync (Data, Barcode, Stok & Style Code)
+        if: ${{ github.event.inputs.action == 'all' || github.event.inputs.action == 'mds-bisa' || github.event_name == 'schedule' || github.event.action == 'trigger-mds-bisa' || github.event.action == 'trigger-sync-engine' || github.event_name == 'workflow_dispatch' && github.event.inputs.action == '' }}
+        run: |
+          FORCE_FLAG="${{ github.event.inputs.force == 'true' && '--force' || '' }}"
+          node scripts/sync_mds_bisa_full.mjs $FORCE_FLAG
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+          MDS_SESSION_COOKIE: ${{ secrets.MDS_SESSION_COOKIE }}
+
+      - name: 🖼️ Run Trigger 2 — Matahari Photo Catalog Sync
+        if: ${{ github.event.inputs.action == 'all' || github.event.inputs.action == 'photos' || github.event_name == 'schedule' || github.event.action == 'trigger-photos' || github.event.action == 'trigger-sync-engine' }}
+        run: |
+          node scripts/sync_matahari_images.js
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}

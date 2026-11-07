@@ -66,6 +66,7 @@ const MAX_RETRIES = 3;
 
 // Parse args
 const isDryRun = process.argv.includes('--dry-run');
+const isForce = process.argv.includes('--force');
 const targetSku = process.argv.find(a => a.startsWith('--sku='))?.split('=')[1];
 
 // ============================================================
@@ -414,9 +415,10 @@ async function main() {
   console.log('');
   
   if (isDryRun) console.log('🏃 MODE: DRY RUN (tidak ada yang ditulis ke DB)\n');
+  if (isForce) console.log('⚡ MODE: FORCE (melewati batasan jam operasional toko)\n');
 
   // --- Cek jam operasional ---
-  if (!isDryRun && !targetSku && !isTokoBuka()) {
+  if (!isDryRun && !targetSku && !isForce && !isTokoBuka()) {
     console.warn('⚠️  PERINGATAN: Sekarang di luar jam operasional toko (09:00-21:30 WIB).');
     console.warn('   Server SQL toko 719 kemungkinan OFFLINE. Sync akan banyak error.');
     console.warn('   Lanjut tetap? Tekan Ctrl+C untuk batal, atau tunggu 5 detik...\n');

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { ArrowLeft, UploadCloud, FileType, CheckCircle2, AlertCircle, Loader2, Trash2, RefreshCw, Image } from "lucide-react";
+import { ArrowLeft, UploadCloud, FileType, CheckCircle2, AlertCircle, Loader2, Trash2, RefreshCw, Image, ExternalLink, Play, Zap } from "lucide-react";
 import Link from "next/link";
 import { PinModal } from "@/components/PinModal";
 import { AlertModal } from "@/components/AlertModal";
@@ -26,6 +26,9 @@ export default function UpdateProdukPage() {
   // Trigger 2: Photo sync
   const [isPhotoSyncing, setIsPhotoSyncing] = useState(false);
   const [photoSyncResult, setPhotoSyncResult] = useState<{ success: boolean; message: string; stats?: any } | null>(null);
+  // Trigger 3: GitHub Actions Dispatch
+  const [isGhDispatching, setIsGhDispatching] = useState(false);
+  const [ghDispatchResult, setGhDispatchResult] = useState<{ success: boolean; message: string; actionsUrl?: string; help?: string } | null>(null);
   const [alertState, setAlertState] = useState<{isOpen: boolean; title: string; message: string; type: "error" | "success" | "warning"}>({isOpen: false, title: "", message: "", type: "error"});
   const [currentUserNik, setCurrentUserNik] = useState<string | null>(null);
   const [blobFiles, setBlobFiles] = useState<any[]>([]);
@@ -296,6 +299,31 @@ export default function UpdateProdukPage() {
       setPhotoSyncResult({ success: false, message: err.message || "Kesalahan jaringan." });
     } finally {
       setIsPhotoSyncing(false);
+    }
+  };
+
+  // ============================================================
+  // TRIGGER 3: Dispatch ke GitHub Actions Cloud Runner
+  // ============================================================
+  const handleGitHubDispatch = async (action: 'all' | 'mds-bisa' | 'photos' = 'all') => {
+    setIsGhDispatching(true);
+    setGhDispatchResult(null);
+    try {
+      const res = await fetch("/api/admin/trigger/github-dispatch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, force: true }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setGhDispatchResult({ success: true, message: data.message, actionsUrl: data.actionsUrl });
+      } else {
+        setGhDispatchResult({ success: false, message: data.error || "Gagal memicu GitHub Actions.", help: data.help });
+      }
+    } catch (err: any) {
+      setGhDispatchResult({ success: false, message: err.message || "Kesalahan jaringan." });
+    } finally {
+      setIsGhDispatching(false);
     }
   };
 
@@ -635,6 +663,70 @@ export default function UpdateProdukPage() {
                   <p className="mt-0.5 opacity-80">
                     DB: {photoSyncResult.stats.total} | Update: {photoSyncResult.stats.updated} | CDN probe: {photoSyncResult.stats.cdnFallback} | Tanpa foto: {photoSyncResult.stats.noPhoto}
                   </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Trigger 3: GitHub Actions Cloud Runner */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-gradient-to-r from-slate-900 to-indigo-950 text-white rounded-xl shadow-sm border border-slate-800 mt-1">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 text-[10px] font-extrabold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full flex items-center gap-1">
+                  <Zap className="w-2.5 h-2.5 text-emerald-400" /> REKOMENDASI
+                </span>
+                <p className="font-bold text-sm text-slate-100">Mesin Cloud GitHub Actions</p>
+              </div>
+              <p className="text-xs text-slate-400 mt-1">
+                Jalankan full sync di server GitHub (bebas batas waktu 60 detik Vercel, tahan hingga 6 jam). Otomatis aktif setiap 09:30 WIB.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => handleGitHubDispatch('all')}
+                disabled={isGhDispatching}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 text-xs font-black rounded-lg transition-colors disabled:opacity-50 shadow-sm"
+              >
+                {isGhDispatching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+                {isGhDispatching ? "Mengirim sinyal..." : "Picu Cloud Sync"}
+              </button>
+              <a
+                href="https://github.com/luqmanmenmen/CheckPrice/actions"
+                target="_blank"
+                rel="noreferrer"
+                className="p-2 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors border border-slate-700"
+                title="Buka tab GitHub Actions"
+              >
+                <ExternalLink className="w-4 h-4" />
+              </a>
+            </div>
+          </div>
+
+          {/* Result GitHub Dispatch */}
+          {ghDispatchResult && (
+            <div className={`flex items-start gap-2 p-3 rounded-lg text-xs font-medium border ${
+              ghDispatchResult.success
+                ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                : "bg-amber-50 border-amber-200 text-amber-800"
+            }`}>
+              {ghDispatchResult.success
+                ? <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600" />
+                : <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
+              }
+              <div className="flex-1">
+                <p className="font-bold">{ghDispatchResult.message}</p>
+                {ghDispatchResult.actionsUrl && (
+                  <a
+                    href={ghDispatchResult.actionsUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-emerald-700 hover:underline font-bold mt-1 text-[11px]"
+                  >
+                    Pantau proses live di GitHub Actions <ExternalLink className="w-3 h-3" />
+                  </a>
+                )}
+                {ghDispatchResult.help && (
+                  <p className="text-[11px] opacity-90 mt-1">{ghDispatchResult.help}</p>
                 )}
               </div>
             </div>
