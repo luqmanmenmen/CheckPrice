@@ -48,7 +48,20 @@ export async function POST(req: Request) {
     const action = body.action || 'all'; // 'all' | 'mds-bisa' | 'photos'
     const force = body.force === true;
 
-    const githubToken = process.env.GITHUB_TOKEN || process.env.GH_PAT;
+    let githubToken = process.env.GITHUB_TOKEN || process.env.GH_PAT;
+
+    // Fallback: Ambil token dari Supabase Storage yang aman jika belum di-set di Vercel
+    if (!githubToken) {
+      try {
+        const { supabase } = await import('@/lib/supabaseClient');
+        const { data, error } = await supabase.storage.from('excel-uploads').download('secrets/gh_token.txt');
+        if (data && !error) {
+          githubToken = (await data.text()).trim();
+        }
+      } catch (e) {
+        console.warn('[GITHUB-DISPATCH] Gagal membaca fallback token dari Storage:', e);
+      }
+    }
 
     if (!githubToken) {
       return NextResponse.json({
