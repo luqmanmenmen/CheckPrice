@@ -533,91 +533,107 @@ async function main() {
 
   console.log(`🔄 Memulai sync ${skusToProcess.length} SKU...\n`);
 
-  for (let i = 0; i < skusToProcess.length; i++) {
-    const sku = skusToProcess[i];
-    const progress = `[${i + 1}/${skusToProcess.length}]`;
+  const CONCURRENCY = targetSku ? 1 : 3;
+  let cursor = 0;
+  let storeOfflineTriggered = false;
+  let sessionExpiredTriggered = false;
+  let isRelogging = false;
 
-    // Ambil detail dari MDS BISA
-    const rawDetail = await fetchItemDetail(sku, cookie);
+  async function worker(workerId) {
+    while (cursor < skusToProcess.length && !storeOfflineTriggered && !sessionExpiredTriggered) {
+      const idx = cursor++;
+      if (idx >= skusToProcess.length) break;
 
-    // Cek session expired → harus re-login
-    if (rawDetail._sessionExpired) {
-      console.log('\n🔄 Session expired! Mencoba re-login...');
-      try {
-        cookie = await autoLogin();
-        // Retry SKU ini
-        const retryDetail = await fetchItemDetail(sku, cookie);
-        if (retryDetail._sessionExpired) {
-          console.error('❌ Re-login gagal, session tetap tidak valid. Hentikan sync.');
+      const sku = skusToProcess[idx];
+      const progress = `[${idx + 1}/${skusToProcess.length}]`;
+
+      // Ambil detail dari MDS BISA
+      let rawDetail = await fetchItemDetail(sku, cookie);
+
+      // Cek session expired → harus re-login
+      if (rawDetail._sessionExpired) {
+        if (!isRelogging) {
+          isRelogging = true;
+          console.log('\n🔄 Session expired! Mencoba re-login...');
+          try {
+            cookie = await autoLogin();
+            isRelogging = false;
+          } catch {
+            sessionExpiredTriggered = true;
+            stats.sessionExpired = true;
+            console.error('❌ Tidak bisa re-login. Hentikan sync.');
+            break;
+          }
+        } else {
+          await delay(1500);
+        }
+        rawDetail = await fetchItemDetail(sku, cookie);
+        if (rawDetail._sessionExpired) {
+          sessionExpiredTriggered = true;
           break;
         }
-        // Lanjut dengan data baru
-        Object.assign(rawDetail, retryDetail);
-        delete rawDetail._sessionExpired;
-      } catch {
-        stats.sessionExpired = true;
-        console.error('❌ Tidak bisa re-login. Hentikan sync.');
-        break;
       }
-    }
 
-    // Cek toko offline
-    if (rawDetail._storeOffline) {
-      stats.storeOffline++;
-      if (stats.storeOffline === 1) {
-        console.warn(`\n🏪 [INFO] TOKO 719 OFFLINE: SQL Server lokal tidak terjangkau (di luar jam 09:00-21:30 WIB).`);
-        console.warn(`   Melewati sync MDS BISA. Stok & barcode di Supabase tetap aman terjaga.\n`);
+      // Cek toko offline
+      if (rawDetail._storeOffline) {
+        stats.storeOffline++;
+        if (stats.storeOffline === 1) {
+          console.warn(`\n🏪 [INFO] TOKO 719 OFFLINE: SQL Server lokal tidak terjangkau (di luar jam 09:00-21:30 WIB).`);
+          console.warn(`   Melewati sync MDS BISA. Stok & barcode di Supabase tetap aman terjaga.\n`);
+        }
+        if (stats.storeOffline >= 3) {
+          storeOfflineTriggered = true;
+          console.log(`🛑 Menghentikan sync MDS BISA karena komputer toko sedang offline/tutup. Menunggu jam operasional buka (09:00 WIB).`);
+          break;
+        }
+        continue;
       }
-      if (stats.storeOffline >= 3) {
-        console.log(`🛑 Menghentikan sync MDS BISA karena komputer toko sedang offline/tutup. Menunggu jam operasional buka (09:00 WIB).`);
-        break;
+
+      if (rawDetail._error) {
+        stats.errors++;
+        if (idx < 5 || idx % 50 === 0) {
+          console.error(`${progress} ❌ SKU ${sku}: ${rawDetail._error}`);
+        }
+        continue;
       }
-      continue;
-    }
 
-    if (rawDetail._error) {
-      stats.errors++;
-      if (i < 5 || i % 50 === 0) {
-        console.error(`${progress} ❌ SKU ${sku}: ${rawDetail._error}`);
+      // Extract fields
+      const fields = extractProductFields(rawDetail);
+      if (!fields) {
+        stats.skipped++;
+        continue;
       }
-      continue;
-    }
 
-    // Extract fields
-    const fields = extractProductFields(rawDetail);
-    if (!fields) {
-      stats.skipped++;
-      continue;
-    }
-
-    // Log progress
-    const barcodeStr = fields.barcode ? `barcode:${fields.barcode}` : 'no-barcode';
-    const articleStr = fields.article ? `article:${fields.article}` : 'no-article';
-    
-    // Upsert ke DB
-    const result = await upsertProduct(sku, fields);
-    
-    if (result.success || result.dryRun) {
-      stats.success++;
-      if (i < 5 || i % 20 === 0) {
-        console.log(`${progress} ✅ SKU ${sku} | ${barcodeStr} | ${articleStr} | stok:${fields.stok}`);
+      // Log progress
+      const barcodeStr = fields.barcode ? `barcode:${fields.barcode}` : 'no-barcode';
+      const articleStr = fields.article ? `article:${fields.article}` : 'no-article';
+      
+      // Upsert ke DB
+      const result = await upsertProduct(sku, fields);
+      
+      if (result.success || result.dryRun) {
+        stats.success++;
+        if (idx < 5 || idx % 25 === 0) {
+          console.log(`${progress} (W${workerId}) ✅ SKU ${sku} | ${barcodeStr} | ${articleStr} | stok:${fields.stok}`);
+        }
+      } else if (result.notFound) {
+        stats.notFound++;
+        if (idx < 5) console.log(`${progress} 🆕 SKU ${sku} tidak ada di DB (produk baru)`);
+      } else if (result.duplicateBarcode) {
+        stats.duplicateBarcode++;
+      } else if (result.error) {
+        stats.errors++;
+        console.error(`${progress} ❌ DB Error SKU ${sku}: ${result.error}`);
       }
-    } else if (result.notFound) {
-      stats.notFound++;
-      // SKU ada di MDS BISA tapi tidak di DB kita → log sebagai produk baru
-      if (i < 5) console.log(`${progress} 🆕 SKU ${sku} tidak ada di DB (produk baru)`);
-    } else if (result.duplicateBarcode) {
-      stats.duplicateBarcode++;
-    } else if (result.error) {
-      stats.errors++;
-      console.error(`${progress} ❌ DB Error SKU ${sku}: ${result.error}`);
-    }
 
-    // Delay antar request (rate limiting protection)
-    if (i < skusToProcess.length - 1) {
+      // Delay antar request per worker (rate limiting protection)
       await delay(REQUEST_DELAY_MS);
     }
   }
+
+  console.log(`🚀 Menjalankan ${CONCURRENCY} worker paralel (percepatan sync 3x lipat)...\n`);
+  const workers = Array.from({ length: CONCURRENCY }, (_, i) => worker(i + 1));
+  await Promise.all(workers);
 
   // --- STEP 4: Ringkasan ---
   console.log('\n');

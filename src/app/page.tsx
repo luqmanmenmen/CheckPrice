@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react";
 import dynamic from "next/dynamic";
-import { Search, ScanText, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle, ArrowLeft, CloudDownload, Loader2, Menu, Sparkles, ArrowRight, Gift, Maximize2 } from "lucide-react";
+import { Search, ScanText, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle, ArrowLeft, CloudDownload, Loader2, Menu, Sparkles, ArrowRight, Gift, Maximize2, Zap } from "lucide-react";
 import { useEffect } from "react";
 import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
 import PullToRefresh from "@/components/PullToRefresh";
@@ -218,6 +218,35 @@ export default function Home() {
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
+  };
+
+  const [checkingLiveStock, setCheckingLiveStock] = useState(false);
+  const [liveStockVerified, setLiveStockVerified] = useState<string | null>(null);
+
+  const handleCheckLiveStock = async () => {
+    if (!product?.sku || checkingLiveStock) return;
+    setCheckingLiveStock(true);
+    try {
+      const res = await fetch("/api/product/live-stock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sku: product.sku }),
+      });
+      const data = await res.json();
+      if (data.success && data.stok !== undefined) {
+        setProduct((prev) => prev ? { ...prev, stok: data.stok } : null);
+        setLiveStockVerified(`Live: ${data.stok} pcs`);
+        showToast(`Stok terverifikasi live StoreHub: ${data.stok} pcs`, "success");
+      } else if (data.storeOffline) {
+        showToast(data.message || "Komputer toko 719 offline (buka 09:00 - 21:30 WIB)", "error");
+      } else {
+        showToast(data.message || "Gagal sinkron stok live", "error");
+      }
+    } catch {
+      showToast("Gagal menghubungi server live StoreHub", "error");
+    } finally {
+      setCheckingLiveStock(false);
+    }
   };
 
   const [submitting, setSubmitting] = useState(false);
@@ -1635,18 +1664,40 @@ export default function Home() {
                 )}
                 
                 {/* Stok Box */}
-                <div className="pt-4 border-t flex items-center justify-between">
+                <div className="pt-4 border-t flex items-center justify-between gap-2">
                   <div>
-                    <p className="text-xs font-bold text-slate-500 uppercase">Sisa Stok (EOH)</p>
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-xs font-bold text-slate-500 uppercase">Sisa Stok (EOH)</p>
+                      {liveStockVerified && (
+                        <span className="text-[10px] font-black text-emerald-700 bg-emerald-100/90 border border-emerald-300 px-1.5 py-0.5 rounded-md animate-in fade-in">
+                          ✓ {liveStockVerified}
+                        </span>
+                      )}
+                    </div>
                     <p className="text-[10px] text-slate-400">Total ketersediaan unit fisik</p>
                   </div>
-                  <span className={`px-4 py-1.5 rounded-lg text-lg font-black tracking-wide ${
-                    (product.stok ?? 0) > 10 ? 'bg-green-100 text-green-700' :
-                    (product.stok ?? 0) > 0 ? 'bg-amber-100 text-amber-700' :
-                    'bg-red-100 text-red-700'
-                  }`}>
-                    {product.stok ?? 0} <span className="text-[10px] font-bold uppercase opacity-80">pcs</span>
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleCheckLiveStock}
+                      disabled={checkingLiveStock}
+                      title="Periksa stok langsung ke server kasir toko 719"
+                      className="flex items-center gap-1 px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-[11px] font-bold transition-all disabled:opacity-50 active:scale-95 shadow-2xs"
+                    >
+                      {checkingLiveStock ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-600" />
+                      ) : (
+                        <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
+                      )}
+                      <span>{checkingLiveStock ? "Cek..." : "Live MDS"}</span>
+                    </button>
+                    <span className={`px-4 py-1.5 rounded-lg text-lg font-black tracking-wide ${
+                      (product.stok ?? 0) > 10 ? 'bg-green-100 text-green-700' :
+                      (product.stok ?? 0) > 0 ? 'bg-amber-100 text-amber-700' :
+                      'bg-red-100 text-red-700'
+                    }`}>
+                      {product.stok ?? 0} <span className="text-[10px] font-bold uppercase opacity-80">pcs</span>
+                    </span>
+                  </div>
                 </div>
               </div>
 

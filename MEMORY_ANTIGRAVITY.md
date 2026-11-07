@@ -287,11 +287,24 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   - **Trigger 1A — MDS BISA Full Sync (`action: 'mds-bisa'`):** Menjalankan loop penuh 9.500 SKU untuk mendeteksi & mendaftarkan produk baru, barcode UPC, style code, warna, ukuran, deskripsi, harga normal, dan stok fisik.
   - **Trigger 1B — Fast Stock-Only Sync (`action: 'stock-only'` / flag `--stock-only`):** Khusus memperbarui angka stok fisik (`stok`) untuk SKU aktif toko 719 tanpa menimpa data master lainnya. Jauh lebih cepat, efisien, dan menghemat kuota runner.
 
-* **Jadwal Otomasi GitHub Actions yang Aman dari Limit Kuota:**
-  - Alih-alih polling setiap 10 menit non-stop yang dapat menghabiskan kuota gratis bulanan (2.000 menit) dalam hitungan jam, GitHub Actions dikonfigurasi terjadwal pada jam-jam kunci operasional toko 719:
-    1. **09:30 WIB:** Buka toko pagi (Full Sync MDS BISA + Promo).
-    2. **14:00 WIB:** Pergantian shift siang (Fast Stock-Only Sync).
-    3. **18:30 WIB:** Menjelang peak hours malam (Fast Stock-Only Sync).
+## 22. Implementasi Concurrency 3 Worker, Otomasi 2x Sehari & Tombol Live Stock On-Demand
+
+* **Concurrency 3 Worker Paralel (`scripts/sync_mds_bisa_full.mjs`):**
+  - Mengubah pemrosesan loop sekuensial menjadi sistem worker pool paralel dengan 3 worker simultan.
+  - Waktu eksekusi 9.529 SKU terpangkas dari **55 menit menjadi hanya ±18 menit**.
+  - Rate limiting tetap aman dengan delay 350ms per worker, auto-relogin jika session expired, dan proteksi instan jika server toko offline.
+
+* **Penjadwalan 2x Sehari (Pagi & Malam Closing) di GitHub Actions:**
+  - **Pukul 09:30 WIB (Pagi):** Full Sync 9.500 SKU (Mendeteksi produk baru, barcode, promo, dan stok awal).
+  - **Pukul 21:00 WIB (Malam Closing):** Full Sync 9.500 SKU (Merekap penerimaan barang receiving DC dan penjualan harian sebelum komputer kasir dimatikan pukul 21:30 WIB).
+  - **Kalkulasi Kuota Bulanan:** 18 menit $\times$ 2 kali $\times$ 30 hari = **1.080 menit per bulan**. Kuota gratis GitHub (2.000 menit) terpakai 54%, menyisakan **920 menit free buffer cadangan**.
+
+* **Fitur On-Demand "⚡ Live MDS" di Layar Kasir/Detail Barang:**
+  - Modul client: [`src/lib/mdsBisaClient.ts`](file:///c:/Max%20Display/price-checker/src/lib/mdsBisaClient.ts) dengan in-memory cookie caching.
+  - Endpoint API: [`src/app/api/product/live-stock/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/product/live-stock/route.ts)
+  - Tombol **`⚡ Live MDS`** di samping kotak `Sisa Stok (EOH)` pada [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx).
+  - Mengambil data stok riil 1 SKU ke StoreHub dalam **300ms**, langsung mengupdate angka stok di Supabase dan layar kasir dengan indikator status hijau. Menggunakan **0 menit kuota GitHub Actions**.
+
 
 
 

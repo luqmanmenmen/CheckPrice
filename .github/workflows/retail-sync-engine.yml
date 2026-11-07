@@ -2,12 +2,10 @@ name: Retail Sync Engine (MDS BISA & Matahari Catalog)
 
 on:
   schedule:
-    # 02:30 UTC = 09:30 WIB (Toko 719 baru buka: Full Sync)
+    # 02:30 UTC = 09:30 WIB (Pagi buka toko: Full Sync MDS BISA & Promo)
     - cron: '30 2 * * *'
-    # 07:00 UTC = 14:00 WIB (Pergantian shift siang: Update Stok)
-    - cron: '0 7 * * *'
-    # 11:30 UTC = 18:30 WIB (Sore peak hours: Update Stok)
-    - cron: '30 11 * * *'
+    # 14:00 UTC = 21:00 WIB (Malam closing toko: Full Sync MDS BISA & Sisa Stok)
+    - cron: '0 14 * * *'
 
   workflow_dispatch:
     inputs:
@@ -79,7 +77,7 @@ jobs:
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
 
       - name: 🏪 Run Trigger 1A — MDS BISA Full Sync (Produk Baru, Barcode, Style Code & Stok)
-        if: ${{ github.event.inputs.action == 'all' || github.event.inputs.action == 'mds-bisa' || (github.event_name == 'schedule' && github.event.schedule == '30 2 * * *') || github.event.action == 'trigger-mds-bisa' || github.event.action == 'trigger-sync-engine' || (github.event_name == 'workflow_dispatch' && github.event.inputs.action == '') }}
+        if: ${{ github.event.inputs.action == 'all' || github.event.inputs.action == 'mds-bisa' || github.event_name == 'schedule' || github.event.action == 'trigger-mds-bisa' || github.event.action == 'trigger-sync-engine' || (github.event_name == 'workflow_dispatch' && github.event.inputs.action == '') }}
         run: |
           FORCE_FLAG="${{ github.event.inputs.force == 'true' && '--force' || '' }}"
           node scripts/sync_mds_bisa_full.mjs $FORCE_FLAG
@@ -89,7 +87,7 @@ jobs:
           MDS_SESSION_COOKIE: ${{ secrets.MDS_SESSION_COOKIE }}
 
       - name: ⚡ Run Trigger 1B — Fast Stock-Only Sync (Khusus Update Stok Toko)
-        if: ${{ github.event.inputs.action == 'stock-only' || (github.event_name == 'schedule' && github.event.schedule != '30 2 * * *') || github.event.action == 'trigger-stock-only' }}
+        if: ${{ github.event.inputs.action == 'stock-only' || github.event.action == 'trigger-stock-only' }}
         run: |
           FORCE_FLAG="${{ github.event.inputs.force == 'true' && '--force' || '' }}"
           node scripts/sync_mds_bisa_full.mjs --stock-only $FORCE_FLAG
