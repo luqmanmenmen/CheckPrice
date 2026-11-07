@@ -10,17 +10,17 @@ load_dotenv()
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 def is_gemini_available() -> bool:
-    """Periksa apakah GEMINI_API_KEY sudah disetel dan merupakan format AI Studio API key."""
+    """Periksa apakah GEMINI_API_KEY sudah disetel."""
     key = os.getenv("GEMINI_API_KEY", "").strip()
-    return bool(key) and key.startswith("AIza")
+    return bool(key) and len(key) > 10
 
-def call_gemini(prompt: str, model: str = "gemini-flash-latest") -> Optional[str]:
+def call_gemini(prompt: str, model: str = "gemini-1.5-flash") -> Optional[str]:
     """
     Panggil Google Gemini REST API secara langsung.
     Menggunakan response_mime_type='application/json' agar output terjamin JSON valid.
     """
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    if not api_key or not api_key.startswith("AIza"):
+    if not api_key:
         return None
 
     # URL endpoint Google Gemini Generative Language API
