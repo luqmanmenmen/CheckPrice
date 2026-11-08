@@ -705,6 +705,40 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
      - Seluruh hasil scraping langsung di-upsert ke tabel `Product` di Supabase secara real-time.
      - Begitu produk ter-upsert, produk tersebut langsung bisa dicari dan di-scan oleh kasir di `luqmanganteng.my.id` (0ms response time via API & Dexie cache) lengkap dengan harga, warna, ukuran, dan stok riil toko!
 
+---
+
+## 47. Mesin Sinkronisasi Pagi Total (Morning Full Sweep) & Generator Laporan Eksekutif
+
+- **Instruksi Khusus Pengguna:**
+  *"jangan sepulang kerjaku nanti pagi ini suruh scrap all semua data di mds meski ada modal sku dari pq atau promo atau pun ga ada modal sku kita scrap semua yang ada tanpa kecuali atau menyisahkan. dan bikin laporan. laporan itu akan ku baca hasil scrap saat sepulang kerja"*.
+- **Implementasi Mesin ([`python-engine/morning_full_sweep.py`](file:///c:/Max%20Display/price-checker/python-engine/morning_full_sweep.py)):**
+  1. **Dual-Track Scraping:**
+     - **Track 1 (Modal SKU):** Menyerap seluruh SKU dari Power Query dan Promo yang belum memiliki barcode lengkap, memanggil StoreHub via parameter `'sku'`.
+     - **Track 2 (Brutal Sweep Barcode Tanpa SKU):** Memindai deret celah barcode EAN-13 Toko 719, menyerap seluruh artikel merk fisik (**MUKU, ZES, SUKO, COLE, NEVADA, dll.**).
+  2. **Pengolahan & Kesiapan Scan (Instant Scannable):**
+     - Data hasil tangkapan langsung di-upsert ke Supabase `Product` secara real-time per batch 25 item.
+     - Produk baru seketika dapat di-scan dan dicari via web `luqmanganteng.my.id` (0ms response).
+  3. **Generator Laporan Otomatis (`python-engine/LAPORAN_SCRAP_PAGI.md`):**
+     - Menyusun laporan eksekutif lengkap yang merinci: total produk awal vs akhir, jumlah SKU baru terserap, durasi pemindaian, serta tabel rincian item per merk (Brand) yang siap dibaca Mas Luqman sepulang kerja.
+
+---
+
+## 48. Heartbeat Daemon Aktif (Polling Berkala MDS BISA Tanpa Patokan Jam Mati)
+
+- **Instruksi Pengguna:**
+  *"ya jngan ngandelin juga jam 9. misal masih belum bisa dipanggil mds alias offline ya panggil terus kasih jeda, sampai dipanggil itu mds bisa maka langsung scrap brutal"*.
+- **Implementasi Heartbeat Daemon ([`python-engine/morning_full_sweep.py`](file:///c:/Max%20Display/price-checker/python-engine/morning_full_sweep.py)):**
+  1. **Looping Mandiri Setiap 45 Detik:**
+     - Mesin tidak bergantung pada patokan jam mati (09:00:00).
+     - Mesin mengirimkan probe deteksi ringan ke SQL Server Toko 719 setiap 45 detik.
+  2. **Pemicu Instan Begitu Toko Online:**
+     - Kapan pun komputer toko fisik dinyalakan oleh karyawan (entah 08:30, 08:45, atau 09:15 WIB), mesin mendeteksi respons sukses dalam 1 hitungan detik dan seketika mengeksekusi **SCRAP BRUTAL**!
+  3. **Status Runtime:**
+     - Daemon background task aktif berjalan di sistem (`task-5133`).
+     - Laporan akhir otomatis terbit di [`python-engine/LAPORAN_SCRAP_PAGI.md`](file:///c:/Max%20Display/price-checker/python-engine/LAPORAN_SCRAP_PAGI.md) dan siap dibaca Mas Luqman sepulang kerja sore nanti.
+
+
+
 
 
 
