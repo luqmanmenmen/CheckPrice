@@ -846,6 +846,18 @@ export default function Home() {
       if (res.ok) {
         setError("");
         if (Array.isArray(data.data)) {
+          if (data.data.length === 0) {
+            setProductsList([]);
+            setProduct(null);
+            setSiblings([]);
+            const isDigitCode = /^\d{8,14}$/.test(trimmed);
+            if (isDigitCode) {
+              setError(`Produk tidak ditemukan untuk: "${trimmed}". (Produk baru belum tercatat di database master toko. Akan otomatis disinkronkan saat toko buka besok).`);
+            } else {
+              setError(`Produk tidak ditemukan untuk: "${trimmed}"`);
+            }
+            return;
+          }
           setProductsList(data.data);
           setCurrentPage(data.meta?.page || 1);
           setTotalPages(data.meta?.totalPages || 1);

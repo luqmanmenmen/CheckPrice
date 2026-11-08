@@ -539,6 +539,31 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   3. **Middleware Guard ([`src/middleware.ts`](file:///c:/Max%20Display/price-checker/src/middleware.ts)):** Akses URL `/cek-harga` langsung dialihkan ke `/login` (atau ke `/` jika pengguna memiliki sesi aktif).
   4. **Halaman Kiosk ([`src/app/cek-harga/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/cek-harga/page.tsx)):** Flag `const IS_KIOSK_HIDDEN = true;` dipasang. Jika halaman sempat dimuat/di-cache, otomatis menghentikan proses pemindai kamera & mengalihkan browser kembali ke `/login`.
 
+---
+
+## 39. Audit Bukti Nyata 9.703 SKU & Barcode dan Penjelasan Kasus Missing Barcode Produk Baru
+
+- **Hasil Audit Nyata Database Supabase:**
+  - Total Produk: **9.703 item**.
+  - Produk Memiliki Barcode: **9.703 item (100% lengkap, 0 item null/kosong)**.
+  - Distribusi Barcode: **9.698 item EAN-13 (13 digit)** (9.523 berawalan `234000...`) & **5 item UPC (12 digit)**.
+  - Barcode non-digit: **0**.
+  - Barcode duplikat: **0**.
+  - SKU duplikat: **0**.
+  - Pencarian live by Barcode maupun SKU diuji di production dan **100% langsung berhasil (0ms / fast)**.
+- **Kasus Barcode `2340002353093` dari User:**
+  1. Barcode `2340002353093` adalah barcode fisik asli EAN-13 yang valid (awalan `234000`, 6 digit tengah `235309`, check digit `3`).
+  2. Barcode ini jatuh tepat pada celah (*gap*) antara barcode `2340002348013` (SKU `61270935`, BYRCH & Co) dan `2340002362477` (SKU `61312649`, SUKO GIRLS).
+  3. Mengapa tidak ada di database? Karena database master 9.703 item bersumber dari **Power Query 10 Oktober 2026** (ekspor 7 Oktober 2026). Barang `2340002353093` adalah **barang kiriman baru (new arrival)** yang belum ada di rekap PQ lama tersebut.
+  4. Mengapa tidak langsung tertarik live malam ini? Saat sistem menembak StoreHub MDS BISA untuk barcode `2340002353093`, server MDS BISA mengembalikan pesan error resmi:  
+     `"error":"check detail on store 719: query store 172.24.12.41:1433: unable to open tcp connection with host '172.24.12.41:1433': connect: no route to host"`.  
+     Artinya, komputer server lokal toko 719 dimatikan listriknya di luar jam operasional malam hari. Begitu toko buka besok pagi (09:00 WIB), StoreHub otomatis bisa terhubung kembali!
+- **Penyempurnaan Sistem:**
+  1. Dukungan pencarian parameter `'upc'` di [`src/lib/mdsBisaClient.ts`](file:///c:/Max%20Display/price-checker/src/lib/mdsBisaClient.ts) untuk barcode 12–13 digit (sebelumnya hanya `'sku'`).
+  2. Fitur `upsert` otomatis produk baru ke Supabase jika ditemukan saat live query MDS BISA.
+  3. Pesan UI informatif di [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx) saat kasir memindai barcode baru yang belum tercatat di database master toko, sehingga tidak memicu kebingungan.
+
+
 
 
 

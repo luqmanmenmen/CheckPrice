@@ -154,7 +154,8 @@ export async function checkSingleItemStock(sku: string): Promise<{
       return await fallbackToDb('Server MDS BISA belum ada session aktif. Menampilkan stok tersimpan.');
     }
 
-    const args = ['sku', cleanSku];
+    const isUpc = /^\d{12,14}$/.test(cleanSku);
+    const args = [isUpc ? 'upc' : 'sku', cleanSku];
 
     // Beri batas timeout 6 detik agar tidak membuat kasir menunggu lama saat toko tutup
     const controller = new AbortController();
@@ -272,7 +273,9 @@ export async function checkSingleItemStock(sku: string): Promise<{
 
     const updatedVariants: Array<{ sku: string; color?: string | null; size?: string | null; stok: number }> = [];
 
-    // Update SKU saat ini terlebih dahulu
+    const itemSku = String(itemData.SKU ?? itemData.sku ?? cleanSku).trim();
+
+    // Update atau insert produk baru jika belum terdaftar di database Supabase
     try {
       const updateData: any = {
         stok: currentSkuStok,
@@ -282,13 +285,26 @@ export async function checkSingleItemStock(sku: string): Promise<{
       if (article) updateData.article = String(article).trim();
       if (hargaNormal && hargaNormal > 0) updateData.hargaNormal = hargaNormal;
 
-      await prisma.product.update({
-        where: { sku: cleanSku },
-        data: updateData,
+      await prisma.product.upsert({
+        where: { sku: itemSku },
+        update: updateData,
+        create: {
+          sku: itemSku,
+          barcode: barcode ? String(barcode).trim() : null,
+          article: article || 'PRODUK BARU',
+          description: String(itemData.Description || itemData.ItemDescription || article || 'PRODUK BARU').trim(),
+          brand: String(itemData.Brand || 'SUKO').trim(),
+          dept: String(itemData.Department || itemData.DeptName || 'SUKO').trim(),
+          color: itemData.Color || null,
+          size: itemData.Size || null,
+          hargaNormal: hargaNormal || 0,
+          stok: currentSkuStok,
+          updatedAt: new Date(),
+        }
       });
-      updatedVariants.push({ sku: cleanSku, stok: currentSkuStok });
+      updatedVariants.push({ sku: itemSku, stok: currentSkuStok });
     } catch (e) {
-      console.warn('Gagal update main SKU:', e);
+      console.warn('Gagal upsert main SKU:', e);
     }
 
     // 3. Jika ada artikel dan relatedStock dari StoreHub: perbarui SELURUH varian (warna & ukuran)
