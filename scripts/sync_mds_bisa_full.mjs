@@ -534,16 +534,8 @@ async function main() {
     }
   }
 
-  // --- HEALTH CHECK: Tunggu server toko jika IT telat menyalakan komputer ---
-  if (!isDryRun && !targetSku && !isForce) {
-    const health = await waitForStoreOnline(cookie, 35);
-    if (!health.online) {
-      console.log('🛑 Selesai (Server toko offline). Stok & data di Supabase tetap aman terjaga.\n');
-      await prisma.$disconnect();
-      process.exit(0);
-    }
-    cookie = health.cookie;
-  }
+  // Pure Direct Scraping: Langsung proses tanpa penundaan atau tunggu IT
+  console.log('🚀 Siap melakukan scraping collage data dan audit stok dari MDS BISA...\n');
 
   // --- STEP 2: Ambil list SKU dari Supabase ---
   let skusToProcess = [];
