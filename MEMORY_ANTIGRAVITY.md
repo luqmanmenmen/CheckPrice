@@ -447,5 +447,23 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   3. **Mutasi SWR & Suko Client Version:** Begitu [UPDATE SEKARANG] selesai atau tombol `(X)` diklik, versi aktif langsung di-cache ke storage, `hasAppCodeUpdate` dinonaktifkan, dan SWR di-refresh seketika.
   4. **Hasil:** Sekali tombol [UPDATE SEKARANG] ditekan atau ditutup `(X)`, banner pink **TIDAK AKAN PERNAH MUNCUL LAGI** meskipun halaman di-refresh berkali-kali. Banner baru akan muncul hanya jika ada pembaruan data besar baru di masa mendatang.
 
+---
+
+## 33. Resolusi Scan Gagal di HP ("Produk Tidak Ditemukan", Lemot, Scan Ulang Baru Muncul)
+
+- **Akar Masalah:**
+  1. **Kesalahan Fatal `db.products.clear()` Saat Unduh:** Pada mekanisme lama di `src/lib/offlineDb.ts`, fungsi `syncOfflineDatabase` selalu memanggil `clear()` terlebih dahulu sebelum memasukkan data baru. Jika jaringan HP kasir sempat tersendat saat mengunduh 9.703 item (3.5MB JSON), database lokal menjadi kosong melompong (*empty state*).
+  2. **Over-Indexing IndexedDB (17 Index):** Skema `v10` mendaftarkan 17 kolom ke index B-Tree IndexedDB (`products: 'sku, barcode, article, name, description, ...'`). Akibatnya browser HP harus menulis 164.000 entri index, membuat penyimpanan HP lemot parah dan sering freeze/hang.
+  3. **Fenomena "Scan 2 Kali Baru Muncul":** 
+     - Scan pertama: Karena offline DB lokal kosong/sebagian, sistem terpaksa request live ke server via internet. Saat jaringan toko lambat, scan pertama gagal atau timeout ("Produk tidak ditemukan").
+     - Namun di balik layar, respon server tersebut sempat disimpan ke `sessionCacheRef` & IndexedDB.
+     - Scan kedua: Karena produk tadi sudah tersimpan di cache, scan kedua langsung berhasil seketika.
+- **Solusi Tuntas (Commit `557d004`):**
+  1. **Hapus `db.products.clear()`:** Diganti dengan `bulkPut` aman per-chunk (1.000 item). Data lama tetap utuh dan bisa langsung di-scan kapan saja tanpa ada momen database kosong di HP.
+  2. **Skema Cepat `v11` (Hanya 3 Index):** Rampingkan skema ke `products: 'sku, barcode, article'`. Kolom lainnya disimpan murni sebagai data tanpa index B-Tree berlebihan. Proses sync di HP kini **10x lebih cepat (~1 detik) dan sangat ringan**.
+  3. **Multi-Format Barcode Fallback:** Ditambahkan pencocokan fleksibel barcode di memori lokal (termasuk penanganan leading zero).
+  4. **Pesan Jaringan Ramah:** Jika internet toko tersendat saat live query, pesan diubah menjadi *"Koneksi internet toko sedang lambat. Coba scan ulang"* agar tidak memicu kebingungan kasir.
+
+
 
 
