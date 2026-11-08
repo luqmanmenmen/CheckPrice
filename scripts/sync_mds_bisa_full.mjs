@@ -285,24 +285,32 @@ function parseServerActionResponse(text, sku, type = 'detail') {
 
   const lines = text.split('\n');
   
+  // Cari chunk yang berisi data result sebenarnya (biasanya di chunk 1: atau 2:)
   for (const line of lines) {
-    // Line format: "1:{...}" atau "0:{...}" tergantung response type
-    if (line.startsWith('1:') || line.startsWith('0:')) {
+    const colonIdx = line.indexOf(':');
+    if (colonIdx > 0 && colonIdx <= 3) {
       try {
-        const jsonStr = line.substring(2);
+        const jsonStr = line.substring(colonIdx + 1);
         const data = JSON.parse(jsonStr);
-        
-        // Error dari server (store offline, SQL Server unreachable)
+
+        // Jika data mengandung error database / SQL
         if (data?.error) {
-          if (data.error.includes('no route to host') || data.error.includes('unable to open tcp')) {
+          if (typeof data.error === 'string' && (data.error.includes('no route to host') || data.error.includes('unable to open tcp'))) {
             return { _storeOffline: true, error: data.error };
           }
           return { _error: data.error };
         }
-        
-        return data;
+
+        // Jika data memuat result atau status success
+        if (data?.result?.data || data?.result?.status === 'success' || (sku && data?.result?.data?.[sku])) {
+          return data;
+        }
+
+        // Fallback jika format langsung object produk
+        if (data?.VendorBarcode || data?.StockOnHand || data?.RetailPrice || data?.StyleCode) {
+          return data;
+        }
       } catch (e) {
-        // Bukan JSON valid, coba line berikutnya
         continue;
       }
     }
@@ -325,21 +333,33 @@ function parseServerActionResponse(text, sku, type = 'detail') {
 // ============================================================
 // PARSER: Ekstrak field dari response checkItemDetail
 // ============================================================
-function extractProductFields(data) {
+function extractProductFields(data, sku) {
   if (!data || data._error || data._storeOffline || data._sessionExpired || data._rawText) return null;
-  
+
+  // Unpack jika dibungkus oleh Next.js Server Action: { result: { data: { "13472861": [ {...} ] } } }
+  let item = data;
+  if (data?.result?.data) {
+    const skuKey = sku || Object.keys(data.result.data)[0];
+    const items = data.result.data[skuKey] || (Object.values(data.result.data)[0]);
+    if (Array.isArray(items) && items.length > 0) {
+      item = items[0];
+    } else if (items && typeof items === 'object') {
+      item = items;
+    }
+  }
+
   // Handle berbagai kemungkinan field name (camelCase, snake_case, Title Case)
   const get = (...keys) => {
     for (const k of keys) {
-      if (data[k] !== undefined && data[k] !== null && data[k] !== '') return data[k];
+      if (item[k] !== undefined && item[k] !== null && item[k] !== '') return item[k];
     }
     return null;
   };
 
-  const barcode = get('vendorBarcode', 'vendor_barcode', 'VendorBarcode', 'barcode', 'upc', 'UPC');
-  const article = get('styleCode', 'style_code', 'StyleCode', 'article', 'style');
-  const description = get('description', 'Description', 'itemDescription', 'item_description');
-  const retailPrice = get('retailPrice', 'retail_price', 'RetailPrice', 'price', 'harga');
+  const barcode = get('VendorBarcode', 'vendorBarcode', 'vendor_barcode', 'barcode', 'upc', 'UPC');
+  const article = get('StyleCode', 'styleCode', 'style_code', 'article', 'style');
+  const description = get('Description', 'description', 'itemDescription', 'item_description');
+  const retailPrice = get('RetailPrice', 'retailPrice', 'retail_price', 'price', 'harga');
 
   // Jika semua field esensial kosong, berarti data tidak valid
   if (!barcode && !article && !description && retailPrice === null) {
@@ -354,13 +374,13 @@ function extractProductFields(data) {
     return cleaned ? parseInt(cleaned) : null;
   };
 
-  // Parse stok - jumlahkan semua ukuran jika ada relatedStock
-  const parseStok = (data) => {
-    const direct = get('stockOnHand', 'stock_on_hand', 'StockOnHand', 'soh', 'SOH');
+  // Parse stok - langsung dari StockOnHand atau relatedStock
+  const parseStok = () => {
+    const direct = get('StockOnHand', 'stockOnHand', 'stock_on_hand', 'soh', 'SOH');
     if (direct !== null) return parseInt(direct) || 0;
     
     // Kalau ada relatedStock, jumlahkan semua
-    const related = get('relatedStock', 'related_stock', 'RelatedStock');
+    const related = get('RelatedStock', 'relatedStock', 'related_stock');
     if (related && typeof related === 'object') {
       let total = 0;
       for (const color of Object.values(related)) {
@@ -376,15 +396,15 @@ function extractProductFields(data) {
   };
 
   return {
-    barcode: get('vendorBarcode', 'vendor_barcode', 'VendorBarcode', 'barcode', 'upc', 'UPC'),
-    article: get('styleCode', 'style_code', 'StyleCode', 'article', 'style'),
-    description: get('description', 'Description', 'itemDescription', 'item_description'),
-    color: get('color', 'Color', 'colorCode', 'color_code'),
-    size: get('size', 'Size'),
-    hargaNormal: parseHarga(get('retailPrice', 'retail_price', 'RetailPrice', 'price', 'harga')),
-    stok: parseStok(data),
-    dept: get('subclassName', 'subclass_name', 'SubclassName', 'dept', 'department'),
-    rawData: data, // simpan raw untuk debugging
+    barcode: get('VendorBarcode', 'vendorBarcode', 'vendor_barcode', 'barcode', 'upc', 'UPC'),
+    article: get('StyleCode', 'styleCode', 'style_code', 'article', 'style'),
+    description: get('Description', 'description', 'itemDescription', 'item_description'),
+    color: get('COLOR', 'Color', 'color', 'colorCode', 'color_code'),
+    size: get('Size', 'size'),
+    hargaNormal: parseHarga(retailPrice),
+    stok: parseStok(),
+    dept: get('DeptName', 'GroupName', 'SubclassName', 'subclassName', 'subclass_name', 'dept', 'department'),
+    rawData: item,
   };
 }
 
@@ -670,7 +690,7 @@ async function main() {
       }
 
       // Extract fields
-      const fields = extractProductFields(rawDetail);
+      const fields = extractProductFields(rawDetail, sku);
       if (!fields) {
         stats.skipped++;
         continue;
