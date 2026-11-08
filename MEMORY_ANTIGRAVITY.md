@@ -464,6 +464,19 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   3. **Multi-Format Barcode Fallback:** Ditambahkan pencocokan fleksibel barcode di memori lokal (termasuk penanganan leading zero).
   4. **Pesan Jaringan Ramah:** Jika internet toko tersendat saat live query, pesan diubah menjadi *"Koneksi internet toko sedang lambat. Coba scan ulang"* agar tidak memicu kebingungan kasir.
 
+---
+
+## 34. Arsitektur Dual Sourcing (MDS BISA & File Promo) & Antrean Prioritas Barcode
+
+- **Konsep "Dua Peruntungan & Saling Backup" (Ide Pengguna):**
+  1. **Dedup & Efisiensi:** Jika sebuah SKU sudah berhasil di-scrap dari MDS BISA (memiliki barcode hangtag, stylecode, dan stok), maka saat file promo dibaca dan menemukan SKU yang sama, sistem cukup memperbarui harga diskon/promonya saja tanpa perlu membuang waktu/kuota scrap ulang ke StoreHub.
+  2. **Antrean Pending Barcode (Keep Dulu & Coba Lagi Besok):** Jika ada SKU baru dari file promo yang saat ditembak ke MDS BISA belum ada di SQL toko 719 (misal barang baru dari gudang pusat/DC yang belum di-receive toko), produk **TETAP DISIMPAN DI DATABASE** dengan status pending (`barcode: null`).
+  3. **Prioritas Terdepan Runner Harian:** Di [`scripts/sync_mds_bisa_full.mjs`](file:///c:/Max%20Display/price-checker/scripts/sync_mds_bisa_full.mjs) dan API trigger [`src/app/api/admin/trigger/mds-bisa/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/mds-bisa/route.ts), seluruh SKU tanpa barcode otomatis diletakkan di **baris antrean paling depan**. Setiap pagi (09:45 WIB), sistem otomatis mencoba peruntungan kembali untuk menarik Barcode UPC EAN-13 & Stok fisiknya begitu barang tersebut selesai di-receive oleh toko!
+
+
+
+
+
 
 
 

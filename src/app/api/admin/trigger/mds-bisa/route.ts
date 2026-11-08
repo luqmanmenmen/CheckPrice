@@ -215,11 +215,18 @@ export async function POST(req: Request) {
       cookie = loginCookie;
     }
 
-    // --- Ambil semua SKU ---
-    const products = await prisma.product.findMany({
+    // --- Ambil semua SKU (Prioritaskan SKU tanpa barcode di baris terdepan) ---
+    const pendingBarcode = await prisma.product.findMany({
+      where: { OR: [{ barcode: null }, { barcode: '' }] },
       select: { sku: true },
-      orderBy: { sku: 'asc' },
+      orderBy: { updatedAt: 'desc' },
     });
+    const regularProducts = await prisma.product.findMany({
+      where: { AND: [{ barcode: { not: null } }, { barcode: { not: '' } }] },
+      select: { sku: true },
+      orderBy: { updatedAt: 'asc' },
+    });
+    const products = [...pendingBarcode, ...regularProducts];
 
     const stats = {
       total: products.length,

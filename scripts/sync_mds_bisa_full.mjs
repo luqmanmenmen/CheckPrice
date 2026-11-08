@@ -606,13 +606,40 @@ async function main() {
     skusToProcess = products.map(p => p.sku);
     console.log(`   Ditemukan ${skusToProcess.length} produk aktif untuk update stok cepat\n`);
   } else {
-    console.log('📋 Mengambil list SKU dari Supabase...');
-    const products = await prisma.product.findMany({
+    console.log('📋 Mengambil list SKU dari Supabase (Dual Sourcing: Prioritaskan SKU Tanpa Barcode)...');
+    
+    // 1. Prioritas Utama: SKU yang belum punya barcode (antrean peruntungan produk baru dari promo)
+    const missingBarcode = await prisma.product.findMany({
+      where: {
+        OR: [
+          { barcode: null },
+          { barcode: '' }
+        ]
+      },
       select: { sku: true },
-      orderBy: { sku: 'asc' },
+      orderBy: { updatedAt: 'desc' },
     });
-    skusToProcess = products.map(p => p.sku);
-    console.log(`   Ditemukan ${skusToProcess.length} produk di database\n`);
+
+    // 2. SKU yang sudah ber-barcode (update stok rutin & collage data)
+    const existingProducts = await prisma.product.findMany({
+      where: {
+        AND: [
+          { barcode: { not: null } },
+          { barcode: { not: '' } }
+        ]
+      },
+      select: { sku: true },
+      orderBy: { updatedAt: 'asc' },
+    });
+
+    const pendingList = missingBarcode.map(p => p.sku);
+    const existingList = existingProducts.map(p => p.sku);
+    skusToProcess = [...pendingList, ...existingList];
+
+    if (pendingList.length > 0) {
+      console.log(`   🎯 Ditemukan ${pendingList.length} SKU BARU/PENDING tanpa barcode (Diproses Terdepan!)`);
+    }
+    console.log(`   📦 Ditemukan ${existingList.length} produk reguler di database. Total: ${skusToProcess.length} SKU\n`);
   }
 
   // --- STEP 3: Loop dan sync ---
