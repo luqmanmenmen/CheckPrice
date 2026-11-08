@@ -89,6 +89,14 @@ export default function Login() {
     } else {
       setShift("1");
     }
+
+    // Deteksi jika dialihkan karena jam shift berakhir
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("reason") === "shift_ended") {
+        setError("⏰ Sesi shift Anda telah berakhir demi keamanan operasional toko. Silakan login kembali saat jam shift Anda dimulai.");
+      }
+    }
   }, []);
 
   const router = useRouter();

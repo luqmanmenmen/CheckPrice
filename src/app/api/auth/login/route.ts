@@ -47,6 +47,29 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "PIN salah" }, { status: 401 });
       }
 
+      // Cek jam operasional shift untuk CREW_STORE (Bukan SUPERVISOR / Developer 22054178)
+      const isSuperOrDev = user.role === "SUPERVISOR" || user.nik === "22054178";
+      if (!isSuperOrDev && parsedShift) {
+        const now = new Date();
+        const jakartaStr = now.toLocaleString("en-US", { timeZone: "Asia/Jakarta", hour12: false });
+        const hourMatch = jakartaStr.match(/ (24|\d+):/);
+        let hour = hourMatch ? parseInt(hourMatch[1], 10) : now.getUTCHours() + 7;
+        if (hour === 24) hour = 0;
+
+        let isOutsideHours = false;
+        if (parsedShift === 1 && (hour >= 17 || hour < 8)) {
+          isOutsideHours = true;
+        } else if (parsedShift === 2 && (hour >= 23 || hour < 14)) {
+          isOutsideHours = true;
+        }
+
+        if (isOutsideHours) {
+          return NextResponse.json({
+            error: `⛔ Akses di luar jam operasional shift. Shift ${parsedShift} (${parsedShift === 1 ? "Pagi: 08:00 - 17:00" : "Siang: 14:00 - 23:00"} WIB). Demi keamanan toko, akses dibatasi saat jam kerja.`
+          }, { status: 403 });
+        }
+      }
+
       // Cek apakah karyawan ini diarahkan ke Portal MDS BISA
       // @ts-ignore
       if (user.redirectMds && user.nik !== "22054178") {

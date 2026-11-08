@@ -29,6 +29,28 @@ export async function middleware(request: NextRequest) {
       userRole = (payload.role as string) || '';
       userNik = (payload.nik as string) || '';
       userJobTitle = (payload.jobTitle as string) || '';
+      const shiftType = payload.shiftType as number | undefined;
+
+      const isSuperOrDev = userRole === 'SUPERVISOR' || userNik === '22054178';
+
+      // Auto-logout jika jam shift telah berakhir untuk keamanan toko dengan pemberitahuan jelas
+      if (shiftType && !isSuperOrDev) {
+        const now = new Date();
+        const jakartaStr = now.toLocaleString("en-US", { timeZone: "Asia/Jakarta", hour12: false });
+        const hourMatch = jakartaStr.match(/ (24|\d+):/);
+        let hour = hourMatch ? parseInt(hourMatch[1], 10) : now.getUTCHours() + 7;
+        if (hour === 24) hour = 0;
+
+        if ((shiftType === 1 && (hour >= 17 || hour < 8)) || (shiftType === 2 && (hour >= 23 || hour < 14))) {
+          isValidSession = false;
+          if (!isAuthPage) {
+            const redirectUrl = new URL('/login?reason=shift_ended', request.url);
+            const response = NextResponse.redirect(redirectUrl);
+            response.cookies.set("token", "", { maxAge: 0, path: "/" });
+            return response;
+          }
+        }
+      }
     } catch (e) {
       isValidSession = false;
     }

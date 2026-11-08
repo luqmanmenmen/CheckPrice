@@ -625,4 +625,29 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   2. **Relaksasi Sesi Login ([`src/app/api/auth/login/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/auth/login/route.ts)):** Karyawan berstatus `OFFLINE` dapat langsung login tanpa tertahan modal sesi aktif 409. Single-device session protection tetap aman dijalankan oleh `/api/auth/me`.
   3. **Hasil:** Seluruh akun karyawan non-redirect (seperti NIK `223516`, `223521`, `223522`, `223514`, `223519`, dll.) kini **100% bisa login lancar** kapan pun!
 
+---
+
+## 43. Proteksi Jam Operasional Shift dengan Reason Jelas & Kebijakan Produk Stok 0
+
+- **Instruksi Pengguna:**
+  1. *"loloolo jangan tetap itu bahaya kalau bisa akses di luar jam operasional kamu kasih reason aja njir wkwkwk"*
+  2. *"berarti gini meski stock 0 ya munculkan aja"*
+  3. *"setelah ini kita save dan rehat kita bertemu lagi sore yak pulang kerja"*
+- **Implementasi Proteksi Jam Operasional dengan Reason Edukatif:**
+  1. **Login API ([`src/app/api/auth/login/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/auth/login/route.ts)):**
+     - Shift 1: 08:00 - 17:00 WIB.
+     - Shift 2: 14:00 - 23:00 WIB.
+     - Di luar jam operasional shift, untuk akun karyawan biasa (`CREW_STORE`), sistem menolak akses dengan HTTP 403 dan pesan alert yang jelas:
+       `"⛔ Akses di luar jam operasional shift. Shift [1/2] ([Pagi/Siang] ... WIB). Demi keamanan toko, akses dibatasi saat jam kerja."`
+     - Akun Supervisor & Developer (`22054178`) tetap memiliki akses darurat 24 jam untuk maintenance/audit.
+  2. **Middleware Redirect ([`src/middleware.ts`](file:///c:/Max%20Display/price-checker/src/middleware.ts)):**
+     - Jika karyawan masih membuka app saat jam shift berakhir, sistem mengalihkan browser ke `/login?reason=shift_ended`.
+  3. **Banner Login Screen ([`src/app/login/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/login/page.tsx)):**
+     - Menangkap parameter `?reason=shift_ended` dan menampilkan pesan amber bersahabat:
+       `"⏰ Sesi shift Anda telah berakhir demi keamanan operasional toko. Silakan login kembali saat jam shift Anda dimulai."`
+- **Konfirmasi Kebijakan Produk Stok 0:**
+  - Seluruh produk dengan stok 0 pcs (tercatat 3.427 produk di Supabase) **tetap 100% dimunculkan di sistem**, tidak pernah di-filter atau disembunyikan.
+  - Kartu produk menampilkan badge informatif: `"Stok: 0 pcs"` dengan harga normal & harga promo yang tetap lengkap.
+
+
 
