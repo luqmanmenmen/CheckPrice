@@ -366,11 +366,15 @@ function extractProductFields(data, sku) {
     return null;
   }
 
-  // Parse harga - bisa format "Rp 349.900" atau angka
+  // Parse harga - bisa format "Rp 349.900" atau angka atau SQL decimal "199900.000000"
   const parseHarga = (val) => {
     if (!val) return null;
-    if (typeof val === 'number') return val;
-    const cleaned = String(val).replace(/[^0-9]/g, '');
+    if (typeof val === 'number') return Math.round(val);
+    let str = String(val).trim();
+    if (/\.\d{4,}$/.test(str) || /\.00$/.test(str)) {
+      str = str.split('.')[0];
+    }
+    const cleaned = str.replace(/[^0-9]/g, '');
     return cleaned ? parseInt(cleaned) : null;
   };
 
