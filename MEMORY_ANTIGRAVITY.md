@@ -580,16 +580,30 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   3. **Antrean Otomatis Produk Gap (Jam Malam):** Jika server toko 719 mati di malam hari, barcode/SKU dicatat ke antrean sinkronisasi untuk dieksekusi oleh runner pagi hari.
   4. **Morning Runner Ingestion (09:45 WIB):** Runner harian memproses seluruh antrean gap barcode dari toko sehingga barang yang sempat gagal kemarin otomatis terdaftar penuh keesokan paginya.
 
+---
 
+## 41. Audit Python Engine & Resolusi Forensik Barcode Gap (Kasus Barcode 2340002353093)
 
-
-
-
-
-
-
-
-
-
-
+- **Prinsip Inti:** Menjalankan amanat pengguna: *"suruh si python lah yang ngerjain... kalau python lebih cerdas masalah mengelola data ini"*.
+- **Hasil Eksekusi Python Master Auditor ([`python-engine/master_auditor.py`](file:///c:/Max%20Display/price-checker/python-engine/master_auditor.py)):**
+  1. **Total Master SKU:** **9.703 item** dimuat dan diuji menyeluruh via Pandas.
+  2. **Kelengkapan Barcode:** **9.703 item (100.0%)** memiliki barcode unik.
+  3. **Integritas Barcode:**
+     - 9.698 item EAN-13 (13 digit) dengan check digit GS1 sempurna (**9.698 / 9.698 - 100% valid**).
+     - 5 item UPC-A (12 digit) valid.
+  4. **Duplikasi:** **0 SKU duplikat**, **0 Barcode bentrok**. Seluruh 9.703 item berstatus bersih.
+- **Hasil Forensik Ilmiah & Gap Inventori (Mengapa 2340002353093 Tidak Ada di Master?):**
+  1. Barcode `2340002353093` diapit oleh:
+     - Batas Bawah: Barcode `2340002348013` (SKU `61270935`, BYRCH & Co, Artikel `Y049L`).
+     - Batas Atas: Barcode `2340002362477` (SKU `61312649`, SUKO GIRLS, Artikel `CGS01`).
+  2. Terdapat **celah inventori 41.714 rentang SKU (`61270936` s/d `61312648`)**.
+  3. Seluruh 10 file CSV Power Query di Supabase Storage (`PQ/POWER QUERY/` dari 10 s/d 21 Oktober) telah dipindai oleh Python Engine, dan terbukti rentang SKU tersebut memang **tidak diekspor dari komputer toko 719 pada bulan Oktober 2026**.
+  4. Karena database master dibangun dari rekap cut-off Power Query & Excel Promo, produk fisik tersebut belum terdaftar di database lokal.
+- **Status Live Server MDS BISA StoreHub Saat Ini:**
+  - Uji live query Python membuktikan session login (`M223515`, role `sa_spg`, Store `719`) aktif dan parameter `['upc', '2340002353093']` diterima resmi oleh Server Action `checkItemDetail` (`60fc4882ad969e8907c38a0c8aa2c93b06a8e5c526`).
+  - Server StoreHub mengembalikan pesan resmi:
+    `{"error":"check detail on store 719: query store 172.24.12.41: unable to open tcp connection with host '172.24.12.41:1433': dial tcp 172.24.12.41:1433: connect: no route to host"}`.
+  - Komputer server lokal toko 719 dimatikan listriknya di malam hari (01:58 WIB). Begitu toko buka pukul 09:00 WIB, StoreHub akan langsung mengembalikan data produk dan otomatis di-upsert ke Supabase.
+- **Opsi Registrasi Instan:**
+  Jika kasir/pengguna ingin produk ini langsung aktif detik ini tanpa menunggu toko buka jam 09:00 WIB, cukup sebutkan 8 digit SKU yang tertera di hangtag baju fisik tersebut untuk didaftarkan langsung ke Supabase.
 
