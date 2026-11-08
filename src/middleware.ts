@@ -69,6 +69,15 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // 1b. Sembunyikan Kiosk Cek Harga sementara waktu
+  if (pathname.startsWith('/cek-harga')) {
+    if (isValidSession) {
+      if (isSuperOrDev) return NextResponse.redirect(new URL('/spv-gateway', request.url));
+      return NextResponse.redirect(new URL('/', request.url));
+    }
+    return NextResponse.redirect(new URL('/login', request.url));
+  }
+
   // 2. Protect all other pages
   if (!isValidSession) {
     if (
@@ -76,8 +85,7 @@ export async function middleware(request: NextRequest) {
       !pathname.startsWith('/_next') &&
       !pathname.startsWith('/assets') &&
       !pathname.startsWith('/suko-logo.png') &&
-      !pathname.startsWith('/favicon.ico') &&
-      !pathname.startsWith('/cek-harga')
+      !pathname.startsWith('/favicon.ico')
     ) {
        return NextResponse.redirect(new URL('/login', request.url));
     }
@@ -98,5 +106,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|assets|favicon.ico|suko-logo.png|cek-harga|api/auth/login|api/auth/check-nik).*)'],
+  matcher: ['/((?!_next/static|_next/image|assets|favicon.ico|suko-logo.png|api/auth/login|api/auth/check-nik).*)'],
 };

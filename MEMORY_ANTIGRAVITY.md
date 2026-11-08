@@ -528,6 +528,18 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
      - **Tombol Aksi Cepat:** Ikon `<ExternalLink />` di samping tombol Edit/Hapus untuk mengaktifkan atau menonaktifkan pengalihan dalam 1 klik dengan konfirmasi dialog aman.
      - **Modal Edit Karyawan:** Toggle switch modern untuk mengubah status pengalihan langsung saat mengedit profil karyawan.
 
+---
+
+## 38. Kiosk Cek Harga (/cek-harga) Disembunyikan Sementara Waktu
+
+- **Latar Belakang:** Atas instruksi pengguna (*"untuk check harga kiost sementara ini di hidden dulu yak"*), seluruh pintu akses dan halaman Kiosk Cek Harga dinonaktifkan sementara.
+- **Implementasi:**
+  1. **Halaman Login ([`src/app/login/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/login/page.tsx)):** Tombol *"Hanya Mau Cek Harga? Buka Kiosk Publik"* di-comment/hidden.
+  2. **Drawer Navigasi ([`src/components/Sidebar.tsx`](file:///c:/Max%20Display/price-checker/src/components/Sidebar.tsx)):** Menu item *"Kiosk Cek Harga"* di-comment/hidden.
+  3. **Middleware Guard ([`src/middleware.ts`](file:///c:/Max%20Display/price-checker/src/middleware.ts)):** Akses URL `/cek-harga` langsung dialihkan ke `/login` (atau ke `/` jika pengguna memiliki sesi aktif).
+  4. **Halaman Kiosk ([`src/app/cek-harga/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/cek-harga/page.tsx)):** Flag `const IS_KIOSK_HIDDEN = true;` dipasang. Jika halaman sempat dimuat/di-cache, otomatis menghentikan proses pemindai kamera & mengalihkan browser kembali ke `/login`.
+
+
 
 
 

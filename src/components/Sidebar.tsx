@@ -244,6 +244,8 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
                 </div>
               </Link>
 
+              {/* Kiosk Cek Harga (Sementara di-hidden) */}
+              {/*
               <Link 
                 href="/cek-harga" 
                 onClick={() => setIsOpen(false)} 
@@ -257,6 +259,7 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
                   <span className="text-[10px] text-emerald-600 font-semibold">Tampilan Publik / Tablet</span>
                 </div>
               </Link>
+              */}
 
               {(activeUser?.jobTitle === 'Gudang Stock' || activeUser?.role === 'SUPERVISOR') && (
                 <Link 

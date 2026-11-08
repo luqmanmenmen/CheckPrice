@@ -425,7 +425,8 @@ export default function Login() {
       </div>
       )}
 
-      {/* Shortcut ke Kiosk Cek Harga Publik */}
+      {/* Shortcut ke Kiosk Cek Harga Publik (Sementara di-hidden) */}
+      {/* 
       <div className="relative z-20 mt-4 text-center">
         <Link 
           href="/cek-harga" 
@@ -435,6 +436,7 @@ export default function Login() {
           Hanya Mau Cek Harga? Buka Kiosk Publik &rarr;
         </Link>
       </div>
+      */}
 
       <div className="flex-grow shrink-0 min-h-[2rem]"></div>
 

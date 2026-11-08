@@ -96,7 +96,16 @@ const playScanBeep = () => {
   } catch { /* ignore */ }
 };
 
+const IS_KIOSK_HIDDEN = true; // SEMENTARA DI-HIDDEN ATAS PERMINTAAN USER
+
 export default function CekHargaPage() {
+  // Sementara Kiosk di-hidden: alihkan ke /login
+  useEffect(() => {
+    if (IS_KIOSK_HIDDEN) {
+      window.location.replace("/login");
+    }
+  }, []);
+
   // Setup database offline lokal di awal
   const [dbState, setDbState] = useState<"checking" | "syncing" | "ready">("checking");
   const [syncProgress, setSyncProgress] = useState(0);
@@ -138,6 +147,11 @@ export default function CekHargaPage() {
 
     const initDb = async () => {
       try {
+        if (IS_KIOSK_HIDDEN) {
+          if (isMounted) setDbState("ready");
+          return;
+        }
+
         const { db, syncOfflineDatabase, checkIfUpdateAvailable, ensureDbOpenSafe } = await import("@/lib/offlineDb");
         await ensureDbOpenSafe();
         const count = await db.products.count().catch(() => 0);
@@ -484,6 +498,25 @@ export default function CekHargaPage() {
       : isPercentPromo
       ? `PROMO DISKON ${discountPct}%`
       : "PENAWARAN SPESIAL TOKO");
+
+  // ── SEMENTARA DI-HIDDEN (TAMPILAN AMAN & REDIRECT) ──
+  if (IS_KIOSK_HIDDEN) {
+    return (
+      <div className="fixed inset-0 z-[200] bg-slate-950 text-white flex flex-col items-center justify-center p-6 text-center select-none">
+        <div className="w-16 h-16 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center mb-6 shadow-2xl backdrop-blur-md">
+          <div className="w-8 h-8 border-3 border-white/20 border-t-amber-400 rounded-full animate-spin" />
+        </div>
+        <img src="/suko-logo.png" alt="SUKO" className="h-10 object-contain mb-4 filter invert opacity-90" />
+        <h2 className="text-xl font-black text-white tracking-tight mb-1.5">Layanan Kiosk Dinonaktifkan Sementara</h2>
+        <p className="text-slate-400 text-xs max-w-xs mb-6 font-medium">
+          Fitur Cek Harga Kiosk sedang dinonaktifkan sementara. Mengalihkan ke halaman login...
+        </p>
+        <a href="/login" className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl transition-all shadow-md">
+          Buka Halaman Login
+        </a>
+      </div>
+    );
+  }
 
   // ── SCREEN 1: PREPARATION LOADING (HANYA MUNCUL DI KUNJUNGAN PERTAMA ~0.5 DETIK) ──
   if (dbState === "syncing") {
