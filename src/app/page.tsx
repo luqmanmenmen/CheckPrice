@@ -725,6 +725,12 @@ export default function Home() {
         if (!localData) {
           localData = await db.products.where('barcode').equals(trimmed).first();
         }
+        if (!localData && /^\d+$/.test(trimmed)) {
+          const stripped = trimmed.replace(/^0+/, '');
+          if (stripped && stripped !== trimmed) {
+            localData = await db.products.where('barcode').equals(stripped).first();
+          }
+        }
       }
 
       // Jika data ditemukan di HP, langsung tampilkan (sangat cepat & tanpa internet)

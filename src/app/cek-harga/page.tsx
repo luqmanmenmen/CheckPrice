@@ -284,6 +284,12 @@ export default function CekHargaPage() {
       if (!foundLocal) {
         foundLocal = await db.products.where("barcode").equals(trimmed).first();
       }
+      if (!foundLocal && /^\d+$/.test(trimmed)) {
+        const stripped = trimmed.replace(/^0+/, '');
+        if (stripped && stripped !== trimmed) {
+          foundLocal = await db.products.where("barcode").equals(stripped).first();
+        }
+      }
 
       if (foundLocal) {
         const prodData: ProductData = {
