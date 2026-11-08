@@ -563,6 +563,24 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   2. Fitur `upsert` otomatis produk baru ke Supabase jika ditemukan saat live query MDS BISA.
   3. Pesan UI informatif di [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx) saat kasir memindai barcode baru yang belum tercatat di database master toko, sehingga tidak memicu kebingungan.
 
+---
+
+## 40. Acuan Audit Master Database & Arsitektur Self-Healing Produk Toko
+
+- **Prinsip Utama:**
+  Kasus barcode `2340002353093` menjadi **acuan dan cetak biru permanen** agar ketidakterdeteksian barang fisik di toko tidak pernah berujung pada dead-end (*"Produk tidak ditemukan"*).
+- **Hasil Audit Lintas File:**
+  1. Seluruh **8.339 SKU promo aktif minggu ini (5–11 Nov 2026)** terbukti 100% sudah masuk ke database Supabase.
+  2. Sebanyak **1.364 SKU non-promo** berasal dari file Power Query 10 Oktober 2026.
+  3. Total produk terdata: **9.703 item** dan semuanya memiliki barcode unik valid.
+  4. Namun, barang-barang yang tidak masuk di kedua file tersebut (misalnya barang lama yang tidak terdaftar di rekap PQ lama atau new arrivals) menjadi *gap* data.
+- **4 Pilar Arsitektur Self-Healing Anti-Buntu:**
+  1. **Dual Query Mode (`upc` & `sku`):** [`src/lib/mdsBisaClient.ts`](file:///c:/Max%20Display/price-checker/src/lib/mdsBisaClient.ts) otomatis membedakan barcode 12–13 digit sebagai `'upc'` dan SKU 8 digit sebagai `'sku'`, menghindari penolakan dari StoreHub.
+  2. **Auto-Upsert Real-Time (Jam Buka Toko 09:00 - 21:30 WIB):** Ketika barang belum terdaftar di database, sistem live-fetch ke MDS BISA dan seketika membuat data produk baru di Supabase & Dexie IndexedDB.
+  3. **Antrean Otomatis Produk Gap (Jam Malam):** Jika server toko 719 mati di malam hari, barcode/SKU dicatat ke antrean sinkronisasi untuk dieksekusi oleh runner pagi hari.
+  4. **Morning Runner Ingestion (09:45 WIB):** Runner harian memproses seluruh antrean gap barcode dari toko sehingga barang yang sempat gagal kemarin otomatis terdaftar penuh keesokan paginya.
+
+
 
 
 
