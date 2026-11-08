@@ -670,6 +670,26 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   3. **Self-Healing Runtime:**
      - Frontend kasir & SPG di `luqmanganteng.my.id` otomatis menangani dual-query `'upc'` (12-13 digit) & `'sku'` (8 digit) dengan auto-save real-time jika kasir memindai produk baru toko.
 
+---
+
+## 45. Mesin Brutal Scraping Python (MUKU, ZES, SUKO & Sweep Barcode Tanpa SKU)
+
+- **Instruksi Khusus Pengguna:**
+  *"jadi nanti ini jam operasional suruh engine scrap all jangan sampai lolos pokoknya disitu buanyak banget dari muku zes dll scrap semua barcode dan sku yang ada di mds bisa tanpa kecuali kita perkaya bank data kita. kalau bisa scrap brutal meski tanpa sku"*.
+- **Implementasi Mesin ([`python-engine/brutal_scraper.py`](file:///c:/Max%20Display/price-checker/python-engine/brutal_scraper.py)):**
+  1. **Algoritma Barcode Gap Sweep (Scrap Tanpa Perlu Tahu SKU):**
+     - Semua barcode EAN-13 internal Matahari memiliki pola awalan `234000` + `[6 digit deret]` + `[check digit GS1 modulo 10]`.
+     - Mesin Python secara otomatis men-generate deret barcode yang berada di celah inventori dan menghitung check digit GS1-nya secara presisi.
+     - Mesin menembak StoreHub MDS BISA via parameter `'upc'` (`checkItemDetail`).
+  2. **Ekstraksi Lengkap Metadata Toko:**
+     - StoreHub mengembalikan payload utuh: `SKU`, `VendorBarcode`, `Brand` (MUKU, ZES, SUKO, dll.), `Department`, `StyleCode` (Artikel), `ItemDescription`, `Color`, `Size`, `RetailPrice`, dan `StockOnHand`.
+  3. **Penyimpanan Batch & Real-time (Supabase & Cache HP):**
+     - Produk baru yang tertangkap langsung di-upsert setiap batch 25 item ke Supabase.
+     - Jeda aman 150ms per permintaan menjaga kelancaran koneksi dan mencegah over-traffic pada router toko.
+  4. **Proteksi Jam Operasional:**
+     - Mesin siap dijalankan secara mandiri pada jam operasional toko buka (09:00 - 21:30 WIB).
+
+
 
 
 
