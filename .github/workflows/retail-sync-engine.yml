@@ -30,6 +30,11 @@ on:
         required: false
         default: false
         type: boolean
+      session_cookie:
+        description: 'MDS Session Cookie (opsional, jika ada akan dipakai)'
+        required: false
+        default: ''
+        type: string
 
   repository_dispatch:
     types: [trigger-sync-engine, trigger-mds-bisa, trigger-stock-only, trigger-photos, trigger-promo]
@@ -84,7 +89,9 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
-          MDS_SESSION_COOKIE: ${{ secrets.MDS_SESSION_COOKIE }}
+          MDS_SESSION_COOKIE: ${{ github.event.inputs.session_cookie || secrets.MDS_SESSION_COOKIE }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
 
       - name: ⚡ Run Trigger 1B — Fast Stock-Only Sync (Khusus Update Stok Toko)
         if: ${{ github.event.inputs.action == 'stock-only' || github.event.action == 'trigger-stock-only' }}
@@ -94,7 +101,9 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
-          MDS_SESSION_COOKIE: ${{ secrets.MDS_SESSION_COOKIE }}
+          MDS_SESSION_COOKIE: ${{ github.event.inputs.session_cookie || secrets.MDS_SESSION_COOKIE }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
 
       - name: 🖼️ Run Trigger 2 — Matahari Photo Catalog Sync
         if: ${{ github.event.inputs.action == 'all' || github.event.inputs.action == 'photos' || github.event_name == 'schedule' || github.event.action == 'trigger-photos' || github.event.action == 'trigger-sync-engine' }}

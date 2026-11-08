@@ -160,21 +160,45 @@ async function autoLogin() {
 // ============================================================
 // STEP 1B: ALTERNATIVE LOGIN - Pakai Cookie Manual (Fallback)
 // ============================================================
-function getManualCookie() {
+async function getManualCookie() {
   // Cek environment variable dulu
-  if (process.env.MDS_SESSION_COOKIE) {
+  if (process.env.MDS_SESSION_COOKIE && process.env.MDS_SESSION_COOKIE.trim().length > 10) {
     console.log('🍪 [COOKIE] Menggunakan cookie dari environment variable MDS_SESSION_COOKIE');
-    return process.env.MDS_SESSION_COOKIE;
+    return process.env.MDS_SESSION_COOKIE.trim();
   }
   
   // Cek file .mds_cookie jika ada
   const cookieFile = path.join(__dirname, '..', '.mds_cookie');
   if (fs.existsSync(cookieFile)) {
     const cookie = fs.readFileSync(cookieFile, 'utf-8').trim();
-    if (cookie) {
+    if (cookie && cookie.length > 10) {
       console.log('🍪 [COOKIE] Menggunakan cookie dari file .mds_cookie');
       return cookie;
     }
+  }
+
+  // Fallback: Ambil dari Supabase Storage (secrets/mds_cookie.txt)
+  try {
+    const supabaseUrl = process.env.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co';
+    const supabaseKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || '';
+    if (supabaseKey) {
+      const storageUrl = `${supabaseUrl}/storage/v1/object/authenticated/excel-uploads/secrets/mds_cookie.txt`;
+      const res = await fetch(storageUrl, {
+        headers: {
+          'Authorization': `Bearer ${supabaseKey}`,
+          'apikey': supabaseKey
+        }
+      });
+      if (res.ok) {
+        const cookie = (await res.text()).trim();
+        if (cookie && cookie.length > 10) {
+          console.log('🍪 [COOKIE] Berhasil memuat cookie aktif dari Supabase Storage');
+          return cookie;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('⚠️ [COOKIE] Gagal membaca cookie dari Supabase Storage:', err.message);
   }
   
   return null;
@@ -516,7 +540,7 @@ async function main() {
   }
 
   // --- STEP 1: Dapatkan Session ---
-  let cookie = getManualCookie();
+  let cookie = await getManualCookie();
   
   if (!cookie) {
     try {
@@ -604,7 +628,7 @@ async function main() {
           isRelogging = true;
           console.log('\n🔄 Session expired! Mencoba re-login...');
           try {
-            cookie = await autoLogin();
+            cookie = (await getManualCookie()) || (await autoLogin());
             isRelogging = false;
           } catch {
             sessionExpiredTriggered = true;

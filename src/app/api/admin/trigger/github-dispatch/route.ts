@@ -73,6 +73,20 @@ export async function POST(req: Request) {
       }, { status: 400 });
     }
 
+    // Ambil MDS session cookie dari storage jika ada
+    let mdsCookie = body.session_cookie || '';
+    if (!mdsCookie) {
+      try {
+        const { supabase } = await import('@/lib/supabaseClient');
+        const { data, error } = await supabase.storage.from('excel-uploads').download('secrets/mds_cookie.txt');
+        if (data && !error) {
+          mdsCookie = (await data.text()).trim();
+        }
+      } catch (e) {
+        console.warn('[GITHUB-DISPATCH] Gagal membaca fallback mds_cookie dari Storage:', e);
+      }
+    }
+
     const dispatchUrl = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/workflows/${WORKFLOW_ID}/dispatches`;
 
     const ghRes = await fetch(dispatchUrl, {
@@ -88,6 +102,7 @@ export async function POST(req: Request) {
         inputs: {
           action,
           force: String(force),
+          session_cookie: mdsCookie,
         },
       }),
     });
