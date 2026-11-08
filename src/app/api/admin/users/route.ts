@@ -167,14 +167,64 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "ID Karyawan wajib diisi" }, { status: 400 });
     }
 
-    await prisma.user.delete({
-      where: { id }
+    // 1. Cek apakah user ada
+    const targetUser = await prisma.user.findUnique({
+      where: { id },
+      select: { id: true, nik: true, name: true }
     });
 
-    return NextResponse.json({ success: true });
-  } catch (error) {
+    if (!targetUser) {
+      return NextResponse.json({ error: "Karyawan tidak ditemukan" }, { status: 404 });
+    }
+
+    // 2. Proteksi Developer Utama (22054178) & Akun Sendiri yang sedang aktif
+    if (targetUser.nik === "22054178") {
+      return NextResponse.json({ error: "Akun Developer Utama tidak dapat dihapus." }, { status: 403 });
+    }
+    if (session.userId === targetUser.id) {
+      return NextResponse.json({ error: "Anda tidak dapat menghapus akun Anda sendiri yang sedang aktif." }, { status: 400 });
+    }
+
+    // 3. Bersihkan seluruh data relasi (Tiket, Shift, SyncHistory, LoginLog) dalam satu transaksi aman
+    await prisma.$transaction(async (tx) => {
+      // Hapus tiket yang dibuat user atau berada dalam shift user
+      await tx.ticket.deleteMany({
+        where: {
+          OR: [
+            { requesterId: id },
+            { shift: { userId: id } }
+          ]
+        }
+      });
+
+      // Hapus riwayat shift user
+      await tx.shift.deleteMany({
+        where: { userId: id }
+      });
+
+      // Hapus riwayat sinkronisasi user
+      await tx.syncHistory.deleteMany({
+        where: { userId: id }
+      });
+
+      // Hapus log login user
+      await tx.loginLog.deleteMany({
+        where: { userId: id }
+      });
+
+      // Hapus akun user
+      await tx.user.delete({
+        where: { id }
+      });
+    });
+
+    return NextResponse.json({ 
+      success: true, 
+      message: `Akun karyawan ${targetUser.name} (${targetUser.nik}) berhasil dihapus beserta data relasinya.` 
+    });
+  } catch (error: any) {
     console.error("Delete user error:", error);
-    return NextResponse.json({ error: "Gagal menghapus pengguna, mungkin memiliki data relasi (Shift/Tiket)" }, { status: 500 });
+    return NextResponse.json({ error: error.message || "Gagal menghapus karyawan" }, { status: 500 });
   }
 }
 
