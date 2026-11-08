@@ -24,6 +24,8 @@ export async function GET(req: NextRequest) {
         status: true,
         pin: true,
         toko: true,
+        // @ts-ignore
+        redirectMds: true,
         sessionId: true,
         loginCount: true,
         lastLogin: true,
@@ -238,7 +240,7 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const { id, name, pin, toko, role } = await req.json();
+    const { id, name, pin, toko, role, redirectMds } = await req.json();
 
     if (!id || !name || !pin) {
       return NextResponse.json({ error: "ID, Nama, dan PIN wajib diisi" }, { status: 400 });
@@ -252,6 +254,8 @@ export async function PUT(req: NextRequest) {
         // @ts-ignore
         toko: toko || null,
         role: role || "CREW_STORE",
+        // @ts-ignore
+        ...(typeof redirectMds === "boolean" ? { redirectMds } : {})
       }
     });
 
@@ -259,5 +263,53 @@ export async function PUT(req: NextRequest) {
   } catch (error) {
     console.error("Edit user error:", error);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  try {
+    const token = req.cookies.get("token")?.value;
+    if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    
+    const session = await verifyToken(token);
+    if (!session || session.role !== "SUPERVISOR") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    const { id, redirectMds } = await req.json();
+
+    if (!id || typeof redirectMds !== "boolean") {
+      return NextResponse.json({ error: "ID dan status redirectMds wajib diisi" }, { status: 400 });
+    }
+
+    const targetUser = await prisma.user.findUnique({
+      where: { id },
+      select: { id: true, nik: true, name: true }
+    });
+
+    if (!targetUser) {
+      return NextResponse.json({ error: "Karyawan tidak ditemukan" }, { status: 404 });
+    }
+
+    if (targetUser.nik === "22054178" && redirectMds) {
+      return NextResponse.json({ error: "Akun Developer Utama tidak boleh dialihkan ke MDS BISA" }, { status: 400 });
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: { 
+        // @ts-ignore
+        redirectMds 
+      }
+    });
+
+    return NextResponse.json({ 
+      success: true, 
+      user: updatedUser,
+      message: `Status redirect MDS BISA untuk ${targetUser.name} (${targetUser.nik}) berhasil diubah menjadi: ${redirectMds ? 'AKTIF (Dilempar ke MDS BISA)' : 'NONAKTIF (Masuk Price Checker)'}` 
+    });
+  } catch (error: any) {
+    console.error("Patch user redirect error:", error);
+    return NextResponse.json({ error: error.message || "Gagal mengubah status redirect" }, { status: 500 });
   }
 }

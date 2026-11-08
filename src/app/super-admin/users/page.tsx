@@ -4,7 +4,7 @@ import useSWR from "swr";
 import { 
   Trash2, Plus, UserPlus, Store, Edit, X, LogIn, Activity, 
   History, Users, UserCheck, PauseCircle, Search, RefreshCw,
-  Calendar, Clock, ShieldCheck, ArrowUpDown
+  Calendar, Clock, ShieldCheck, ArrowUpDown, ExternalLink
 } from "lucide-react";
 import { AlertModal } from "@/components/AlertModal";
 
@@ -152,7 +152,14 @@ export default function UsersManagement() {
       const res = await fetch("/api/admin/users", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: editingUser.id, name: editingUser.name, pin: editingUser.pin, toko: editingUser.toko, role: editingUser.role })
+        body: JSON.stringify({ 
+          id: editingUser.id, 
+          name: editingUser.name, 
+          pin: editingUser.pin, 
+          toko: editingUser.toko, 
+          role: editingUser.role,
+          redirectMds: editingUser.redirectMds 
+        })
       });
       
       const resData = await res.json();
@@ -168,6 +175,41 @@ export default function UsersManagement() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleToggleRedirect = async (userId: string, userName: string, currentStatus: boolean) => {
+    const nextStatus = !currentStatus;
+    const actionText = nextStatus 
+      ? `mengalihkan login ${userName} ke Portal MDS BISA` 
+      : `mengembalikan login ${userName} ke sistem Price Checker biasa`;
+
+    showAlert(
+      nextStatus ? "Aktifkan Redirect MDS BISA?" : "Nonaktifkan Redirect MDS BISA?",
+      `Apakah Anda yakin ingin ${actionText}? ${
+        nextStatus 
+          ? "Saat karyawan ini memasukkan NIK & PIN di halaman login, sistem akan langsung melemparnya ke halaman login MDS BISA." 
+          : "Karyawan ini akan kembali login normal ke Price Checker."
+      }`,
+      "warning",
+      async () => {
+        try {
+          const res = await fetch("/api/admin/users", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: userId, redirectMds: nextStatus })
+          });
+          const resData = await res.json();
+          if (res.ok) {
+            showAlert("Berhasil", resData.message || "Status redirect berhasil diubah.", "success");
+            mutate();
+          } else {
+            showAlert("Gagal", resData.error || "Gagal mengubah status redirect.", "error");
+          }
+        } catch (err: any) {
+          showAlert("Error", "Terjadi kesalahan jaringan", "error");
+        }
+      }
+    );
   };
 
   const confirmDelete = (id: string, userName: string) => {
@@ -387,6 +429,29 @@ export default function UsersManagement() {
                   <option value="SUPERVISOR">SUPERVISOR</option>
                 </select>
               </div>
+
+              {/* Toggle Redirect ke MDS BISA */}
+              <div className="md:col-span-2 p-3.5 bg-amber-50/80 rounded-xl border border-amber-200 flex items-center justify-between gap-3">
+                <div className="flex-1">
+                  <div className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+                    <ExternalLink className="w-3.5 h-3.5 text-amber-600" />
+                    Redirect ke Portal MDS BISA
+                  </div>
+                  <p className="text-[11px] text-amber-700/80 mt-0.5">
+                    Jika diaktifkan, saat karyawan ini memasukkan NIK & PIN dan Enter di halaman login, sistem langsung melemparnya ke halaman login MDS BISA.
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={!!editingUser.redirectMds}
+                    onChange={e => setEditingUser({ ...editingUser, redirectMds: e.target.checked })}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-600"></div>
+                </label>
+              </div>
+
               <div className="md:col-span-2 mt-4 flex gap-3">
                 <button disabled={loading} type="submit" className="bg-indigo-600 text-white font-bold py-3 px-6 rounded-xl hover:bg-indigo-700 transition-colors flex-1 disabled:opacity-50">
                   {loading ? "Menyimpan..." : "Update Data"}
@@ -469,7 +534,14 @@ export default function UsersManagement() {
                 return (
                 <tr key={user.id} className="hover:bg-slate-50/80 transition-colors">
                   <td className="p-4 font-mono font-bold text-slate-700">{user.nik}</td>
-                  <td className="p-4 font-bold text-slate-800">{user.name}</td>
+                  <td className="p-4">
+                    <div className="font-bold text-slate-800">{user.name}</div>
+                    {user.redirectMds && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md mt-1">
+                        <ExternalLink className="w-3 h-3 text-amber-600" /> Redirect MDS BISA
+                      </span>
+                    )}
+                  </td>
                   <td className="p-4 font-mono text-slate-500 bg-slate-50 rounded-lg px-2 text-xs">{user.pin}</td>
                   <td className="p-4">
                     {user.toko ? (
@@ -561,7 +633,20 @@ export default function UsersManagement() {
                   </td>
 
                   {isTopBoss && (
-                    <td className="p-4 text-right">
+                    <td className="p-4 text-right whitespace-nowrap">
+                      {user.nik !== "22054178" && (
+                        <button 
+                          onClick={() => handleToggleRedirect(user.id, user.name, !!user.redirectMds)}
+                          className={`p-2 rounded-lg transition-colors mr-1 ${
+                            user.redirectMds 
+                              ? 'bg-amber-100 text-amber-800 hover:bg-amber-200 border border-amber-300' 
+                              : 'text-slate-400 hover:text-amber-600 hover:bg-amber-50'
+                          }`}
+                          title={user.redirectMds ? "Batalkan Redirect (Kembali ke Price Checker Biasa)" : "Alihkan ke Portal Login MDS BISA saat Login"}
+                        >
+                          <ExternalLink className="w-4 h-4" />
+                        </button>
+                      )}
                       <button 
                         onClick={() => setEditingUser(user)}
                         className="text-indigo-500 hover:text-indigo-700 p-2 hover:bg-indigo-50 rounded-lg transition-colors mr-1"

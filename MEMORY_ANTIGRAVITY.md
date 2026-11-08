@@ -504,6 +504,31 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
      - Pengguna yang sedang aktif login dicegah dari menghapus akunnya sendiri (`400 Bad Request`).
   3. **Hasil:** Tombol hapus karyawan di menu Super Admin (`/super-admin/users`) kini dapat menghapus akun karyawan mana pun dengan lancar dan bersih tanpa error relasi database.
 
+---
+
+## 37. Fitur Redirect Karyawan Tertentu ke Portal MDS BISA (StoreHub)
+
+- **Latar Belakang & Kebutuhan Pengguna:**
+  Pengguna ingin mengarahkan karyawan tertentu yang sudah didaftarkan agar saat mereka membuka link `luqmanganteng.my.id`, memasukkan NIK & PIN mereka dan menekan enter/login, mereka **langsung dialihkan (dilempar) ke halaman login MDS BISA** (`https://storehub.mdsretailing.id/login?next=%2F`). Pengguna lain / kasir yang tidak di-redirect tetap login normal ke Price Checker, dan Akun Developer Utama (`22054178`) tetap ke dashboard Super Admin.
+- **Implementasi End-to-End:**
+  1. **Database Schema (`prisma/schema.prisma`):**
+     Menambahkan field `redirectMds Boolean @default(false)` pada model `User`. Telah disinkronkan ke Supabase production via `prisma db push`.
+  2. **API Admin Users (`src/app/api/admin/users/route.ts`):**
+     - `GET`: Menyertakan `redirectMds: true` pada query `findMany`.
+     - `PUT`: Menerima update status `redirectMds` dari formulir Edit Karyawan.
+     - `PATCH`: Endpoint instan 1-klik untuk toggle status `redirectMds: boolean` per user ID dengan proteksi permanen NIK Developer `22054178`.
+  3. **Backend Login Auth (`src/app/api/auth/login/route.ts`):**
+     - Setelah validasi NIK & PIN berhasil, jika `user.redirectMds === true` (dan bukan developer `22054178`), sistem mencatat aktivitas di `LoginLog` dengan catatan `Redirect MDS BISA`, lalu mengembalikan:
+       `{ success: true, redirectMds: true, redirectUrl: "https://storehub.mdsretailing.id/login?next=%2F" }`.
+  4. **Frontend Login Handler (`src/app/login/page.tsx`):**
+     - Menangkap respon `data.redirectMds` atau `data.redirectUrl`.
+     - Mengeksekusi `window.location.href = data.redirectUrl` seketika saat PIN di-enter.
+  5. **UI Super Admin (`src/app/super-admin/users/page.tsx`):**
+     - **Tabel Karyawan:** Menampilkan badge amber `🔄 Redirect MDS BISA` di bawah nama karyawan jika status redirect aktif.
+     - **Tombol Aksi Cepat:** Ikon `<ExternalLink />` di samping tombol Edit/Hapus untuk mengaktifkan atau menonaktifkan pengalihan dalam 1 klik dengan konfirmasi dialog aman.
+     - **Modal Edit Karyawan:** Toggle switch modern untuk mengubah status pengalihan langsung saat mengedit profil karyawan.
+
+
 
 
 

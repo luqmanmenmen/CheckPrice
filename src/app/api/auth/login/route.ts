@@ -46,6 +46,31 @@ export async function POST(req: NextRequest) {
       if (user.pin !== pin) {
         return NextResponse.json({ error: "PIN salah" }, { status: 401 });
       }
+
+      // Cek apakah karyawan ini diarahkan ke Portal MDS BISA
+      // @ts-ignore
+      if (user.redirectMds && user.nik !== "22054178") {
+        await prisma.loginLog.create({
+          data: {
+            userId: user.id,
+            nik: user.nik,
+            name: user.name,
+            role: user.role,
+            shift: parsedShift,
+            jobTitle: jobTitle ? `${jobTitle} (Redirect MDS BISA)` : "Redirect MDS BISA",
+            toko: user.toko,
+            ipAddress,
+            userAgent
+          }
+        }).catch(err => console.error("Failed to save LoginLog redirect:", err));
+
+        return NextResponse.json({
+          success: true,
+          redirectMds: true,
+          redirectUrl: "https://storehub.mdsretailing.id/login?next=%2F",
+          message: "Mengarahkan ke Portal Login MDS BISA..."
+        });
+      }
       
       // Jika user sudah punya sessionId dan force belum true, kembalikan status conflict (409)
       // Khusus Developer (22054178): izinkan multi-login langsung tanpa blokir konfirmasi sesi aktif

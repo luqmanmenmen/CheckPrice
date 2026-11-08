@@ -69,6 +69,7 @@ model User {
   role      Role     @default(CREW_STORE)
   status    UserStatus @default(ACTIVE)
   toko      String?
+  redirectMds Boolean  @default(false) // Alihkan langsung ke MDS BISA saat berkunjung
   sessionId String?
   lastLogin DateTime?
   lastActive DateTime?

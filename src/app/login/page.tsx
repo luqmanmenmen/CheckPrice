@@ -112,6 +112,12 @@ export default function Login() {
 
       const data = await res.json();
       if (res.ok) {
+        if (data.redirectMds || data.redirectUrl) {
+          setLoading(true);
+          window.location.href = data.redirectUrl || "https://storehub.mdsretailing.id/login?next=%2F";
+          return;
+        }
+
         if (pin === "123456") {
           setLoginRole(data.role);
           setShowChangePin(true);
@@ -159,6 +165,12 @@ export default function Login() {
       }
       
       if (res.ok) {
+        if (data.redirectMds || data.redirectUrl) {
+          setLoading(true);
+          window.location.href = data.redirectUrl || "https://storehub.mdsretailing.id/login?next=%2F";
+          return;
+        }
+
         if (pin === "123456") {
           setLoginRole(data.role);
           setShowChangePin(true);
