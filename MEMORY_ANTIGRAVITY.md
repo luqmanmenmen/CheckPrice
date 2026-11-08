@@ -651,3 +651,25 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
 
 
 
+---
+
+## 44. Cetak Biru & PR Utama Eksekusi Sore (Audit Total Seluruh Barcode, Gap SKU & Rekonsiliasi MDS BISA Toko 719)
+
+- **Amanat Langsung Pengguna:**
+  *"oke jangan khusus barcode ini ya all produk yang bermasalah intinya sku yang tidak bisa di scan barcode (udah ada data barcodenya) atau tidak ada barcode upn/upc oke itu pr mu kita lanjut besok jadi besok kamu langsung kerjakan sepulang kerjaku"*.
+- **Ruang Lingkup Pekerjaan (PR Sore):**
+  1. **Bukan hanya 1 barcode (`2340002353093`), melainkan SEMUA SKU di Toko 719:**
+     - Seluruh SKU yang terdaftar di database tetapi barcodenya bermasalah, salah, atau gagal di-scan.
+     - Seluruh produk fisik toko yang ada di MDS BISA tetapi belum terserap di Supabase (Gap SKU inventori akibat cut-off Power Query lama).
+     - Produk tanpa barcode UPC / EAN-13.
+  2. **Mesin Eksekusi Python ([`python-engine/master_auditor.py`](file:///c:/Max%20Display/price-checker/python-engine/master_auditor.py)):**
+     - Berjalan saat komputer SQL Server lokal Toko 719 aktif menyala pada jam buka toko.
+     - Melakukan query massal StoreHub via Next.js Server Action `checkItemDetail` (`60fc4882ad969e8907c38a0c8aa2c93b06a8e5c526`).
+     - Menyerap seluruh metadata valid: VendorBarcode EAN-13/UPC asli, StyleCode/Artikel, RetailPrice, SOH (Stok), Color, dan Size.
+     - Meng-upsert otomatis ke database Supabase sehingga 100% produk toko fisik terintegrasi utuh ke sistem Price Checker.
+  3. **Self-Healing Runtime:**
+     - Frontend kasir & SPG di `luqmanganteng.my.id` otomatis menangani dual-query `'upc'` (12-13 digit) & `'sku'` (8 digit) dengan auto-save real-time jika kasir memindai produk baru toko.
+
+
+
+
