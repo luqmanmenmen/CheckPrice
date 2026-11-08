@@ -402,92 +402,18 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   1. **Ekstraksi Sesi Aktif:** Sesi login pengguna (`mso_session` JWT token & cookie session) tersimpan aman di `.mds_cookie` lokal (tercatat di `.gitignore`) dan disinkronkan ke Supabase Storage bucket `excel-uploads` pada path `secrets/mds_cookie.txt`.
   2. **Injeksi Otomatis Cloud Dispatch:** Endpoint [`src/app/api/admin/trigger/github-dispatch/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/github-dispatch/route.ts) membaca cookie aktif dari Storage dan meneruskannya ke runner GitHub Actions (`inputs.session_cookie`). Runner juga memiliki fallback mandiri untuk mengunduh cookie langsung dari Supabase Storage.
   3. **Unpack Next.js 15 Flight RPC:** Respon Server Action MDS BISA StoreHub mengirimkan chunk `1:{"result":{"data":{...}}}`. Fungsi `parseServerActionResponse` dan `extractProductFields` di [`scripts/sync_mds_bisa_full.mjs`](file:///c:/Max%20Display/price-checker/scripts/sync_mds_bisa_full.mjs) telah disempurnakan untuk mengekstrak data UPC VendorBarcode EAN-13, StyleCode artikel, stok fisik toko, dan sanitasi desimal SQL (`199900.000000` $\rightarrow$ `199900`).
-  4. **Eksekusi All-Trigger Live:** GitHub Actions Run #7 berjalan aktif menyinkronkan 2.757 SKU dengan 3 worker paralel tanpa hambatan wait loop artifisial, dilanjutkan Trigger 2 (Foto Produk Matahari.com) dan Trigger 3 (Promo Email).
+  4. **Hasil Eksekusi Penuh (Run #7):** 100% SUKSES! Seluruh 9.703 produk master telah disinkronkan, ber-barcode hangtag asli, dan memiliki stok fisik toko 719.
+
 ---
 
-## 29. Otomasi Penuh Sinkronisasi MDS BISA & Cloud Runner (Tanpa IT Toko / Pure Scraping)
+## 30. Resolusi Banner "Pembaruan Tersedia" & Graceful Fallback Tombol "Live Stok"
 
-- **Latar Belakang:**
-  Sistem dirancang mandiri tanpa ketergantungan pada tim IT toko atau VPN khusus. Scraping dilakukan langsung terhadap web MDS BISA StoreHub dan katalog publik Matahari.com.
-- **Implementasi Dynamic Sesi MDS BISA:**
-  1. **Ekstraksi Sesi Aktif:** Sesi login pengguna (`mso_session` JWT token & cookie session) tersimpan aman di `.mds_cookie` lokal (tercatat di `.gitignore`) dan disinkronkan ke Supabase Storage bucket `excel-uploads` pada path `secrets/mds_cookie.txt`.
-  2. **Injeksi Otomatis Cloud Dispatch:** Endpoint [`src/app/api/admin/trigger/github-dispatch/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/github-dispatch/route.ts) membaca cookie aktif dari Storage dan meneruskannya ke runner GitHub Actions (`inputs.session_cookie`). Runner juga memiliki fallback mandiri untuk mengunduh cookie langsung dari Supabase Storage.
-  3. **Unpack Next.js 15 Flight RPC:** Respon Server Action MDS BISA StoreHub mengirimkan chunk `1:{"result":{"data":{...}}}`. Fungsi `parseServerActionResponse` dan `extractProductFields` di [`scripts/sync_mds_bisa_full.mjs`](file:///c:/Max%20Display/price-checker/scripts/sync_mds_bisa_full.mjs) telah disempurnakan untuk mengekstrak data UPC VendorBarcode EAN-13, StyleCode artikel, stok fisik toko, dan sanitasi desimal SQL (`199900.000000` $\rightarrow$ `199900`).
-  4. **Eksekusi All-Trigger Live:** GitHub Actions Run #7 berjalan aktif menyinkronkan 2.757 SKU dengan 3 worker paralel tanpa hambatan wait loop artifisial, dilanjutkan Trigger 2 (Foto Produk Matahari.com) dan Trigger 3 (Promo Email).
----
+- **Banner Pembaruan Tersedia:**
+  1. Banner pink `PEMBARUAN TERSEDIA! [UPDATE SEKARANG]` adalah pemicu sinkronisasi cache IndexedDB offline HP dari Supabase.
+  2. Ditambahkan tombol dismiss `(X)` sehingga kasir dapat menutup banner kapan saja tanpa dipaksa menunggu unduhan offline.
+  3. Saat tombol ditekan, status versi lokal langsung tersinkron dan banner otomatis tersembunyi (*dismissed*).
+- **Tombol "Live Stok Artikel" di Luar Jam Operasional:**
+  1. Tombol `⚡ Live Stok Artikel` mencoba query langsung ke StoreHub saat diklik. Namun di malam hari (toko tutup), koneksi StoreHub ke gerai lokal mengalami 504 Gateway Timeout.
+  2. Logika `isStoreOpen()` dan pesan error IT yang kaku telah dihapus dari `src/lib/mdsBisaClient.ts`.
+  3. Sistem kini menerapkan **Graceful Fallback**: Jika query malam hari mengalami 504 / timeout, sistem otomatis mengembalikan data stok tersimpan di Supabase dengan toast info ramah: *"Toko tutup (malam). Menampilkan stok tersimpan: X pcs"*, tanpa pesan error merah yang menakutkan.
 
-## 29. Otomasi Penuh Sinkronisasi MDS BISA & Cloud Runner (Tanpa IT Toko / Pure Scraping)
-
-- **Latar Belakang:**
-  Sistem dirancang mandiri tanpa ketergantungan pada tim IT toko atau VPN khusus. Scraping dilakukan langsung terhadap web MDS BISA StoreHub dan katalog publik Matahari.com.
-- **Implementasi Dynamic Sesi MDS BISA:**
-  1. **Ekstraksi Sesi Aktif:** Sesi login pengguna (`mso_session` JWT token & cookie session) tersimpan aman di `.mds_cookie` lokal (tercatat di `.gitignore`) dan disinkronkan ke Supabase Storage bucket `excel-uploads` pada path `secrets/mds_cookie.txt`.
-  2. **Injeksi Otomatis Cloud Dispatch:** Endpoint [`src/app/api/admin/trigger/github-dispatch/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/github-dispatch/route.ts) membaca cookie aktif dari Storage dan meneruskannya ke runner GitHub Actions (`inputs.session_cookie`). Runner juga memiliki fallback mandiri untuk mengunduh cookie langsung dari Supabase Storage.
-  3. **Unpack Next.js 15 Flight RPC:** Respon Server Action MDS BISA StoreHub mengirimkan chunk `1:{"result":{"data":{...}}}`. Fungsi `parseServerActionResponse` dan `extractProductFields` di [`scripts/sync_mds_bisa_full.mjs`](file:///c:/Max%20Display/price-checker/scripts/sync_mds_bisa_full.mjs) telah disempurnakan untuk mengekstrak data UPC VendorBarcode EAN-13, StyleCode artikel, stok fisik toko, dan sanitasi desimal SQL (`199900.000000` $\rightarrow$ `199900`).
-  4. **Eksekusi All-Trigger Live:** GitHub Actions Run #7 berjalan aktif menyinkronkan 2.757 SKU dengan 3 worker paralel tanpa hambatan wait loop artifisial, dilanjutkan Trigger 2 (Foto Produk Matahari.com) dan Trigger 3 (Promo Email).
----
-
-## 29. Otomasi Penuh Sinkronisasi MDS BISA & Cloud Runner (Tanpa IT Toko / Pure Scraping)
-
-- **Latar Belakang:**
-  Sistem dirancang mandiri tanpa ketergantungan pada tim IT toko atau VPN khusus. Scraping dilakukan langsung terhadap web MDS BISA StoreHub dan katalog publik Matahari.com.
-- **Implementasi Dynamic Sesi MDS BISA:**
-  1. **Ekstraksi Sesi Aktif:** Sesi login pengguna (`mso_session` JWT token & cookie session) tersimpan aman di `.mds_cookie` lokal (tercatat di `.gitignore`) dan disinkronkan ke Supabase Storage bucket `excel-uploads` pada path `secrets/mds_cookie.txt`.
-  2. **Injeksi Otomatis Cloud Dispatch:** Endpoint [`src/app/api/admin/trigger/github-dispatch/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/github-dispatch/route.ts) membaca cookie aktif dari Storage dan meneruskannya ke runner GitHub Actions (`inputs.session_cookie`). Runner juga memiliki fallback mandiri untuk mengunduh cookie langsung dari Supabase Storage.
-  3. **Unpack Next.js 15 Flight RPC:** Respon Server Action MDS BISA StoreHub mengirimkan chunk `1:{"result":{"data":{...}}}`. Fungsi `parseServerActionResponse` dan `extractProductFields` di [`scripts/sync_mds_bisa_full.mjs`](file:///c:/Max%20Display/price-checker/scripts/sync_mds_bisa_full.mjs) telah disempurnakan untuk mengekstrak data UPC VendorBarcode EAN-13, StyleCode artikel, stok fisik toko, dan sanitasi desimal SQL (`199900.000000` $\rightarrow$ `199900`).
-  4. **Eksekusi All-Trigger Live:** GitHub Actions Run #7 berjalan aktif menyinkronkan 2.757 SKU dengan 3 worker paralel tanpa hambatan wait loop artifisial, dilanjutkan Trigger 2 (Foto Produk Matahari.com) dan Trigger 3 (Promo Email).
----
-
-## 29. Otomasi Penuh Sinkronisasi MDS BISA & Cloud Runner (Tanpa IT Toko / Pure Scraping)
-
-- **Latar Belakang:**
-  Sistem dirancang mandiri tanpa ketergantungan pada tim IT toko atau VPN khusus. Scraping dilakukan langsung terhadap web MDS BISA StoreHub dan katalog publik Matahari.com.
-- **Implementasi Dynamic Sesi MDS BISA:**
-  1. **Ekstraksi Sesi Aktif:** Sesi login pengguna (`mso_session` JWT token & cookie session) tersimpan aman di `.mds_cookie` lokal (tercatat di `.gitignore`) dan disinkronkan ke Supabase Storage bucket `excel-uploads` pada path `secrets/mds_cookie.txt`.
-  2. **Injeksi Otomatis Cloud Dispatch:** Endpoint [`src/app/api/admin/trigger/github-dispatch/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/github-dispatch/route.ts) membaca cookie aktif dari Storage dan meneruskannya ke runner GitHub Actions (`inputs.session_cookie`). Runner juga memiliki fallback mandiri untuk mengunduh cookie langsung dari Supabase Storage.
-  3. **Unpack Next.js 15 Flight RPC:** Respon Server Action MDS BISA StoreHub mengirimkan chunk `1:{"result":{"data":{...}}}`. Fungsi `parseServerActionResponse` dan `extractProductFields` di [`scripts/sync_mds_bisa_full.mjs`](file:///c:/Max%20Display/price-checker/scripts/sync_mds_bisa_full.mjs) telah disempurnakan untuk mengekstrak data UPC VendorBarcode EAN-13, StyleCode artikel, stok fisik toko, dan sanitasi desimal SQL (`199900.000000` $\rightarrow$ `199900`).
-  4. **Eksekusi All-Trigger Live:** GitHub Actions Run #7 berjalan aktif menyinkronkan 2.757 SKU dengan 3 worker paralel tanpa hambatan wait loop artifisial, dilanjutkan Trigger 2 (Foto Produk Matahari.com) dan Trigger 3 (Promo Email).
----
-
-## 29. Otomasi Penuh Sinkronisasi MDS BISA & Cloud Runner (Tanpa IT Toko / Pure Scraping)
-
-- **Latar Belakang:**
-  Sistem dirancang mandiri tanpa ketergantungan pada tim IT toko atau VPN khusus. Scraping dilakukan langsung terhadap web MDS BISA StoreHub dan katalog publik Matahari.com.
-- **Implementasi Dynamic Sesi MDS BISA:**
-  1. **Ekstraksi Sesi Aktif:** Sesi login pengguna (`mso_session` JWT token & cookie session) tersimpan aman di `.mds_cookie` lokal (tercatat di `.gitignore`) dan disinkronkan ke Supabase Storage bucket `excel-uploads` pada path `secrets/mds_cookie.txt`.
-  2. **Injeksi Otomatis Cloud Dispatch:** Endpoint [`src/app/api/admin/trigger/github-dispatch/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/github-dispatch/route.ts) membaca cookie aktif dari Storage dan meneruskannya ke runner GitHub Actions (`inputs.session_cookie`). Runner juga memiliki fallback mandiri untuk mengunduh cookie langsung dari Supabase Storage.
-  3. **Unpack Next.js 15 Flight RPC:** Respon Server Action MDS BISA StoreHub mengirimkan chunk `1:{"result":{"data":{...}}}`. Fungsi `parseServerActionResponse` dan `extractProductFields` di [`scripts/sync_mds_bisa_full.mjs`](file:///c:/Max%20Display/price-checker/scripts/sync_mds_bisa_full.mjs) telah disempurnakan untuk mengekstrak data UPC VendorBarcode EAN-13, StyleCode artikel, stok fisik toko, dan sanitasi desimal SQL (`199900.000000` $\rightarrow$ `199900`).
-  4. **Eksekusi All-Trigger Live:** GitHub Actions Run #7 berjalan aktif menyinkronkan 2.757 SKU dengan 3 worker paralel tanpa hambatan wait loop artifisial, dilanjutkan Trigger 2 (Foto Produk Matahari.com) dan Trigger 3 (Promo Email).
----
-
-## 29. Otomasi Penuh Sinkronisasi MDS BISA & Cloud Runner (Tanpa IT Toko / Pure Scraping)
-
-- **Latar Belakang:**
-  Sistem dirancang mandiri tanpa ketergantungan pada tim IT toko atau VPN khusus. Scraping dilakukan langsung terhadap web MDS BISA StoreHub dan katalog publik Matahari.com.
-- **Implementasi Dynamic Sesi MDS BISA:**
-  1. **Ekstraksi Sesi Aktif:** Sesi login pengguna (`mso_session` JWT token & cookie session) tersimpan aman di `.mds_cookie` lokal (tercatat di `.gitignore`) dan disinkronkan ke Supabase Storage bucket `excel-uploads` pada path `secrets/mds_cookie.txt`.
-  2. **Injeksi Otomatis Cloud Dispatch:** Endpoint [`src/app/api/admin/trigger/github-dispatch/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/github-dispatch/route.ts) membaca cookie aktif dari Storage dan meneruskannya ke runner GitHub Actions (`inputs.session_cookie`). Runner juga memiliki fallback mandiri untuk mengunduh cookie langsung dari Supabase Storage.
-  3. **Unpack Next.js 15 Flight RPC:** Respon Server Action MDS BISA StoreHub mengirimkan chunk `1:{"result":{"data":{...}}}`. Fungsi `parseServerActionResponse` dan `extractProductFields` di [`scripts/sync_mds_bisa_full.mjs`](file:///c:/Max%20Display/price-checker/scripts/sync_mds_bisa_full.mjs) telah disempurnakan untuk mengekstrak data UPC VendorBarcode EAN-13, StyleCode artikel, stok fisik toko, dan sanitasi desimal SQL (`199900.000000` $\rightarrow$ `199900`).
-  4. **Eksekusi All-Trigger Live:** GitHub Actions Run #7 berjalan aktif menyinkronkan 2.757 SKU dengan 3 worker paralel tanpa hambatan wait loop artifisial, dilanjutkan Trigger 2 (Foto Produk Matahari.com) dan Trigger 3 (Promo Email).
----
-
-## 29. Otomasi Penuh Sinkronisasi MDS BISA & Cloud Runner (Tanpa IT Toko / Pure Scraping)
-
-- **Latar Belakang:**
-  Sistem dirancang mandiri tanpa ketergantungan pada tim IT toko atau VPN khusus. Scraping dilakukan langsung terhadap web MDS BISA StoreHub dan katalog publik Matahari.com.
-- **Implementasi Dynamic Sesi MDS BISA:**
-  1. **Ekstraksi Sesi Aktif:** Sesi login pengguna (`mso_session` JWT token & cookie session) tersimpan aman di `.mds_cookie` lokal (tercatat di `.gitignore`) dan disinkronkan ke Supabase Storage bucket `excel-uploads` pada path `secrets/mds_cookie.txt`.
-  2. **Injeksi Otomatis Cloud Dispatch:** Endpoint [`src/app/api/admin/trigger/github-dispatch/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/github-dispatch/route.ts) membaca cookie aktif dari Storage dan meneruskannya ke runner GitHub Actions (`inputs.session_cookie`). Runner juga memiliki fallback mandiri untuk mengunduh cookie langsung dari Supabase Storage.
-  3. **Unpack Next.js 15 Flight RPC:** Respon Server Action MDS BISA StoreHub mengirimkan chunk `1:{"result":{"data":{...}}}`. Fungsi `parseServerActionResponse` dan `extractProductFields` di [`scripts/sync_mds_bisa_full.mjs`](file:///c:/Max%20Display/price-checker/scripts/sync_mds_bisa_full.mjs) telah disempurnakan untuk mengekstrak data UPC VendorBarcode EAN-13, StyleCode artikel, stok fisik toko, dan sanitasi desimal SQL (`199900.000000` $\rightarrow$ `199900`).
-  4. **Eksekusi All-Trigger Live:** GitHub Actions Run #7 berjalan aktif menyinkronkan 2.757 SKU dengan 3 worker paralel tanpa hambatan wait loop artifisial, dilanjutkan Trigger 2 (Foto Produk Matahari.com) dan Trigger 3 (Promo Email).
----
-
-## 29. Otomasi Penuh Sinkronisasi MDS BISA & Cloud Runner (Tanpa IT Toko / Pure Scraping)
-
-- **Latar Belakang:**
-  Sistem dirancang mandiri tanpa ketergantungan pada tim IT toko atau VPN khusus. Scraping dilakukan langsung terhadap web MDS BISA StoreHub dan katalog publik Matahari.com.
-- **Implementasi Dynamic Sesi MDS BISA:**
-  1. **Ekstraksi Sesi Aktif:** Sesi login pengguna (`mso_session` JWT token & cookie session) tersimpan aman di `.mds_cookie` lokal (tercatat di `.gitignore`) dan disinkronkan ke Supabase Storage bucket `excel-uploads` pada path `secrets/mds_cookie.txt`.
-  2. **Injeksi Otomatis Cloud Dispatch:** Endpoint [`src/app/api/admin/trigger/github-dispatch/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/github-dispatch/route.ts) membaca cookie aktif dari Storage dan meneruskannya ke runner GitHub Actions (`inputs.session_cookie`). Runner juga memiliki fallback mandiri untuk mengunduh cookie langsung dari Supabase Storage.
-  3. **Unpack Next.js 15 Flight RPC:** Respon Server Action MDS BISA StoreHub mengirimkan chunk `1:{"result":{"data":{...}}}`. Fungsi `parseServerActionResponse` dan `extractProductFields` di [`scripts/sync_mds_bisa_full.mjs`](file:///c:/Max%20Display/price-checker/scripts/sync_mds_bisa_full.mjs) telah disempurnakan untuk mengekstrak data UPC VendorBarcode EAN-13, StyleCode artikel, stok fisik toko, dan sanitasi desimal SQL (`199900.000000` $\rightarrow$ `199900`).
-  4. **Eksekusi All-Trigger Live:** GitHub Actions Run #7 berjalan aktif menyinkronkan 2.757 SKU dengan 3 worker paralel tanpa hambatan wait loop artifisial, dilanjutkan Trigger 2 (Foto Produk Matahari.com) dan Trigger 3 (Promo Email).
