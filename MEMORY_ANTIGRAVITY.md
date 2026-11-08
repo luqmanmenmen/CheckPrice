@@ -486,6 +486,25 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   2. **Retensi 24 Jam Tiket di Gudang & SA:** Tiket request facing out kini bertahan aktif selama 24 jam penuh. Kueri gudang maupun SA mengambil tiket aktif berumur $\le 24$ jam tanpa terkunci oleh status logout shift. Auto-close hanya dijalankan untuk tiket yang sudah lewat dari 24 jam.
   3. **Persistensi 24 Jam Draft Keranjang di HP:** Keranjang antrean facing out sebelum dikirim (`cart`) kini otomatis tersimpan di `localStorage` (`suko_facing_out_cart`). Jika kasir tidak sengaja logout atau HP mati, saat login kembali dalam 24 jam, seluruh daftar barang yang sudah ditambahkan tetap utuh!
 
+---
+
+## 36. Resolusi Hapus Karyawan / Cascade Delete Data Relasi Pengguna
+
+- **Akar Masalah:**
+  Pada endpoint `DELETE /api/admin/users`, sistem sebelumnya hanya memanggil `prisma.user.delete({ where: { id } })`. Karena pengguna yang pernah bekerja memiliki data relasi foreign key di tabel `Shift`, `Ticket`, `LoginLog`, dan `SyncHistory`, PostgreSQL menolak penghapusan dengan error foreign key constraint: *"Gagal menghapus pengguna, mungkin memiliki data relasi (Shift/Tiket)"*.
+- **Solusi Tuntas (Commit `664fb1c`):**
+  1. **Transaksi Aman Cascade Delete (`prisma.$transaction`):** Sebelum menghapus akun user, sistem otomatis membersihkan seluruh rekaman relasi dependensi:
+     - Hapus tiket (`Ticket`) yang dibuat pengguna atau berada di shift pengguna.
+     - Hapus riwayat shift (`Shift`).
+     - Hapus riwayat sinkronisasi (`SyncHistory`).
+     - Hapus riwayat log login (`LoginLog`).
+     - Hapus akun pengguna (`User`).
+  2. **Proteksi Keamanan:**
+     - Akun Developer Utama (NIK `22054178`) diproteksi permanen dari penghapusan (`403 Forbidden`).
+     - Pengguna yang sedang aktif login dicegah dari menghapus akunnya sendiri (`400 Bad Request`).
+  3. **Hasil:** Tombol hapus karyawan di menu Super Admin (`/super-admin/users`) kini dapat menghapus akun karyawan mana pun dengan lancar dan bersih tanpa error relasi database.
+
+
 
 
 
