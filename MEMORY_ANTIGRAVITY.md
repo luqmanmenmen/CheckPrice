@@ -433,4 +433,19 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   - Sebelumnya, tampilan kartu detail produk di [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx) dan Kiosk [`src/app/cek-harga/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/cek-harga/page.tsx) hanya menampilkan label `SKU:` dan `ARTIKEL:`, sementara label `BARCODE:` belum dimunculkan di kartu. Hal ini membuat kasir mengira produk belum memiliki barcode.
   - **Solusi Terpasang:** Ditambahkan badge hijau terang **`BARCODE: {product.barcode}`** dengan ikon Barcode di samping badge SKU dan ARTIKEL. Kasir dan user kini dapat langsung melihat nomor barcode fisik hangtag asli dari setiap SKU yang dicari.
 
+---
+
+## 32. Eliminasi Perulangan Banner Pink "Pembaruan Tersedia" (Persistensi Versi & Dismiss)
+
+- **Akar Masalah:**
+  1. Perbandingan versi di `page.tsx` sebelumnya menggunakan `serverVersion !== localVersion` yang membandingkan timestamp mentah milidetik. Setiap kali background sync atau update SKU berjalan di server, timestamp server menjadi lebih baru sehingga memicu banner berulang kali.
+  2. Flag dismiss `dismissedUpdate` sebelumnya hanya disimpan di state React (`useState(false)`). Begitu halaman di-refresh atau dibuka ulang, state kembali ke `false` sehingga banner pink muncul lagi meskipun pengguna sudah menekan tombol [UPDATE SEKARANG].
+  3. Cek `hasAppCodeUpdate` memeriksa string versi aplikasi yang tersimpan di `localStorage` klien.
+- **Solusi Tuntas (Commit `4e35d0d`):**
+  1. **Persistensi ke LocalStorage:** Status versi yang di-update maupun di-dismiss disimpan permanen ke `localStorage` pada key `suko_dismissed_update` dan `suko_server_version`.
+  2. **Logika Perbandingan Numerik:** Banner hanya muncul jika `Number(serverVersion) > Number(localVersion)` DAN versi tersebut belum pernah di-update atau di-dismiss (`isDismissedForThisVersion` false).
+  3. **Mutasi SWR & Suko Client Version:** Begitu [UPDATE SEKARANG] selesai atau tombol `(X)` diklik, versi aktif langsung di-cache ke storage, `hasAppCodeUpdate` dinonaktifkan, dan SWR di-refresh seketika.
+  4. **Hasil:** Sekali tombol [UPDATE SEKARANG] ditekan atau ditutup `(X)`, banner pink **TIDAK AKAN PERNAH MUNCUL LAGI** meskipun halaman di-refresh berkali-kali. Banner baru akan muncul hanya jika ada pembaruan data besar baru di masa mendatang.
+
+
 
