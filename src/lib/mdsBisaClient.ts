@@ -39,44 +39,64 @@ export async function getStoreHubCookie(): Promise<string> {
     return cachedCookie;
   }
 
-  // Jika ada env MDS_SESSION_COOKIE, gunakan itu
+  // 1. Jika ada env MDS_SESSION_COOKIE, gunakan itu
   if (process.env.MDS_SESSION_COOKIE) {
     cachedCookie = process.env.MDS_SESSION_COOKIE;
     cookieCachedAt = now;
     return cachedCookie;
   }
 
-  // Auto-login ke StoreHub
-  const formData = new URLSearchParams();
-  formData.append('next', '/');
-  formData.append('username', CREDENTIALS.username);
-  formData.append('password', CREDENTIALS.password);
-  formData.append('tz', CREDENTIALS.tz);
-
-  const res = await fetch(LOGIN_URL, {
-    method: 'POST',
-    headers: {
-      'Accept': 'text/x-component',
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Next-Action': ACTION_LOGIN,
-      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15',
-      'Referer': LOGIN_URL,
-    },
-    body: formData.toString(),
-    redirect: 'manual',
-  });
-
-  const setCookieHeader = res.headers.get('set-cookie') || '';
-  const cookiesList = setCookieHeader.split(',').map(c => c.split(';')[0].trim());
-  const sessionCookie = cookiesList.join('; ');
-
-  if (!sessionCookie || (!sessionCookie.includes('mso_session') && !sessionCookie.includes('db76d'))) {
-    throw new Error('Gagal mendapatkan session login StoreHub');
+  // 2. Ambil dari Supabase Storage (secrets/mds_cookie.txt)
+  try {
+    const { supabase } = await import('@/lib/supabaseClient');
+    const { data, error } = await supabase.storage.from('excel-uploads').download('secrets/mds_cookie.txt');
+    if (data && !error) {
+      const cookie = (await data.text()).trim();
+      if (cookie && cookie.length > 10) {
+        cachedCookie = cookie;
+        cookieCachedAt = now;
+        return cachedCookie;
+      }
+    }
+  } catch (e) {
+    console.warn('[MDS-CLIENT] Gagal membaca cookie dari Storage:', e);
   }
 
-  cachedCookie = sessionCookie;
-  cookieCachedAt = now;
-  return sessionCookie;
+  // 3. Fallback Auto-login ke StoreHub
+  try {
+    const formData = new URLSearchParams();
+    formData.append('next', '/');
+    formData.append('username', CREDENTIALS.username);
+    formData.append('password', CREDENTIALS.password);
+    formData.append('tz', CREDENTIALS.tz);
+
+    const res = await fetch(LOGIN_URL, {
+      method: 'POST',
+      headers: {
+        'Accept': 'text/x-component',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Next-Action': ACTION_LOGIN,
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15',
+        'Referer': LOGIN_URL,
+      },
+      body: formData.toString(),
+      redirect: 'manual',
+    });
+
+    const setCookieHeader = res.headers.get('set-cookie') || '';
+    const cookiesList = setCookieHeader.split(',').map(c => c.split(';')[0].trim());
+    const sessionCookie = cookiesList.join('; ');
+
+    if (sessionCookie && (sessionCookie.includes('mso_session') || sessionCookie.includes('db76d'))) {
+      cachedCookie = sessionCookie;
+      cookieCachedAt = now;
+      return sessionCookie;
+    }
+  } catch (e) {
+    console.warn('[MDS-CLIENT] Auto-login error:', e);
+  }
+
+  throw new Error('Gagal mendapatkan session login StoreHub');
 }
 
 export async function checkSingleItemStock(sku: string): Promise<{
@@ -93,37 +113,55 @@ export async function checkSingleItemStock(sku: string): Promise<{
 }> {
   const cleanSku = String(sku).trim();
 
-  // 1. Cek jam buka toko fisik
-  if (!isStoreOpen()) {
-    return {
-      success: false,
-      sku: cleanSku,
-      storeOffline: true,
-      message: 'Server komputer toko 719 offline di luar jam operasional (09:00 - 21:30 WIB).',
-    };
-  }
+  // Helper untuk fallback anggun ke database Supabase
+  const fallbackToDb = async (msg: string) => {
+    try {
+      const dbProduct = await prisma.product.findUnique({
+        where: { sku: cleanSku },
+        select: { sku: true, stok: true, barcode: true, article: true, hargaNormal: true }
+      });
+      let variants: Array<{ sku: string; color?: string | null; size?: string | null; stok: number }> = [];
+      if (dbProduct?.article) {
+        const siblings = await prisma.product.findMany({
+          where: { article: dbProduct.article },
+          select: { sku: true, color: true, size: true, stok: true }
+        });
+        variants = siblings.map(s => ({ sku: s.sku, color: s.color, size: s.size, stok: s.stok }));
+      }
+      return {
+        success: true,
+        sku: cleanSku,
+        stok: dbProduct?.stok ?? 0,
+        barcode: dbProduct?.barcode,
+        article: dbProduct?.article,
+        hargaNormal: dbProduct?.hargaNormal,
+        variants,
+        storeOffline: true,
+        message: msg,
+      };
+    } catch {
+      return {
+        success: false,
+        sku: cleanSku,
+        message: msg,
+      };
+    }
+  };
 
   try {
-    let cookie = await getStoreHubCookie();
+    let cookie = await getStoreHubCookie().catch(() => null);
+    if (!cookie) {
+      return await fallbackToDb('Server MDS BISA belum ada session aktif. Menampilkan stok tersimpan.');
+    }
+
     const args = ['sku', cleanSku];
 
-    let res = await fetch(ITEM_CHECKER_URL, {
-      method: 'POST',
-      headers: {
-        'Accept': 'text/x-component',
-        'Content-Type': 'text/plain;charset=UTF-8',
-        'Cookie': cookie,
-        'Next-Action': ACTION_DETAIL,
-        'Referer': ITEM_CHECKER_URL,
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15',
-      },
-      body: JSON.stringify(args),
-    });
+    // Beri batas timeout 6 detik agar tidak membuat kasir menunggu lama saat toko tutup
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
 
-    // Jika 401 Unauthorized, re-login sekali
-    if (res.status === 401) {
-      cachedCookie = null;
-      cookie = await getStoreHubCookie();
+    let res: Response;
+    try {
       res = await fetch(ITEM_CHECKER_URL, {
         method: 'POST',
         headers: {
@@ -133,31 +171,64 @@ export async function checkSingleItemStock(sku: string): Promise<{
           'Next-Action': ACTION_DETAIL,
           'Referer': ITEM_CHECKER_URL,
           'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15',
+          'Next-Router-State-Tree': '%5B%22%22%2C%7B%22children%22%3A%5B%22(app)%22%2C%7B%22children%22%3A%5B%22item-checker%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C4%5D%7D%2Cnull%2C%22refetch%22%2C24%5D',
         },
         body: JSON.stringify(args),
+        signal: controller.signal,
       });
+    } catch {
+      clearTimeout(timeoutId);
+      return await fallbackToDb('Server MDS BISA sedang istirahat (malam hari). Menampilkan stok tersimpan.');
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    // Jika 401 Unauthorized, re-login sekali
+    if (res.status === 401) {
+      cachedCookie = null;
+      cookie = await getStoreHubCookie().catch(() => null);
+      if (!cookie) return await fallbackToDb('Sesi login kedaluwarsa. Menampilkan stok tersimpan.');
+      
+      try {
+        res = await fetch(ITEM_CHECKER_URL, {
+          method: 'POST',
+          headers: {
+            'Accept': 'text/x-component',
+            'Content-Type': 'text/plain;charset=UTF-8',
+            'Cookie': cookie,
+            'Next-Action': ACTION_DETAIL,
+            'Referer': ITEM_CHECKER_URL,
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15',
+            'Next-Router-State-Tree': '%5B%22%22%2C%7B%22children%22%3A%5B%22(app)%22%2C%7B%22children%22%3A%5B%22item-checker%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C4%5D%7D%2Cnull%2C%22refetch%22%2C24%5D',
+          },
+          body: JSON.stringify(args),
+        });
+      } catch {
+        return await fallbackToDb('Server MDS BISA sedang istirahat (malam hari). Menampilkan stok tersimpan.');
+      }
     }
 
     const text = await res.text();
 
-    if (text.includes('504 Gateway') || text.includes('Gateway Time-out') || text.includes('no route to host')) {
-      return {
-        success: false,
-        sku: cleanSku,
-        storeOffline: true,
-        message: 'Server kasir lokal toko 719 sedang tidak terjangkau (VPN offline).',
-      };
+    if (text.includes('504 Gateway') || text.includes('Gateway Time-out') || text.includes('no route to host') || res.status === 504) {
+      return await fallbackToDb('Server toko fisik sedang istirahat (malam hari). Menampilkan stok tersimpan.');
     }
 
-    // Parse Server Action Response
+    // Parse Server Action Response (Unpack Next.js 15 chunk)
     let itemData: any = null;
     const lines = text.split('\n');
     for (const line of lines) {
-      if (line.startsWith('1:') || line.startsWith('0:')) {
+      const colonIdx = line.indexOf(':');
+      if (colonIdx > 0 && colonIdx <= 3) {
         try {
-          const parsed = JSON.parse(line.substring(2));
-          if (parsed && typeof parsed === 'object') {
-            itemData = parsed;
+          const parsed = JSON.parse(line.substring(colonIdx + 1));
+          if (parsed?.result?.data?.[cleanSku]) {
+            itemData = parsed.result.data[cleanSku][0];
+            break;
+          }
+          if (parsed?.result?.data) {
+            const first = Object.values(parsed.result.data)[0];
+            itemData = Array.isArray(first) ? first[0] : first;
             break;
           }
         } catch {
@@ -167,23 +238,30 @@ export async function checkSingleItemStock(sku: string): Promise<{
     }
 
     if (!itemData || itemData.error) {
-      return {
-        success: false,
-        sku: cleanSku,
-        message: itemData?.error || 'Data produk tidak ditemukan di portal StoreHub.',
-      };
+      return await fallbackToDb('Menampilkan stok tersimpan di sistem.');
     }
 
     // 1. Ekstraksi nilai stok untuk SKU saat ini
     let currentSkuStok = 0;
-    const directStok = itemData.stockOnHand ?? itemData.stock_on_hand ?? itemData.StockOnHand ?? itemData.soh;
+    const directStok = itemData.StockOnHand ?? itemData.stockOnHand ?? itemData.stock_on_hand ?? itemData.soh;
     if (directStok !== undefined && directStok !== null) {
       currentSkuStok = parseInt(String(directStok), 10) || 0;
     }
 
-    const barcode = itemData.vendorBarcode || itemData.barcode || itemData.upc || null;
-    const article = itemData.styleCode || itemData.article || itemData.style || null;
-    const hargaNormal = parseFloat(itemData.retailPrice || itemData.price) || null;
+    const barcode = itemData.VendorBarcode ?? itemData.vendorBarcode ?? itemData.barcode ?? null;
+    const article = itemData.StyleCode ?? itemData.styleCode ?? itemData.article ?? null;
+    
+    // Parse harga normal ritel
+    let rawPrice = itemData.RetailPrice ?? itemData.retailPrice ?? itemData.price;
+    let hargaNormal: number | null = null;
+    if (rawPrice) {
+      let str = String(rawPrice).trim();
+      if (/\.\d{4,}$/.test(str) || /\.00$/.test(str)) {
+        str = str.split('.')[0];
+      }
+      const cleaned = str.replace(/[^0-9]/g, '');
+      hargaNormal = cleaned ? parseInt(cleaned) : null;
+    }
 
     // 2. Cari seluruh varian produk dari ARTIKEL ini di database Supabase
     let articleToSearch = article;

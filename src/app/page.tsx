@@ -212,10 +212,10 @@ export default function Home() {
   const [error, setError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [orderPreviewImage, setOrderPreviewImage] = useState<{ url: string; title: string; sku: string } | null>(null);
 
-  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
   };
@@ -255,16 +255,19 @@ export default function Home() {
           });
         }
 
-        const countText = data.totalVariantsUpdated > 1 ? ` (${data.totalVariantsUpdated} varian warna & ukuran)` : '';
-        setLiveStockVerified(`Live: ${data.stok} pcs${countText}`);
-        showToast(`Stok seluruh warna & ukuran artikel ${data.article || product.article || ''} terverifikasi live StoreHub!`, "success");
-      } else if (data.storeOffline) {
-        showToast(data.message || "Komputer toko 719 offline (buka 09:00 - 21:30 WIB)", "error");
+        if (data.storeOffline) {
+          setLiveStockVerified(`Tersimpan: ${data.stok} pcs`);
+          showToast(data.message || `Toko tutup (malam). Menampilkan stok tersimpan: ${data.stok} pcs`, "info");
+        } else {
+          const countText = data.totalVariantsUpdated > 1 ? ` (${data.totalVariantsUpdated} varian warna & ukuran)` : '';
+          setLiveStockVerified(`Live: ${data.stok} pcs${countText}`);
+          showToast(`Stok seluruh warna & ukuran artikel ${data.article || product.article || ''} terverifikasi live StoreHub!`, "success");
+        }
       } else {
-        showToast(data.message || "Gagal sinkron stok live", "error");
+        showToast(data.message || "Menampilkan stok tersimpan di sistem", "info");
       }
     } catch {
-      showToast("Gagal menghubungi server live StoreHub", "error");
+      showToast("Menampilkan stok tersimpan di sistem", "info");
     } finally {
       setCheckingLiveStock(false);
     }
@@ -285,6 +288,7 @@ export default function Home() {
   
   const [localVersion, setLocalVersion] = useState<string | null>(null);
   const [hasAppCodeUpdate, setHasAppCodeUpdate] = useState(false);
+  const [dismissedUpdate, setDismissedUpdate] = useState(false);
   
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -299,7 +303,7 @@ export default function Home() {
   }, []);
 
   const hasNewUpdate = Boolean(
-    (serverVersion && (!localVersion || serverVersion !== localVersion)) || hasAppCodeUpdate
+    !dismissedUpdate && ((serverVersion && (!localVersion || serverVersion !== localVersion)) || hasAppCodeUpdate)
   );
 
   // Download awal otomatis hanya jika database lokal masih kosong (produk < 1000)
@@ -358,6 +362,8 @@ export default function Home() {
         localStorage.setItem("suko_server_version", serverVersion);
         setLocalVersion(serverVersion);
       }
+      setDismissedUpdate(true);
+      setHasAppCodeUpdate(false);
 
       // Hapus tracker batas toleransi 1 hari setelah berhasil update
       if (typeof window !== "undefined") {
@@ -988,9 +994,9 @@ export default function Home() {
     {/* Toast Notification */}
     {toast && (
       <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-full shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-top-10 duration-300 font-bold text-sm whitespace-nowrap ${
-        toast.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'
+        toast.type === 'success' ? 'bg-emerald-600 text-white' : (toast.type === 'info' ? 'bg-indigo-600 text-white' : 'bg-red-600 text-white')
       }`}>
-        {toast.type === 'success' ? <CheckCircle2 className="w-5 h-5" /> : <XCircle className="w-5 h-5" />}
+        {toast.type === 'success' ? <CheckCircle2 className="w-5 h-5" /> : (toast.type === 'info' ? <Bell className="w-5 h-5" /> : <XCircle className="w-5 h-5" />)}
         <span>{toast.message}</span>
       </div>
     )}
@@ -1051,7 +1057,7 @@ export default function Home() {
         {/* Database Status Info */}
         <div className="flex flex-col gap-2">
           {hasNewUpdate && (
-            <div className="bg-rose-500 rounded-xl p-3 shadow-md border border-rose-600 flex items-center justify-between animate-in slide-in-from-top-2">
+            <div className="bg-rose-500 rounded-xl p-3 shadow-md border border-rose-600 flex items-center justify-between animate-in slide-in-from-top-2 gap-3">
               <div className="flex items-center gap-3">
                 <CloudDownload className="w-6 h-6 text-white animate-bounce shrink-0" />
                 <div>
@@ -1059,13 +1065,28 @@ export default function Home() {
                   <p className="text-rose-100 text-[10px] font-medium leading-tight mt-0.5">Update data promo, harga, dan fitur sistem terbaru.</p>
                 </div>
               </div>
-              <button 
-                onClick={() => handleManualSync()}
-                disabled={isSyncing}
-                className={`px-3 py-2 bg-white text-rose-600 font-black text-xs rounded-lg hover:bg-rose-50 transition-colors shadow-sm shrink-0 whitespace-nowrap ${isSyncing ? 'opacity-50' : ''}`}
-              >
-                {isSyncing ? "UPDATE..." : "UPDATE SEKARANG"}
-              </button>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => handleManualSync()}
+                  disabled={isSyncing}
+                  className={`px-3 py-2 bg-white text-rose-600 font-black text-xs rounded-lg hover:bg-rose-50 transition-colors shadow-sm shrink-0 whitespace-nowrap cursor-pointer ${isSyncing ? 'opacity-50' : ''}`}
+                >
+                  {isSyncing ? "UPDATE..." : "UPDATE SEKARANG"}
+                </button>
+                <button
+                  onClick={() => {
+                    setDismissedUpdate(true);
+                    if (serverVersion) {
+                      localStorage.setItem("suko_server_version", serverVersion);
+                      setLocalVersion(serverVersion);
+                    }
+                  }}
+                  title="Tutup pemberitahuan"
+                  className="p-1.5 text-white/80 hover:text-white hover:bg-rose-600 rounded-lg transition-colors cursor-pointer shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           )}
 
