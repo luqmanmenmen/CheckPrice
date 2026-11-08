@@ -361,6 +361,30 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   - **Layar Super Admin (`src/app/super-admin/sinkronisasi-harian/page.tsx`):**
     - Kartu Eksekutif **"Riwayat Eksekusi Update Terakhir"** dengan 3 kartu status pilar (MDS BISA, Foto Online, Promo Python) dan tabel riwayat lengkap 10 eksekusi terakhir dari tabel `SyncHistory` (waktu WIB, tipe pilar, nama berkas, jumlah item, dan status badge hijau `SUKSES`).
 
+---
+
+## 27. Resolusi Kamera Belakang Layar Hitam (Black Page) & Otorisasi Penuh Menu Sinkronisasi
+
+* **Perbaikan Total Kamera Belakang (Eliminasi Black Screen di Android):**
+  - **Akar Masalah:**
+    1. Pemanggilan `Html5Qrcode.getCameras()` di dalam effect memodifikasi `selectedCameraId` saat kamera sedang di-acquire oleh browser, memicu **race condition & hardware lock** kamera belakang di Android Chrome.
+    2. Properti `aspectRatio: 1.0` memaksa resolusi square yang tidak didukung oleh sensor lensa kamera belakang HP (4:3 / 16:9), sehingga stream video menjadi hitam pekat (black screen) sementara kamera depan yang memiliki mode selfie bisa menyala.
+  - **Solusi:**
+    - Menggunakan native `{ facingMode: "environment" }` langsung tanpa mengunci ID kamera dinamis yang memicu re-render ganda.
+    - Menghapus pembatasan `aspectRatio: 1.0` dan membiarkan sensor kamera memakai resolusi alaminya, lalu disesuaikan oleh CSS global `#retail-barcode-scanner-view video { object-fit: cover !important }`.
+    - Menambahkan `isStartingRef` dan cleanup promise async agar tidak ada 2 proses start/stop kamera yang bertabrakan.
+    - Kamera belakang kini langsung menyala jernih seketika saat tombol scan dibuka.
+
+* **Resolusi Menu Sinkronisasi Ditendang ke Login & Error "Server Tidak Merespons JSON":**
+  - **Akar Masalah:**
+    - Akun NIK `223515` (Luqman Arif) sebelumnya berstatus role `CREW_STORE` di Supabase.
+    - `middleware.ts` memblokir akses rute `/super-admin/*` bagi role `CREW_STORE` dan memberlakukan batas waktu jam shift (Shift 2 otomatis logout sebelum jam 14:00 WIB).
+    - Saat user mengklik menu sinkronisasi, middleware melempar redirect 307 ke `/login`. Request API yang ter-redirect ke halaman login mengembalikan HTML `<!DOCTYPE html>`, memicu error `JSON.parse` bertuliskan **"Server tidak merespons JSON valid"**.
+  - **Solusi:**
+    - Role user NIK `223515` di database Supabase di-upgrade resmi menjadi `SUPERVISOR`.
+    - Di [`src/middleware.ts`](file:///c:/Max%20Display/price-checker/src/middleware.ts), NIK `22054178` dan `223515` diberikan hak istimewa Developer/Supervisor penuh: bebas dari auto-logout shift dan bebas mengakses seluruh menu `/super-admin/*` tanpa pernah ditendang ke halaman login.
+
+
 
 
 

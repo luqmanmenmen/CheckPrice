@@ -11,7 +11,6 @@ import {
   Barcode, 
   FlipHorizontal, 
   Camera, 
-  ScanText,
   Volume2,
   VolumeX,
   AlertCircle
@@ -42,17 +41,17 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
   const scannerContainerId = "retail-barcode-scanner-view";
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const isHandlingResult = useRef(false);
+  const isStartingRef = useRef(false);
 
-  const [status, setStatus] = useState("Menyiapkan Pemindai Barcode Kamera...");
+  const [status, setStatus] = useState("Menghubungkan ke Kamera...");
   const [isReady, setIsReady] = useState(false);
   const [hasTorch, setHasTorch] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [foundCode, setFoundCode] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // Default prioritaskan kamera belakang (environment)
   const [facingMode, setFacingMode] = useState<"environment" | "user">("environment");
-  const [availableCameras, setAvailableCameras] = useState<{ id: string; label: string }[]>([]);
-  const [selectedCameraId, setSelectedCameraId] = useState<string | null>(null);
 
   // Audio feedback nada beep kasir (1.8 kHz, 100ms)
   const playBeep = useCallback(() => {
@@ -116,84 +115,84 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     }, 250);
   }, [onScanResult, playBeep, triggerHaptic]);
 
-  // Inisialisasi & Start Kamera Pemindai
+  // Inisialisasi & Start Kamera Pemindai (Anti-Race Condition & Anti-Black Screen)
   useEffect(() => {
-    let isMounted = true;
+    let isCancelled = false;
     isHandlingResult.current = false;
     setErrorMessage(null);
     setFoundCode(null);
-    setStatus("Menghubungkan ke kamera...");
+    setIsReady(false);
+    setStatus(facingMode === "environment" ? "Membuka Kamera Belakang..." : "Membuka Kamera Depan...");
 
-    // Cek daftar kamera fisik yang tersedia
-    Html5Qrcode.getCameras()
-      .then((cameras) => {
-        if (!isMounted) return;
-        if (cameras && cameras.length > 0) {
-          setAvailableCameras(cameras);
-          // Prioritaskan kamera belakang (back/environment)
-          const backCam = cameras.find((c) =>
-            c.label.toLowerCase().includes("back") ||
-            c.label.toLowerCase().includes("belakang") ||
-            c.label.toLowerCase().includes("environment") ||
-            c.label.toLowerCase().includes("0")
-          );
-          if (!selectedCameraId) {
-            setSelectedCameraId(backCam ? backCam.id : cameras[0].id);
+    const startCamera = async () => {
+      if (isStartingRef.current) return;
+      isStartingRef.current = true;
+
+      // Hentikan scanner sebelumnya jika masih aktif
+      if (scannerRef.current) {
+        try {
+          if (scannerRef.current.isScanning) {
+            await scannerRef.current.stop();
           }
+          await scannerRef.current.clear();
+        } catch (e) {
+          console.warn("Cleanup scanner error:", e);
         }
-      })
-      .catch((err) => {
-        console.warn("Kamera getCameras error:", err);
+      }
+
+      if (isCancelled) {
+        isStartingRef.current = false;
+        return;
+      }
+
+      // Buat instance baru
+      const html5Qr = new Html5Qrcode(scannerContainerId, {
+        formatsToSupport: SUPPORTED_FORMATS,
+        verbose: false,
+        experimentalFeatures: {
+          useBarCodeDetectorIfSupported: true, // Native C++ BarcodeDetector pada Android Chrome (5ms!)
+        },
       });
 
-    const html5Qr = new Html5Qrcode(scannerContainerId, {
-      formatsToSupport: SUPPORTED_FORMATS,
-      verbose: false,
-      experimentalFeatures: {
-        useBarCodeDetectorIfSupported: true, // Native C++ BarcodeDetector pada Android Chrome (5ms!)
-      },
-    });
+      scannerRef.current = html5Qr;
 
-    scannerRef.current = html5Qr;
+      // Konfigurasi area bidik horizontal proporsional untuk barcode pakaian ritel
+      const qrboxConfig = (viewfinderWidth: number, viewfinderHeight: number) => {
+        const width = Math.floor(Math.min(viewfinderWidth * 0.88, 380));
+        const height = Math.floor(Math.min(viewfinderHeight * 0.40, 170));
+        return { width, height };
+      };
 
-    const qrboxConfig = (viewfinderWidth: number, viewfinderHeight: number) => {
-      // Area bidik persegi panjang horizontal untuk garis barcode pakaian (lebar 86%, tinggi max 160px)
-      const width = Math.floor(Math.min(viewfinderWidth * 0.88, 380));
-      const height = Math.floor(Math.min(viewfinderHeight * 0.38, 160));
-      return { width, height };
-    };
+      // Konfigurasi pemindai: HAPUS aspectRatio 1.0 agar tidak black screen di kamera belakang HP Android
+      const config = {
+        fps: 15,
+        qrbox: qrboxConfig,
+        disableFlip: false,
+      };
 
-    const config = {
-      fps: 20, // 20 frame per detik untuk scanning barcode super cepat
-      qrbox: qrboxConfig,
-      aspectRatio: 1.0,
-      disableFlip: false,
-    };
+      try {
+        // Coba start dengan facingMode yang dipilih
+        await html5Qr.start(
+          { facingMode: facingMode },
+          config,
+          (decodedText) => {
+            handleBarcodeDetected(decodedText);
+          },
+          () => {
+            // Callback frame scanning normal saat belum ada barcode di kamera
+          }
+        );
 
-    const cameraConfig = selectedCameraId
-      ? selectedCameraId
-      : { facingMode: facingMode };
-
-    html5Qr
-      .start(
-        cameraConfig,
-        config,
-        (decodedText) => {
-          handleBarcodeDetected(decodedText);
-        },
-        () => {
-          // Frame error callback biasa saat barcode belum ada di viewfinder
-        }
-      )
-      .then(() => {
-        if (!isMounted) {
+        if (isCancelled) {
           html5Qr.stop().catch(() => {});
+          isStartingRef.current = false;
           return;
         }
+
         setIsReady(true);
         setStatus("Arahkan Garis Barcode ke Dalam Kotak");
 
-        // Cek dukungan torch / senter
+        // Cek dukungan senter (flashlight / torch)
         try {
           const capabilities = html5Qr.getRunningTrackCameraCapabilities();
           if (capabilities && typeof (capabilities as any).torchFeature === "function") {
@@ -203,21 +202,66 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
         } catch {
           setHasTorch(false);
         }
-      })
-      .catch((err) => {
-        if (!isMounted) return;
-        console.error("Gagal memulai scanner barcode:", err);
-        setErrorMessage("Tidak dapat mengakses kamera. Pastikan izin kamera telah diberikan.");
-        setStatus("Izin Kamera Ditolak / Tidak Ditemukan");
-      });
+      } catch (err: any) {
+        if (isCancelled) return;
+        console.warn(`Gagal start kamera dengan facingMode ${facingMode}:`, err);
 
-    return () => {
-      isMounted = false;
-      if (html5Qr.isScanning) {
-        html5Qr.stop().catch((e) => console.warn("Stop scanner error:", e));
+        // Fallback: jika exact/facingMode gagal, ambil camera ID pertama yang tersedia
+        try {
+          const cameras = await Html5Qrcode.getCameras();
+          if (cameras && cameras.length > 0) {
+            // Jika ingin kamera belakang, pilih yang bukan front/depan
+            let targetCam = cameras[0];
+            if (facingMode === "environment") {
+              const backCam = cameras.find((c) =>
+                c.label.toLowerCase().includes("back") ||
+                c.label.toLowerCase().includes("belakang") ||
+                c.label.toLowerCase().includes("rear") ||
+                c.label.toLowerCase().includes("environment")
+              );
+              if (backCam) targetCam = backCam;
+              else if (cameras.length > 1) targetCam = cameras[cameras.length - 1]; // Kamera terakhir biasanya kamera belakang di Android
+            }
+
+            await html5Qr.start(
+              targetCam.id,
+              config,
+              (decodedText) => handleBarcodeDetected(decodedText),
+              () => {}
+            );
+
+            if (!isCancelled) {
+              setIsReady(true);
+              setStatus("Arahkan Garis Barcode ke Dalam Kotak");
+            }
+          } else {
+            throw new Error("Tidak ada perangkat kamera yang terdeteksi");
+          }
+        } catch (fallbackErr: any) {
+          if (!isCancelled) {
+            console.error("Gagal semua upaya start kamera:", fallbackErr);
+            setErrorMessage("Kamera tidak dapat diakses. Pastikan izin kamera aktif di browser.");
+            setStatus("Izin Kamera Ditolak / Kamera Sibuk");
+          }
+        }
+      } finally {
+        isStartingRef.current = false;
       }
     };
-  }, [facingMode, selectedCameraId, handleBarcodeDetected]);
+
+    startCamera();
+
+    return () => {
+      isCancelled = true;
+      if (scannerRef.current) {
+        try {
+          if (scannerRef.current.isScanning) {
+            scannerRef.current.stop().catch(() => {});
+          }
+        } catch {}
+      }
+    };
+  }, [facingMode, handleBarcodeDetected]);
 
   // Toggle Senter (Flashlight / Torch)
   const toggleTorch = async () => {
@@ -233,15 +277,10 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     }
   };
 
-  // Toggle Switch Kamera (Depan / Belakang)
+  // Toggle Switch Kamera (Belakang <-> Depan)
   const switchCamera = () => {
-    if (availableCameras.length > 1) {
-      const currentIndex = availableCameras.findIndex((c) => c.id === selectedCameraId);
-      const nextIndex = (currentIndex + 1) % availableCameras.length;
-      setSelectedCameraId(availableCameras[nextIndex].id);
-    } else {
-      setFacingMode((prev) => (prev === "environment" ? "user" : "environment"));
-    }
+    setTorchOn(false);
+    setFacingMode((prev) => (prev === "environment" ? "user" : "environment"));
   };
 
   return (
@@ -249,14 +288,14 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       {/* Container Video HTML5 QR Code */}
       <div 
         id={scannerContainerId} 
-        className="w-full h-full object-cover flex items-center justify-center"
-        style={{ minHeight: "320px" }}
+        className="w-full h-full flex items-center justify-center relative overflow-hidden"
+        style={{ minHeight: "320px", maxHeight: "100%" }}
       />
 
       {/* OVERLAY VIEWFINDER KASIR MODERN */}
-      <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-4">
+      <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-4 z-10">
         {/* Kotak Bidik Barcode (Horizontal Rectangular Viewfinder) */}
-        <div className="relative w-[86%] max-w-[360px] h-36 border-2 border-emerald-400/80 rounded-2xl shadow-[0_0_30px_rgba(16,185,129,0.3)] flex items-center justify-center overflow-hidden backdrop-brightness-105">
+        <div className="relative w-[88%] max-w-[360px] h-36 sm:h-40 border-2 border-emerald-400/80 rounded-2xl shadow-[0_0_30px_rgba(16,185,129,0.3)] flex items-center justify-center overflow-hidden backdrop-brightness-105">
           {/* Garis Laser Horizontal Bergerak Naik-Turun */}
           <div className="absolute w-full h-0.5 bg-gradient-to-r from-transparent via-emerald-400 to-transparent shadow-[0_0_12px_#34d399] animate-laser" />
 
@@ -280,10 +319,10 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
         </div>
 
         {/* Petunjuk Arah Garis Barcode */}
-        <div className="mt-4 px-3 py-1.5 bg-black/60 backdrop-blur-md rounded-full border border-white/10 text-center">
+        <div className="mt-4 px-3.5 py-1.5 bg-black/70 backdrop-blur-md rounded-full border border-white/10 text-center shadow-lg">
           <p className="text-xs font-medium text-emerald-300 flex items-center gap-1.5">
             <Barcode className="w-3.5 h-3.5 animate-pulse" />
-            <span>Posisikan garis barcode lurus di dalam kotak</span>
+            <span>Posisikan garis barcode di dalam kotak</span>
           </p>
         </div>
       </div>
@@ -294,11 +333,11 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
         <div className="flex items-center gap-2 bg-black/70 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/15 text-white">
           <div className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
           <span className="text-[11px] font-bold tracking-wide uppercase text-slate-200">
-            Scanner Barcode 1D
+            {facingMode === "environment" ? "Kamera Belakang (1D)" : "Kamera Depan (1D)"}
           </span>
         </div>
 
-        {/* Action Controls: Sound & Torch & Camera */}
+        {/* Action Controls: Sound & Torch & Switch Camera */}
         <div className="flex items-center gap-2">
           {/* Suara Beep */}
           <button
@@ -309,8 +348,8 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
             {soundEnabled ? <Volume2 className="w-4 h-4 text-emerald-400" /> : <VolumeX className="w-4 h-4 text-slate-400" />}
           </button>
 
-          {/* Lampu Senter / Flashlight */}
-          {hasTorch && (
+          {/* Lampu Senter / Flashlight (Hanya ada di kamera belakang) */}
+          {hasTorch && facingMode === "environment" && (
             <button
               onClick={toggleTorch}
               className={`p-2 rounded-full backdrop-blur-md border transition active:scale-95 ${
@@ -324,22 +363,20 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
             </button>
           )}
 
-          {/* Switch Kamera Depan/Belakang */}
-          {availableCameras.length > 1 && (
-            <button
-              onClick={switchCamera}
-              className="p-2 rounded-full bg-black/60 backdrop-blur-md border border-white/15 text-white hover:bg-white/20 transition active:scale-95"
-              title="Ganti Kamera"
-            >
-              <FlipHorizontal className="w-4 h-4 text-slate-200" />
-            </button>
-          )}
+          {/* Switch Kamera Belakang <-> Depan */}
+          <button
+            onClick={switchCamera}
+            className="p-2 rounded-full bg-black/60 backdrop-blur-md border border-white/15 text-white hover:bg-white/20 transition active:scale-95 flex items-center gap-1"
+            title="Ganti Kamera Belakang / Depan"
+          >
+            <FlipHorizontal className="w-4 h-4 text-slate-200" />
+          </button>
         </div>
       </div>
 
       {/* FOOTER BOTTOM STATUS */}
       <div className="absolute bottom-4 left-4 right-4 flex flex-col items-center justify-center z-30 pointer-events-auto">
-        <div className="w-full max-w-sm bg-slate-900/90 backdrop-blur-md px-4 py-2.5 rounded-2xl border border-slate-700/80 shadow-2xl flex items-center justify-between">
+        <div className="w-full max-w-sm bg-slate-900/95 backdrop-blur-md px-4 py-2.5 rounded-2xl border border-slate-700/80 shadow-2xl flex items-center justify-between">
           <div className="flex items-center gap-2.5 overflow-hidden">
             {!isReady && !errorMessage ? (
               <Loader2 className="w-4 h-4 text-emerald-400 animate-spin shrink-0" />
@@ -355,14 +392,25 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
           <div className="shrink-0 flex items-center gap-1.5 ml-2">
             <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/80 border border-emerald-800/80 px-2 py-0.5 rounded-full font-bold">
-              EAN/UPC
+              EAN-13
             </span>
           </div>
         </div>
       </div>
 
-      {/* CSS Animation untuk garis laser scan */}
-      <style jsx>{`
+      {/* CSS untuk memastikan elemen video kamera memenuhi layar dan tidak blank */}
+      <style jsx global>{`
+        #retail-barcode-scanner-view {
+          width: 100% !important;
+          height: 100% !important;
+          background: #000 !important;
+        }
+        #retail-barcode-scanner-view video {
+          width: 100% !important;
+          height: 100% !important;
+          object-fit: cover !important;
+          background: #000 !important;
+        }
         @keyframes laserMove {
           0% {
             top: 5%;

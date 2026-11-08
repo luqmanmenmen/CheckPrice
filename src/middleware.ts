@@ -16,6 +16,7 @@ export async function middleware(request: NextRequest) {
   // Verify the token if it exists
   let isValidSession = false;
   let userRole = '';
+  let userNik = '';
   let userJobTitle = '';
 
   if (token) {
@@ -25,28 +26,28 @@ export async function middleware(request: NextRequest) {
       isValidSession = true;
       
       const payload = verified.payload as Record<string, unknown>;
-      userRole = payload.role as string;
-      userJobTitle = payload.jobTitle as string || '';
+      userRole = (payload.role as string) || '';
+      userNik = (payload.nik as string) || '';
+      userJobTitle = (payload.jobTitle as string) || '';
       const shiftType = payload.shiftType as number | undefined;
 
-      // Auto-logout based on shift time - ONLY FOR CREW STORE
-      if (shiftType && userRole !== 'SUPERVISOR') {
+      const isSuperOrDev = userRole === 'SUPERVISOR' || userNik === '22054178' || userNik === '223515';
+
+      // Auto-logout based on shift time - HANYA UNTUK CREW STORE BIASA (Bukan Supervisor / Developer)
+      if (shiftType && !isSuperOrDev) {
         // Get current hour in Jakarta time (WIB)
         const now = new Date();
         const jakartaStr = now.toLocaleString("en-US", { timeZone: "Asia/Jakarta", hour12: false });
-        // jakartaStr looks like "9/27/2026, 00:29:43" or "9/27/2026, 24:29:43"
         const hourMatch = jakartaStr.match(/ (24|\d+):/);
         let hour = hourMatch ? parseInt(hourMatch[1], 10) : now.getUTCHours() + 7;
         if (hour === 24) hour = 0; // Fix edge case for 24:00
 
-        // Shift 1: Pagi (09:00 - 17:00)
+        // Shift 1: Pagi (08:00 - 17:59)
         if (shiftType === 1) {
-          // Jika di luar jam 08:00 - 17:59
           if (hour >= 17 || hour < 8) isValidSession = false;
         } 
-        // Shift 2: Siang (14:30 - 23:00)
+        // Shift 2: Siang (14:00 - 23:59)
         else if (shiftType === 2) {
-          // Jika di luar jam 14:00 - 23:59
           if (hour >= 23 || hour < 14) isValidSession = false;
         }
       }
@@ -56,10 +57,12 @@ export async function middleware(request: NextRequest) {
     }
   }
 
+  const isSuperOrDev = userRole === 'SUPERVISOR' || userNik === '22054178' || userNik === '223515';
+
   // 1. Redirect logged-in users away from /login
   if (isAuthPage) {
     if (isValidSession) {
-      if (userRole === 'SUPERVISOR') return NextResponse.redirect(new URL('/spv-gateway', request.url));
+      if (isSuperOrDev) return NextResponse.redirect(new URL('/spv-gateway', request.url));
       if (userJobTitle === 'Gudang Stock') return NextResponse.redirect(new URL('/warehouse', request.url));
       return NextResponse.redirect(new URL('/', request.url));
     }
@@ -81,15 +84,14 @@ export async function middleware(request: NextRequest) {
   } else {
     // 3. RBAC: Role-Based Access Control
     // Gudang Stock should be able to access both /warehouse and /
-    // Crew store cannot access warehouse if they are not gudang stock
-    if (userRole === 'CREW_STORE' && userJobTitle !== 'Gudang Stock' && pathname.startsWith('/warehouse')) {
+    if (userRole === 'CREW_STORE' && !isSuperOrDev && userJobTitle !== 'Gudang Stock' && pathname.startsWith('/warehouse')) {
       return NextResponse.redirect(new URL('/', request.url));
     }
-    // CREW_STORE cannot access super-admin
-    if (userRole === 'CREW_STORE' && pathname.startsWith('/super-admin')) {
+    // CREW_STORE biasa tidak boleh akses super-admin (Kecuali Supervisor / NIK 22054178 & 223515)
+    if (userRole === 'CREW_STORE' && !isSuperOrDev && pathname.startsWith('/super-admin')) {
       return NextResponse.redirect(new URL('/', request.url));
     }
-    // SUPERVISOR has full access, no restriction needed!
+    // SUPERVISOR / Developer memiliki akses penuh!
   }
 
   return NextResponse.next();
