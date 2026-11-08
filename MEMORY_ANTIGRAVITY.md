@@ -748,10 +748,22 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
      - Jadwal cron di [`.github/workflows/retail-sync-engine.yml`](file:///c:/Max%20Display/price-checker/.github/workflows/retail-sync-engine.yml) telah dimatikan sepenuhnya.
      - Timeout workflow diturunkan menjadi 15 menit jika sewaktu-waktu dipicu manual.
      - Seluruh mesin pemindaian dijalankan oleh **Local Python Engine** di komputer lokal Mas Luqman, sehingga **100% GRATIS dan TIDAK MENGURANGI kuota GitHub Actions (2.000 menit/bulan)** sama sekali.
-  2. **Standby Mulai Tepat Pukul 09:00 WIB:**
+  2. **Standby Mulai Tepat Pukul 10:00 WIB:**
      - Pemantauan malam hari dihentikan total agar komputer, CPU, dan jaringan beristirahat.
-     - Mesin [`python-engine/morning_full_sweep.py`](file:///c:/Max%20Display/price-checker/python-engine/morning_full_sweep.py) hanya akan aktif melakukan standby probing mulai pukul **09:00 WIB pagi** saat toko fisik Pakuwon Mall mulai dibuka.
+     - Mesin [`python-engine/morning_full_sweep.py`](file:///c:/Max%20Display/price-checker/python-engine/morning_full_sweep.py) disesuaikan untuk standby mulai tepat pukul **10:00 WIB pagi** (sesuai arahan: *"eh start jam 10 aja ding"*).
      - Begitu server toko 719 online, scraping brutal langsung menyapu seluruh katalog MUKU, ZES, SUKO, dll., dan laporan resmi otomatis disajikan untuk dibaca Mas Luqman sore hari sepulang kerja!
+
+---
+
+## 50. Penyesuaian Jadwal Standby Pukul 10:00 WIB (Jam Buka Operasional Mall & POS)
+
+- **Instruksi Pengguna:**
+  *"eh start jam 10 aja ding"*.
+- **Pembaruan Eksekusi:**
+  1. **Timer Otomatis (`task-5173`):** Timer terjadwal diset tepat pada pukul **10:00 WIB** (27.600 detik dari sekarang).
+  2. **Python Standby Threshold:** Pada [`python-engine/morning_full_sweep.py`](file:///c:/Max%20Display/price-checker/python-engine/morning_full_sweep.py), batas waktu tunggu diset ke 600 menit (pukul 10:00 WIB). Sebelum jam 10:00, Python tidur tenang tanpa request apa pun.
+  3. **Pukul 10:00 WIB:** Mesin standby mendeteksi status server Toko 719 menyala dan seketika mengeksekusi penarikan data massal dan pembuatan laporan `LAPORAN_SCRAP_PAGI.md`.
+
 
 
 

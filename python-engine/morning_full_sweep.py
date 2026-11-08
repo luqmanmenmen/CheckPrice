@@ -136,7 +136,7 @@ def probe_store_online(cookie: str) -> bool:
 
 def wait_until_store_online(cookie: str, check_interval_sec: int = 45):
     """
-    Standby cerdas: Hanya dimulai mulai pukul 09:00 WIB pagi saat toko mulai beroperasi.
+    Standby cerdas: Dimulai tepat pukul 10:00 WIB pagi saat jam buka operasional toko/mall.
     Tidak ada aktivitas / request malam hari agar kuota dan jaringan 100% hemat.
     """
     now_utc = datetime.now(timezone.utc)
@@ -144,19 +144,19 @@ def wait_until_store_online(cookie: str, check_interval_sec: int = 45):
     wib_minute = now_utc.minute
     total_minutes = wib_hour * 60 + wib_minute
 
-    # Jika dipanggil sebelum jam 09:00 WIB (540 menit), tidur tenang sampai jam 09:00 WIB
-    if total_minutes < 540:
-        sleep_sec = (540 - total_minutes) * 60
+    # Jika dipanggil sebelum jam 10:00 WIB (600 menit), tidur tenang sampai jam 10:00 WIB
+    if total_minutes < 600:
+        sleep_sec = (600 - total_minutes) * 60
         print(f"⏳ Saat ini masih pukul {wib_hour:02d}:{wib_minute:02d} WIB.")
-        print(f"   Sesuai arahan Mas Luqman: Standby akan dimulai tepat pukul 09:00 WIB pagi!")
+        print(f"   Sesuai arahan Mas Luqman: Standby akan dimulai tepat pukul 10:00 WIB pagi saat toko buka!")
         print(f"   Mesin tidur tenang selama {sleep_sec // 60} menit (0 request ke server/GitHub)...")
         time.sleep(sleep_sec)
 
     print("\n" + "=" * 75)
-    print("📡 [HEARTBEAT STANDBY 09:00 WIB] MEMANTAU KESIAPAN SQL SERVER TOKO 719")
+    print("📡 [HEARTBEAT STANDBY 10:00 WIB] MEMANTAU KESIAPAN SQL SERVER TOKO 719")
     print("=" * 75)
     print(f"Interval pemantauan : Setiap {check_interval_sec} detik.")
-    print("Prinsip Mas Luqman  : Standby jam 9 pagi, begitu MDS BISA online")
+    print("Prinsip Mas Luqman  : Standby jam 10 pagi, begitu MDS BISA online")
     print("                      langsung eksekusi SCRAP BRUTAL tanpa menyisakan apa pun!")
     print("=" * 75)
 
