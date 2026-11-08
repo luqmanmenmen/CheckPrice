@@ -176,7 +176,7 @@ export default function UpdateProdukPage() {
     }
   };
 
-  const isAllowed = !currentUserNik || currentUserNik === "22054178" || currentUserNik === "223515";
+  const isAllowed = !currentUserNik || currentUserNik === "22054178";
   if (!isAllowed) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">

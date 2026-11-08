@@ -183,7 +183,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: false, error: 'Unauthorized - Silakan login kembali' }, { status: 401 });
   }
 
-  if (user.role !== 'SUPERVISOR') {
+  if (user.role !== 'SUPERVISOR' && user.nik !== '22054178') {
     return NextResponse.json({ success: false, error: 'Forbidden - Khusus Supervisor' }, { status: 403 });
   }
 

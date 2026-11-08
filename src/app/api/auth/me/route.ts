@@ -25,8 +25,9 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ user: null });
     }
 
-    // Use loose inequality (!=) so that null and undefined are considered equal for legacy tokens
-    if (dbUser.sessionId != session.sessionId) {
+    // Khusus Developer (22054178) atau SUPERVISOR: izinkan akses multi-device (HP & Laptop bersamaan) tanpa kick/wipe session
+    const isSuperOrDev = dbUser.role === "SUPERVISOR" || session.nik === "22054178";
+    if (!isSuperOrDev && dbUser.sessionId != session.sessionId) {
       console.log("[AUTH ME] Session ID mismatch! DB:", dbUser.sessionId, "JWT:", session.sessionId);
       const response = NextResponse.json({ user: null });
       response.cookies.set("token", "", { maxAge: 0, path: "/" });

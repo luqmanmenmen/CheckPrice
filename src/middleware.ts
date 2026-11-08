@@ -31,7 +31,7 @@ export async function middleware(request: NextRequest) {
       userJobTitle = (payload.jobTitle as string) || '';
       const shiftType = payload.shiftType as number | undefined;
 
-      const isSuperOrDev = userRole === 'SUPERVISOR' || userNik === '22054178' || userNik === '223515';
+      const isSuperOrDev = userRole === 'SUPERVISOR' || userNik === '22054178';
 
       // Auto-logout based on shift time - HANYA UNTUK CREW STORE BIASA (Bukan Supervisor / Developer)
       if (shiftType && !isSuperOrDev) {
@@ -57,7 +57,7 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  const isSuperOrDev = userRole === 'SUPERVISOR' || userNik === '22054178' || userNik === '223515';
+  const isSuperOrDev = userRole === 'SUPERVISOR' || userNik === '22054178';
 
   // 1. Redirect logged-in users away from /login
   if (isAuthPage) {
@@ -87,7 +87,7 @@ export async function middleware(request: NextRequest) {
     if (userRole === 'CREW_STORE' && !isSuperOrDev && userJobTitle !== 'Gudang Stock' && pathname.startsWith('/warehouse')) {
       return NextResponse.redirect(new URL('/', request.url));
     }
-    // CREW_STORE biasa tidak boleh akses super-admin (Kecuali Supervisor / NIK 22054178 & 223515)
+    // CREW_STORE biasa tidak boleh akses super-admin (Kecuali Supervisor / NIK Developer 22054178)
     if (userRole === 'CREW_STORE' && !isSuperOrDev && pathname.startsWith('/super-admin')) {
       return NextResponse.redirect(new URL('/', request.url));
     }

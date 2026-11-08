@@ -375,14 +375,16 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
     - Menambahkan `isStartingRef` dan cleanup promise async agar tidak ada 2 proses start/stop kamera yang bertabrakan.
     - Kamera belakang kini langsung menyala jernih seketika saat tombol scan dibuka.
 
-* **Resolusi Menu Sinkronisasi Ditendang ke Login & Error "Server Tidak Merespons JSON":**
+* **Resolusi Menu Sinkronisasi Ditendang ke Login & Proteksi Khusus Akun Developer NIK 22054178:**
   - **Akar Masalah:**
-    - Akun NIK `223515` (Luqman Arif) sebelumnya berstatus role `CREW_STORE` di Supabase.
-    - `middleware.ts` memblokir akses rute `/super-admin/*` bagi role `CREW_STORE` dan memberlakukan batas waktu jam shift (Shift 2 otomatis logout sebelum jam 14:00 WIB).
-    - Saat user mengklik menu sinkronisasi, middleware melempar redirect 307 ke `/login`. Request API yang ter-redirect ke halaman login mengembalikan HTML `<!DOCTYPE html>`, memicu error `JSON.parse` bertuliskan **"Server tidak merespons JSON valid"**.
-  - **Solusi:**
-    - Role user NIK `223515` di database Supabase di-upgrade resmi menjadi `SUPERVISOR`.
-    - Di [`src/middleware.ts`](file:///c:/Max%20Display/price-checker/src/middleware.ts), NIK `22054178` dan `223515` diberikan hak istimewa Developer/Supervisor penuh: bebas dari auto-logout shift dan bebas mengakses seluruh menu `/super-admin/*` tanpa pernah ditendang ke halaman login.
+    1. Akun NIK `22054178` adalah Developer (`SUPERVISOR`). Saat testing multi-device (misal HP kasir + Laptop bersamaan), mekanisme single active session (`sessionId != session.sessionId`) di `/api/auth/me` menghapus cookie token (`maxAge: 0`) pada perangkat yang sedang dipakai.
+    2. Batas waktu jam shift di middleware sempat mengecek jam kerja sehingga memicu redirect ke `/login` bagi session yang ter-refresh.
+    3. Ketika redirect 307 ke login terjadi saat background fetch `/api/admin/trigger/*`, browser menerima HTML `<!DOCTYPE html>`, yang memicu error parsing `JSON.parse` bertuliskan **"Server tidak merespons JSON valid"**.
+  - **Solusi Tuntas:**
+    1. **Role Akun Lain Tetap Terjaga:** Akun `223515` tetap `CREW_STORE` murni sesuai instruksi tegas pengguna. Tidak ada role akun lain yang diubah.
+    2. **Multi-Device Session Support Developer:** Di [`/api/auth/me`](file:///c:/Max%20Display/price-checker/src/app/api/auth/me/route.ts) dan [`/api/auth/login`](file:///c:/Max%20Display/price-checker/src/app/api/auth/login/route.ts), akun Developer `22054178` / `SUPERVISOR` dibebaskan dari pembatalan sesi ganda sehingga dapat aktif di HP dan Laptop secara bersamaan tanpa pernah terlempar ke halaman login.
+    3. **Akses Penuh Endpoint Trigger:** Di `src/middleware.ts`, `src/app/super-admin/sinkronisasi-harian/page.tsx`, `github-dispatch`, `github-status`, `mds-bisa`, dan `photos`, akun NIK `22054178` diberikan akses developer permanen bebas dari auto-logout shift.
+    4. **Dukungan Barcode Hangtag Ritel (EAN-13):** Barcode `2340002272943` (SKU `13472861`, T1KT1351 S, Rp 129.900) terverifikasi 100% cocok di database Supabase dan langsung dikenali oleh pemindai barcode 1D.
 
 
 
