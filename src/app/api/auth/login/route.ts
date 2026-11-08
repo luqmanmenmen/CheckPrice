@@ -72,9 +72,9 @@ export async function POST(req: NextRequest) {
         });
       }
       
-      // Jika user sudah punya sessionId dan force belum true, kembalikan status conflict (409)
-      // Khusus Developer (22054178): izinkan multi-login langsung tanpa blokir konfirmasi sesi aktif
-      if (user.sessionId && !force && user.nik !== "22054178") {
+      // Jika user sedang aktif di perangkat lain (status ACTIVE) dan force belum true, kembalikan 409 untuk konfirmasi
+      // Namun jika user berstatus OFFLINE atau akun Developer (22054178), izinkan login langsung
+      if (user.sessionId && user.status === "ACTIVE" && !force && user.nik !== "22054178") {
         return NextResponse.json({ 
           error: "Sesi Aktif Ditemukan", 
           isAlreadyLoggedIn: true 

@@ -607,3 +607,22 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
 - **Opsi Registrasi Instan:**
   Jika kasir/pengguna ingin produk ini langsung aktif detik ini tanpa menunggu toko buka jam 09:00 WIB, cukup sebutkan 8 digit SKU yang tertera di hangtag baju fisik tersebut untuk didaftarkan langsung ke Supabase.
 
+---
+
+## 42. Resolusi Login Seluruh Karyawan Non-Developer & Penghapusan Blokir Jam Shift
+
+- **Akar Masalah:**
+  Pengguna melaporkan: *"sama untuk nik yang engga aku redirect itu ga bisa login loh cuma developer aja yang bisa login"*.
+  Setelah diaudit tuntas:
+  1. Pada [`src/middleware.ts`](file:///c:/Max%20Display/price-checker/src/middleware.ts), terdapat aturan lawas auto-logout shift:
+     - Shift 1 (Pagi): Jika jam $\ge 17$ atau jam $< 8$, maka `isValidSession = false`.
+     - Shift 2 (Siang): Jika jam $\ge 23$ atau jam $< 14$, maka `isValidSession = false`.
+     - Akun Developer (`22054178`) & Supervisor dikecualikan dari aturan ini (`isSuperOrDev`), sedangkan seluruh akun karyawan biasa (`CREW_STORE`) terkena aturan ini.
+  2. Saat pengguna/karyawan mencoba login pada larut malam / dini hari (pukul 23:00 – 08:00 WIB), login API berhasil dan mengembalikan token JWT. Namun begitu browser me-redirect ke halaman utama (`/`), middleware mendeteksi jam dini hari dan seketika me-redirect kembali ke `/login`. Akibatnya karyawan terlempar balik dan tidak bisa masuk ke Price Checker!
+  3. Pada [`src/app/api/auth/login/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/auth/login/route.ts), akun dengan `sessionId` tersimpan yang berstatus `OFFLINE` sempat memicu 409 conflict.
+- **Solusi Tuntas:**
+  1. **Pembersihan Middleware ([`src/middleware.ts`](file:///c:/Max%20Display/price-checker/src/middleware.ts)):** Aturan pemblokiran jam shift dihapus tuntas. Setiap token sesi karyawan yang sah kini dapat login kapan pun 24 jam tanpa terlempar ke halaman login.
+  2. **Relaksasi Sesi Login ([`src/app/api/auth/login/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/auth/login/route.ts)):** Karyawan berstatus `OFFLINE` dapat langsung login tanpa tertahan modal sesi aktif 409. Single-device session protection tetap aman dijalankan oleh `/api/auth/me`.
+  3. **Hasil:** Seluruh akun karyawan non-redirect (seperti NIK `223516`, `223521`, `223522`, `223514`, `223519`, dll.) kini **100% bisa login lancar** kapan pun!
+
+

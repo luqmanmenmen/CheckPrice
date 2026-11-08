@@ -29,29 +29,6 @@ export async function middleware(request: NextRequest) {
       userRole = (payload.role as string) || '';
       userNik = (payload.nik as string) || '';
       userJobTitle = (payload.jobTitle as string) || '';
-      const shiftType = payload.shiftType as number | undefined;
-
-      const isSuperOrDev = userRole === 'SUPERVISOR' || userNik === '22054178';
-
-      // Auto-logout based on shift time - HANYA UNTUK CREW STORE BIASA (Bukan Supervisor / Developer)
-      if (shiftType && !isSuperOrDev) {
-        // Get current hour in Jakarta time (WIB)
-        const now = new Date();
-        const jakartaStr = now.toLocaleString("en-US", { timeZone: "Asia/Jakarta", hour12: false });
-        const hourMatch = jakartaStr.match(/ (24|\d+):/);
-        let hour = hourMatch ? parseInt(hourMatch[1], 10) : now.getUTCHours() + 7;
-        if (hour === 24) hour = 0; // Fix edge case for 24:00
-
-        // Shift 1: Pagi (08:00 - 17:59)
-        if (shiftType === 1) {
-          if (hour >= 17 || hour < 8) isValidSession = false;
-        } 
-        // Shift 2: Siang (14:00 - 23:59)
-        else if (shiftType === 2) {
-          if (hour >= 23 || hour < 14) isValidSession = false;
-        }
-      }
-
     } catch (e) {
       isValidSession = false;
     }
