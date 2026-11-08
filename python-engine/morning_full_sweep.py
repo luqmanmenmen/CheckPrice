@@ -136,15 +136,27 @@ def probe_store_online(cookie: str) -> bool:
 
 def wait_until_store_online(cookie: str, check_interval_sec: int = 45):
     """
-    Loop cerdas mandiri: Memanggil StoreHub MDS BISA secara berkala dengan jeda.
-    Tidak bergantung pada patokan jam mati: begitu toko menyala kapan pun,
-    mesin seketika langsung memulai SCRAP BRUTAL!
+    Standby cerdas: Hanya dimulai mulai pukul 09:00 WIB pagi saat toko mulai beroperasi.
+    Tidak ada aktivitas / request malam hari agar kuota dan jaringan 100% hemat.
     """
+    now_utc = datetime.now(timezone.utc)
+    wib_hour = (now_utc.hour + 7) % 24
+    wib_minute = now_utc.minute
+    total_minutes = wib_hour * 60 + wib_minute
+
+    # Jika dipanggil sebelum jam 09:00 WIB (540 menit), tidur tenang sampai jam 09:00 WIB
+    if total_minutes < 540:
+        sleep_sec = (540 - total_minutes) * 60
+        print(f"⏳ Saat ini masih pukul {wib_hour:02d}:{wib_minute:02d} WIB.")
+        print(f"   Sesuai arahan Mas Luqman: Standby akan dimulai tepat pukul 09:00 WIB pagi!")
+        print(f"   Mesin tidur tenang selama {sleep_sec // 60} menit (0 request ke server/GitHub)...")
+        time.sleep(sleep_sec)
+
     print("\n" + "=" * 75)
-    print("📡 [HEARTBEAT DAEMON] MEMANTAU KESIAPAN SQL SERVER TOKO 719 MDS BISA")
+    print("📡 [HEARTBEAT STANDBY 09:00 WIB] MEMANTAU KESIAPAN SQL SERVER TOKO 719")
     print("=" * 75)
     print(f"Interval pemantauan : Setiap {check_interval_sec} detik.")
-    print("Prinsip Mas Luqman  : Panggil terus dengan jeda, sampai MDS BISA online")
+    print("Prinsip Mas Luqman  : Standby jam 9 pagi, begitu MDS BISA online")
     print("                      langsung eksekusi SCRAP BRUTAL tanpa menyisakan apa pun!")
     print("=" * 75)
 

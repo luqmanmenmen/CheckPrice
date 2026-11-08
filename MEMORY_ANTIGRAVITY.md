@@ -734,8 +734,33 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   2. **Pemicu Instan Begitu Toko Online:**
      - Kapan pun komputer toko fisik dinyalakan oleh karyawan (entah 08:30, 08:45, atau 09:15 WIB), mesin mendeteksi respons sukses dalam 1 hitungan detik dan seketika mengeksekusi **SCRAP BRUTAL**!
   3. **Status Runtime:**
-     - Daemon background task aktif berjalan di sistem (`task-5133`).
      - Laporan akhir otomatis terbit di [`python-engine/LAPORAN_SCRAP_PAGI.md`](file:///c:/Max%20Display/price-checker/python-engine/LAPORAN_SCRAP_PAGI.md) dan siap dibaca Mas Luqman sepulang kerja sore nanti.
+
+---
+
+## 49. Keputusan Standby Pukul 09:00 WIB & Jaminan 100% Proteksi Kuota GitHub Actions
+
+- **Instruksi Pengguna:**
+  1. *"jangan sampai menghabiskan quota github loh ya"*
+  2. *"start jam 9 pagi aja kita stand by nya misal nih ngabisin quota github"*
+- **Tindakan & Garansi Keamanan Sistem:**
+  1. **NOL Kuota GitHub Terpakai (0% Quota GitHub Actions):**
+     - Jadwal cron di [`.github/workflows/retail-sync-engine.yml`](file:///c:/Max%20Display/price-checker/.github/workflows/retail-sync-engine.yml) telah dimatikan sepenuhnya.
+     - Timeout workflow diturunkan menjadi 15 menit jika sewaktu-waktu dipicu manual.
+     - Seluruh mesin pemindaian dijalankan oleh **Local Python Engine** di komputer lokal Mas Luqman, sehingga **100% GRATIS dan TIDAK MENGURANGI kuota GitHub Actions (2.000 menit/bulan)** sama sekali.
+  2. **Standby Mulai Tepat Pukul 09:00 WIB:**
+     - Pemantauan malam hari dihentikan total agar komputer, CPU, dan jaringan beristirahat.
+     - Mesin [`python-engine/morning_full_sweep.py`](file:///c:/Max%20Display/price-checker/python-engine/morning_full_sweep.py) hanya akan aktif melakukan standby probing mulai pukul **09:00 WIB pagi** saat toko fisik Pakuwon Mall mulai dibuka.
+     - Begitu server toko 719 online, scraping brutal langsung menyapu seluruh katalog MUKU, ZES, SUKO, dll., dan laporan resmi otomatis disajikan untuk dibaca Mas Luqman sore hari sepulang kerja!
+
+
+
+
+
+
+
+
+
 
 
 
