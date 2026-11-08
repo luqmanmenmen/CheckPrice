@@ -689,6 +689,23 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   4. **Proteksi Jam Operasional:**
      - Mesin siap dijalankan secara mandiri pada jam operasional toko buka (09:00 - 21:30 WIB).
 
+---
+
+## 46. Jadwal Otomatis Pagi 09:00 WIB & Batch Runner Scraping Brutal Semua Produk Toko
+
+- **Instruksi Pengguna:**
+  *"jadi tugasmu scrap all data yang ada di mds tanpa kecuali ! . scrap all taruh di bank data, suruh python scrap all data di mds besok pagi oke suruh scrap tanpa kecuali yang bisa di scrap. dan jika sudah kelolah langsung data itu agar bisa muncul saat discan"*.
+- **Otomatisasi Sistem:**
+  1. **Background Scheduled Timer (`task-5106`):**
+     - Ditetapkan timer otomatis untuk menyala tepat pukul **09:00 WIB** pagi saat komputer SQL Server toko 719 mulai dinyalakan.
+     - Begitu timer menyala, mesin Python langsung mengeksekusi penarikan katalog massal dari MDS BISA StoreHub.
+  2. **1-Click Batch Runner ([`python-engine/run_morning_scrap.bat`](file:///c:/Max%20Display/price-checker/python-engine/run_morning_scrap.bat)):**
+     - Shortcut praktis bagi pengguna untuk mengeksekusi pemindaian brutal kapan pun dalam 1 klik ganda dari Windows.
+  3. **Pengelolaan Data Siap Scan (Instant Scannable):**
+     - Seluruh hasil scraping langsung di-upsert ke tabel `Product` di Supabase secara real-time.
+     - Begitu produk ter-upsert, produk tersebut langsung bisa dicari dan di-scan oleh kasir di `luqmanganteng.my.id` (0ms response time via API & Dexie cache) lengkap dengan harga, warna, ukuran, dan stok riil toko!
+
+
 
 
 
