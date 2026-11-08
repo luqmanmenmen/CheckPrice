@@ -161,6 +161,7 @@ export async function syncOfflineDatabase(
 
           if (onSyncStateChange) onSyncStateChange(true, 100);
           localStorage.setItem("suko_server_version", serverVersion);
+          localStorage.setItem("suko_dismissed_update", serverVersion);
           localStorage.setItem("suko_db_schema_version", "v10");
           console.log(`[OfflineDB] Berhasil sync ${result.data.length} produk v10 (versi: ${serverVersion})`);
           return true;

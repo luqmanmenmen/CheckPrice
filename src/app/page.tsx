@@ -283,16 +283,17 @@ export default function Home() {
   const [isSyncing, setIsSyncing] = useState(false);
 
   // Fetch last update date (Cek tiap 5 menit = 300000 ms agar tidak membebani server/kuota)
-  const { data: updateData } = useSWR("/api/last-update", fetcher, { refreshInterval: 300000 });
+  const { data: updateData, mutate: mutateLastUpdate } = useSWR("/api/last-update", fetcher, { refreshInterval: 300000 });
   const serverVersion = updateData?.lastUpdate ? new Date(updateData.lastUpdate).getTime().toString() : null;
   
   const [localVersion, setLocalVersion] = useState<string | null>(null);
   const [hasAppCodeUpdate, setHasAppCodeUpdate] = useState(false);
-  const [dismissedUpdate, setDismissedUpdate] = useState(false);
+  const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
   
   useEffect(() => {
     if (typeof window !== "undefined") {
       setLocalVersion(localStorage.getItem("suko_server_version"));
+      setDismissedVersion(localStorage.getItem("suko_dismissed_update"));
     }
     // Cek juga update kode aplikasi / UI / fitur baru
     import("@/lib/version").then(({ checkAppVersion }) => {
@@ -302,8 +303,19 @@ export default function Home() {
     });
   }, []);
 
+  // Cek apakah banner ini sudah pernah di-update atau ditutup user untuk versi ini
+  const isDismissedForThisVersion = Boolean(
+    serverVersion && dismissedVersion && (
+      dismissedVersion === serverVersion || 
+      Number(dismissedVersion) >= Number(serverVersion)
+    )
+  );
+
   const hasNewUpdate = Boolean(
-    !dismissedUpdate && ((serverVersion && (!localVersion || serverVersion !== localVersion)) || hasAppCodeUpdate)
+    !isDismissedForThisVersion && (
+      (serverVersion && localVersion && Number(serverVersion) > Number(localVersion)) || 
+      hasAppCodeUpdate
+    )
   );
 
   // Download awal otomatis hanya jika database lokal masih kosong (produk < 1000)
@@ -358,12 +370,14 @@ export default function Home() {
         if (prog !== undefined) setSyncProgress(prog);
       }, true);
 
-      if (serverVersion) {
-        localStorage.setItem("suko_server_version", serverVersion);
-        setLocalVersion(serverVersion);
-      }
-      setDismissedUpdate(true);
+      const targetVersion = serverVersion || Date.now().toString();
+      localStorage.setItem("suko_server_version", targetVersion);
+      localStorage.setItem("suko_dismissed_update", targetVersion);
+      localStorage.setItem("suko_client_version", "2.5.6");
+      setLocalVersion(targetVersion);
+      setDismissedVersion(targetVersion);
       setHasAppCodeUpdate(false);
+      mutateLastUpdate();
 
       // Hapus tracker batas toleransi 1 hari setelah berhasil update
       if (typeof window !== "undefined") {
@@ -1075,11 +1089,12 @@ export default function Home() {
                 </button>
                 <button
                   onClick={() => {
-                    setDismissedUpdate(true);
-                    if (serverVersion) {
-                      localStorage.setItem("suko_server_version", serverVersion);
-                      setLocalVersion(serverVersion);
-                    }
+                    const targetVersion = serverVersion || Date.now().toString();
+                    localStorage.setItem("suko_server_version", targetVersion);
+                    localStorage.setItem("suko_dismissed_update", targetVersion);
+                    setLocalVersion(targetVersion);
+                    setDismissedVersion(targetVersion);
+                    setHasAppCodeUpdate(false);
                   }}
                   title="Tutup pemberitahuan"
                   className="p-1.5 text-white/80 hover:text-white hover:bg-rose-600 rounded-lg transition-colors cursor-pointer shrink-0"
