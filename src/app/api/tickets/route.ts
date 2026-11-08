@@ -16,31 +16,27 @@ export async function GET(req: NextRequest) {
 
     const isWarehouseUser = session.jobTitle === "Gudang Stock" || session.role === "SUPERVISOR";
 
-    // Hitung awal hari ini dalam zona waktu WIB (UTC+7)
-    const now = new Date();
-    const wibNow = new Date(now.getTime() + 7 * 60 * 60 * 1000);
-    const startOfTodayWib = new Date(Date.UTC(wibNow.getUTCFullYear(), wibNow.getUTCMonth(), wibNow.getUTCDate(), 0, 0, 0, 0));
-    const startOfTodayUtc = new Date(startOfTodayWib.getTime() - 7 * 60 * 60 * 1000);
+    // Batas waktu 24 jam terakhir (permintaan user: data request facing out bertahan 24 jam / 1 hari agar aman jika tak sengaja logout)
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-    // Auto-close tiket lama yang terbit sebelum hari ini agar tidak menumpuk dan rancu
+    // Auto-close tiket lama yang terbit lebih dari 24 jam lalu
     prisma.ticket.updateMany({
       where: {
         status: { in: ["PENDING", "READY"] },
-        createdAt: { lt: startOfTodayUtc }
+        createdAt: { lt: twentyFourHoursAgo }
       },
       data: {
         status: "COMPLETED",
-        reason: "Auto-close (Hari Kemarin / Shift Berakhir)"
+        reason: "Auto-close (> 24 Jam)"
       }
     }).catch(err => console.error("Auto-close old tickets error:", err));
 
     if (isWarehouseUser) {
-      // Gudang HANYA melihat tiket aktif HARI INI dari shift SA yang masih aktif
+      // Gudang melihat tiket aktif dalam rentang 24 jam terakhir (tetap muncul meski SA sempat logout)
       tickets = await prisma.ticket.findMany({
         where: {
           status: { in: ["PENDING", "READY"] },
-          createdAt: { gte: startOfTodayUtc },
-          shift: { endTime: null } // HANYA dari shift yang belum di-logout/selesai
+          createdAt: { gte: twentyFourHoursAgo },
         },
         include: {
           requester: { select: { name: true, nik: true } }
@@ -50,12 +46,12 @@ export async function GET(req: NextRequest) {
         }
       });
     } else {
-      // SA melihat tiket miliknya hari ini
+      // SA melihat tiket miliknya dalam 24 jam terakhir (tetap ada meski sempat logout!)
       tickets = await prisma.ticket.findMany({
         where: {
           requesterId: session.userId,
           status: { not: "COMPLETED" },
-          createdAt: { gte: startOfTodayUtc }
+          createdAt: { gte: twentyFourHoursAgo }
         },
         include: {
           requester: { select: { name: true, nik: true } }

@@ -277,6 +277,38 @@ export default function Home() {
   const [qty, setQty] = useState(1);
   const [activeTab, setActiveTab] = useState<"FACING_OUT" | "STOCK_CHECK" | "ORDERS">("FACING_OUT");
   const [cart, setCart] = useState<any[]>([]);
+
+  // Tahan draft keranjang request facing out selama 24 jam di memori HP agar tidak hilang jika tak sengaja logout
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const raw = localStorage.getItem("suko_facing_out_cart");
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          const now = Date.now();
+          if (parsed?.timestamp && (now - parsed.timestamp < 24 * 60 * 60 * 1000) && Array.isArray(parsed?.items)) {
+            setCart(parsed.items);
+          } else {
+            localStorage.removeItem("suko_facing_out_cart");
+          }
+        }
+      } catch {}
+    }
+  }, []);
+
+  const updateCart = (newCart: any[]) => {
+    setCart(newCart);
+    if (typeof window !== "undefined") {
+      if (newCart.length > 0) {
+        localStorage.setItem("suko_facing_out_cart", JSON.stringify({
+          timestamp: Date.now(),
+          items: newCart
+        }));
+      } else {
+        localStorage.removeItem("suko_facing_out_cart");
+      }
+    }
+  };
   const [continuousMode, setContinuousMode] = useState(false);
   const [user, setUser] = useState<{name: string, nik: string, role: string, status?: string, jobTitle?: string} | null>(null);
   const [togglingStatus, setTogglingStatus] = useState(false);
@@ -882,7 +914,7 @@ export default function Home() {
 
   const addToCart = (type: string, qty: number, size: string) => {
     if (!product) return;
-    setCart([...cart, {
+    updateCart([...cart, {
       sku: product.sku,
       productName: product.description,
       type,
@@ -912,7 +944,7 @@ export default function Home() {
       const data = await res.json();
       if (res.ok) {
         showToast(`${cart.length} tiket berhasil dikirim ke Gudang!`);
-        setCart([]);
+        updateCart([]);
       } else {
         showToast(data.error || "Gagal mengirim tiket", "error");
       }
@@ -2026,7 +2058,7 @@ export default function Home() {
               <p className="text-xs text-slate-500 font-bold uppercase">Daftar Kirim</p>
               <p className="font-extrabold text-blue-700">{cart.length} Barang</p>
             </div>
-            <button onClick={() => setCart([])} className="text-xs text-red-500 font-bold uppercase py-1 px-3 bg-red-50 rounded-lg hover:bg-red-100 transition-colors">Kosongkan</button>
+            <button onClick={() => updateCart([])} className="text-xs text-red-500 font-bold uppercase py-1 px-3 bg-red-50 rounded-lg hover:bg-red-100 transition-colors">Kosongkan</button>
           </div>
           
           {/* Desktop Cart Items Preview */}

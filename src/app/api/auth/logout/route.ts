@@ -19,17 +19,8 @@ export async function POST(req: NextRequest) {
             data: { endTime: new Date() }
           });
 
-          // Tutup sisa tiket yang masih gantung saat SA selesai shift (biar tidak rancu ke shift berikutnya)
-          await prisma.ticket.updateMany({
-            where: {
-              shiftId: activeShift.id,
-              status: { in: ["PENDING", "READY"] }
-            },
-            data: {
-              status: "COMPLETED",
-              reason: "Shift Selesai (Logout)"
-            }
-          });
+          // PERMINTAAN USER: Tiket request facing out JANGAN langsung ditutup saat logout!
+          // Tahan selama 24 jam agar jika tidak sengaja logout, data request facing out tetap utuh.
         }
         
         // Update user status to OFFLINE when logging out
