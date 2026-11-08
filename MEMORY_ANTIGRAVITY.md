@@ -473,6 +473,20 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   2. **Antrean Pending Barcode (Keep Dulu & Coba Lagi Besok):** Jika ada SKU baru dari file promo yang saat ditembak ke MDS BISA belum ada di SQL toko 719 (misal barang baru dari gudang pusat/DC yang belum di-receive toko), produk **TETAP DISIMPAN DI DATABASE** dengan status pending (`barcode: null`).
   3. **Prioritas Terdepan Runner Harian:** Di [`scripts/sync_mds_bisa_full.mjs`](file:///c:/Max%20Display/price-checker/scripts/sync_mds_bisa_full.mjs) dan API trigger [`src/app/api/admin/trigger/mds-bisa/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/mds-bisa/route.ts), seluruh SKU tanpa barcode otomatis diletakkan di **baris antrean paling depan**. Setiap pagi (09:45 WIB), sistem otomatis mencoba peruntungan kembali untuk menarik Barcode UPC EAN-13 & Stok fisiknya begitu barang tersebut selesai di-receive oleh toko!
 
+---
+
+## 35. Proteksi 24 Jam Data Request Facing Out & Keranjang Draft Saat Logout
+
+- **Akar Masalah:**
+  1. Pada [`src/app/api/auth/logout/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/auth/logout/route.ts), setiap kali pengguna menekan logout, sistem lama mengeksekusi `prisma.ticket.updateMany` untuk mengubah semua tiket PENDING/READY menjadi `COMPLETED` dengan alasan *"Shift Selesai (Logout)"*.
+  2. Pada [`src/app/api/tickets/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/tickets/route.ts), kueri gudang menyaring `shift: { endTime: null }` sehingga tiket langsung lenyap dari layar gudang begitu SA logout.
+  3. Pada layar depan kasir (`src/app/page.tsx`), state antrean keranjang facing out (`cart`) hanya tersimpan di memori sementara React (`useState([])`) sehingga draft barang hilang jika tidak sengaja logout atau refresh browser.
+- **Solusi Tuntas (Commit `21926e8`):**
+  1. **Hapus Auto-Close di Logout:** Endpoint logout tidak lagi menutup tiket aktif PENDING/READY.
+  2. **Retensi 24 Jam Tiket di Gudang & SA:** Tiket request facing out kini bertahan aktif selama 24 jam penuh. Kueri gudang maupun SA mengambil tiket aktif berumur $\le 24$ jam tanpa terkunci oleh status logout shift. Auto-close hanya dijalankan untuk tiket yang sudah lewat dari 24 jam.
+  3. **Persistensi 24 Jam Draft Keranjang di HP:** Keranjang antrean facing out sebelum dikirim (`cart`) kini otomatis tersimpan di `localStorage` (`suko_facing_out_cart`). Jika kasir tidak sengaja logout atau HP mati, saat login kembali dalam 24 jam, seluruh daftar barang yang sudah ditambahkan tetap utuh!
+
+
 
 
 
