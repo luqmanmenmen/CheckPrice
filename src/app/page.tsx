@@ -1683,6 +1683,12 @@ export default function Home() {
                     ARTIKEL: {product.article}
                   </span>
                 )}
+                {product.barcode && (
+                  <span className="flex items-center gap-1.5 bg-emerald-100 text-emerald-800 text-xs font-black font-mono px-3 py-1.5 rounded-lg border border-emerald-200 shadow-sm" title="Barcode UPC / EAN-13 Hangtag">
+                    <Barcode className="w-3.5 h-3.5 text-emerald-600" />
+                    BARCODE: {product.barcode}
+                  </span>
+                )}
                 {isPromoExpired && (
                   <span className="bg-rose-100 text-rose-700 text-xs font-bold px-2.5 py-1.5 rounded-lg border border-rose-200">
                     Masa Berlaku Promo Habis

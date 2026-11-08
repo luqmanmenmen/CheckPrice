@@ -680,6 +680,12 @@ export default function CekHargaPage() {
                       <span className="bg-slate-50 text-slate-600 font-mono px-3 py-1 rounded-full text-[11px] font-bold border border-slate-200/80">
                         SKU: {product.sku}
                       </span>
+                      {product.barcode && (
+                        <span className="bg-emerald-50 text-emerald-800 border border-emerald-200/80 font-mono px-3 py-1 rounded-full text-[11px] font-bold tracking-wide flex items-center gap-1.5" title="Barcode UPC / EAN-13 Hangtag">
+                          <Barcode className="w-3.5 h-3.5 text-emerald-600" />
+                          Barcode: {product.barcode}
+                        </span>
+                      )}
                     </div>
 
                     <div className="w-full max-w-[200px] h-px bg-slate-100 mb-5" />
