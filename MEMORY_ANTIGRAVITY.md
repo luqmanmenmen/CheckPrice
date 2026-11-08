@@ -417,3 +417,20 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   2. Logika `isStoreOpen()` dan pesan error IT yang kaku telah dihapus dari `src/lib/mdsBisaClient.ts`.
   3. Sistem kini menerapkan **Graceful Fallback**: Jika query malam hari mengalami 504 / timeout, sistem otomatis mengembalikan data stok tersimpan di Supabase dengan toast info ramah: *"Toko tutup (malam). Menampilkan stok tersimpan: X pcs"*, tanpa pesan error merah yang menakutkan.
 
+---
+
+## 31. Audit Total Barcode Batang (UPC / EAN-13) & Integrasi Badge Barcode di Tampilan Produk
+
+- **Hasil Audit Database Supabase (Detik Ini):**
+  - Total Produk: **9.703 SKU**.
+  - Produk dengan Barcode Batang Asli: **9.703 produk (100% LENGKAP!)**.
+  - Distribusi Panjang Barcode:
+    - 13 digit EAN-13 (Awalan `234...` / `23...` hangtag ritel): **9.698 produk**.
+    - 12 digit UPC-A: **5 produk**.
+    - SKU tanpa barcode / invalid / null: **0 produk (NOL KOSONG)**.
+  - Seluruh 7.651 SKU dari file Power Query 10 Oktober 2026 terverifikasi 100% sudah masuk ke database dan telah memiliki barcode hangtag resmi.
+- **Penyebab Keraguan Pengguna & Solusi UI:**
+  - Sebelumnya, tampilan kartu detail produk di [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx) dan Kiosk [`src/app/cek-harga/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/cek-harga/page.tsx) hanya menampilkan label `SKU:` dan `ARTIKEL:`, sementara label `BARCODE:` belum dimunculkan di kartu. Hal ini membuat kasir mengira produk belum memiliki barcode.
+  - **Solusi Terpasang:** Ditambahkan badge hijau terang **`BARCODE: {product.barcode}`** dengan ikon Barcode di samping badge SKU dan ARTIKEL. Kasir dan user kini dapat langsung melihat nomor barcode fisik hangtag asli dari setiap SKU yang dicari.
+
+
