@@ -10,7 +10,7 @@ const LOGIN_URL = `${STOREHUB_BASE}/login?next=%2F`;
 const ITEM_CHECKER_URL = `${STOREHUB_BASE}/item-checker`;
 
 const ACTION_LOGIN = '6071833df0be708d73972db0a7dc0c7c83eb3d41f3';
-const ACTION_DETAIL = '60fc4882ad969e8907c38a0c8aa2c93b06a8e5c526';
+let ACTION_DETAIL = '608e569ea77f8871817d11afae932ecea7d0fcbd09';
 
 const CREDENTIALS = {
   username: 'M223515',
@@ -229,7 +229,13 @@ export async function checkSingleItemStock(sku: string): Promise<{
           }
           if (parsed?.result?.data) {
             const first = Object.values(parsed.result.data)[0];
-            itemData = Array.isArray(first) ? first[0] : first;
+            if (Array.isArray(first)) {
+              // Jika query adalah UPC / barcode, prioritaskan item yang memiliki VendorBarcode cocok
+              const matchUpc = isUpc ? first.find((x: any) => String(x.VendorBarcode).trim() === cleanSku) : null;
+              itemData = matchUpc || first[0];
+            } else {
+              itemData = first;
+            }
             break;
           }
         } catch {
@@ -277,11 +283,12 @@ export async function checkSingleItemStock(sku: string): Promise<{
 
     // Update atau insert produk baru jika belum terdaftar di database Supabase
     try {
+      const resolvedBarcode = isUpc ? cleanSku : (barcode ? String(barcode).trim() : null);
       const updateData: any = {
         stok: currentSkuStok,
         updatedAt: new Date(),
       };
-      if (barcode) updateData.barcode = String(barcode).trim();
+      if (resolvedBarcode) updateData.barcode = resolvedBarcode;
       if (article) updateData.article = String(article).trim();
       if (hargaNormal && hargaNormal > 0) updateData.hargaNormal = hargaNormal;
 
@@ -290,7 +297,7 @@ export async function checkSingleItemStock(sku: string): Promise<{
         update: updateData,
         create: {
           sku: itemSku,
-          barcode: barcode ? String(barcode).trim() : null,
+          barcode: resolvedBarcode,
           article: article || 'PRODUK BARU',
           description: String(itemData.Description || itemData.ItemDescription || article || 'PRODUK BARU').trim(),
           brand: String(itemData.Brand || 'SUKO').trim(),

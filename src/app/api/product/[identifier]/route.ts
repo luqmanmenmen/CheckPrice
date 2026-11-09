@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma as db } from "@/lib/prisma";
+import { checkSingleItemStock } from "@/lib/mdsBisaClient";
 
 export const dynamic = 'force-dynamic';
 
@@ -160,6 +161,24 @@ export async function GET(
     });
 
     if (candidateMatches.length === 0) {
+      // Self-Healing On-the-Fly: Jika input berupa Barcode (12-14 digit) atau SKU (8 digit),
+      // tembak langsung MDS BISA StoreHub jika toko sedang buka
+      if (/^\d{8,14}$/.test(rawInput)) {
+        try {
+          const liveRes = await checkSingleItemStock(rawInput);
+          if (liveRes.success && liveRes.sku) {
+            let fetched = await db.product.findUnique({ where: { sku: liveRes.sku } });
+            if (fetched) {
+              fetched = checkAndCleanPromo(fetched);
+              const siblings = await getProductSiblings(fetched);
+              return NextResponse.json({ data: fetched, siblings, source: 'MDS_BISA_LIVE' });
+            }
+          }
+        } catch (e) {
+          console.warn("Gagal lookup live MDS BISA fallback:", e);
+        }
+      }
+
       const totalCount = await db.product.count();
       return NextResponse.json(
         {

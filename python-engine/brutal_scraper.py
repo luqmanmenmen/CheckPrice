@@ -52,7 +52,23 @@ sb: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # Konfigurasi MDS BISA StoreHub
 STOREHUB_BASE = "https://storehub.mdsretailing.id"
 ITEM_CHECKER_URL = f"{STOREHUB_BASE}/item-checker"
-ACTION_DETAIL = "60fc4882ad969e8907c38a0c8aa2c93b06a8e5c526"
+ACTION_DETAIL = "608e569ea77f8871817d11afae932ecea7d0fcbd09"
+
+
+def resolve_action_detail(default_action: str = ACTION_DETAIL) -> str:
+    """Mendeteksi action ID checkItemDetail secara dinamis dari Next.js bundle jika berubah."""
+    try:
+        r = requests.get(ITEM_CHECKER_URL, timeout=8)
+        scripts = re.findall(r'src="(/_next/static/[^"]+\.js)"', r.text)
+        for s in scripts:
+            js_url = f"{STOREHUB_BASE}{s}"
+            js_r = requests.get(js_url, timeout=8)
+            match = re.search(r'createServerReference\("([a-f0-9]{40,44})"[^)]*"checkItemDetail"', js_r.text)
+            if match:
+                return match.group(1)
+    except Exception as e:
+        print(f"⚠️ Gagal resolve action hash: {e}")
+    return default_action
 
 
 def calculate_ean13_check_digit(digits12: str) -> str:
@@ -95,6 +111,7 @@ def get_active_cookie() -> str:
 
 def query_storehub_item(category: str, identifier: str, cookie: str) -> Optional[Dict[str, Any]]:
     """Menembak StoreHub MDS BISA untuk 1 UPC atau SKU."""
+    global ACTION_DETAIL
     headers = {
         "Accept": "text/x-component",
         "Content-Type": "text/plain;charset=UTF-8",
@@ -114,6 +131,20 @@ def query_storehub_item(category: str, identifier: str, cookie: str) -> Optional
         )
     except Exception:
         return None
+
+    if res.status_code == 404:
+        # Build Next.js mungkin berganti hash, resolve action baru
+        ACTION_DETAIL = resolve_action_detail()
+        headers["Next-Action"] = ACTION_DETAIL
+        try:
+            res = requests.post(
+                ITEM_CHECKER_URL,
+                headers=headers,
+                data=json.dumps([category, str(identifier).strip()]),
+                timeout=8
+            )
+        except Exception:
+            return None
 
     if res.status_code != 200:
         return None
@@ -184,13 +215,24 @@ def run_brutal_sweep(start_body: int = 234000, end_body: int = 237000):
             continue
 
         vendor_bc = str(raw_item.get("VendorBarcode") or barcode).strip()
-        brand = str(raw_item.get("Brand") or "MDS RETAIL").strip()
-        dept = str(raw_item.get("Department") or brand).strip()
-        article = str(raw_item.get("StyleCode") or raw_item.get("ItemDescription") or "PRODUK BARU").strip()
-        desc = str(raw_item.get("ItemDescription") or article).strip()
-        color = raw_item.get("Color") or None
-        size = raw_item.get("Size") or None
-        stok = int(raw_item.get("StockOnHand") or 0)
+        brand = str(raw_item.get("Brand") or raw_item.get("GroupName") or "MDS RETAIL").strip()
+        if brand.startswith("SUKO"):
+            brand = "SUKO"
+        elif brand.startswith("MUKU"):
+            brand = "MUKU"
+        elif brand.startswith("ZES"):
+            brand = "ZES"
+        elif brand.startswith("COLE"):
+            brand = "COLE"
+        elif brand.startswith("NEVADA"):
+            brand = "NEVADA"
+
+        dept = str(raw_item.get("DeptName") or raw_item.get("Department") or brand).strip()
+        article = str(raw_item.get("StyleCode") or raw_item.get("Description") or raw_item.get("ItemDescription") or "PRODUK BARU").strip()
+        desc = str(raw_item.get("Description") or raw_item.get("ItemDescription") or article).strip()
+        color = raw_item.get("COLOR") or raw_item.get("Color") or None
+        size = raw_item.get("Size") or raw_item.get("SIZE") or None
+        stok = int(float(raw_item.get("StockOnHand") or 0))
 
         raw_price = raw_item.get("RetailPrice") or 0
         try:
@@ -201,7 +243,7 @@ def run_brutal_sweep(start_body: int = 234000, end_body: int = 237000):
 
         product_record = {
             "sku": sku,
-            "barcode": vendor_bc,
+            "barcode": barcode,
             "article": article,
             "description": desc,
             "brand": brand,

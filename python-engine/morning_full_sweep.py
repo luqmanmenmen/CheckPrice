@@ -42,9 +42,25 @@ sb: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 STOREHUB_BASE = "https://storehub.mdsretailing.id"
 ITEM_CHECKER_URL = f"{STOREHUB_BASE}/item-checker"
-ACTION_DETAIL = "60fc4882ad969e8907c38a0c8aa2c93b06a8e5c526"
+ACTION_DETAIL = "608e569ea77f8871817d11afae932ecea7d0fcbd09"
 
 REPORT_PATH = os.path.join(os.path.dirname(__file__), "LAPORAN_SCRAP_PAGI.md")
+
+
+def resolve_action_detail(default_action: str = ACTION_DETAIL) -> str:
+    """Mendeteksi action ID checkItemDetail secara dinamis dari Next.js bundle jika berubah."""
+    try:
+        r = requests.get(ITEM_CHECKER_URL, timeout=8)
+        scripts = re.findall(r'src="(/_next/static/[^"]+\.js)"', r.text)
+        for s in scripts:
+            js_url = f"{STOREHUB_BASE}{s}"
+            js_r = requests.get(js_url, timeout=8)
+            match = re.search(r'createServerReference\("([a-f0-9]{40,44})"[^)]*"checkItemDetail"', js_r.text)
+            if match:
+                return match.group(1)
+    except Exception as e:
+        print(f"⚠️ Gagal resolve action hash: {e}")
+    return default_action
 
 
 def calculate_ean13_check_digit(digits12: str) -> str:
@@ -76,6 +92,7 @@ def get_active_cookie() -> str:
 
 def query_storehub(category: str, identifier: str, cookie: str) -> Optional[Dict[str, Any]]:
     """Menembak StoreHub MDS BISA untuk 1 UPC atau SKU."""
+    global ACTION_DETAIL
     headers = {
         "Accept": "text/x-component",
         "Content-Type": "text/plain;charset=UTF-8",
@@ -95,6 +112,20 @@ def query_storehub(category: str, identifier: str, cookie: str) -> Optional[Dict
         )
     except Exception:
         return None
+
+    if res.status_code == 404:
+        # Build Next.js mungkin berganti hash, resolve action baru
+        ACTION_DETAIL = resolve_action_detail()
+        headers["Next-Action"] = ACTION_DETAIL
+        try:
+            res = requests.post(
+                ITEM_CHECKER_URL,
+                headers=headers,
+                data=json.dumps([category, str(identifier).strip()]),
+                timeout=8
+            )
+        except Exception:
+            return None
 
     if res.status_code != 200:
         return None
@@ -175,6 +206,63 @@ def wait_until_store_online(cookie: str, check_interval_sec: int = 45):
         time.sleep(check_interval_sec)
 
 
+def save_report(start_time: datetime, initial_count: int, new_discovered: int, updated_count: int, brands_counter: Dict[str, int]):
+    """Menulis laporan eksekutif markdown secara real-time."""
+    end_time = datetime.now()
+    duration_minutes = (end_time - start_time).total_seconds() / 60
+
+    try:
+        final_res = sb.table("Product").select("id", count="exact").execute()
+        final_count = final_res.count or initial_count
+    except Exception:
+        final_count = initial_count + new_discovered
+
+    report_content = f"""# 📋 LAPORAN HASIL BRUTAL SCRAPING & SINKRONISASI PAGI MDS BISA
+**Tanggal Eksekusi:** {start_time.strftime('%d %B %Y')}  
+**Waktu Mulai:** {start_time.strftime('%H:%M:%S')} WIB  
+**Waktu Pembaruan:** {end_time.strftime('%H:%M:%S')} WIB  
+**Durasi Pemindaian:** {duration_minutes:.1f} Menit  
+
+---
+
+## 1. Ringkasan Eksekutif Bank Data
+- **Total Master Produk Awal:** {initial_count:,} SKU  
+- **Total Master Produk Akhir:** **{final_count:,} SKU**  
+- **Produk Baru Berhasil Diserap:** **+{new_discovered:,} SKU**  
+- **Produk Lama Dilengkapi Barcode/Stok:** **{updated_count:,} SKU**  
+- **Status Database:** 100% Produk Langsung Aktif & Dapat Di-scan Kasir  
+
+---
+
+## 2. Rincian Produk Berdasarkan Merk (Brand)
+Berikut adalah rincian produk yang berhasil ditangkap dan dimasukkan ke bank data:
+
+| No | Merk (Brand) | Jumlah Produk Diserap | Status di Sistem |
+| :--- | :--- | :--- | :--- |
+"""
+    for idx, (b_name, b_count) in enumerate(sorted(brands_counter.items(), key=lambda x: x[1], reverse=True), 1):
+        report_content += f"| {idx} | **{b_name}** | {b_count:,} Item | ✅ Aktif & Siap Scan |\n"
+
+    if not brands_counter:
+        report_content += "| 1 | *Menunggu Server Toko Online* | - | ⏳ Standby |\n"
+
+    report_content += f"""
+---
+
+## 3. Kesiapan Sistem di Toko (Self-Healing Runtime)
+1. **Pencarian Cerdas 0ms:** Seluruh produk di atas sudah terindeks di pencarian 4-Cell Supabase & cache Dexie HP kasir (`luqmanganteng.my.id`).
+2. **Barcode Scanner Aktif:** Pemindaian barcode fisik melalui kamera maupun keyboard scanner langsung membaca harga normal, harga promo, warna, ukuran, dan sisa stok toko riil.
+3. **Kebijakan Stok 0:** Semua produk (bahkan dengan stok 0 pcs) tetap ditampilkan utuh dengan badge informatif tanpa ada yang disembunyikan.
+
+---
+*Laporan otomatis dibuat oleh Python Engine untuk dibaca Mas Luqman sepulang kerja.*
+"""
+
+    with open(REPORT_PATH, "w", encoding="utf-8") as f:
+        f.write(report_content)
+    print(f"   📄 Laporan diperbarui di: {REPORT_PATH}")
+
+
 def execute_morning_sweep():
     """Eksekusi penuh pemindaian pagi hari saat toko buka."""
     cookie = get_active_cookie()
@@ -253,10 +341,12 @@ def execute_morning_sweep():
     # Sweep rentang celah yang mencakup artikel MUKU, ZES, BYRCH, SUKO
     # Fokus celah di sekitar 234000230000 s/d 234000245000
     SWEEP_RANGES = [
-        (234800, 236300),  # Celah barcode 2340002353093 & produk tetangganya
-        (185000, 187000),  # Celah Nevada & Young Fashion
+        (235250, 235450),  # Celah barcode 2340002353093 & SUKO/MUKU terdekat (prioritas utama)
+        (234800, 235249),  # Blok tetangga bawah
+        (235451, 236300),  # Blok tetangga atas
         (212000, 214000),  # Celah Suko Casual & Muku
         (284000, 286000),  # Celah Zes & Kids
+        (185000, 187000),  # Celah Nevada & Young Fashion
     ]
 
     for start_b, end_b in SWEEP_RANGES:
@@ -276,22 +366,37 @@ def execute_morning_sweep():
             if not sku_val:
                 continue
 
-            brand_val = str(item.get("Brand") or "MDS RETAIL").strip()
-            art_val = str(item.get("StyleCode") or item.get("ItemDescription") or "PRODUK BARU").strip()
-            desc_val = str(item.get("ItemDescription") or art_val).strip()
-            stok_val = int(item.get("StockOnHand") or 0)
-            raw_p = item.get("RetailPrice") or 0
+            brand_val = str(item.get("Brand") or item.get("GroupName") or "MDS RETAIL").strip()
+            # Bersihkan prefix "SUKO MEN" -> "SUKO", "MUKU LADIES" -> "MUKU", dll jika perlu
+            if brand_val.startswith("SUKO"):
+                brand_val = "SUKO"
+            elif brand_val.startswith("MUKU"):
+                brand_val = "MUKU"
+            elif brand_val.startswith("ZES"):
+                brand_val = "ZES"
+            elif brand_val.startswith("COLE"):
+                brand_val = "COLE"
+            elif brand_val.startswith("NEVADA"):
+                brand_val = "NEVADA"
+
+            art_val = str(item.get("StyleCode") or item.get("Description") or item.get("ItemDescription") or "PRODUK BARU").strip()
+            desc_val = str(item.get("Description") or item.get("ItemDescription") or art_val).strip()
+            dept_val = str(item.get("DeptName") or item.get("Department") or brand_val).strip()
+            color_val = item.get("COLOR") or item.get("Color") or None
+            size_val = item.get("Size") or item.get("SIZE") or None
+            stok_val = int(float(item.get("StockOnHand") or 0))
+            raw_p = item.get("RetailPrice") or item.get("Price") or 0
             p_clean = int(re.sub(r"[^0-9]", "", str(raw_p).split(".")[0]) or 0)
 
             record = {
                 "sku": sku_val,
-                "barcode": str(item.get("VendorBarcode") or bc).strip(),
+                "barcode": bc,
                 "article": art_val,
                 "description": desc_val,
                 "brand": brand_val,
-                "dept": str(item.get("Department") or brand_val).strip(),
-                "color": item.get("Color") or None,
-                "size": item.get("Size") or None,
+                "dept": dept_val,
+                "color": color_val,
+                "size": size_val,
                 "hargaNormal": p_clean,
                 "stok": stok_val,
                 "updatedAt": datetime.now(timezone.utc).isoformat()
@@ -308,70 +413,28 @@ def execute_morning_sweep():
                     sb.table("Product").upsert(buffer_to_save, on_conflict="sku").execute()
                     print(f"   💾 [DB] Berhasil menyimpan {len(buffer_to_save)} produk ke database!")
                     buffer_to_save = []
+                    save_report(start_time, initial_count, new_discovered, updated_count, brands_counter)
                 except Exception as e:
                     print(f"   ❌ Gagal upsert: {e}")
 
             time.sleep(0.15)
 
-    # Simpan sisa
-    if buffer_to_save:
-        try:
-            sb.table("Product").upsert(buffer_to_save, on_conflict="sku").execute()
-            print(f"   💾 [DB] Berhasil menyimpan sisa {len(buffer_to_save)} produk!")
-        except Exception as e:
-            print(f"   ❌ Gagal upsert sisa: {e}")
+        # Simpan sisa per blok
+        if buffer_to_save:
+            try:
+                sb.table("Product").upsert(buffer_to_save, on_conflict="sku").execute()
+                print(f"   💾 [DB] Berhasil menyimpan sisa {len(buffer_to_save)} produk!")
+                buffer_to_save = []
+                save_report(start_time, initial_count, new_discovered, updated_count, brands_counter)
+            except Exception as e:
+                print(f"   ❌ Gagal upsert sisa: {e}")
 
-    end_time = datetime.now()
-    duration_minutes = (end_time - start_time).total_seconds() / 60
+    # Laporan Akhir
+    save_report(start_time, initial_count, new_discovered, updated_count, brands_counter)
 
-    # 3. Hitung total akhir
-    final_res = sb.table("Product").select("id", count="exact").execute()
-    final_count = final_res.count or 0
-
-    # 4. Susun Laporan Eksekutif Markdown
-    report_content = f"""# 📋 LAPORAN HASIL BRUTAL SCRAPING & SINKRONISASI PAGI MDS BISA
-**Tanggal Eksekusi:** {start_time.strftime('%d %B %Y')}  
-**Waktu Mulai:** {start_time.strftime('%H:%M:%S')} WIB  
-**Waktu Selesai:** {end_time.strftime('%H:%M:%S')} WIB  
-**Durasi Pemindaian:** {duration_minutes:.1f} Menit  
-
----
-
-## 1. Ringkasan Eksekutif Bank Data
-- **Total Master Produk Awal:** {initial_count:,} SKU  
-- **Total Master Produk Akhir:** **{final_count:,} SKU**  
-- **Produk Baru Berhasil Diserap:** **+{new_discovered:,} SKU**  
-- **Produk Lama Dilengkapi Barcode/Stok:** **{updated_count:,} SKU**  
-- **Status Database:** 100% Produk Langsung Aktif & Dapat Di-scan Kasir  
-
----
-
-## 2. Rincian Produk Berdasarkan Merk (Brand)
-Berikut adalah rincian produk yang berhasil ditangkap dan dimasukkan ke bank data:
-
-| No | Merk (Brand) | Jumlah Produk Diserap | Status di Sistem |
-| :--- | :--- | :--- | :--- |
-"""
-    for idx, (b_name, b_count) in enumerate(sorted(brands_counter.items(), key=lambda x: x[1], reverse=True), 1):
-        report_content += f"| {idx} | **{b_name}** | {b_count:,} Item | ✅ Aktif & Siap Scan |\n"
-
-    if not brands_counter:
-        report_content += "| 1 | *Menunggu Server Toko Online Pukul 09:00 WIB* | - | ⏳ Standby |\n"
-
-    report_content += f"""
----
-
-## 3. Kesiapan Sistem di Toko (Self-Healing Runtime)
-1. **Pencarian Cerdas 0ms:** Seluruh produk di atas sudah terindeks di pencarian 4-Cell Supabase & cache Dexie HP kasir (`luqmanganteng.my.id`).
-2. **Barcode Scanner Aktif:** Pemindaian barcode fisik melalui kamera maupun keyboard scanner langsung membaca harga normal, harga promo, warna, ukuran, dan sisa stok toko riil.
-3. **Kebijakan Stok 0:** Semua produk (bahkan dengan stok 0 pcs) tetap ditampilkan utuh dengan badge informatif tanpa ada yang disembunyikan.
-
----
-*Laporan otomatis dibuat oleh Python Engine untuk dibaca Mas Luqman sepulang kerja.*
-"""
-
-    with open(REPORT_PATH, "w", encoding="utf-8") as f:
-        f.write(report_content)
+    print("\n" + "=" * 75)
+    print(f"🎉 SUKSES! Laporan resmi telah disimpan di: {REPORT_PATH}")
+    print("=" * 75 + "\n")
 
     print("\n" + "=" * 75)
     print(f"🎉 SUKSES! Laporan resmi telah disimpan di: {REPORT_PATH}")
