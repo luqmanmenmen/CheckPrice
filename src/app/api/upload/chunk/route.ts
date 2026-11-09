@@ -49,11 +49,12 @@ const REQUIRED_COLS = ["SKU"];
 // Mapping fleksibel nama kolom → nama standar kita
 // Agar sheet dengan variasi nama kolom tetap terbaca
 const COL_ALIASES: Record<string, string[]> = {
-  "SKU":              ["SKU", "KODE", "KODE PRODUK", "PRODUCT CODE", "CODE", "ID", "ITEM", "MATERIAL", "NO MATERIAL", "PLU"],
+  "SKU":              ["SKU", "KODE", "KODE PRODUK", "PRODUCT CODE", "CODE", "ID", "ITEM", "MATERIAL", "NO MATERIAL", "PLU", "SKU 8 DIGIT", "SKU 7 DIGIT"],
+  "BARCODE":          ["BARCODE", "EAN", "EAN13", "EAN-13", "UPC", "KODE BARCODE"],
   "DESCRIPTION":      ["DESCRIPTION", "ITEM_DESCRIPTION", "ITEM DESCRIPTION", "NAMA", "NAMA PRODUK", "PRODUCT NAME", "DESC", "KETERANGAN", "DESKRIPSI", "ITEM_DESCRIP"],
-  "HARGA NORMAL":     ["HARGA NORMAL", "HARGA", "NORMAL PRICE", "PRICE", "HARGA JUAL", "REGULAR PRICE", "HARGA POKOK", "RP RETAIL"],
-  "HARGA PROMO":      ["HARGA PROMO", "PROMO PRICE", "PROMO", "HARGA DISKON", "DISC PRICE"],
-  "ARTICLE":          ["ARTICLE", "ARTIKEL", "BARCODE", "NO ARTIKEL", "PARENT_NAME", "PARENT NAME"],
+  "HARGA NORMAL":     ["HARGA NORMAL", "HARGA", "NORMAL PRICE", "PRICE", "HARGA JUAL", "REGULAR PRICE", "HARGA POKOK", "RP RETAIL", "NORMAL"],
+  "HARGA PROMO":      ["HARGA PROMO", "PROMO PRICE", "PROMO", "HARGA DISKON", "DISC PRICE", "SPECIAL PRICE", "SP"],
+  "ARTICLE":          ["ARTICLE", "ARTIKEL", "NO ARTIKEL", "PARENT_NAME", "PARENT NAME", "STYLE", "STYLE CODE"],
   "FROM DATE":        ["FROM DATE", "DARI TANGGAL", "START DATE", "TGL MULAI", "FROM"],
   "TO DATE":          ["TO DATE", "SAMPAI TANGGAL", "END DATE", "TGL AKHIR", "TO", "BERLAKU SAMPAI"],
   "DISKON":           ["DISKON", "DISCOUNT", "DISC", "POTONGAN"],
@@ -76,6 +77,17 @@ const COL_ALIASES: Record<string, string[]> = {
   "DAY_SALES_RETAIL": ["DAY_SALES_RETAIL", "DAY SALES RETAIL"],
   "BOM_UNIT":         ["BOM_UNIT", "BOM UNIT"],
 };
+
+function computeMdsSku8From7(sku7: string): string {
+  if (!/^\d{7}$/.test(sku7)) return sku7;
+  const weights = [1, 2, 1, 2, 1, 2, 1];
+  let sum = 0;
+  for (let i = 0; i < 7; i++) {
+    sum += Number(sku7[i]) * weights[i];
+  }
+  const check = (10 - (sum % 10)) % 10;
+  return `${sku7}${check}`;
+}
 
 // Some sheets have column names with leading/trailing spaces like " HARGA NORMAL "
 // Normalize a row object so all keys are trimmed
@@ -110,7 +122,11 @@ function sheetHasRequiredCols(remappedRow: any): boolean {
 // Parse a single data row into our Product shape
 // -------------------------------------------------------
 function parseRow(row: any) {
-  const sku = String(row["SKU"] ?? "").trim();
+  let rawSku = String(row["SKU"] ?? "").trim().replace(/\.0$/, "");
+  const rawBarcode = row["BARCODE"] !== undefined ? String(row["BARCODE"]).trim().replace(/\.0$/, "") : "";
+  if (!rawSku && rawBarcode) rawSku = rawBarcode;
+  const sku = rawSku;
+  const barcode = rawBarcode || (/^\d{12,14}$/.test(sku) ? sku : undefined);
   const article = row["ARTICLE"] !== undefined ? (String(row["ARTICLE"]).trim() || null) : undefined;
   const description = row["DESCRIPTION"] !== undefined ? String(row["DESCRIPTION"]).trim() : undefined;
   const acara = row["ACARA"] !== undefined ? (String(row["ACARA"]).trim() || null) : undefined;
@@ -201,7 +217,7 @@ function parseRow(row: any) {
   const sourceSheet = row["__SOURCE_SHEET__"] !== undefined ? String(row["__SOURCE_SHEET__"]) : undefined;
 
   return {
-    sku, article, description, acara, fromDate, toDate,
+    sku, barcode, article, description, acara, fromDate, toDate,
     hargaNormal, hargaPromo, diskon, discountType, brand, dept,
     stok, eoh_retail,
     sales_mtd, sales_mtd_retail,
@@ -323,25 +339,67 @@ async function upsertProducts(
   let failed = 0;
 
   const allItems = Array.from(productMap.values());
-  const allSkus = allItems.map((item) => item.sku);
+  const candidateSkus = new Set<string>();
+  const candidateBarcodes = new Set<string>();
 
-  // 1. Ambil semua SKU yang sudah ada di database (Batch Query)
+  for (const item of allItems) {
+    if (item.sku) {
+      candidateSkus.add(item.sku);
+      if (/^\d{7}$/.test(item.sku)) {
+        candidateSkus.add(computeMdsSku8From7(item.sku));
+      }
+      if (/^\d{12,14}$/.test(item.sku)) {
+        candidateBarcodes.add(item.sku);
+      }
+    }
+    if (item.barcode) {
+      candidateBarcodes.add(item.barcode);
+    }
+  }
+
+  // 1. Ambil semua SKU & Barcode yang sudah ada di database (Batch Query lintas 84.763 SKU)
   const existingProducts = await prisma.product.findMany({
-    where: { sku: { in: allSkus } },
+    where: {
+      OR: [
+        { sku: { in: Array.from(candidateSkus) } },
+        ...(candidateBarcodes.size > 0
+          ? [{ barcode: { in: Array.from(candidateBarcodes) } }]
+          : []),
+      ],
+    },
     select: { 
-      id: true, sku: true, stok: true,
+      id: true, sku: true, barcode: true, stok: true,
       sales_mtd: true, sales_mtd_retail: true,
       hargaNormal: true,
       hargaPromo: true, diskon: true, discountType: true, acara: true, fromDate: true, toDate: true
     },
   });
   const existingProductMap = new Map(existingProducts.map((p) => [p.sku, p]));
+  const existingBarcodeMap = new Map(
+    existingProducts.filter((p) => p.barcode).map((p) => [p.barcode as string, p])
+  );
 
   const itemsToCreate = [];
   const itemsToUpdate = [];
 
   for (const item of allItems) {
-    if (existingProductMap.has(item.sku)) {
+    // Resolusi pintar: Cek SKU langsung -> Cek konversi 7-ke-8 digit SKU -> Cek via Barcode 13 digit
+    let matchedExisting = existingProductMap.get(item.sku);
+    if (!matchedExisting && /^\d{7}$/.test(item.sku)) {
+      const sku8 = computeMdsSku8From7(item.sku);
+      matchedExisting = existingProductMap.get(sku8);
+      if (matchedExisting) item.sku = sku8;
+    }
+    if (!matchedExisting && item.barcode) {
+      matchedExisting = existingBarcodeMap.get(item.barcode);
+      if (matchedExisting) item.sku = matchedExisting.sku;
+    }
+    if (!matchedExisting && /^\d{12,14}$/.test(item.sku)) {
+      matchedExisting = existingBarcodeMap.get(item.sku);
+      if (matchedExisting) item.sku = matchedExisting.sku;
+    }
+
+    if (matchedExisting) {
       itemsToUpdate.push(item);
     } else {
       // New SKU → add with default fallback for missing required fields

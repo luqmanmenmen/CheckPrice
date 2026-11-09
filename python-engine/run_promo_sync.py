@@ -165,40 +165,99 @@ def process_single_promo_file(file_url: str, file_name: str = None) -> int:
         if total_rows == 0:
             return 0
 
+        def compute_mds_sku8(sku7: str) -> str:
+            if len(sku7) == 7 and sku7.isdigit():
+                weights = [1, 2, 1, 2, 1, 2, 1]
+                s = sum(int(sku7[idx]) * weights[idx] for idx in range(7))
+                return f"{sku7}{(10 - (s % 10)) % 10}"
+            return sku7
+
         CHUNK_SIZE = 500
         total_updated = 0
         now_iso = datetime.now(timezone.utc).isoformat()
 
         for i in range(0, total_rows, CHUNK_SIZE):
             chunk = parsed_data[i:i + CHUNK_SIZE]
-            chunk_skus = [str(x["sku"]) for x in chunk]
+            candidate_skus = set()
+            candidate_barcodes = set()
+            for x in chunk:
+                s = str(x["sku"]).strip()
+                if s:
+                    candidate_skus.add(s)
+                    if len(s) == 7 and s.isdigit():
+                        candidate_skus.add(compute_mds_sku8(s))
+                    if len(s) >= 12 and s.isdigit():
+                        candidate_barcodes.add(s)
+                bc = x.get("barcode")
+                if bc:
+                    candidate_barcodes.add(str(bc).strip())
 
+            ex_map = {}
+            ex_barcode_map = {}
             try:
-                ex_res = (
-                    supabase.table("Product")
-                    .select("sku, barcode, article, brand, dept, color, size, description, hargaNormal, stok, imageUrl, images, createdAt")
-                    .in_("sku", chunk_skus)
-                    .execute()
-                )
-                ex_map = {str(item["sku"]): item for item in (ex_res.data or [])}
+                if candidate_skus:
+                    ex_res = (
+                        supabase.table("Product")
+                        .select("sku, barcode, article, brand, dept, color, size, description, hargaNormal, stok, imageUrl, images, createdAt")
+                        .in_("sku", list(candidate_skus))
+                        .execute()
+                    )
+                    for row_ex in (ex_res.data or []):
+                        ex_map[str(row_ex["sku"])] = row_ex
+                        if row_ex.get("barcode"):
+                            ex_barcode_map[str(row_ex["barcode"])] = row_ex
+
+                if candidate_barcodes:
+                    bc_res = (
+                        supabase.table("Product")
+                        .select("sku, barcode, article, brand, dept, color, size, description, hargaNormal, stok, imageUrl, images, createdAt")
+                        .in_("barcode", list(candidate_barcodes))
+                        .execute()
+                    )
+                    for row_bc in (bc_res.data or []):
+                        ex_map[str(row_bc["sku"])] = row_bc
+                        if row_bc.get("barcode"):
+                            ex_barcode_map[str(row_bc["barcode"])] = row_bc
             except Exception as ex:
                 print(f"⚠️ Gagal fetch existing chunk {i}: {ex}")
-                ex_map = {}
 
-            payload = []
+            payload_by_sku = {}
             for item in chunk:
-                sku_str = str(item["sku"])
-                ex = ex_map.get(sku_str, {})
+                sku_str = str(item["sku"]).strip()
+                ex = ex_map.get(sku_str)
+                if not ex and len(sku_str) == 7 and sku_str.isdigit():
+                    sku8 = compute_mds_sku8(sku_str)
+                    if sku8 in ex_map:
+                        ex = ex_map[sku8]
+                        sku_str = sku8
+                if not ex and item.get("barcode") and str(item["barcode"]) in ex_barcode_map:
+                    ex = ex_barcode_map[str(item["barcode"])]
+                    sku_str = str(ex["sku"])
+                if not ex and len(sku_str) >= 12 and sku_str in ex_barcode_map:
+                    ex = ex_barcode_map[sku_str]
+                    sku_str = str(ex["sku"])
+
+                ex = ex or {}
+                item_desc = (item.get("description") or "").strip()
+                if item_desc.upper().startswith("PRODUK "):
+                    item_desc = ""
+
+                ex_desc = (ex.get("description") or "").strip()
+                final_desc = ex_desc or item_desc or f"Produk {sku_str}"
+
+                item_dept = item.get("dept")
+                if item_dept == "DEPARTEMEN LAINNYA":
+                    item_dept = None
 
                 p_item = {
-                    "sku": item["sku"],
+                    "sku": sku_str,
                     "barcode": ex.get("barcode") or item.get("barcode"),
                     "article": ex.get("article") or item.get("article"),
-                    "description": item.get("description") or ex.get("description") or "",
-                    "brand": item.get("brand") or ex.get("brand"),
-                    "dept": item.get("dept") or ex.get("dept"),
-                    "color": item.get("color") or ex.get("color"),
-                    "size": item.get("size") or ex.get("size"),
+                    "description": final_desc,
+                    "brand": ex.get("brand") or item.get("brand"),
+                    "dept": ex.get("dept") or item_dept or "DEPARTEMEN LAINNYA",
+                    "color": ex.get("color") or item.get("color"),
+                    "size": ex.get("size") or item.get("size"),
                     "imageUrl": ex.get("imageUrl"),
                     "images": ex.get("images") or [],
                     "hargaNormal": item.get("harga_normal") or ex.get("hargaNormal") or 0,
@@ -214,8 +273,9 @@ def process_single_promo_file(file_url: str, file_name: str = None) -> int:
                     "updatedAt": now_iso,
                     "createdAt": ex.get("createdAt") or now_iso,
                 }
-                payload.append(p_item)
+                payload_by_sku[sku_str] = p_item
 
+            payload = list(payload_by_sku.values())
             try:
                 up_res = supabase.table("Product").upsert(payload, on_conflict="sku").execute()
                 total_updated += len(payload)

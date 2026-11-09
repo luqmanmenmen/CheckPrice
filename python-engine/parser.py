@@ -154,10 +154,34 @@ def extract_brand_dept(file_path: str) -> Tuple[str, str]:
     brand = "SUKO"
     if "BYRCH" in file_name_upper or "BYRCH" in dept_name:
         brand = "BYRCH & CO"
+    elif "MUKU" in file_name_upper or "MUKU" in dept_name:
+        brand = "MUKU"
+        if dept_name == "DEPARTEMEN LAINNYA":
+            dept_name = "MUKU"
+    elif "ZES" in file_name_upper or "ZES" in dept_name:
+        brand = "ZES"
+        if dept_name == "DEPARTEMEN LAINNYA":
+            dept_name = "ZES"
+    elif "ANYDAY" in file_name_upper or "ANYDAY" in dept_name:
+        brand = "ANYDAY"
+        if dept_name == "DEPARTEMEN LAINNYA":
+            dept_name = "ANYDAY"
     elif "NEVADA" in file_name_upper:
         brand = "NEVADA"
     elif "CONNEXION" in file_name_upper:
         brand = "CONNEXION"
+    elif "LITTLE M" in file_name_upper:
+        brand = "LITTLE M"
+    elif "COLE" in file_name_upper:
+        brand = "COLE"
+    elif "ST YVES" in file_name_upper:
+        brand = "ST YVES"
+    elif "PHENOMENAL" in file_name_upper:
+        brand = "PHENOMENAL"
+    elif "PIPPO" in file_name_upper:
+        brand = "PIPPO"
+    elif "MAXMURAH" in file_name_upper:
+        brand = "MAXMURAH"
 
     return brand, dept_name
 

@@ -195,9 +195,10 @@ export default function UpdateHargaPage() {
       setStatus("success");
       setResultMsg(`Berhasil mengunggah ${files.length} file promo! Sedang memproses data secara otomatis...`);
       
-      // Langsung jalankan proses sync tanpa perlu klik tombol
+      // Langsung jalankan proses sync tanpa perlu klik tombol + picu Python Engine di GitHub Actions
       await fetchBlobFiles();
       await handleFullResync(true);
+      handleGitHubDispatch('promo').catch(() => {});
     } catch (error: any) {
       console.error("Upload error:", error);
       setProgress(100);
