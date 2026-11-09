@@ -131,9 +131,11 @@ def normalize_brand_and_dept(item: Dict[str, Any]) -> Tuple[str, str]:
     """Menormalisasi nama Brand dan Departemen dari payload StoreHub."""
     raw_group = str(item.get("Brand") or item.get("GroupName") or "").strip()
     raw_dept = str(item.get("DeptName") or item.get("Department") or raw_group or "MDS RETAIL").strip()
-    combined_upper = f"{raw_group} {raw_dept}".upper()
+    raw_style = str(item.get("StyleCode") or "").strip().upper()
+    raw_desc = str(item.get("Description") or item.get("ItemDescription") or "").strip().upper()
+    combined_upper = f"{raw_group} {raw_dept} {raw_desc}".upper()
 
-    if "MUKU" in combined_upper:
+    if "MUKU" in combined_upper or raw_style.startswith("MK-") or "-MK" in raw_style:
         brand = "MUKU"
     elif "ZES" in combined_upper:
         brand = "ZES"
