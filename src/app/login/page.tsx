@@ -90,11 +90,16 @@ export default function Login() {
       setShift("1");
     }
 
-    // Deteksi jika dialihkan karena jam shift berakhir
+    // Deteksi jika dialihkan karena jam shift berakhir atau pindah tab/perangkat
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
-      if (params.get("reason") === "shift_ended") {
+      const reason = params.get("reason");
+      if (reason === "shift_ended") {
         setError("⏰ Sesi shift Anda telah berakhir demi keamanan operasional toko. Silakan login kembali saat jam shift Anda dimulai.");
+      } else if (reason === "device_switched") {
+        setError("🔄 Tab/perangkat lama ini otomatis logout karena akun Anda baru saja login di tab/perangkat lain. (Tenang, daftar keranjang scan Anda tetap tersimpan aman!).");
+      } else if (reason === "session_expired_cart_saved") {
+        setError("🔒 Sesi login perlu disegarkan. Jangan khawatir, seluruh barang yang sudah Anda scan tetap tersimpan utuh di keranjang dan siap dikirim setelah login!");
       }
     }
   }, []);

@@ -104,13 +104,18 @@ export async function POST(req: NextRequest) {
 
     const { items, sku, size, qty, type, photoUrl, ocrData } = await req.json();
 
-    // Get user's active shift
-    const activeShift = await prisma.shift.findFirst({
+    // Get user's active shift (auto-create jika belum ada agar submit keranjang Facing Out tidak pernah gagal!)
+    let activeShift = await prisma.shift.findFirst({
       where: { userId: session.userId, endTime: null }
     });
 
     if (!activeShift) {
-      return NextResponse.json({ error: "Anda belum memulai shift" }, { status: 400 });
+      activeShift = await prisma.shift.create({
+        data: {
+          userId: session.userId,
+          type: (session as any).shiftType ? Number((session as any).shiftType) : 1
+        }
+      });
     }
 
     if (items && Array.isArray(items)) {

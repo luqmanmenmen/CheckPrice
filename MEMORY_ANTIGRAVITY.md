@@ -857,6 +857,23 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
      - **Integrasi Gemini AI Search Agent (`consultGeminiSearchAgent`):** Menggunakan `gemini-flash-lite-latest` (`thinkingBudget: 0`, batas waktu cepat 2,2 detik) untuk menerjemahkan kalimat keinginan alami pelanggan atau deskripsi 30% yang unik menjadi kata kunci katalog ERP secara cerdas.
      - **Offline Smart Search (`searchOfflineSmart`):** Jika internet toko mati saat kasir mengetik manual kode artikel atau 30% deskripsi, sistem otomatis mencari di Dexie IndexedDB lokal dengan algoritma 30% fuzzy yang sama.
 
+---
+
+## 56. Resolusi Auto-Logout Tab Lama Saat Login Multi-Tab/Incognito & Fitur Multi-Warna/Size Request dalam 1x Scan
+
+- **Instruksi Pengguna:**
+  *"sama ada case error kan aku login di beberapa hp kan atau tab browser nah aku mau scan buat facing out nah malah gagal karna belom login. gini masalah login di lain device itu langsung misal aku buka lagi di tab lama nah langsung ke logout gitu biar ga bingung karna masalah data offline ini kadang lemot mangkanya aku coba di igconigto mungkin bisa lebih cepat karna cache new gitu pikirku malah kena error gini karna login di beberapa tab coba ini selesaikan masalah ini agar pas aku udah scan banyak banget itu ga repot. oh iya 1 artikel kan banyak warna misal aku ingin beberapa warna untuk reques quanty aku harus scan lagi jadi inginku misal aku pilih ad gitu jadi warna biru size s aku ignin 4 warna merah size xl aku ingin 5 nah itu enak bang kan maksudku biar ga scan" lama bet dah."*
+- **Solusi Tuntas & Fitur Baru:**
+  1. **Auto-Logout Instan Tab Lama Saat Dibuka Kembali & Jaminan Anti-Hilang Keranjang ([`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx), [`src/app/api/auth/me/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/auth/me/route.ts), [`src/app/api/tickets/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/tickets/route.ts)):**
+     - **Akar Masalah:** Sebelumnya, saat pengguna login di tab baru (misal Incognito) atau HP lain, tab lama masih tampak terbuka normal padahal sesi di dalamnya sudah dicabut. Akibatnya saat sudah scan banyak barang lalu menekan *Kirim*, pengiriman ditolak karena belum login / belum ada shift aktif.
+     - **Deteksi Fokus Tab (`visibilitychange` & `focus`):** Begitu pengguna beralih/membuka kembali tab lama, `verifyActiveSession()` langsung mengecek `/api/auth/me`. Jika sesi sudah berpindah ke tab/HP baru (`reason: "device_switched"`), tab lama **seketika otomatis logout ke `/login?reason=device_switched`** dengan pesan pemberitahuan yang jelas, sehingga pengguna tidak pernah terjebak melakukan scan di tab yang sudah mati.
+     - **Auto-Create Shift & Keranjang Abadi 24 Jam:** Di `POST /api/tickets`, jika `activeShift` belum ada, sistem otomatis membuatkan `Shift` baru tanpa menolak pengiriman. Dan jika saat klik *Kirim* sesi kebetulan habis (`401`), seluruh barang di keranjang (`suko_facing_out_cart`) tetap tersimpan utuh 100% di `localStorage` dan langsung siap dikirim begitu login kembali!
+  2. **Fitur Pilih Banyak Warna & Ukuran Sekaligus dalam 1x Scan Artikel (`multiVariantQty` di [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx)):**
+     - Pada tabel **"Pilih Banyak Warna & Ukuran Sekaligus"**, setiap kotak varian `(Warna, Size)` kini dilengkapi tombol **`[ - ] [ Pilih / Qty ] [ + ]`** langsung di kartunya.
+     - **Contoh Penggunaan:** Cukup scan 1 baju dari sebuah artikel $\rightarrow$ tekan `+` 4x pada **Biru (Size S)** $\rightarrow$ tekan `+` 5x pada **Merah (Size XL)** $\rightarrow$ muncul panel ringkasan hijau **`🎯 Dipilih: 2 Varian (9 Pcs): BIRU (S) x4, MERAH (XL) x5`** $\rightarrow$ klik 1 tombol **`Masukkan Semua ke Facing Out (2 Varian • 9 Pcs)`**!
+     - Tersedia juga tombol **`➕ Tambah & Pilih Warna Lain`** pada pemilih varian tunggal agar kartu artikel tidak langsung tertutup jika masih ingin memilih warna lainnya.
+
+
 
 
 

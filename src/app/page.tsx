@@ -541,15 +541,49 @@ export default function Home() {
   };
 
   useEffect(() => {
-    fetch("/api/auth/me", { credentials: "same-origin" })
-      .then(res => res.json())
-      .then(data => {
+    let isActive = true;
+    const verifyActiveSession = async () => {
+      try {
+        const res = await fetch("/api/auth/me?t=" + Date.now(), {
+          credentials: "same-origin",
+          cache: "no-store",
+        });
+        const data = await res.json();
+        if (!isActive) return;
+
         if (data.user) {
           setUser(data.user);
           localStorage.setItem("suko_user", JSON.stringify(data.user));
+        } else {
+          // Sesi sudah pindah ke tab/HP lain atau habis -> langsung lempar ke login
+          // (Keranjang suko_facing_out_cart di localStorage tetap aman 100%!)
+          localStorage.removeItem("suko_user");
+          const reasonParam = data.reason === "device_switched" ? "device_switched" : "session_expired_cart_saved";
+          window.location.href = `/login?reason=${reasonParam}`;
         }
-      })
-      .catch(console.error);
+      } catch (err) {
+        // Abaikan error jaringan sesaat saat offline agar kasir tetap bisa scan offline
+      }
+    };
+
+    verifyActiveSession();
+
+    const onFocusOrVisible = () => {
+      if (document.visibilityState === "visible") {
+        verifyActiveSession();
+      }
+    };
+
+    window.addEventListener("focus", onFocusOrVisible);
+    document.addEventListener("visibilitychange", onFocusOrVisible);
+    const intervalId = setInterval(verifyActiveSession, 25000);
+
+    return () => {
+      isActive = false;
+      window.removeEventListener("focus", onFocusOrVisible);
+      document.removeEventListener("visibilitychange", onFocusOrVisible);
+      clearInterval(intervalId);
+    };
   }, []);
 
   const toggleStatus = async () => {
@@ -963,21 +997,120 @@ export default function Home() {
     }
   };
 
-  const addToCart = (type: string, qty: number, size: string) => {
+  // State Multi-Warna & Multi-Size Sekaligus dalam 1x Scan (SKU -> Qty)
+  const [multiVariantQty, setMultiVariantQty] = useState<Record<string, number>>({});
+
+  // Reset pilihan multi-varian jika pindah ke artikel yang berbeda
+  useEffect(() => {
+    setMultiVariantQty({});
+  }, [product?.article]);
+
+  const adjustVariantQty = (sku: string, delta: number, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setMultiVariantQty((prev) => {
+      const current = prev[sku] || 0;
+      const next = Math.max(0, current + delta);
+      const copy = { ...prev };
+      if (next === 0) {
+        delete copy[sku];
+      } else {
+        copy[sku] = next;
+      }
+      return copy;
+    });
+  };
+
+  const addToCart = (type: string, qty: number, size: string, keepOpen: boolean = false) => {
     if (!product) return;
-    updateCart([...cart, {
-      sku: product.sku,
-      productName: product.description,
-      type,
-      qty,
-      size,
-      photoUrl: product.imageUrl || null,
-      ocrData: null
-    }]);
+
+    // Gabungkan jika SKU & tipe yang sama sudah ada di keranjang
+    const existingIdx = cart.findIndex((c) => c.sku === product.sku && c.type === type);
+    let nextCart: any[];
+    if (existingIdx !== -1) {
+      nextCart = [...cart];
+      nextCart[existingIdx] = {
+        ...nextCart[existingIdx],
+        qty: (nextCart[existingIdx].qty || 1) + qty,
+      };
+    } else {
+      nextCart = [
+        ...cart,
+        {
+          sku: product.sku,
+          productName: product.description,
+          type,
+          qty,
+          size,
+          photoUrl: product.imageUrl || null,
+          ocrData: null,
+        },
+      ];
+    }
+
+    updateCart(nextCart);
+    setQty(1);
+
+    if (keepOpen) {
+      showToast(`+${qty} pcs (${size || product.sku}) masuk keranjang! Silakan pilih warna/size lain.`, "success");
+      return;
+    }
+
     setProduct(null);
     setManualInput("");
+    setMultiVariantQty({});
+    showToast(`Berhasil ditambahkan ke daftar. Total: ${nextCart.length} item`);
+    if (continuousMode) {
+      setIsScanning(true);
+    }
+  };
+
+  const addMultipleVariantsToCart = (type: string, keepOpen: boolean = false) => {
+    if (!product) return;
+    const allSibs = siblings && siblings.length > 0 ? siblings : [product];
+    const selectedEntries = Object.entries(multiVariantQty).filter(([, q]) => q > 0);
+    if (selectedEntries.length === 0) return;
+
+    let nextCart = [...cart];
+    let totalPcsAdded = 0;
+
+    for (const [targetSku, selectedQty] of selectedEntries) {
+      const sib = allSibs.find((s) => s.sku === targetSku);
+      if (!sib) continue;
+      const sibInfo = parseProductInfo(sib);
+      const itemSize = sibInfo.size || sib.size || "";
+      totalPcsAdded += selectedQty;
+
+      const existingIdx = nextCart.findIndex((c) => c.sku === sib.sku && c.type === type);
+      if (existingIdx !== -1) {
+        nextCart[existingIdx] = {
+          ...nextCart[existingIdx],
+          qty: (nextCart[existingIdx].qty || 1) + selectedQty,
+        };
+      } else {
+        nextCart.push({
+          sku: sib.sku,
+          productName: sib.description,
+          type,
+          qty: selectedQty,
+          size: itemSize,
+          photoUrl: sib.imageUrl || product.imageUrl || null,
+          ocrData: null,
+        });
+      }
+    }
+
+    updateCart(nextCart);
+    setMultiVariantQty({});
     setQty(1);
-    showToast(`Berhasil ditambahkan ke daftar. Total: ${cart.length + 1}`);
+
+    if (keepOpen) {
+      showToast(`Berhasil menambahkan ${selectedEntries.length} varian (${totalPcsAdded} pcs) ke keranjang!`, "success");
+      return;
+    }
+
+    setProduct(null);
+    setManualInput("");
+    showToast(`Mantap! ${selectedEntries.length} warna/size (${totalPcsAdded} pcs) masuk keranjang!`, "success");
     if (continuousMode) {
       setIsScanning(true);
     }
@@ -996,6 +1129,13 @@ export default function Home() {
       if (res.ok) {
         showToast(`${cart.length} tiket berhasil dikirim ke Gudang!`);
         updateCart([]);
+      } else if (res.status === 401) {
+        // Sesi pindah tab/belum login: Pastikan keranjang tetap tersimpan di localStorage lalu arahkan ke login!
+        updateCart(cart);
+        showToast("Sesi login berpindah tab. Keranjang Anda aman, mengarahkan ke halaman login...", "info");
+        setTimeout(() => {
+          window.location.href = "/login?reason=session_expired_cart_saved";
+        }, 900);
       } else {
         showToast(data.error || "Gagal mengirim tiket", "error");
       }
@@ -1012,6 +1152,7 @@ export default function Home() {
     setProduct(null);
     setSiblings([]);
     setProductsList([]);
+    setMultiVariantQty({});
     setError("");
     setQty(1);
     inputRef.current?.focus();
@@ -1908,34 +2049,48 @@ export default function Home() {
                 />
               </div>
 
-              {/* Matrix Varian Produk (Siblings) */}
-              {Object.keys(variantsGroupedBySize).length > 0 && (
+              {/* Matrix Varian Produk (Siblings) + Multi-Pick Qty per Warna & Ukuran */}
+              {Object.keys(variantsGroupedBySize).length > 0 && (() => {
+                const selectedVariantEntries = Object.entries(multiVariantQty).filter(([, q]) => q > 0);
+                const selectedVariantsCount = selectedVariantEntries.length;
+                const selectedTotalPcs = selectedVariantEntries.reduce((acc, [, q]) => acc + q, 0);
+
+                return (
                 <div className="bg-white rounded-xl p-4 border border-slate-200 mt-2 shadow-sm">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                      <Layers className="w-4 h-4 text-indigo-500" />
-                      Ketersediaan Stok Varian Lain
-                    </h3>
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                        <Layers className="w-4 h-4 text-indigo-500" />
+                        Pilih Banyak Warna & Ukuran Sekaligus
+                      </h3>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Tekan <span className="font-bold text-emerald-600">+</span> pada kotak warna/size untuk memilih beberapa varian sekaligus tanpa scan ulang
+                      </p>
+                    </div>
                     <span className="text-[11px] font-bold bg-indigo-50 text-indigo-700 px-2.5 py-0.5 rounded-full">
                       {sourceSiblings.length} Pilihan
                     </span>
                   </div>
-                  <div className="flex flex-col gap-3">
+                  <div className="flex flex-col gap-3 mt-3">
                     {Object.entries(variantsGroupedBySize)
                       .sort((a, b) => sortSizes(a[0], b[0]))
                       .map(([size, items]) => (
-                      <div key={size} className="flex items-center gap-2 sm:gap-3 border-b border-slate-100 pb-3 last:border-0 last:pb-0">
-                        <div className="w-10 h-10 shrink-0 bg-slate-100 rounded-lg flex items-center justify-center border font-black text-slate-700 text-sm">
+                      <div key={size} className="flex items-start sm:items-center gap-2 sm:gap-3 border-b border-slate-100 pb-3 last:border-0 last:pb-0">
+                        <div className="w-10 h-10 shrink-0 bg-slate-100 rounded-lg flex items-center justify-center border font-black text-slate-700 text-sm mt-1 sm:mt-0">
                           {size}
                         </div>
                         <div className="flex-1 flex gap-2.5 overflow-x-auto sm:overflow-visible sm:flex-wrap pb-2 sm:pb-0 snap-x">
                           {items.map((item, idx) => {
                             const cData = getColorData(item.color);
                             const bgStyle = cData ? { backgroundColor: cData.hex } : {};
+                            const pickedQty = multiVariantQty[item.sku] || 0;
                             
-                            // Tentukan kelas berdasarkan apakah warna dikenali & apakah terpilih (current)
-                            let buttonClass = `flex flex-col border rounded-lg px-3 py-2.5 min-w-[130px] sm:min-w-[115px] shrink-0 snap-start text-left transition-colors duration-100 active:scale-95 border-black/10 `;
-                            if (item.isCurrent) {
+                            let buttonClass = `flex flex-col border rounded-xl px-3 py-2.5 min-w-[142px] sm:min-w-[132px] shrink-0 snap-start text-left transition-all duration-100 border-black/10 cursor-pointer `;
+                            if (pickedQty > 0) {
+                              buttonClass += cData
+                                ? 'ring-2 ring-emerald-500 ring-offset-2 shadow-md font-bold '
+                                : 'bg-emerald-50/70 border-emerald-500 ring-2 ring-emerald-500 shadow-md font-bold ';
+                            } else if (item.isCurrent) {
                               buttonClass += cData 
                                 ? 'ring-2 ring-indigo-500 ring-offset-2 shadow-sm font-bold ' 
                                 : 'bg-indigo-50 border-indigo-500 ring-2 ring-indigo-500 shadow-sm font-bold ';
@@ -1945,7 +2100,6 @@ export default function Home() {
                                 : 'bg-white hover:bg-slate-50 hover:border-indigo-200 ';
                             }
 
-                            // Tentukan warna teks
                             const titleColor = cData 
                               ? (cData.isDark ? 'text-white' : 'text-slate-900')
                               : (item.isCurrent ? 'text-indigo-800' : 'text-slate-600');
@@ -1958,7 +2112,7 @@ export default function Home() {
                             const hasPromoPrice = Boolean(item.hargaPromo && item.hargaPromo > 0 && item.hargaPromo < item.hargaNormal);
 
                             return (
-                              <button
+                              <div
                                 key={idx}
                                 onClick={() => handleSelectVariant(item.sku)}
                                 style={bgStyle}
@@ -1968,11 +2122,15 @@ export default function Home() {
                                   <span className={`text-[11px] font-bold uppercase truncate ${titleColor}`} title={item.color}>
                                     {item.color}
                                   </span>
-                                  {itemHasPromo && (
+                                  {pickedQty > 0 ? (
+                                    <span className="bg-emerald-600 text-white text-[9px] font-black px-1.5 py-0.5 rounded shadow-xs shrink-0 uppercase">
+                                      +{pickedQty}
+                                    </span>
+                                  ) : itemHasPromo ? (
                                     <span className="bg-red-600 text-white text-[8px] font-black px-1.5 py-0.5 rounded shadow-xs shrink-0 tracking-tight leading-none uppercase">
                                       PROMO
                                     </span>
-                                  )}
+                                  ) : null}
                                 </div>
                                 <div className="flex items-center justify-between mt-0.5 gap-2">
                                   <span className={`text-[10px] font-mono ${subColor}`}>{item.sku.slice(-4)}</span>
@@ -1996,20 +2154,115 @@ export default function Home() {
                                     </span>
                                   )}
                                 </div>
-                              </button>
+
+                                {/* Kontrol Qty Multi-Warna & Multi-Size Langsung di Tiap Kartu Varian */}
+                                <div
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="mt-2 pt-1.5 border-t border-black/10 flex items-center justify-between gap-1 w-full"
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={(e) => adjustVariantQty(item.sku, -1, e)}
+                                    disabled={pickedQty === 0}
+                                    className={`w-6 h-6 rounded-md font-black text-xs flex items-center justify-center transition-colors ${
+                                      pickedQty > 0
+                                        ? "bg-white text-slate-800 shadow-xs hover:bg-rose-50 hover:text-rose-600 border border-slate-200"
+                                        : "bg-black/10 text-slate-400 opacity-40 cursor-not-allowed"
+                                    }`}
+                                  >
+                                    -
+                                  </button>
+                                  <span
+                                    className={`text-[11px] font-black px-1.5 py-0.5 rounded ${
+                                      pickedQty > 0
+                                        ? "bg-emerald-600 text-white shadow-2xs"
+                                        : cData && cData.isDark
+                                        ? "text-white/80"
+                                        : "text-slate-600"
+                                    }`}
+                                  >
+                                    {pickedQty > 0 ? `${pickedQty} pcs` : "Pilih"}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => adjustVariantQty(item.sku, 1, e)}
+                                    className="w-6 h-6 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center justify-center shadow-xs active:scale-90 transition-transform"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              </div>
                             );
                           })}
                         </div>
                       </div>
                     ))}
                   </div>
-                </div>
-              )}
 
-              {/* Aksi Gudang */}
+                  {/* Panel Ringkasan Multi-Warna & Multi-Size yang Dipilih */}
+                  {selectedVariantsCount > 0 && (
+                    <div className="mt-4 p-3.5 rounded-xl bg-emerald-50/90 border border-emerald-200 flex flex-col gap-2.5 animate-in fade-in duration-200">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-black text-emerald-900 uppercase tracking-wide">
+                          🎯 Dipilih: {selectedVariantsCount} Varian ({selectedTotalPcs} Pcs)
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setMultiVariantQty({})}
+                          className="text-[11px] font-bold text-rose-600 hover:underline"
+                        >
+                          Reset Pilihan
+                        </button>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {selectedVariantEntries.map(([vSku, vQty]) => {
+                          const foundSib = sourceSiblings.find((s) => s.sku === vSku);
+                          const info = foundSib ? parseProductInfo(foundSib) : { color: "", size: "" };
+                          return (
+                            <span
+                              key={vSku}
+                              className="inline-flex items-center gap-1.5 bg-white text-slate-800 border border-emerald-300 px-2.5 py-1 rounded-lg text-xs font-bold shadow-2xs"
+                            >
+                              <span>{info.color || "STANDAR"}</span>
+                              <span className="bg-indigo-100 text-indigo-800 px-1.5 py-0.5 rounded text-[10px] font-black">
+                                {info.size || "ALL"}
+                              </span>
+                              <span className="text-emerald-700 font-black">x{vQty}</span>
+                            </span>
+                          );
+                        })}
+                      </div>
+                      <div className="flex flex-col sm:flex-row gap-2 mt-1">
+                        {activeTab === "FACING_OUT" ? (
+                          <button
+                            type="button"
+                            onClick={() => addMultipleVariantsToCart("FACING_OUT", false)}
+                            className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-black py-3 px-4 rounded-xl shadow-md active:scale-95 transition-all flex items-center justify-center gap-2 text-sm"
+                          >
+                            <Package2 className="w-4 h-4" />
+                            Masukkan Semua ke Facing Out ({selectedVariantsCount} Varian • {selectedTotalPcs} Pcs)
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => addMultipleVariantsToCart("STOCK_CHECK", false)}
+                            className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3 px-4 rounded-xl shadow-md active:scale-95 transition-all flex items-center justify-center gap-2 text-sm"
+                          >
+                            <MessageSquare className="w-4 h-4" />
+                            Tanya Stok Semua Pilihan ({selectedVariantsCount} Varian • {selectedTotalPcs} Pcs)
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                );
+              })()}
+
+              {/* Aksi Gudang (Varian Tunggal Aktif) */}
               <div className="flex flex-col gap-3 mt-4 bg-slate-50 p-4 rounded-xl border border-slate-100">
                 <div className="flex justify-between items-center">
-                  <p className="text-xs font-bold text-slate-500 uppercase">Masukkan ke Keranjang</p>
+                  <p className="text-xs font-bold text-slate-500 uppercase">Masukkan Varian Aktif ({parsedInfo.color || "-"} • {parsedInfo.size || "-"})</p>
                   
                   <div className="flex items-center gap-3">
                     {/* Continuous Toggle */}
@@ -2035,16 +2288,42 @@ export default function Home() {
                   </div>
                 </div>
                 
-                <div className="flex gap-2 mt-1">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
                   {activeTab === "FACING_OUT" && (
-                    <button onClick={() => addToCart("FACING_OUT", qty, parsedInfo.size || product.size || "")} className="w-full bg-amber-500 text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 hover:bg-amber-600 shadow-md active:scale-95 transition-all">
-                      <Package2 className="w-5 h-5" /> Facing Out
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => addToCart("FACING_OUT", qty, parsedInfo.size || product.size || "", true)}
+                        className="w-full bg-white text-amber-700 border-2 border-amber-400 font-bold py-3 rounded-xl flex items-center justify-center gap-1.5 hover:bg-amber-50 active:scale-95 transition-all text-xs sm:text-sm"
+                      >
+                        ➕ Tambah & Pilih Warna Lain
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => addToCart("FACING_OUT", qty, parsedInfo.size || product.size || "", false)}
+                        className="w-full bg-amber-500 text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 hover:bg-amber-600 shadow-md active:scale-95 transition-all text-xs sm:text-sm"
+                      >
+                        <Package2 className="w-5 h-5" /> Facing Out (Selesai)
+                      </button>
+                    </>
                   )}
                   {activeTab === "STOCK_CHECK" && (
-                    <button onClick={() => addToCart("STOCK_CHECK", qty, parsedInfo.size || product.size || "")} className="w-full bg-indigo-600 text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 hover:bg-indigo-700 shadow-md active:scale-95 transition-all">
-                      <MessageSquare className="w-5 h-5" /> Tanya Stok
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => addToCart("STOCK_CHECK", qty, parsedInfo.size || product.size || "", true)}
+                        className="w-full bg-white text-indigo-700 border-2 border-indigo-400 font-bold py-3 rounded-xl flex items-center justify-center gap-1.5 hover:bg-indigo-50 active:scale-95 transition-all text-xs sm:text-sm"
+                      >
+                        ➕ Tambah & Pilih Warna Lain
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => addToCart("STOCK_CHECK", qty, parsedInfo.size || product.size || "", false)}
+                        className="w-full bg-indigo-600 text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 hover:bg-indigo-700 shadow-md active:scale-95 transition-all text-xs sm:text-sm"
+                      >
+                        <MessageSquare className="w-5 h-5" /> Tanya Stok (Selesai)
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
