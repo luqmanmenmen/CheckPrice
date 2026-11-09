@@ -1,8 +1,49 @@
 "use client";
 
 import { useState, useRef, useEffect, TouchEvent } from "react";
-import { ChevronLeft, ChevronRight, Maximize2, X, Image as ImageIcon } from "lucide-react";
+import { ChevronLeft, ChevronRight, Maximize2, Image as ImageIcon } from "lucide-react";
 import ImageLightboxModal from "@/components/ImageLightboxModal";
+
+const preloadedUrls = new Set<string>();
+
+/**
+ * Mengoptimalkan URL gambar CDN Shopify / Matahari.com agar berukuran ringan (~12–18 KB vs 1.2 MB)
+ * sehingga langsung tampil 0ms tanpa loading lama saat di-scan atau dicari!
+ */
+export function optimizeRetailImageUrl(rawUrl?: string | null, width: number = 400): string {
+  if (!rawUrl || typeof rawUrl !== "string") return "";
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return "";
+
+  if (trimmed.includes("cdn.shopify.com") || trimmed.includes("matahari.com/cdn/shop")) {
+    try {
+      const u = new URL(trimmed);
+      u.searchParams.set("width", String(width));
+      return u.toString();
+    } catch {
+      const sep = trimmed.includes("?") ? "&" : "?";
+      return `${trimmed}${sep}width=${width}`;
+    }
+  }
+  return trimmed;
+}
+
+/**
+ * Preload daftar URL gambar ke RAM browser di background agar saat diklik/discan langsung muncul 0ms
+ */
+export function preloadProductImages(urls: (string | null | undefined)[], width: number = 400) {
+  if (typeof window === "undefined") return;
+  for (const raw of urls) {
+    if (!raw) continue;
+    const opt = optimizeRetailImageUrl(raw, width);
+    if (!opt || preloadedUrls.has(opt)) continue;
+    preloadedUrls.add(opt);
+    const img = new window.Image();
+    img.decoding = "async";
+    img.referrerPolicy = "no-referrer";
+    img.src = opt;
+  }
+}
 
 interface ProductImageSliderProps {
   images?: string[] | null;
@@ -16,18 +57,27 @@ export default function ProductImageSlider({
   images,
   alt,
   className = "w-40 h-52 sm:w-48 sm:h-60",
-  aspectRatio = "aspect-[3/4]",
   allowZoom = true,
 }: ProductImageSliderProps) {
-  const cleanImages = (images || []).filter((u): u is string => typeof u === "string" && u.trim().length > 0);
+  const cleanImages = (images || []).filter(
+    (u): u is string => typeof u === "string" && u.trim().length > 0
+  );
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isZoomed, setIsZoomed] = useState(false);
+  const [useRawFallback, setUseRawFallback] = useState<Record<number, boolean>>({});
   const [hasError, setHasError] = useState<Record<number, boolean>>({});
 
-  // Reset index when image list changes (e.g. when changing variant color)
+  // Reset index ketika gambar utama berganti (misal ganti produk / warna)
+  const firstImageKey = cleanImages[0] || "";
   useEffect(() => {
     setCurrentIndex(0);
-  }, [cleanImages[0]]);
+    setUseRawFallback({});
+    setHasError({});
+    // Preload slide ke-2 dst di background setelah gambar utama
+    if (cleanImages.length > 1) {
+      preloadProductImages(cleanImages.slice(1), 400);
+    }
+  }, [firstImageKey]);
 
   // Touch Swipe Handling
   const touchStartX = useRef<number | null>(null);
@@ -48,10 +98,8 @@ export default function ProductImageSlider({
     const distance = touchStartX.current - touchEndX.current;
     if (Math.abs(distance) > minSwipeDistance) {
       if (distance > 0) {
-        // Swipe left -> Next
         handleNext();
       } else {
-        // Swipe right -> Prev
         handlePrev();
       }
     }
@@ -71,15 +119,26 @@ export default function ProductImageSlider({
 
   if (cleanImages.length === 0) {
     return (
-      <div className={`relative ${className} rounded-2xl bg-slate-100 flex flex-col items-center justify-center border border-slate-200 text-slate-400 p-4`}>
+      <div
+        className={`relative ${className} rounded-2xl bg-slate-100 flex flex-col items-center justify-center border border-slate-200 text-slate-400 p-4`}
+      >
         <ImageIcon className="w-8 h-8 opacity-40 mb-1" />
-        <span className="text-[10px] font-bold uppercase tracking-wider opacity-60">Foto Belum Tersedia</span>
+        <span className="text-[10px] font-bold uppercase tracking-wider opacity-60">
+          Foto Belum Tersedia
+        </span>
       </div>
     );
   }
 
-  const currentSrc = cleanImages[currentIndex] || cleanImages[0];
+  const safeIndex = currentIndex < cleanImages.length ? currentIndex : 0;
+  const rawCurrentSrc = cleanImages[safeIndex] || cleanImages[0];
+  const displaySrc = useRawFallback[safeIndex]
+    ? rawCurrentSrc
+    : optimizeRetailImageUrl(rawCurrentSrc, 400);
   const isMulti = cleanImages.length > 1;
+
+  // Untuk Lightbox Zoom gunakan resolusi HD (width=1000)
+  const hdZoomImages = cleanImages.map((u) => optimizeRetailImageUrl(u, 1000));
 
   return (
     <>
@@ -89,40 +148,40 @@ export default function ProductImageSlider({
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
       >
-        {/* Gambar Utama dengan Animasi Geser Halus */}
+        {/* Render langsung gambar aktif tanpa delay animasi fade agar muncul 0ms */}
         <div className="w-full h-full relative overflow-hidden bg-slate-100">
-          {cleanImages.map((src, idx) => (
-            <div
-              key={src + idx}
-              className={`absolute inset-0 transition-opacity duration-300 ease-out ${
-                idx === currentIndex ? "opacity-100 z-10" : "opacity-0 z-0 pointer-events-none"
-              }`}
-            >
-              {hasError[idx] ? (
-                <div className="w-full h-full flex flex-col items-center justify-center bg-slate-100 text-slate-400 p-2">
-                  <ImageIcon className="w-8 h-8 opacity-40 mb-1" />
-                  <span className="text-[10px] font-bold">Gagal memuat</span>
-                </div>
-              ) : (
-                <img
-                  src={src}
-                  alt={`${alt} - Foto ${idx + 1}`}
-                  loading={idx === 0 ? "eager" : "lazy"}
-                  referrerPolicy="no-referrer"
-                  draggable={false}
-                  onError={() => setHasError((prev) => ({ ...prev, [idx]: true }))}
-                  className="w-full h-full object-cover object-top transition-transform duration-300 group-hover:scale-105 cursor-pointer"
-                  onClick={() => allowZoom && setIsZoomed(true)}
-                />
-              )}
+          {hasError[safeIndex] ? (
+            <div className="w-full h-full flex flex-col items-center justify-center bg-slate-100 text-slate-400 p-2">
+              <ImageIcon className="w-8 h-8 opacity-40 mb-1" />
+              <span className="text-[10px] font-bold">Gagal memuat</span>
             </div>
-          ))}
+          ) : (
+            <img
+              key={displaySrc}
+              src={displaySrc}
+              alt={`${alt} - Foto ${safeIndex + 1}`}
+              loading="eager"
+              decoding="sync"
+              fetchPriority="high"
+              referrerPolicy="no-referrer"
+              draggable={false}
+              onError={() => {
+                if (!useRawFallback[safeIndex] && displaySrc !== rawCurrentSrc) {
+                  setUseRawFallback((prev) => ({ ...prev, [safeIndex]: true }));
+                } else {
+                  setHasError((prev) => ({ ...prev, [safeIndex]: true }));
+                }
+              }}
+              className="w-full h-full object-cover object-top cursor-pointer"
+              onClick={() => allowZoom && setIsZoomed(true)}
+            />
+          )}
         </div>
 
         {/* Badge Counter Gambar (misal: 1 / 5) */}
         {isMulti && (
           <div className="absolute top-2.5 right-2.5 z-20 bg-slate-950/70 backdrop-blur-md text-white text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm tracking-wider">
-            {currentIndex + 1} / {cleanImages.length}
+            {safeIndex + 1} / {cleanImages.length}
           </div>
         )}
 
@@ -177,8 +236,8 @@ export default function ProductImageSlider({
                     e.stopPropagation();
                     setCurrentIndex(idx);
                   }}
-                  className={`transition-all duration-300 rounded-full ${
-                    idx === currentIndex
+                  className={`transition-all duration-200 rounded-full ${
+                    idx === safeIndex
                       ? "w-4 h-1.5 bg-white shadow-md"
                       : "w-1.5 h-1.5 bg-white/50 hover:bg-white/80"
                   }`}
@@ -190,12 +249,12 @@ export default function ProductImageSlider({
         )}
       </div>
 
-      {/* Modal Lightbox Zoom with centered portal, pinch-to-zoom & mouse wheel */}
-      <ImageLightboxModal 
+      {/* Modal Lightbox Zoom */}
+      <ImageLightboxModal
         isOpen={isZoomed}
         onClose={() => setIsZoomed(false)}
-        images={cleanImages}
-        initialIndex={currentIndex}
+        images={hdZoomImages}
+        initialIndex={safeIndex}
         title={alt}
       />
     </>

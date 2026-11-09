@@ -10,7 +10,7 @@ import useSWR from "swr";
 import { Bell } from "lucide-react";
 import Link from "next/link";
 import { ChipLoader } from "@/components/ChipLoader";
-import ProductImageSlider from "@/components/ProductImageSlider";
+import ProductImageSlider, { optimizeRetailImageUrl, preloadProductImages } from "@/components/ProductImageSlider";
 import ShiftLoader from "@/components/ShiftLoader";
 import ImageLightboxModal from "@/components/ImageLightboxModal";
 import { createPortal } from "react-dom";
@@ -883,6 +883,7 @@ export default function Home() {
           }
         }
         setSiblings(currentSiblings);
+        preloadProductImages([localProduct.imageUrl, ...currentSiblings.map((s) => s.imageUrl)], 400);
         // Daftarkan SEMUA varian ke memory cache agar scan berikutnya 0ms
         sessionCacheRef.current.set(trimmed.toLowerCase(), { product: localProduct, siblings: currentSiblings });
         currentSiblings.forEach((s) => {
@@ -926,6 +927,7 @@ export default function Home() {
             return;
           }
           setProductsList(data.data);
+          preloadProductImages(data.data.map((item: any) => item.imageUrl), 400);
           setCurrentPage(data.meta?.page || 1);
           setTotalPages(data.meta?.totalPages || 1);
         } else {
@@ -933,6 +935,7 @@ export default function Home() {
           const serverSiblings = data.siblings || [];
           setSiblings(serverSiblings);
           setProductsList([]);
+          preloadProductImages([data.data?.imageUrl, ...serverSiblings.map((s: any) => s.imageUrl)], 400);
 
           // Simpan produk & SEMUA siblings ke session cache agar klik/scan varian berikutnya 0ms
           sessionCacheRef.current.set(trimmed.toLowerCase(), { product: data.data, siblings: serverSiblings });
@@ -1747,8 +1750,12 @@ export default function Home() {
               const info = parseProductInfo(p);
               return (
                 <button
-                  key={p.id}
+                  key={p.id || p.sku}
                   onClick={() => {
+                    // Tampilkan produk & gambar yang sudah di-cache seketika (0ms tanpa tunggu loading!)
+                    setProduct(p);
+                    setSiblings([p]);
+                    setProductsList([]);
                     setManualInput(p.sku);
                     searchProduct(p.sku);
                   }}
@@ -1757,9 +1764,10 @@ export default function Home() {
                   {p.imageUrl && (
                     <div className="w-12 h-16 rounded-lg overflow-hidden bg-slate-100 border border-slate-200 shrink-0">
                       <img
-                        src={p.imageUrl}
+                        src={optimizeRetailImageUrl(p.imageUrl, 400)}
                         alt={info.name}
-                        loading="lazy"
+                        loading="eager"
+                        decoding="sync"
                         referrerPolicy="no-referrer"
                         className="w-full h-full object-cover object-top"
                       />
@@ -2076,7 +2084,16 @@ export default function Home() {
                   )}
                 </div>
                 <ProductImageSlider
-                  images={product.images && product.images.length > 0 ? product.images : (product.imageUrl ? [product.imageUrl] : [])}
+                  images={(() => {
+                    if (product.images && product.images.length > 0) return product.images;
+                    if (product.imageUrl) return [product.imageUrl];
+                    const sameColorSib = sourceSiblings.find(
+                      (s) => s.imageUrl && s.color && product.color && s.color.toUpperCase() === product.color.toUpperCase()
+                    );
+                    if (sameColorSib?.imageUrl) return [sameColorSib.imageUrl];
+                    const anySibWithImg = sourceSiblings.find((s) => s.imageUrl);
+                    return anySibWithImg?.imageUrl ? [anySibWithImg.imageUrl] : [];
+                  })()}
                   alt={`${parsedInfo.name} - ${parsedInfo.color || product.sku}`}
                   className="w-48 h-64 sm:w-56 sm:h-72"
                 />

@@ -26,6 +26,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="id">
+      <head>
+        <link rel="preconnect" href="https://cdn.shopify.com" crossOrigin="anonymous" />
+        <link rel="dns-prefetch" href="https://cdn.shopify.com" />
+      </head>
       <body className={`${inter.className} bg-slate-50 text-slate-900 min-h-[100dvh] flex flex-col antialiased`}>
         <LayoutWrapper>
           {children}
