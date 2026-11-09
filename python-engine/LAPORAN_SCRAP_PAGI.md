@@ -18,6 +18,31 @@
 
 ---
 
+## 1B. Ringkasan Eksekutif Brutal Scraping Foto Produk Resmi (`matahari.com`)
+> *(Laporan rincian lengkap per brand juga tersedia di [`python-engine/LAPORAN_SCRAP_GAMBAR.md`](file:///c:/Max%20Display/price-checker/python-engine/LAPORAN_SCRAP_GAMBAR.md))*
+
+- **Filter Keamanan Gambar:** **100% Foto Studio Produk Asli** dari katalog `/products/` `matahari.com` (otomatis memblokir logo brand, banner promo, ikon navigasi, voucher, maupun tabel *size chart*).
+- **Produk Berfoto Sebelum Scrap:** `7,664 SKU`
+- **Total Produk Baru Mendapat Foto Studio Resmi Hari Ini:** **`+27,629 SKU`**
+  - *Direct SKU Match (95 Sitemap XML + Shopify JSON Catalog):* `24,703 SKU`
+  - *Collage Sibling Match (Artikel & Warna Persis Sama):* `1,673 SKU`
+  - *Collage Sibling Match (Kode Artikel Induk Sama):* `1,253 SKU`
+- **Total Master Produk Berfoto Saat Ini di Supabase:** **`35,293 SKU` (41.6% dari total 84.763 SKU)**
+  - **SUKO / SUKO MEN / SUKO LADIES:** `7,773 SKU` berfoto (**75%–100%**)
+  - **NEVADA:** `6,656 SKU` berfoto
+  - **LITTLE M:** `5,176 SKU` berfoto
+  - **CONNEXION & MUKU:** `1,765 SKU` berfoto (**MUKU 62.5%**)
+  - **COLE:** `1,595 SKU` berfoto
+  - **LADIES / MEN / CHILDREN / MAXMURAH SHOES:** `3,215 SKU` berfoto (**78%–87%**)
+  - **VOLO:** `1,401 SKU` berfoto (**66.2%**)
+  - **MAXMURAH APPAREL:** `1,306 SKU` berfoto
+  - **ST YVES:** `1,273 SKU` berfoto
+  - **CHILDREN BOYS & GIRLS:** `1,579 SKU` berfoto
+  - **MEN CONTEMP & YOUNG CASUAL:** `1,525 SKU` berfoto
+  - **BYRCH & CO & DETAILS:** `382 SKU` berfoto (**59%–65%**)
+
+---
+
 ## 2. Rincian Produk Berdasarkan Merk / Departemen
 Berikut adalah rincian produk yang berhasil ditangkap dari StoreHub MDS BISA dan dimasukkan ke bank data:
 

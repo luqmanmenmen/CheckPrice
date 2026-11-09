@@ -796,4 +796,28 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
        - Penambahan Produk Baru: **+75.060 SKU baru** (+989 SKU lama dilengkapi) dari **350+ Merk & Departemen** (mencakup *NEVADA* 17.686 item, *LITTLE M* 13.009 item, *ZES* 5.694 item, *ST YVES* 4.990 item, *CONNEXION* 3.875 item, *COLE* 3.847 item, *SUKO* 11.800+ item, *VOLO* 2.609 item, *MUKU Special Collection* 80 item, *MAXMURAH*, *DISNEY*, *BYRCH & CO*, *CARDINAL*, *DETAILS*, dll.).
        - Seluruh **84.763 SKU** kini aktif 100% dan langsung muncul seketika saat di-scan barcode maupun dicari di `luqmanganteng.my.id`.
 
+---
+
+## 53. Mesin Brutal Scraping Foto Produk Resmi Matahari.com (`brutal_image_scraper.py`)
+
+- **Instruksi Pengguna:**
+  1. *"oke mesin scrap sekarang mencrab brutal gambar all tanpa kecuali di matahari.com bisa ?"*
+  2. *"maksudku produknya loh ya bukan gambar yang lain loh yaa"*
+  3. *"laporannya dong biar aku tau udah berapa yang udah di scrap"*
+- **Arsitektur & Filter 100% Foto Produk Asli ([`python-engine/brutal_image_scraper.py`](file:///c:/Max%20Display/price-checker/python-engine/brutal_image_scraper.py)):**
+  1. **Filter Keamanan Gambar (`clean_img_url`):**
+     - Memvalidasi ketat agar hanya URL foto produk resmi dari `cdn.shopify.com/s/files/1/0666/9212/0727/` yang diambil.
+     - Memblokir 100% gambar non-produk (`banner`, `logo`, `icon`, `badge`, `size`, `chart`, `panduan`, `ukur`, `placeholder`, `voucher`, `.svg`, `.gif`).
+  2. **Strategi 4-Jalur Paralel (16 Worker Threads):**
+     - **Jalur 1 (95 Sitemap XML Produk `sitemap_products_1..95.xml`):** Menyedot 93.456 URL foto produk valid dan memetakan 69.191 SKU unik dari nama file 8-digit SKU.
+     - **Jalur 2 (100 Halaman Global `/products.json`):** Menyedot 25.000 artikel induk (~177.258 varian SKU) beserta galeri multi-angle (`-1` s/d `-5`) dan mengekstrak `Kode Artikel` (`StyleCode`) dari akhir `body_html`.
+     - **Jalur 3 (66 Koleksi Raksasa Brand & Kategori):** Menyedot koleksi terbesar dari indeks `/collections.json` hingga mengumpulkan **228.753 SKU berfoto** dan **12.402 Kode Artikel**.
+     - **Jalur 4 (Collage Sibling Propagation):** Mewariskan foto studio ke varian ukuran (`S, M, L, XL, XXL`) yang memiliki pasangan `(article, color)` atau `article` (`StyleCode`) yang sama persis.
+  3. **Hasil Eksekusi Aktual (09 Nov 2026 — Durasi 4,1 Menit):**
+     - Produk Berfoto Sebelum Scrap: **7.664 SKU**
+     - Produk Baru Mendapat Foto Studio Resmi: **+27.629 SKU** (`24.703` Direct SKU Match + `1.673` Sibling Artikel & Warna + `1.253` Sibling Kode Artikel Induk)
+     - **Total Produk Berfoto Saat Ini di Supabase:** **35.293 SKU (41,6% dari 84.763 SKU)**
+     - Laporan lengkap disajikan di [`python-engine/LAPORAN_SCRAP_GAMBAR.md`](file:///c:/Max%20Display/price-checker/python-engine/LAPORAN_SCRAP_GAMBAR.md) dan [`python-engine/LAPORAN_SCRAP_PAGI.md`](file:///c:/Max%20Display/price-checker/python-engine/LAPORAN_SCRAP_PAGI.md).
+
+
 
