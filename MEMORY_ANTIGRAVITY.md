@@ -819,5 +819,26 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
      - **Total Produk Berfoto Saat Ini di Supabase:** **35.293 SKU (41,6% dari 84.763 SKU)**
      - Laporan lengkap disajikan di [`python-engine/LAPORAN_SCRAP_GAMBAR.md`](file:///c:/Max%20Display/price-checker/python-engine/LAPORAN_SCRAP_GAMBAR.md) dan [`python-engine/LAPORAN_SCRAP_PAGI.md`](file:///c:/Max%20Display/price-checker/python-engine/LAPORAN_SCRAP_PAGI.md).
 
+---
+
+## 54. Brankas Backup Lokal Penuh & Mesin 1-Klik Disaster Recovery (`C:\Max Display\BACKUP_MASTER_LOKAL`)
+
+- **Instruksi Pengguna:**
+  *"oke jangan lupa all backup ke komputer localku ya. misal server lagi trouble atau di hack kita masih ada backup file yang bisa kita intall ulang kembali"*.
+- **Implementasi Mesin ([`python-engine/local_full_backup.py`](file:///c:/Max%20Display/price-checker/python-engine/local_full_backup.py)):**
+  1. **Lokasi Brankas Lokal:** `C:\Max Display\BACKUP_MASTER_LOKAL` (terisolasi aman di harddisk lokal komputer Mas Luqman).
+  2. **Isi Backup Lengkap (100% Data & Konfigurasi):**
+     - `database_json/Product.json`: **84.763 baris SKU lengkap** (101,49 MB — mencakup SKU, Barcode EAN-13, Harga Normal, Promo, Stok, dan Galeri Foto Studio CDN).
+     - `database_json/User.json`: **21 akun karyawan/supervisor/developer** lengkap dengan PIN & status `redirectMds`.
+     - `database_json/DailySales.json` (**4.282 baris**), `Shift.json` (**262 baris**), `Ticket.json` (**150 baris**), `SyncHistory.json` (**225 baris**), `LoginLog.json` (**161 baris**).
+     - `FULL_DATABASE_BACKUP.json.gz`: Arsip tunggal terkompresi seluruh database (**3,65 MB** — praktis disalin ke Flashdisk/Google Drive).
+     - `MASTER_PRODUK_TOKO_719.csv`: Tabel **84.763 produk** dalam format CSV (**32,88 MB** — bisa dibuka langsung di Microsoft Excel secara offline tanpa internet).
+     - `config_dan_skema/`: Salinan utuh `.env`, `.mds_cookie`, `schema.prisma`, `package.json`, `MEMORY_ANTIGRAVITY.md`, `LAPORAN_SCRAP_PAGI.md`, dan `LAPORAN_SCRAP_GAMBAR.md`.
+  3. **Mesin 1-Klik Restore & Install Ulang:**
+     - [`KLIK_UNTUK_RESTORE_DATABASE.bat`](file:///C:/Max%20Display/BACKUP_MASTER_LOKAL/KLIK_UNTUK_RESTORE_DATABASE.bat) & [`restore_database.py`](file:///C:/Max%20Display/BACKUP_MASTER_LOKAL/restore_database.py): Memulihkan kembali seluruh 84.763 produk dan akun karyawan ke server Supabase secara otomatis jika server terkena hack/reset atau pindah database baru.
+     - [`KLIK_UNTUK_UPDATE_BACKUP.bat`](file:///C:/Max%20Display/BACKUP_MASTER_LOKAL/KLIK_UNTUK_UPDATE_BACKUP.bat): Shortcut 1-klik untuk memperbarui isi backup lokal kapan pun diinginkan.
+     - [`PANDUAN_INSTALL_ULANG_DAN_RESTORE.md`](file:///C:/Max%20Display/BACKUP_MASTER_LOKAL/PANDUAN_INSTALL_ULANG_DAN_RESTORE.md): Panduan lengkap langkah demi langkah instalasi ulang dari nol.
+
+
 
 
