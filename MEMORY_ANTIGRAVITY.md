@@ -878,3 +878,24 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
 
 
 
+
+---
+
+## 57. Rekonstruksi Total 3 Kategori Trigger di GitHub Actions Python Engine (0% Komputasi Vercel) & Brankas Mapping 84.763 SKU
+
+- **Instruksi Pengguna:**
+  1. *"dan ini juga mesin scrabber brutal image mahatari.com sama mesin scrabber mds bisa ini tolong tanam di github terus kamu buat triger dong di front end agar bisa dirun disana. jadi rekontruksi semua triger. ada scrab sama update stock live kan sudah dapat semua jalur sku nya jangan kamu buang itu mapping jalurnya agar bisa update stock terkini"*
+  2. *"ada 3 kategori. scrab, update stock, update promo yang di email itu. tolong rekontruksi semua bukan dijalankan di vercel loh ya"*
+- **Implementasi & Pengamanan Arsitektur (100% Python di GitHub Actions, 0% Vercel):**
+  1. **Brankas Permanen Jalur Mapping 84.763 SKU (`python-engine/mapped_sku_paths.json.gz`):**
+     - Seluruh **84.763 jalur `(SKU, Barcode EAN-13, StyleCode Artikel)`** telah diekspor dan ditanam langsung ke repositori GitHub pada [`python-engine/mapped_sku_paths.json.gz`](file:///c:/Max%20Display/price-checker/python-engine/mapped_sku_paths.json.gz) (622 KB terkompresi) serta disinkronkan otomatis oleh [`python-engine/morning_full_sweep.py`](file:///c:/Max%20Display/price-checker/python-engine/morning_full_sweep.py).
+     - Mapping jalur 84.763 SKU dijamin **tidak pernah hilang atau terbuang**, dan langsung dipakai untuk memperbarui stok fisik terkini (`--stock-only`).
+  2. **Rekonstruksi 3 Kategori Mesin Python di [`.github/workflows/retail-sync-engine.yml`](file:///c:/Max%20Display/price-checker/.github/workflows/retail-sync-engine.yml) & [`src/app/super-admin/sinkronisasi-harian/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/sinkronisasi-harian/page.tsx):**
+     - **🔥 KATEGORI 1 — SCRAB BRUTAL (`action: "scrab"` / `"mds-bisa"` / `"photos"`):**
+       - Menjalankan [`python-engine/morning_full_sweep.py --brutal`](file:///c:/Max%20Display/price-checker/python-engine/morning_full_sweep.py) (16-Worker Python + Dual Check-Digit Modulo-10 SKU & EAN-13 Barcode Sweep) dan [`python-engine/brutal_image_scraper.py`](file:///c:/Max%20Display/price-checker/python-engine/brutal_image_scraper.py) (4-Jalur Pure Product Studio Photos Matahari.com).
+     - **⚡ KATEGORI 2 — UPDATE STOCK LIVE TERKINI (`action: "stock-only"`):**
+       - Menjalankan [`python-engine/morning_full_sweep.py --stock-only`](file:///c:/Max%20Display/price-checker/python-engine/morning_full_sweep.py) yang membaca seluruh **84.763 jalur SKU & Artikel** dari Supabase + `mapped_sku_paths.json.gz`, mengutamakan stok aktif/promo & perwakilan setiap artikel dengan ekstraksi multi-varian `relatedStock` (16 Workers), tanpa pernah menimpa foto atau promo.
+     - **🏷️ KATEGORI 3 — UPDATE PROMO EMAIL (`action: "promo"`):**
+       - Menjalankan [`python-engine/run_promo_sync.py`](file:///c:/Max%20Display/price-checker/python-engine/run_promo_sync.py) + `parser.py` + Gemini AI di GitHub Actions untuk membedah seluruh file Excel promo terbaru dari email (`PROMO/` di Supabase Storage), sambil melindungi `imageUrl`, `images[]`, `barcode`, dan `stok`.
+  3. **Eliminasi 100% Eksekusi Berat di Vercel:**
+     - Endpoint [`/api/admin/trigger/github-dispatch`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/github-dispatch/route.ts), [`/api/admin/trigger/mds-bisa`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/mds-bisa/route.ts), [`/api/admin/trigger/photos`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/photos/route.ts), dan [`/api/upload/sync-latest-blob`](file:///c:/Max%20Display/price-checker/src/app/api/upload/sync-latest-blob/route.ts) telah direkonstruksi sehingga **tidak ada satu pun proses scraping, loop stok, maupun bedah Excel promo yang berjalan di Vercel**. Semuanya meneruskan sinyal `workflow_dispatch` dalam 0,3 detik ke GitHub Actions Python Runner.

@@ -176,7 +176,7 @@ def process_single_promo_file(file_url: str, file_name: str = None) -> int:
             try:
                 ex_res = (
                     supabase.table("Product")
-                    .select("sku, barcode, article, brand, dept, color, size, description, hargaNormal, stok, createdAt")
+                    .select("sku, barcode, article, brand, dept, color, size, description, hargaNormal, stok, imageUrl, images, createdAt")
                     .in_("sku", chunk_skus)
                     .execute()
                 )
@@ -199,6 +199,8 @@ def process_single_promo_file(file_url: str, file_name: str = None) -> int:
                     "dept": item.get("dept") or ex.get("dept"),
                     "color": item.get("color") or ex.get("color"),
                     "size": item.get("size") or ex.get("size"),
+                    "imageUrl": ex.get("imageUrl"),
+                    "images": ex.get("images") or [],
                     "hargaNormal": item.get("harga_normal") or ex.get("hargaNormal") or 0,
                     "hargaNormalSource": "PROMO",
                     "hargaPromo": item.get("harga_promo") if item.get("is_promo") else None,

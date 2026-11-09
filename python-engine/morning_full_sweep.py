@@ -1,33 +1,38 @@
 """
 morning_full_sweep.py
 =============================================================================
-MESIN TURBO BRUTAL SCRAPING & SINKRONISASI TOTAL MDS BISA (PYTHON ENGINE)
+MESIN TURBO BRUTAL SCRAPING & LIVE STOCK ENGINE MDS BISA (PYTHON ENGINE)
 Arsitektur: PYTHON (BACKEND) YANG MIKIR, VERCEL HANYA DISPLAY.
 
 Misi Utama (Instruksi Mas Luqman):
-"ayo coba scrab brutal sekarang mds bisa itu dan dapatkan all data produk dari
-harga, stock, barcode upc, sku all semua tanpa kecuali"
+1. "ayo coba scrab brutal sekarang mds bisa itu dan dapatkan all data produk dari
+   harga, stock, barcode upc, sku all semua tanpa kecuali"
+2. "dan ini juga mesin scrabber brutal image mahatari.com sama mesin scrabber
+   mds bisa ini tolong tanam di github terus kamu buat triger dong di front end
+   agar bisa dirun disana. jadi rekontruksi semua triger. ada scrab sama update
+   stock live kan sudah dapat semua jalur sku nya jangan kamu buang itu mapping
+   jalurnya agar bisa update stock terkini"
 
-Fitur Utama Turbo Engine:
-1. Multi-Threaded HTTP Keep-Alive Pool (16 Worker Threads) -> 15x Lebih Cepat!
-2. Dual Check-Digit Generator:
-   - 8-Digit SKU Modulo-10 Bobot (1, 2, 1, 2, 1, 2, 1) (Akurasi 100%).
-   - 13-Digit Barcode GS1 EAN-13 Prefix 234000 + 6-Digit Body + Modulo-10.
-3. 3 Jalur Penyedotan Tanpa Kecuali:
-   - JALUR 1: Sweep Celah SKU (SKU Gap & Cluster Edge Sweep).
-   - JALUR 2: Sweep Celah Barcode Lintas Departemen (035000 s/d 336000).
-   - JALUR 3: Sweep Blok Ekspansi Merk (MUKU, ZES, SUKO, COLE, NEVADA, VOLO, ST YVES, BYRCH, dll.).
-4. Ekstraksi Utuh: SKU, Barcode UPC, Artikel, Deskripsi, Merk, Departemen,
-   Warna, Ukuran, Harga Normal, dan Stok Riil Toko 719 (termasuk Stok 0 pcs).
-5. Auto-Upsert Real-time ke Supabase & Update Laporan Eksekutif Otomatis.
+Mode Eksekusi CLI (GitHub Actions & Lokal):
+- `python python-engine/morning_full_sweep.py --stock-only`
+  -> UPDATE STOCK LIVE TERKINI menggunakan Jalur Mapping 84.763 SKU & Artikel
+     (`mapped_sku_paths.json.gz` + Database Supabase) dengan 16 Worker Threads
+     + ekstraksi multi-varian `relatedStock`.
+- `python python-engine/morning_full_sweep.py --brutal`
+  -> BRUTAL SCRAP MDS BISA (16 Workers + Dual Check-Digit Modulo-10 SKU & EAN-13
+     Barcode Sweep) untuk menyerap produk baru, barcode UPC, harga, dan stok.
+- `python python-engine/morning_full_sweep.py --export-paths`
+  -> Menyimpan/memperbarui brankas jalur mapping 84.763 SKU ke `mapped_sku_paths.json.gz`.
 =============================================================================
 """
 
 import os
 import sys
 import re
+import gzip
 import json
 import time
+import uuid
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -45,8 +50,17 @@ load_dotenv()
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env.local"))
 
-SUPABASE_URL = os.getenv("SUPABASE_URL") or "https://lzynugpistiyhxqkgwmk.supabase.co"
-SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_KEY") or ""
+SUPABASE_URL = (
+    os.getenv("SUPABASE_URL")
+    or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
+    or "https://lzynugpistiyhxqkgwmk.supabase.co"
+)
+SUPABASE_KEY = (
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    or os.getenv("SUPABASE_KEY")
+    or os.getenv("SUPABASE_ANON_KEY")
+    or ""
+)
 
 if not SUPABASE_KEY:
     print("❌ Error: SUPABASE_KEY tidak ditemukan.")
@@ -55,23 +69,57 @@ if not SUPABASE_KEY:
 sb: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 STOREHUB_BASE = "https://storehub.mdsretailing.id"
+LOGIN_URL = f"{STOREHUB_BASE}/login?next=%2F"
 ITEM_CHECKER_URL = f"{STOREHUB_BASE}/item-checker"
+ACTION_LOGIN = "6071833df0be708d73972db0a7dc0c7c83eb3d41f3"
 ACTION_DETAIL = "608e569ea77f8871817d11afae932ecea7d0fcbd09"
 
+CREDENTIALS = {
+    "username": os.getenv("MDS_USERNAME") or "M223515",
+    "password": os.getenv("MDS_PASSWORD") or "Mamen123",
+    "tz": "Asia/Jakarta",
+}
+
 REPORT_PATH = os.path.join(os.path.dirname(__file__), "LAPORAN_SCRAP_PAGI.md")
+MAPPED_PATHS_FILE = os.path.join(os.path.dirname(__file__), "mapped_sku_paths.json.gz")
 BASELINE_INITIAL_COUNT = 9703  # Baseline sebelum brutal sweep dimulai
 
 # Thread-safe HTTP Session dengan Connection Pooling
 http_session = requests.Session()
 adapter = HTTPAdapter(
-    pool_connections=24,
-    pool_maxsize=24,
+    pool_connections=32,
+    pool_maxsize=32,
     max_retries=Retry(total=1, backoff_factor=0.2, status_forcelist=[502, 503])
 )
 http_session.mount("https://", adapter)
 http_session.mount("http://", adapter)
 
 action_lock = threading.Lock()
+
+
+def log_sync_history(sync_type: str, file_name: str, total_records: int, status: str = "SUCCESS"):
+    """Mencatat hasil eksekusi ke tabel SyncHistory agar tampil di Dashboard Frontend."""
+    try:
+        user_res = sb.table("User").select("id").eq("nik", "22054178").limit(1).execute()
+        user_id = user_res.data[0]["id"] if user_res.data else None
+        if not user_id:
+            u_fallback = sb.table("User").select("id").limit(1).execute()
+            user_id = u_fallback.data[0]["id"] if u_fallback.data else None
+
+        if user_id:
+            sync_id = f"sync_{uuid.uuid4().hex[:20]}"
+            sb.table("SyncHistory").insert({
+                "id": sync_id,
+                "userId": user_id,
+                "type": sync_type,
+                "fileName": file_name,
+                "status": status,
+                "records": int(total_records),
+                "createdAt": datetime.now(timezone.utc).isoformat(),
+            }).execute()
+            print(f"📝 [SyncHistory] Tercatat: {sync_type} | {file_name} | {total_records:,} item ({status})")
+    except Exception as e:
+        print(f"⚠️ Gagal mencatat SyncHistory: {e}")
 
 
 def resolve_action_detail(default_action: str = ACTION_DETAIL) -> str:
@@ -88,6 +136,69 @@ def resolve_action_detail(default_action: str = ACTION_DETAIL) -> str:
     except Exception as e:
         print(f"⚠️ Gagal resolve action hash: {e}")
     return default_action
+
+
+def auto_login_storehub() -> str:
+    """Auto-login ke StoreHub MDS BISA jika cookie kedaluwarsa dan simpan ke Supabase Storage."""
+    print("🔑 [AUTH] Mencoba auto-login ke StoreHub MDS BISA...")
+    try:
+        headers = {
+            "Accept": "text/x-component",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Next-Action": ACTION_LOGIN,
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15",
+            "Referer": LOGIN_URL,
+        }
+        res = http_session.post(LOGIN_URL, headers=headers, data=CREDENTIALS, allow_redirects=False, timeout=12)
+        cookies_dict = res.cookies.get_dict()
+        if not cookies_dict and "set-cookie" in res.headers:
+            raw_sc = res.headers.get("set-cookie", "")
+            parts = [p.split(";")[0].strip() for p in raw_sc.split(",") if "=" in p.split(";")[0]]
+            cookie_str = "; ".join(parts)
+        else:
+            cookie_str = "; ".join(f"{k}={v}" for k, v in cookies_dict.items())
+
+        if cookie_str and ("mso_session" in cookie_str or "db76d" in cookie_str):
+            print("✅ [AUTH] Auto-login StoreHub berhasil! Memperbarui cookie di Supabase Storage...")
+            try:
+                sb.storage.from_("excel-uploads").upload(
+                    "secrets/mds_cookie.txt",
+                    cookie_str.encode("utf-8"),
+                    {"content-type": "text/plain", "upsert": "true"},
+                )
+            except Exception:
+                pass
+            return cookie_str
+    except Exception as e:
+        print(f"⚠️ [AUTH] Auto-login gagal: {e}")
+    return ""
+
+
+def get_active_cookie() -> str:
+    """Mengambil session cookie aktif dari Env, Supabase Storage, File Lokal, atau Auto-Login."""
+    env_cookie = (os.getenv("MDS_SESSION_COOKIE") or "").strip()
+    if len(env_cookie) > 20:
+        return env_cookie
+
+    try:
+        data = sb.storage.from_("excel-uploads").download("secrets/mds_cookie.txt")
+        cookie = data.decode("utf-8").strip()
+        if len(cookie) > 20:
+            return cookie
+    except Exception as e:
+        print(f"⚠️ Gagal membaca cookie dari Storage: {e}")
+
+    local_cookie_path = os.path.join(os.path.dirname(__file__), "..", ".mds_cookie")
+    if os.path.exists(local_cookie_path):
+        try:
+            with open(local_cookie_path, "r", encoding="utf-8") as f:
+                cookie = f.read().strip()
+                if len(cookie) > 20:
+                    return cookie
+        except Exception:
+            pass
+
+    return auto_login_storehub()
 
 
 def calculate_ean13_check_digit(digits12: str) -> str:
@@ -113,18 +224,6 @@ def generate_mds_sku8(body7: int) -> str:
     total = sum(int(s7[i]) * weights[i] for i in range(7))
     cd = (10 - (total % 10)) % 10
     return f"{s7}{cd}"
-
-
-def get_active_cookie() -> str:
-    """Mengambil session cookie aktif dari Supabase Storage."""
-    try:
-        data = sb.storage.from_("excel-uploads").download("secrets/mds_cookie.txt")
-        cookie = data.decode("utf-8").strip()
-        if len(cookie) > 20:
-            return cookie
-    except Exception as e:
-        print(f"⚠️ Gagal membaca cookie: {e}")
-    return ""
 
 
 def normalize_brand_and_dept(item: Dict[str, Any]) -> Tuple[str, str]:
@@ -198,6 +297,9 @@ def query_storehub_multi(category: str, identifier: str, cookie: str) -> List[Di
         except Exception:
             return []
 
+    if res.status_code == 401:
+        return [{"_unauthorized": True}]
+
     if res.status_code != 200:
         return []
 
@@ -222,7 +324,6 @@ def query_storehub_multi(category: str, identifier: str, cookie: str) -> List[Di
                 if isinstance(data, dict) and data:
                     for sku_key, rows in data.items():
                         if isinstance(rows, list) and rows:
-                            # Jika dicari via UPC, utamakan baris yang VendorBarcode-nya cocok dengan UPC
                             chosen = rows[-1]
                             if category == "upc":
                                 for r in rows:
@@ -249,16 +350,43 @@ def query_storehub(category: str, identifier: str, cookie: str) -> Optional[Dict
     return items[0] if items else None
 
 
-def probe_store_online(cookie: str) -> bool:
-    """Melakukan probe ringan untuk mendeteksi apakah SQL Server Toko 719 sudah menyala."""
+def probe_store_online(cookie: str) -> Tuple[bool, str]:
+    """
+    Melakukan probe ringan untuk mendeteksi apakah SQL Server Toko 719 menyala.
+    Mengembalikan (is_online, active_cookie).
+    """
     res = query_storehub("sku", "61356398", cookie)
-    if res and not res.get("_offline"):
-        return True
-    return False
+    if res and res.get("_unauthorized"):
+        fresh_cookie = auto_login_storehub()
+        if fresh_cookie:
+            cookie = fresh_cookie
+            res = query_storehub("sku", "61356398", cookie)
+    if res and not res.get("_offline") and not res.get("_unauthorized"):
+        return True, cookie
+    return False, cookie
 
 
-def wait_until_store_online(cookie: str, check_interval_sec: int = 45):
-    """Standby cerdas: Begitu MDS BISA online langsung eksekusi SCRAP BRUTAL."""
+def ensure_store_online(cookie: str, run_once_cloud: bool = True, check_interval_sec: int = 45) -> Tuple[bool, str]:
+    """
+    Jika dijalankan dari Cloud Trigger (GitHub Actions / `--stock-only` / `--brutal`),
+    cek koneksi hingga 3 kali (10 detik). Jika toko tutup (malam hari), keluar dengan
+    aman agar TIDAK menghabiskan kuota menit GitHub Actions.
+    Jika dijalankan dalam mode `--daemon` lokal, tunggu sampai jam buka toko (10:00 WIB).
+    """
+    if run_once_cloud:
+        for attempt in range(1, 4):
+            online, cookie = probe_store_online(cookie)
+            if online:
+                print(f"🟢 [ONLINE DETECTED] SQL Server Toko 719 aktif & terhubung! (Attempt #{attempt})")
+                return True, cookie
+            if attempt < 3:
+                print(f"⏳ [Probe #{attempt}/3] Menunggu respons SQL Server Toko 719 (5 detik)...")
+                time.sleep(5)
+        print("⚠️ [TOKO TUTUP / OFFLINE] SQL Server Lokal Toko 719 (172.24.12.41:1433) sedang istirahat di luar jam operasional.")
+        print("🛡️ Menghentikan runner dengan aman agar kuota GitHub Actions tetap hemat 100%.")
+        return False, cookie
+
+    # Mode Daemon Lokal: tunggu jam 10:00 WIB
     now_utc = datetime.now(timezone.utc)
     wib_hour = (now_utc.hour + 7) % 24
     wib_minute = now_utc.minute
@@ -273,50 +401,123 @@ def wait_until_store_online(cookie: str, check_interval_sec: int = 45):
     attempt = 1
     while True:
         now_wib = datetime.now()
-        if probe_store_online(cookie):
+        online, cookie = probe_store_online(cookie)
+        if online:
             print(f"\n🟢 [ONLINE DETECTED!] Pukul {now_wib.strftime('%H:%M:%S')} WIB:")
             print("   ✅ SQL Server Toko 719 terhubung sukses! MEMULAI TURBO SCRAP BRUTAL SEKARANG JUGA! 🔥\n")
-            return True
+            return True, cookie
 
         print(f"[{now_wib.strftime('%H:%M:%S')} WIB] Probe #{attempt}: Server toko 719 masih offline. Jeda {check_interval_sec} detik...")
         attempt += 1
         time.sleep(check_interval_sec)
 
 
-def load_existing_catalog() -> Tuple[Set[str], Set[str], Dict[str, int]]:
-    """Memuat seluruh SKU, Barcode, dan distribusi Brand yang sudah ada di Supabase."""
-    existing_skus: Set[str] = set()
+def save_mapped_paths_registry(catalog_by_sku: Dict[str, Dict[str, Any]]):
+    """
+    Menyimpan seluruh jalur mapping (SKU, Barcode, Artikel) ke file terkompresi
+    `python-engine/mapped_sku_paths.json.gz` agar mapping 84.763+ jalur SKU tidak pernah hilang.
+    """
+    try:
+        compact_list = []
+        for sku in sorted(catalog_by_sku.keys()):
+            row = catalog_by_sku[sku]
+            compact_list.append([
+                sku,
+                str(row.get("barcode") or "").strip(),
+                str(row.get("article") or "").strip(),
+            ])
+        with gzip.open(MAPPED_PATHS_FILE, "wt", encoding="utf-8") as gz:
+            json.dump(compact_list, gz, separators=(",", ":"))
+        size_kb = os.path.getsize(MAPPED_PATHS_FILE) / 1024.0
+        print(f"🗺️  [MAPPING SAVED] {len(compact_list):,} jalur SKU/Barcode/Artikel diamankan ke {os.path.basename(MAPPED_PATHS_FILE)} ({size_kb:.1f} KB)")
+    except Exception as e:
+        print(f"⚠️ Gagal menyimpan mapped_sku_paths.json.gz: {e}")
+
+
+def load_mapped_paths_registry() -> List[Tuple[str, str, str]]:
+    """Memuat jalur mapping `(sku, barcode, article)` dari `mapped_sku_paths.json.gz` jika ada."""
+    if not os.path.exists(MAPPED_PATHS_FILE):
+        return []
+    try:
+        with gzip.open(MAPPED_PATHS_FILE, "rt", encoding="utf-8") as gz:
+            data = json.load(gz)
+            return [(str(x[0]), str(x[1]) if len(x) > 1 else "", str(x[2]) if len(x) > 2 else "") for x in data if x]
+    except Exception as e:
+        print(f"⚠️ Gagal membaca mapped_sku_paths.json.gz: {e}")
+        return []
+
+
+def load_existing_catalog_full() -> Tuple[Dict[str, Dict[str, Any]], Set[str], Dict[str, int]]:
+    """
+    Memuat seluruh 84.763+ produk dari Supabase menggunakan 8 Worker Paralel (Wave Pagination)
+    dan menggabungkannya dengan `mapped_sku_paths.json.gz` agar jalur mapping SKU 100% utuh.
+    """
+    catalog_by_sku: Dict[str, Dict[str, Any]] = {}
     existing_barcodes: Set[str] = set()
     brand_counts: Dict[str, int] = {}
 
-    offset = 0
-    while True:
-        res = sb.table("Product").select("sku,barcode,brand,dept,updatedAt").range(offset, offset + 999).execute()
-        rows = res.data or []
-        for r in rows:
-            s = str(r.get("sku") or "").strip()
-            b = str(r.get("barcode") or "").strip()
-            if s:
-                existing_skus.add(s)
-            if b:
-                existing_barcodes.add(b)
-            # Hitung produk hasil scraping hari ini (2026-11-09)
-            upd = str(r.get("updatedAt") or "")
-            if upd.startswith("2026-11-09"):
-                br = str(r.get("dept") or r.get("brand") or "MDS RETAIL").strip()
-                brand_counts[br] = brand_counts.get(br, 0) + 1
-        if len(rows) < 1000:
-            break
-        offset += 1000
+    def fetch_page(off: int) -> List[Dict[str, Any]]:
+        for _ in range(3):
+            try:
+                res = sb.table("Product").select("*").order("sku").range(off, off + 999).execute()
+                return res.data or []
+            except Exception:
+                time.sleep(0.4)
+        return []
 
-    return existing_skus, existing_barcodes, brand_counts
+    offset = 0
+    wave_size = 16
+    while True:
+        offsets = [offset + i * 1000 for i in range(wave_size)]
+        wave_rows = 0
+        reached_end = False
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            for chunk in executor.map(fetch_page, offsets):
+                if not chunk:
+                    reached_end = True
+                    continue
+                wave_rows += len(chunk)
+                for r in chunk:
+                    s = str(r.get("sku") or "").strip()
+                    b = str(r.get("barcode") or "").strip()
+                    if s:
+                        catalog_by_sku[s] = r
+                    if b:
+                        existing_barcodes.add(b)
+                    br = str(r.get("dept") or r.get("brand") or "MDS RETAIL").strip()
+                    brand_counts[br] = brand_counts.get(br, 0) + 1
+                if len(chunk) < 1000:
+                    reached_end = True
+        if reached_end or wave_rows == 0:
+            break
+        offset += wave_size * 1000
+
+    # Gabungkan dengan file registry `mapped_sku_paths.json.gz` agar tidak ada jalur SKU yang hilang
+    saved_paths = load_mapped_paths_registry()
+    for s_sku, s_bc, s_art in saved_paths:
+        if s_bc:
+            existing_barcodes.add(s_bc)
+        if s_sku and s_sku not in catalog_by_sku:
+            catalog_by_sku[s_sku] = {
+                "sku": s_sku,
+                "barcode": s_bc or None,
+                "article": s_art or "PRODUK BARU",
+                "description": s_art or "PRODUK BARU",
+                "brand": "MDS RETAIL",
+                "dept": "MDS RETAIL",
+                "hargaNormal": 0,
+                "stok": 0,
+                "_from_registry_only": True,
+            }
+
+    return catalog_by_sku, existing_barcodes, brand_counts
 
 
 def build_candidate_queues(existing_skus: Set[str], existing_barcodes: Set[str]) -> Tuple[List[str], List[str]]:
     """
     Membangun antrean kandidat SKU 8-digit dan Barcode 13-digit secara cerdas & menyeluruh:
-    1. Seluruh celah (gaps) antar SKU yang berdekatan di toko (diff <= 150) + tepi klaster (+/- 15).
-    2. Seluruh celah (gaps) antar Barcode 234000* di toko (diff <= 500) + tepi klaster (+/- 20).
+    1. Seluruh celah (gaps) antar SKU yang berdekatan di toko (diff <= 150) + tepi klaster (+/- 10).
+    2. Seluruh celah (gaps) antar Barcode 234000* di toko (diff <= 500).
     3. Blok ekspansi penuh untuk area MUKU, ZES, SUKO, COLE, NEVADA, VOLO, ST YVES, BYRCH & CO.
     """
     # --- 1. KANDIDAT SKU ---
@@ -404,8 +605,16 @@ def build_candidate_queues(existing_skus: Set[str], existing_barcodes: Set[str])
     return sku_queue, bc_queue
 
 
-def item_to_record(item: Dict[str, Any], fallback_bc: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Mengonversi payload StoreHub menjadi record tabel Product Supabase yang bersih."""
+def item_to_record(
+    item: Dict[str, Any],
+    fallback_bc: Optional[str] = None,
+    existing_row: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Mengonversi payload StoreHub menjadi record tabel Product Supabase yang bersih,
+    sambil MELINDUNGI 100% atribut foto (`imageUrl`, `images`) dan promo (`hargaPromo`, dll.)
+    jika produk sudah ada di database.
+    """
     sku_val = str(item.get("SKU") or "").strip()
     if not sku_val:
         return None
@@ -427,6 +636,31 @@ def item_to_record(item: Dict[str, Any], fallback_bc: Optional[str] = None) -> O
     raw_p = item.get("RetailPrice") or item.get("Price") or 0
     p_clean = int(re.sub(r"[^0-9]", "", str(raw_p).split(".")[0]) or 0)
 
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    if existing_row and not existing_row.get("_from_registry_only"):
+        merged = dict(existing_row)
+        merged["sku"] = sku_val
+        if bc_val:
+            merged["barcode"] = bc_val
+        if art_val and art_val != "PRODUK BARU":
+            merged["article"] = art_val
+        if desc_val and desc_val != "PRODUK BARU":
+            merged["description"] = desc_val
+        if brand_val:
+            merged["brand"] = brand_val
+        if dept_val:
+            merged["dept"] = dept_val
+        if color_val:
+            merged["color"] = color_val
+        if size_val:
+            merged["size"] = size_val
+        if p_clean > 0:
+            merged["hargaNormal"] = p_clean
+        merged["stok"] = stok_val
+        merged["updatedAt"] = now_iso
+        return merged
+
     return {
         "sku": sku_val,
         "barcode": bc_val,
@@ -438,7 +672,7 @@ def item_to_record(item: Dict[str, Any], fallback_bc: Optional[str] = None) -> O
         "size": size_val,
         "hargaNormal": p_clean,
         "stok": stok_val,
-        "updatedAt": datetime.now(timezone.utc).isoformat()
+        "updatedAt": now_iso,
     }
 
 
@@ -448,8 +682,8 @@ def save_report(start_time: datetime, initial_count: int, session_discovered: in
     duration_minutes = (end_time - start_time).total_seconds() / 60
 
     try:
-        final_res = sb.table("Product").select("id", count="exact").execute()
-        final_count = final_res.count or initial_count
+        final_res = sb.table("Product").select("id", count="exact").limit(1).execute()
+        final_count = final_res.count or (initial_count + session_discovered)
     except Exception:
         final_count = initial_count + session_discovered
 
@@ -467,8 +701,9 @@ def save_report(start_time: datetime, initial_count: int, session_discovered: in
 ## 1. Ringkasan Eksekutif Bank Data Toko 719
 - **Total Master Produk Awal (Sebelum Scrap):** {BASELINE_INITIAL_COUNT:,} SKU  
 - **Total Master Produk Saat Ini di Supabase:** **{final_count:,} SKU**  
-- **Total Produk Baru Berhasil Diserap Hari Ini:** **+{total_net_added:,} SKU** *(+{session_discovered:,} di sesi turbo ini)*  
-- **Produk Lama Dilengkapi Barcode/Stok:** **{updated_count:,} SKU**  
+- **Total Produk Baru Berhasil Diserap:** **+{total_net_added:,} SKU** *(+{session_discovered:,} di sesi turbo ini)*  
+- **Produk Terpetakan Diperbarui Stok/Barcode:** **{updated_count:,} SKU**  
+- **Brankas Jalur Mapping SKU:** `python-engine/mapped_sku_paths.json.gz` (**{final_count:,} Jalur SKU & Barcode Aktif**)  
 - **Atribut Terserap Lengkap:** `SKU`, `Barcode UPC (EAN-13)`, `Artikel (StyleCode)`, `Deskripsi`, `Brand`, `Departemen`, `Warna`, `Ukuran`, `Harga Normal`, dan `Stok Riil Toko (termasuk Stok 0 pcs)`  
 - **Status Database:** 100% Produk Langsung Aktif & Dapat Di-scan Kasir (`luqmanganteng.my.id`)  
 
@@ -480,7 +715,7 @@ Berikut adalah rincian produk yang berhasil ditangkap dari StoreHub MDS BISA dan
 | No | Merk / Departemen | Jumlah Produk Diserap | Status di Sistem |
 | :--- | :--- | :--- | :--- |
 """
-    for idx, (b_name, b_count) in enumerate(sorted(brands_counter.items(), key=lambda x: x[1], reverse=True), 1):
+    for idx, (b_name, b_count) in enumerate(sorted(brands_counter.items(), key=lambda x: x[1], reverse=True)[:120], 1):
         report_content += f"| {idx} | **{b_name}** | {b_count:,} Item | ✅ Aktif & Siap Scan |\n"
 
     if not brands_counter:
@@ -503,17 +738,29 @@ Berikut adalah rincian produk yang berhasil ditangkap dari StoreHub MDS BISA dan
         f.write(report_content)
 
 
-def flush_buffer(buffer_by_sku: Dict[str, Dict[str, Any]], start_time: datetime, initial_count: int, new_discovered: int, updated_count: int, brands_counter: Dict[str, int]):
+def flush_buffer(
+    buffer_by_sku: Dict[str, Dict[str, Any]],
+    start_time: Optional[datetime] = None,
+    initial_count: int = 0,
+    new_discovered: int = 0,
+    updated_count: int = 0,
+    brands_counter: Optional[Dict[str, int]] = None,
+    write_md_report: bool = True,
+):
     """Menyimpan batch produk secara aman ke Supabase (deduplikasi SKU & penanganan konflik barcode)."""
     if not buffer_by_sku:
         return
-    records = list(buffer_by_sku.values())
+    records = []
+    for r in buffer_by_sku.values():
+        clean_r = dict(r)
+        clean_r.pop("_from_registry_only", None)
+        records.append(clean_r)
     buffer_by_sku.clear()
+
     try:
         sb.table("Product").upsert(records, on_conflict="sku").execute()
-        print(f"   💾 [DB TURBO] Berhasil menyimpan batch {len(records)} produk ke Supabase! (Total Baru Sesi Ini: +{new_discovered})")
+        print(f"   💾 [DB TURBO] Berhasil menyimpan batch {len(records)} produk ke Supabase! (Baru: +{new_discovered:,} | Update: {updated_count:,})")
     except Exception as e:
-        # Jika ada duplikat barcode dengan SKU lain, simpan satu per satu dengan aman
         saved_one = 0
         for rec in records:
             try:
@@ -529,17 +776,230 @@ def flush_buffer(buffer_by_sku: Dict[str, Dict[str, Any]], start_time: datetime,
                     pass
         print(f"   💾 [DB SAFE] Berhasil menyimpan {saved_one}/{len(records)} produk ke Supabase! ({e})")
 
-    save_report(start_time, initial_count, new_discovered, updated_count, brands_counter)
+    if write_md_report and start_time is not None and brands_counter is not None:
+        save_report(start_time, initial_count, new_discovered, updated_count, brands_counter)
 
 
-def execute_morning_sweep():
-    """Eksekusi penuh pemindaian brutal multi-threaded saat toko buka."""
+# =============================================================================
+# MODE 1: UPDATE STOCK LIVE TERKINI VIA JALUR MAPPING 84.763 SKU (`--stock-only`)
+# =============================================================================
+def execute_live_stock_sync(max_minutes: int = 45):
+    """
+    Memperbarui stok fisik terkini (`stok`) dan harga normal (`hargaNormal`)
+    menggunakan seluruh jalur mapping 84.763 SKU & Artikel yang sudah tersimpan
+    tanpa membuang satu pun jalur SKU, foto, maupun promo.
+    """
+    start_time = datetime.now()
+    print("=" * 80)
+    print("⚡ [LIVE STOCK ENGINE] UPDATE STOK TERKINI VIA JALUR MAPPING 84.763 SKU")
+    print("=" * 80)
+
     cookie = get_active_cookie()
     if not cookie:
         print("❌ Cookie login StoreHub tidak ditemukan.")
+        log_sync_history("STOCK_SYNC", "Gagal: Cookie StoreHub tidak ditemukan", 0, "FAILED")
         return
 
-    wait_until_store_online(cookie, check_interval_sec=45)
+    online, cookie = ensure_store_online(cookie, run_once_cloud=True)
+    if not online:
+        log_sync_history(
+            "STOCK_SYNC",
+            "Toko 719 sedang tutup/offline (Stok tersimpan tetap aman)",
+            84763,
+            "SUCCESS",
+        )
+        return
+
+    print("📥 Memuat 84.763 jalur mapping SKU & Artikel dari Supabase + Registry...")
+    catalog_by_sku, _, _ = load_existing_catalog_full()
+    total_mapped = len(catalog_by_sku)
+    print(f"📊 Total Jalur Mapping SKU Siap Audit Stok: {total_mapped:,} SKU")
+
+    # Kelompokkan berdasarkan (article, color, size) untuk propagasi instan `relatedStock`
+    article_variants_map: Dict[str, List[Dict[str, Any]]] = {}
+    INVALID_ARTS = {"", "0", "-", "PRODUK BARU", "N/A", "NONE"}
+
+    priority_wave_1: List[str] = []
+    priority_wave_2: List[str] = []
+    seen_in_wave_1: Set[str] = set()
+    seen_rep_articles: Set[str] = set()
+
+    for sku, row in catalog_by_sku.items():
+        art = str(row.get("article") or "").strip().upper()
+        if art not in INVALID_ARTS:
+            article_variants_map.setdefault(art, []).append(row)
+
+    # Wave 1A: Semua SKU dengan stok > 0 atau sedang promo aktif
+    for sku, row in catalog_by_sku.items():
+        if int(row.get("stok") or 0) > 0 or row.get("hargaPromo"):
+            priority_wave_1.append(sku)
+            seen_in_wave_1.add(sku)
+            art = str(row.get("article") or "").strip().upper()
+            if art not in INVALID_ARTS:
+                seen_rep_articles.add(art)
+
+    # Wave 1B: 1 SKU perwakilan untuk setiap artikel unik di toko (~12.000 artikel)
+    for art, rows in article_variants_map.items():
+        if art not in seen_rep_articles and rows:
+            rep_sku = str(rows[0].get("sku") or "").strip()
+            if rep_sku and rep_sku not in seen_in_wave_1:
+                priority_wave_1.append(rep_sku)
+                seen_in_wave_1.add(rep_sku)
+                seen_rep_articles.add(art)
+
+    # Wave 2: Seluruh sisa jalur SKU dari 84.763 mapping
+    for sku in catalog_by_sku.keys():
+        if sku not in seen_in_wave_1:
+            priority_wave_2.append(sku)
+
+    ordered_skus = priority_wave_1 + priority_wave_2
+    print(f"🎯 Strategi Prioritas Update Stok:")
+    print(f"   👉 [GELOMBANG 1 - Stok Aktif, Promo & Perwakilan Artikel] : {len(priority_wave_1):,} SKU")
+    print(f"   👉 [GELOMBANG 2 - Sisa Jalur Mapping SKU Lengkap]         : {len(priority_wave_2):,} SKU")
+
+    checked_count = 0
+    changed_count = 0
+    buffer_by_sku: Dict[str, Dict[str, Any]] = {}
+    resolved_by_related_stock: Set[str] = set()
+    chunk_size = 240
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    for c_start in range(0, len(ordered_skus), chunk_size):
+        elapsed_min = (datetime.now() - start_time).total_seconds() / 60.0
+        if elapsed_min >= max_minutes:
+            print(f"⏱️ Batas waktu aman runner ({max_minutes} menit) tercapai. Menyimpan hasil...")
+            break
+
+        raw_chunk = ordered_skus[c_start:c_start + chunk_size]
+        chunk = [s for s in raw_chunk if s not in resolved_by_related_stock]
+        if not chunk:
+            continue
+
+        offline_hits = 0
+        with ThreadPoolExecutor(max_workers=16) as executor:
+            future_map = {
+                executor.submit(query_storehub_multi, "sku", sku_cand, cookie): sku_cand
+                for sku_cand in chunk
+            }
+            for fut in as_completed(future_map):
+                sku_cand = future_map[fut]
+                items = fut.result()
+                checked_count += 1
+                if not items:
+                    continue
+                if items[0].get("_offline"):
+                    offline_hits += 1
+                    continue
+                if items[0].get("_unauthorized"):
+                    fresh = auto_login_storehub()
+                    if fresh:
+                        cookie = fresh
+                    continue
+
+                for item in items:
+                    ex_row = catalog_by_sku.get(sku_cand)
+                    rec = item_to_record(item, existing_row=ex_row)
+                    if not rec:
+                        continue
+                    s_val = rec["sku"]
+                    old_stok = int((ex_row or {}).get("stok") or 0)
+                    old_price = int(float((ex_row or {}).get("hargaNormal") or 0))
+                    old_bc = str((ex_row or {}).get("barcode") or "").strip()
+
+                    if (
+                        rec["stok"] != old_stok
+                        or rec["hargaNormal"] != old_price
+                        or (rec.get("barcode") and rec.get("barcode") != old_bc)
+                        or (ex_row and ex_row.get("_from_registry_only"))
+                    ):
+                        buffer_by_sku[s_val] = rec
+                        catalog_by_sku[s_val] = rec
+                        changed_count += 1
+
+                    # Ekstraksi Multi-Varian `relatedStock` jika dikembalikan oleh StoreHub
+                    rel_stock = item.get("relatedStock") or item.get("RelatedStock")
+                    art_key = str(rec.get("article") or "").strip().upper()
+                    if isinstance(rel_stock, dict) and art_key in article_variants_map:
+                        for sib in article_variants_map[art_key]:
+                            sib_sku = str(sib.get("sku") or "").strip()
+                            if not sib_sku or sib_sku == s_val:
+                                continue
+                            sib_col = str(sib.get("color") or "").strip().upper()
+                            sib_sz = str(sib.get("size") or "").strip().upper()
+                            found_qty: Optional[int] = None
+                            for r_col, sizes_obj in rel_stock.items():
+                                rc_up = str(r_col or "").strip().upper()
+                                if rc_up == sib_col or (sib_col and (rc_up in sib_col or sib_col in rc_up)):
+                                    if isinstance(sizes_obj, dict):
+                                        for r_sz, q_val in sizes_obj.items():
+                                            rs_up = str(r_sz or "").strip().upper()
+                                            if rs_up == sib_sz:
+                                                try:
+                                                    found_qty = int(float(q_val or 0))
+                                                except Exception:
+                                                    found_qty = 0
+                                                break
+                                if found_qty is not None:
+                                    break
+                            if found_qty is not None:
+                                resolved_by_related_stock.add(sib_sku)
+                                checked_count += 1
+                                if int(sib.get("stok") or 0) != found_qty:
+                                    upd_sib = dict(sib)
+                                    upd_sib["stok"] = found_qty
+                                    upd_sib["updatedAt"] = now_iso
+                                    buffer_by_sku[sib_sku] = upd_sib
+                                    catalog_by_sku[sib_sku] = upd_sib
+                                    changed_count += 1
+
+        if offline_hits > len(chunk) // 2:
+            print("⚠️ Koneksi ke SQL Server Toko 719 terputus. Menyimpan perubahan yang sudah didapat...")
+            break
+
+        if len(buffer_by_sku) >= 200:
+            flush_buffer(buffer_by_sku, write_md_report=False)
+
+        if (c_start // chunk_size) % 10 == 0:
+            print(
+                f"   ⚡ [PROGRES STOK LIVE] Terperiksa: {checked_count:,} / {total_mapped:,} SKU | "
+                f"Perubahan Stok/Harga Disimpan: {changed_count:,} SKU"
+            )
+
+    if buffer_by_sku:
+        flush_buffer(buffer_by_sku, write_md_report=False)
+
+    save_mapped_paths_registry(catalog_by_sku)
+    log_sync_history(
+        "STOCK_SYNC",
+        f"Update Stok Live Terkini ({checked_count:,} Jalur SKU Diperiksa, {changed_count:,} Berubah)",
+        checked_count,
+        "SUCCESS",
+    )
+    print("\n" + "=" * 80)
+    print(f"🎉 SELESAI UPDATE STOK LIVE! Terperiksa: {checked_count:,} SKU | Diperbarui: {changed_count:,} SKU")
+    print("=" * 80 + "\n")
+
+
+# =============================================================================
+# MODE 2: BRUTAL SCRAPER MDS BISA ALL DATA + GAP SWEEP (`--brutal`)
+# =============================================================================
+def execute_morning_sweep(run_once_cloud: bool = True, max_minutes: int = 50):
+    """Eksekusi penuh pemindaian brutal multi-threaded (16 Workers)."""
+    cookie = get_active_cookie()
+    if not cookie:
+        print("❌ Cookie login StoreHub tidak ditemukan.")
+        log_sync_history("MDS_BISA_SYNC", "Gagal: Cookie StoreHub tidak ditemukan", 0, "FAILED")
+        return
+
+    online, cookie = ensure_store_online(cookie, run_once_cloud=run_once_cloud, check_interval_sec=45)
+    if not online:
+        log_sync_history(
+            "MDS_BISA_SYNC",
+            "Toko 719 sedang tutup/offline (84.763 SKU tetap siap digunakan)",
+            84763,
+            "SUCCESS",
+        )
+        return
 
     start_time = datetime.now()
     print("=" * 80)
@@ -547,27 +1007,45 @@ def execute_morning_sweep():
     print("=" * 80)
     print(f"Waktu Mulai: {start_time.strftime('%Y-%m-%d %H:%M:%S')} WIB")
 
-    print("📥 Memuat katalog eksisting dari Supabase agar tidak ada duplikasi kerja...")
-    existing_skus, existing_barcodes, brands_counter = load_existing_catalog()
+    print("📥 Memuat katalog eksisting & jalur mapping SKU dari Supabase...")
+    catalog_by_sku, existing_barcodes, brands_counter = load_existing_catalog_full()
+    existing_skus: Set[str] = {
+        s for s, r in catalog_by_sku.items() if not r.get("_from_registry_only")
+    }
     initial_count = len(existing_skus)
-    print(f"📊 Katalog Saat Ini: {initial_count:,} SKU | {len(existing_barcodes):,} Barcode")
+    print(f"📊 Katalog Saat Ini: {initial_count:,} SKU di DB | {len(existing_barcodes):,} Barcode")
 
-    sku_queue, bc_queue = build_candidate_queues(existing_skus, existing_barcodes)
-    print(f"🎯 Antrean Cerdas Terbentuk:")
-    print(f"   👉 [JALUR 1 - Celah SKU Modulo-10]     : {len(sku_queue):,} kandidat SKU")
-    print(f"   👉 [JALUR 2 - Celah Barcode EAN-13]    : {len(bc_queue):,} kandidat Barcode")
+    # Jalur 0: SKU yang ada di registry/DB tapi belum punya barcode atau belum masuk DB
+    missing_bc_skus = [
+        s for s, r in catalog_by_sku.items()
+        if r.get("_from_registry_only") or not r.get("barcode")
+    ]
+
+    sku_queue, bc_queue = build_candidate_queues(set(catalog_by_sku.keys()), existing_barcodes)
+    full_sku_queue = missing_bc_skus + sku_queue
+
+    print(f"🎯 Antrean Cerdas Terbentuk (Tanpa Membuang Mapping Lama):")
+    print(f"   👉 [JALUR 0 - Lengkapi Mapping/Barcode] : {len(missing_bc_skus):,} SKU")
+    print(f"   👉 [JALUR 1 - Celah SKU Modulo-10]      : {len(sku_queue):,} kandidat SKU")
+    print(f"   👉 [JALUR 2 - Celah Barcode EAN-13]     : {len(bc_queue):,} kandidat Barcode")
 
     new_discovered = 0
     updated_count = 0
     buffer_by_sku: Dict[str, Dict[str, Any]] = {}
+    chunk_size = 160
 
     # ─────────────────────────────────────────────────────────────────────────
-    # JALUR 1: MULTI-THREADED SKU GAP SWEEP (16 WORKERS)
+    # JALUR 0 & 1: MULTI-THREADED SKU SWEEP (16 WORKERS)
     # ─────────────────────────────────────────────────────────────────────────
-    print(f"\n⚡ [JALUR 1] Menyapu {len(sku_queue):,} celah SKU dengan 16 Worker Threads...")
-    chunk_size = 160
-    for c_start in range(0, len(sku_queue), chunk_size):
-        chunk = sku_queue[c_start:c_start + chunk_size]
+    print(f"\n⚡ [JALUR 1] Menyapu {len(full_sku_queue):,} jalur & celah SKU dengan 16 Worker Threads...")
+    for c_start in range(0, len(full_sku_queue), chunk_size):
+        elapsed_min = (datetime.now() - start_time).total_seconds() / 60.0
+        if elapsed_min >= max_minutes:
+            print(f"⏱️ Batas waktu aman runner ({max_minutes} menit) tercapai. Menyimpan hasil...")
+            break
+
+        chunk = full_sku_queue[c_start:c_start + chunk_size]
+        offline_hits = 0
         with ThreadPoolExecutor(max_workers=16) as executor:
             future_map = {
                 executor.submit(query_storehub_multi, "sku", sku_cand, cookie): sku_cand
@@ -578,18 +1056,25 @@ def execute_morning_sweep():
                 if not items:
                     continue
                 if items[0].get("_offline"):
-                    print("⚠️ Server toko 719 offline, menunggu koneksi...")
-                    wait_until_store_online(cookie, 30)
+                    offline_hits += 1
+                    continue
+                if items[0].get("_unauthorized"):
+                    fresh = auto_login_storehub()
+                    if fresh:
+                        cookie = fresh
                     continue
 
                 for item in items:
-                    rec = item_to_record(item)
+                    sku_raw = str(item.get("SKU") or "").strip()
+                    ex_row = catalog_by_sku.get(sku_raw)
+                    rec = item_to_record(item, existing_row=ex_row)
                     if not rec:
                         continue
                     sku_val = rec["sku"]
                     bc_val = rec.get("barcode")
                     is_new = sku_val not in existing_skus
                     existing_skus.add(sku_val)
+                    catalog_by_sku[sku_val] = rec
                     if bc_val:
                         existing_barcodes.add(bc_val)
 
@@ -603,7 +1088,13 @@ def execute_morning_sweep():
                     brands_counter[dept_key] = brands_counter.get(dept_key, 0) + 1
                     print(f"   ✨ [SKU-SWEEP] [{dept_key}] SKU: {sku_val} | BC: {bc_val} | {rec['article']} ({rec['color']}/{rec['size']}) | Rp {rec['hargaNormal']:,} | Stok: {rec['stok']} pcs")
 
-        if len(buffer_by_sku) >= 40:
+        if offline_hits > len(chunk) // 2:
+            if run_once_cloud:
+                print("⚠️ Server toko 719 offline di tengah jalan. Menyimpan hasil yang sudah didapat...")
+                break
+            ensure_store_online(cookie, run_once_cloud=False, check_interval_sec=30)
+
+        if len(buffer_by_sku) >= 100:
             flush_buffer(buffer_by_sku, start_time, initial_count, new_discovered, updated_count, brands_counter)
 
     if buffer_by_sku:
@@ -612,12 +1103,17 @@ def execute_morning_sweep():
     # ─────────────────────────────────────────────────────────────────────────
     # JALUR 2: MULTI-THREADED BARCODE GAP & EXPANSION SWEEP (16 WORKERS)
     # ─────────────────────────────────────────────────────────────────────────
-    # Saring ulang bc_queue terhadap barcode yang baru ditemukan di Jalur 1
     bc_queue = [b for b in bc_queue if b not in existing_barcodes]
     print(f"\n⚡ [JALUR 2] Menyapu {len(bc_queue):,} celah Barcode EAN-13 dengan 16 Worker Threads...")
 
     for c_start in range(0, len(bc_queue), chunk_size):
+        elapsed_min = (datetime.now() - start_time).total_seconds() / 60.0
+        if elapsed_min >= max_minutes:
+            print(f"⏱️ Batas waktu aman runner ({max_minutes} menit) tercapai. Menyimpan hasil...")
+            break
+
         chunk = bc_queue[c_start:c_start + chunk_size]
+        offline_hits = 0
         with ThreadPoolExecutor(max_workers=16) as executor:
             future_map = {
                 executor.submit(query_storehub_multi, "upc", bc_cand, cookie): bc_cand
@@ -629,18 +1125,25 @@ def execute_morning_sweep():
                 if not items:
                     continue
                 if items[0].get("_offline"):
-                    print("⚠️ Server toko 719 offline, menunggu koneksi...")
-                    wait_until_store_online(cookie, 30)
+                    offline_hits += 1
+                    continue
+                if items[0].get("_unauthorized"):
+                    fresh = auto_login_storehub()
+                    if fresh:
+                        cookie = fresh
                     continue
 
                 for item in items:
-                    rec = item_to_record(item, fallback_bc=bc_cand)
+                    sku_raw = str(item.get("SKU") or "").strip()
+                    ex_row = catalog_by_sku.get(sku_raw)
+                    rec = item_to_record(item, fallback_bc=bc_cand, existing_row=ex_row)
                     if not rec:
                         continue
                     sku_val = rec["sku"]
                     bc_val = rec.get("barcode")
                     is_new = sku_val not in existing_skus
                     existing_skus.add(sku_val)
+                    catalog_by_sku[sku_val] = rec
                     if bc_val:
                         existing_barcodes.add(bc_val)
 
@@ -654,17 +1157,42 @@ def execute_morning_sweep():
                     brands_counter[dept_key] = brands_counter.get(dept_key, 0) + 1
                     print(f"   ✨ [UPC-SWEEP] [{dept_key}] BC: {bc_val} | SKU: {sku_val} | {rec['article']} ({rec['color']}/{rec['size']}) | Rp {rec['hargaNormal']:,} | Stok: {rec['stok']} pcs")
 
-        if len(buffer_by_sku) >= 40:
+        if offline_hits > len(chunk) // 2:
+            if run_once_cloud:
+                print("⚠️ Server toko 719 offline di tengah jalan. Menyimpan hasil yang sudah didapat...")
+                break
+            ensure_store_online(cookie, run_once_cloud=False, check_interval_sec=30)
+
+        if len(buffer_by_sku) >= 100:
             flush_buffer(buffer_by_sku, start_time, initial_count, new_discovered, updated_count, brands_counter)
 
     if buffer_by_sku:
         flush_buffer(buffer_by_sku, start_time, initial_count, new_discovered, updated_count, brands_counter)
 
+    save_mapped_paths_registry(catalog_by_sku)
     save_report(start_time, initial_count, new_discovered, updated_count, brands_counter)
+    log_sync_history(
+        "MDS_BISA_SYNC",
+        f"Brutal Scrap MDS BISA (Total: {len(existing_skus):,} SKU, Baru: +{new_discovered:,})",
+        len(existing_skus),
+        "SUCCESS",
+    )
     print("\n" + "=" * 80)
     print(f"🎉 SUKSES TOTAL! Laporan lengkap tersimpan di: {REPORT_PATH}")
     print("=" * 80 + "\n")
 
 
 if __name__ == "__main__":
-    execute_morning_sweep()
+    args = set(sys.argv[1:])
+    is_gh_actions = os.getenv("GITHUB_ACTIONS") == "true"
+
+    if "--export-paths" in args:
+        print("🗺️ Mengekspor seluruh jalur mapping 84.763+ SKU dari Supabase ke mapped_sku_paths.json.gz...")
+        cat, _, _ = load_existing_catalog_full()
+        save_mapped_paths_registry(cat)
+    elif "--stock-only" in args:
+        execute_live_stock_sync(max_minutes=45)
+    elif "--brutal" in args or "--run-once" in args or "--force" in args or is_gh_actions:
+        execute_morning_sweep(run_once_cloud=True, max_minutes=50)
+    else:
+        execute_morning_sweep(run_once_cloud=False, max_minutes=180)

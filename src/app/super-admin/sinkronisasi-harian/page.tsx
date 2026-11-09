@@ -20,6 +20,8 @@ import {
   Database,
   ChevronDown,
   ChevronUp,
+  Flame,
+  ShieldCheck,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -70,10 +72,17 @@ interface RecentRun {
   htmlUrl: string;
 }
 
+type TriggerAction = "scrab" | "mds-bisa" | "photos" | "stock-only" | "promo" | "all";
+
 export default function UpdateProdukPage() {
   const [isGhDispatching, setIsGhDispatching] = useState(false);
-  const [activeAction, setActiveAction] = useState<string | null>(null);
-  const [ghDispatchResult, setGhDispatchResult] = useState<{ success: boolean; message: string; actionsUrl?: string; help?: string } | null>(null);
+  const [activeAction, setActiveAction] = useState<TriggerAction | null>(null);
+  const [ghDispatchResult, setGhDispatchResult] = useState<{
+    success: boolean;
+    message: string;
+    actionsUrl?: string;
+    help?: string;
+  } | null>(null);
   const [currentUserNik, setCurrentUserNik] = useState<string | null>(null);
 
   // Real-time Cloud Monitor State
@@ -125,23 +134,20 @@ export default function UpdateProdukPage() {
     }
   };
 
-  // Polling otomatis setiap 3.5 detik jika run sedang berjalan (in_progress / queued)
+  // Polling otomatis setiap 3.5 detik
   useEffect(() => {
     fetchCloudStatus(true);
-
-    const checkAndPoll = () => {
+    pollTimerRef.current = setInterval(() => {
       fetchCloudStatus(false);
-    };
-
-    pollTimerRef.current = setInterval(checkAndPoll, 3500);
+    }, 3500);
 
     return () => {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     };
   }, []);
 
-  // DISPATCH ENGINE: Memicu GitHub Actions Cloud Runner
-  const handleGitHubDispatch = async (action: "all" | "mds-bisa" | "stock-only" | "photos" | "promo") => {
+  // DISPATCH ENGINE: Memicu GitHub Actions Python Cloud Runner (0% Eksekusi Vercel)
+  const handleGitHubDispatch = async (action: TriggerAction) => {
     setIsGhDispatching(true);
     setActiveAction(action);
     setGhDispatchResult(null);
@@ -163,10 +169,13 @@ export default function UpdateProdukPage() {
 
       if (res.ok && data.success) {
         setGhDispatchResult({ success: true, message: data.message, actionsUrl: data.actionsUrl });
-        // Segarkan status cloud secara langsung
         setTimeout(() => fetchCloudStatus(false), 1200);
       } else {
-        setGhDispatchResult({ success: false, message: data.error || "Gagal memicu GitHub Actions.", help: data.help });
+        setGhDispatchResult({
+          success: false,
+          message: data.error || "Gagal memicu GitHub Actions.",
+          help: data.help,
+        });
       }
     } catch (err: any) {
       setGhDispatchResult({ success: false, message: err.message || "Kesalahan jaringan." });
@@ -183,8 +192,13 @@ export default function UpdateProdukPage() {
         <div className="bg-white p-8 rounded-2xl shadow-sm border border-rose-200 text-center max-w-sm">
           <AlertCircle className="w-12 h-12 text-rose-500 mx-auto mb-4" />
           <h2 className="text-xl font-bold text-slate-800 mb-2">Akses Ditolak</h2>
-          <p className="text-sm text-slate-600 mb-6">Hanya Developer (NIK 22054178) yang diizinkan mengakses halaman sinkronisasi ini.</p>
-          <Link href="/super-admin" className="px-6 py-2 bg-slate-800 text-white rounded-lg text-sm font-bold hover:bg-slate-900 transition-colors">
+          <p className="text-sm text-slate-600 mb-6">
+            Hanya Developer (NIK 22054178) yang diizinkan mengakses halaman sinkronisasi ini.
+          </p>
+          <Link
+            href="/super-admin"
+            className="px-6 py-2 bg-slate-800 text-white rounded-lg text-sm font-bold hover:bg-slate-900 transition-colors"
+          >
             Kembali ke Dashboard
           </Link>
         </div>
@@ -206,8 +220,10 @@ export default function UpdateProdukPage() {
             <ArrowLeft className="w-5 h-5 text-slate-700" />
           </Link>
           <div>
-            <h1 className="font-bold text-xl text-slate-800">Sinkronisasi Ritel</h1>
-            <p className="text-xs text-slate-500">Pusat Kendali Otomatis Cloud: MDS BISA, Foto Shopify, & Promo Email</p>
+            <h1 className="font-bold text-xl text-slate-800">Pusat Trigger 3 Kategori (GitHub Python)</h1>
+            <p className="text-xs text-slate-500">
+              100% Dijalankan oleh Mesin Python di GitHub Actions • 0% Beban Komputasi Vercel
+            </p>
           </div>
         </div>
 
@@ -224,109 +240,164 @@ export default function UpdateProdukPage() {
       </div>
 
       {/* ============================================================ */}
-      {/* 4 TRIGGER UTAMA (MANDIRI & BEBAS LIMIT 10s VERCEL) */}
+      {/* 3 KATEGORI UTAMA MESIN PYTHON DI GITHUB ACTIONS              */}
       {/* ============================================================ */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="p-4 border-b border-slate-100 bg-gradient-to-r from-indigo-50 to-purple-50">
-          <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
-            <RefreshCw className="w-4 h-4 text-indigo-600" />
-            Pilihan Sinkronisasi Cloud (GitHub Actions Engine)
-          </h3>
-          <p className="text-xs text-slate-500 mt-0.5">Pilih sinkronisasi spesifik yang kamu inginkan atau jalankan semua sekaligus</p>
+        <div className="p-4 border-b border-slate-100 bg-gradient-to-r from-indigo-50 via-purple-50 to-cyan-50 flex items-center justify-between gap-2">
+          <div>
+            <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-indigo-600" />
+              Rekonstruksi 3 Kategori Trigger (GitHub Actions Python Engine)
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Seluruh mesin berjalan di server Ubuntu GitHub Actions dengan brankas mapping 84.763 SKU
+            </p>
+          </div>
+          <span className="px-2.5 py-1 text-[10px] font-extrabold bg-indigo-100 text-indigo-800 rounded-full border border-indigo-200 shrink-0">
+            84.763 JALUR SKU AKTIF
+          </span>
         </div>
 
-        <div className="p-4 flex flex-col gap-3">
-          {/* Trigger 1A: MDS BISA Full */}
-          <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-3.5 bg-indigo-50/70 rounded-xl border border-indigo-100 hover:border-indigo-300 transition-colors">
-            <div className="flex-1 min-w-0">
-              <p className="font-bold text-indigo-900 text-sm flex items-center gap-1.5">
-                🏪 Trigger 1A — MDS BISA Full Sync
-              </p>
-              <p className="text-xs text-indigo-600 mt-0.5">
-                Scraping komplit 9.500 SKU: tambah produk baru otomatis, barcode UPC, style code, harga normal, dan stok fisik
-              </p>
+        <div className="p-4 flex flex-col gap-3.5">
+          {/* ------------------------------------------------------------ */}
+          {/* KATEGORI 1: SCRAB BRUTAL (MDS BISA + GAMBAR MATAHARI.COM)    */}
+          {/* ------------------------------------------------------------ */}
+          <div className="flex flex-col gap-3 p-4 bg-gradient-to-br from-indigo-50/90 via-purple-50/60 to-white rounded-xl border border-indigo-200 shadow-2xs">
+            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="px-2 py-0.5 text-[10px] font-black bg-indigo-600 text-white rounded-md uppercase tracking-wider">
+                    KATEGORI 1 • SCRAB
+                  </span>
+                  <p className="font-bold text-indigo-950 text-sm flex items-center gap-1.5">
+                    🔥 Mesin Brutal Scrab (MDS BISA & Gambar Produk Matahari.com)
+                  </p>
+                </div>
+                <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                  Menjalankan mesin Python 16-Worker (<code className="text-[11px] bg-white px-1 py-0.5 rounded border border-indigo-100">morning_full_sweep.py --brutal</code>) untuk menyerap produk baru, Barcode UPC EAN-13, Artikel, Harga & Stok, serta mesin 4-Jalur Foto Studio Produk Asli (<code className="text-[11px] bg-white px-1 py-0.5 rounded border border-purple-100">brutal_image_scraper.py</code> — bebas logo/banner).
+                </p>
+              </div>
+              <button
+                onClick={() => handleGitHubDispatch("scrab")}
+                disabled={isGhDispatching || isRunning}
+                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-extrabold rounded-xl transition-colors disabled:opacity-50 shrink-0 shadow-sm"
+              >
+                {isGhDispatching && activeAction === "scrab" ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Flame className="w-4 h-4" />
+                )}
+                {isGhDispatching && activeAction === "scrab" ? "Menyalakan..." : "Scrab Komplit (MDS + Foto)"}
+              </button>
             </div>
-            <button
-              onClick={() => handleGitHubDispatch("mds-bisa")}
-              disabled={isGhDispatching || isRunning}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-colors disabled:opacity-50 shrink-0 shadow-sm"
-            >
-              {isGhDispatching && activeAction === "mds-bisa" ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-              {isGhDispatching && activeAction === "mds-bisa" ? "Menyalakan..." : "MDS BISA All"}
-            </button>
+
+            {/* Sub-tombol untuk menjalankan salah satu mesin Scrab secara terpisah jika diinginkan */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-indigo-100/80">
+              <button
+                onClick={() => handleGitHubDispatch("mds-bisa")}
+                disabled={isGhDispatching || isRunning}
+                className="flex items-center justify-center gap-1.5 px-3 py-2 bg-white hover:bg-indigo-50 text-indigo-800 border border-indigo-200 text-xs font-bold rounded-lg transition-colors disabled:opacity-50"
+              >
+                {isGhDispatching && activeAction === "mds-bisa" ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Database className="w-3.5 h-3.5 text-indigo-600" />
+                )}
+                🏪 Scrab Data MDS BISA Saja (16 Workers)
+              </button>
+
+              <button
+                onClick={() => handleGitHubDispatch("photos")}
+                disabled={isGhDispatching || isRunning}
+                className="flex items-center justify-center gap-1.5 px-3 py-2 bg-white hover:bg-purple-50 text-purple-800 border border-purple-200 text-xs font-bold rounded-lg transition-colors disabled:opacity-50"
+              >
+                {isGhDispatching && activeAction === "photos" ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Image className="w-3.5 h-3.5 text-purple-600" />
+                )}
+                📸 Scrab Foto Produk Matahari.com Saja
+              </button>
+            </div>
           </div>
 
-          {/* Trigger 1B: Khusus Update Stok Saja (Fast Stock Sync) */}
-          <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-3.5 bg-cyan-50/70 rounded-xl border border-cyan-100 hover:border-cyan-300 transition-colors">
+          {/* ------------------------------------------------------------ */}
+          {/* KATEGORI 2: UPDATE STOCK LIVE (JALUR MAPPING 84.763 SKU)     */}
+          {/* ------------------------------------------------------------ */}
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 bg-gradient-to-br from-cyan-50/90 to-white rounded-xl border border-cyan-200 shadow-2xs">
             <div className="flex-1 min-w-0">
-              <p className="font-bold text-cyan-900 text-sm flex items-center gap-1.5">
-                ⚡ Trigger 1B — Update Stok Saja (Fast Stock)
-              </p>
-              <p className="text-xs text-cyan-600 mt-0.5">
-                Khusus memperbarui sisa stok toko 719 untuk produk aktif (lebih cepat & hemat kuota runner)
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="px-2 py-0.5 text-[10px] font-black bg-cyan-600 text-white rounded-md uppercase tracking-wider">
+                  KATEGORI 2 • UPDATE STOCK
+                </span>
+                <p className="font-bold text-cyan-950 text-sm flex items-center gap-1.5">
+                  ⚡ Update Stock Live Terkini (Jalur Mapping 84.763 SKU & Artikel)
+                </p>
+              </div>
+              <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                Memanfaatkan seluruh <strong>84.763 jalur mapping SKU, Barcode & Artikel</strong> yang sudah tersimpan di <code className="text-[11px] bg-white px-1 py-0.5 rounded border border-cyan-100">mapped_sku_paths.json.gz</code> untuk memperbarui stok fisik terkini (<code className="text-[11px]">stok</code> & <code className="text-[11px]">relatedStock</code> multi-warna/size) dengan 16 Worker Python tanpa membuang jalur SKU sedikit pun.
               </p>
             </div>
             <button
               onClick={() => handleGitHubDispatch("stock-only")}
               disabled={isGhDispatching || isRunning}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-bold rounded-xl transition-colors disabled:opacity-50 shrink-0 shadow-sm"
+              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-extrabold rounded-xl transition-colors disabled:opacity-50 shrink-0 shadow-sm"
             >
-              {isGhDispatching && activeAction === "stock-only" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-              {isGhDispatching && activeAction === "stock-only" ? "Menyalakan..." : "Update Stok Saja"}
+              {isGhDispatching && activeAction === "stock-only" ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Zap className="w-4 h-4" />
+              )}
+              {isGhDispatching && activeAction === "stock-only" ? "Menyalakan..." : "Update Stock Live"}
             </button>
           </div>
 
-          {/* Trigger 2: Foto Produk */}
-          <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-3.5 bg-purple-50/70 rounded-xl border border-purple-100 hover:border-purple-300 transition-colors">
+          {/* ------------------------------------------------------------ */}
+          {/* KATEGORI 3: UPDATE PROMO EMAIL (PYTHON PROMO ENGINE)         */}
+          {/* ------------------------------------------------------------ */}
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 bg-gradient-to-br from-sky-50/90 to-white rounded-xl border border-sky-200 shadow-2xs">
             <div className="flex-1 min-w-0">
-              <p className="font-bold text-purple-900 text-sm flex items-center gap-1.5">
-                🖼️ Trigger 2 — Sync Foto Produk
-              </p>
-              <p className="text-xs text-purple-600 mt-0.5">
-                Ambil foto model resmi dan varian dari katalog Shopify CDN Matahari.com
-              </p>
-            </div>
-            <button
-              onClick={() => handleGitHubDispatch("photos")}
-              disabled={isGhDispatching || isRunning}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-xl transition-colors disabled:opacity-50 shrink-0 shadow-sm"
-            >
-              {isGhDispatching && activeAction === "photos" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Image className="w-4 h-4" />}
-              {isGhDispatching && activeAction === "photos" ? "Menyalakan..." : "Sync Foto Saja"}
-            </button>
-          </div>
-
-          {/* Trigger 3: Promo Saja (Python Engine) */}
-          <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-3.5 bg-sky-50/70 rounded-xl border border-sky-100 hover:border-sky-300 transition-colors">
-            <div className="flex-1 min-w-0">
-              <p className="font-bold text-sky-900 text-sm flex items-center gap-1.5">
-                🏷️ Trigger 3 — Sync Promo (Mesin Python)
-              </p>
-              <p className="text-xs text-sky-600 mt-0.5">
-                Bedah file Excel promo email via Python & Gemini AI (stok & barcode tetap terlindungi)
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="px-2 py-0.5 text-[10px] font-black bg-sky-600 text-white rounded-md uppercase tracking-wider">
+                  KATEGORI 3 • UPDATE PROMO
+                </span>
+                <p className="font-bold text-sky-950 text-sm flex items-center gap-1.5">
+                  🏷️ Update Promo Email (Mesin Python & Gemini AI)
+                </p>
+              </div>
+              <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                Membedah seluruh file Excel promo terbaru dari email (<code className="text-[11px] bg-white px-1 py-0.5 rounded border border-sky-100">run_promo_sync.py</code> di GitHub Actions) untuk memperbarui Harga Promo, Diskon, dan Periode Acara. Stok fisik, Barcode UPC, dan Foto Studio tetap 100% terlindungi.
               </p>
             </div>
             <button
               onClick={() => handleGitHubDispatch("promo")}
               disabled={isGhDispatching || isRunning}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold rounded-xl transition-colors disabled:opacity-50 shrink-0 shadow-sm"
+              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-sky-600 hover:bg-sky-700 text-white text-xs font-extrabold rounded-xl transition-colors disabled:opacity-50 shrink-0 shadow-sm"
             >
-              {isGhDispatching && activeAction === "promo" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Tag className="w-4 h-4" />}
-              {isGhDispatching && activeAction === "promo" ? "Menyalakan..." : "Sync Promo Saja"}
+              {isGhDispatching && activeAction === "promo" ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Tag className="w-4 h-4" />
+              )}
+              {isGhDispatching && activeAction === "promo" ? "Menyalakan..." : "Update Promo Email"}
             </button>
           </div>
 
-          {/* Trigger 4: Full Sync (All) */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-xl shadow-md border border-slate-800 mt-1">
+          {/* ------------------------------------------------------------ */}
+          {/* TOMBOL KOMPLIT: JALANKAN 3 KATEGORI SEKALIGUS                */}
+          {/* ------------------------------------------------------------ */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-xl shadow-md border border-slate-800 mt-0.5">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <span className="px-2 py-0.5 text-[10px] font-extrabold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full flex items-center gap-1">
-                  <Zap className="w-2.5 h-2.5 text-emerald-400" /> PAKET KOMPLIT
+                  <Zap className="w-2.5 h-2.5 text-emerald-400" /> ALL-IN-ONE CLOUD
                 </span>
-                <p className="font-bold text-sm text-slate-100">Trigger 4 — Full Sync (Semua Sekaligus)</p>
+                <p className="font-bold text-sm text-slate-100">
+                  Jalankan 3 Kategori Sekaligus (Scrab + Update Stock + Promo Email)
+                </p>
               </div>
               <p className="text-xs text-slate-400 mt-1">
-                Jalankan urutan komplit secara otomatis di cloud: MDS BISA ➔ Foto Katalog ➔ Update Promo.
+                Dieksekusi berurutan 100% di GitHub Actions Python Runner tanpa membebani Vercel.
               </p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
@@ -335,8 +406,12 @@ export default function UpdateProdukPage() {
                 disabled={isGhDispatching || isRunning}
                 className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-400 hover:to-green-400 text-slate-950 text-xs font-black rounded-xl transition-all disabled:opacity-50 shadow-md shadow-emerald-500/20"
               >
-                {isGhDispatching && activeAction === "all" ? <Loader2 className="w-4 h-4 animate-spin text-slate-950" /> : <Play className="w-4 h-4 fill-current" />}
-                {isGhDispatching && activeAction === "all" ? "Menyalakan..." : "Jalankan Full Sync (All)"}
+                {isGhDispatching && activeAction === "all" ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
+                ) : (
+                  <Play className="w-4 h-4 fill-current" />
+                )}
+                {isGhDispatching && activeAction === "all" ? "Menyalakan..." : "Jalankan Semua (3 Kategori)"}
               </button>
             </div>
           </div>
@@ -382,11 +457,15 @@ export default function UpdateProdukPage() {
         <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-900 text-white">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0">
-              <Activity className={`w-4 h-4 ${isRunning ? "text-amber-400 animate-pulse" : isFailed ? "text-rose-400" : "text-emerald-400"}`} />
+              <Activity
+                className={`w-4 h-4 ${
+                  isRunning ? "text-amber-400 animate-pulse" : isFailed ? "text-rose-400" : "text-emerald-400"
+                }`}
+              />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h3 className="font-bold text-sm text-slate-100">Live Monitor & Log Eksekusi Cloud</h3>
+                <h3 className="font-bold text-sm text-slate-100">Live Monitor & Log Eksekusi Cloud (GitHub Actions)</h3>
                 {activeRun && (
                   <span className="px-2 py-0.5 text-[10px] font-mono bg-slate-800 text-slate-300 rounded-md border border-slate-700">
                     Run #{activeRun.runNumber}
@@ -394,7 +473,7 @@ export default function UpdateProdukPage() {
                 )}
               </div>
               <p className="text-[11px] text-slate-400">
-                Status proses, persentase progres, dan deteksi error runner GitHub
+                Status proses Python Engine, persentase progres, dan deteksi error runner GitHub
               </p>
             </div>
           </div>
@@ -417,9 +496,7 @@ export default function UpdateProdukPage() {
               </span>
             )}
             {!activeRun && (
-              <span className="px-3 py-1 text-xs font-semibold bg-slate-800 text-slate-400 rounded-full">
-                Siap
-              </span>
+              <span className="px-3 py-1 text-xs font-semibold bg-slate-800 text-slate-400 rounded-full">Siap</span>
             )}
           </div>
         </div>
@@ -436,9 +513,13 @@ export default function UpdateProdukPage() {
                     <span>Langkah: {activeRun?.currentStep || "Menyiapkan cloud runner..."}</span>
                   </>
                 ) : isFailed ? (
-                  <span className="text-rose-600 font-bold">Terjadi kegagalan: {activeRun?.errorStep || activeRun?.currentStep}</span>
+                  <span className="text-rose-600 font-bold">
+                    Terjadi kegagalan: {activeRun?.errorStep || activeRun?.currentStep}
+                  </span>
                 ) : (
-                  <span className="text-slate-600">Terakhir: {activeRun?.currentStep || "Workflow siap dijalankan"}</span>
+                  <span className="text-slate-600">
+                    Terakhir: {activeRun?.currentStep || "Workflow siap dijalankan"}
+                  </span>
                 )}
               </span>
               <span className="font-black font-mono text-sm shrink-0 ml-2 text-indigo-600">
@@ -466,7 +547,13 @@ export default function UpdateProdukPage() {
               </span>
               {activeRun?.updatedAt && (
                 <span>
-                  Update: {new Date(activeRun.updatedAt).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" })} WIB
+                  Update:{" "}
+                  {new Date(activeRun.updatedAt).toLocaleTimeString("id-ID", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  })}{" "}
+                  WIB
                 </span>
               )}
             </div>
@@ -482,7 +569,8 @@ export default function UpdateProdukPage() {
                   {activeRun?.errorStep || "Kegagalan pada salah satu step runner cloud."}
                 </p>
                 <p className="text-[11px] text-rose-600 mt-1">
-                  Silakan periksa log terminal di bawah atau buka tautan GitHub untuk meninjau detail error selengkapnya.
+                  Silakan periksa log terminal di bawah atau buka tautan GitHub untuk meninjau detail error
+                  selengkapnya.
                 </p>
               </div>
             </div>
@@ -494,13 +582,17 @@ export default function UpdateProdukPage() {
               <p className="text-xs font-bold text-slate-700 mb-2 flex items-center justify-between">
                 <span>Rincian Langkah Eksekusi (Checklist Cloud)</span>
                 <span className="text-[10px] text-slate-400 font-normal">
-                  {cloudStatus.steps.filter((s) => s.isCompleted && !s.isSkipped).length} dari {cloudStatus.steps.filter((s) => !s.isSkipped).length} selesai
+                  {cloudStatus.steps.filter((s) => s.isCompleted && !s.isSkipped).length} dari{" "}
+                  {cloudStatus.steps.filter((s) => !s.isSkipped).length} selesai
                 </span>
               </p>
 
               <div className="flex flex-col gap-1.5 max-h-56 overflow-y-auto pr-1">
                 {cloudStatus.steps
-                  .filter((step) => !step.name.startsWith("Post ") && step.name !== "Set up job" && step.name !== "Complete job")
+                  .filter(
+                    (step) =>
+                      !step.name.startsWith("Post ") && step.name !== "Set up job" && step.name !== "Complete job"
+                  )
                   .map((step) => (
                     <div
                       key={step.number}
@@ -567,12 +659,13 @@ export default function UpdateProdukPage() {
               }`}
             >
               <div className="text-emerald-400">
-                [SYSTEM] Mesin Sinkronisasi Cloud Antigravity siap dipantau.
+                [SYSTEM] Mesin Python 3 Kategori (Scrab • Update Stock • Promo Email) siap di GitHub Actions.
               </div>
               {activeRun && (
                 <>
                   <div className="text-indigo-300">
-                    [{new Date(activeRun.createdAt).toLocaleTimeString("id-ID")}] 🚀 Run #{activeRun.runNumber} aktif (Trigger: {activeRun.event})
+                    [{new Date(activeRun.createdAt).toLocaleTimeString("id-ID")}] 🚀 Run #{activeRun.runNumber} aktif
+                    (Trigger: {activeRun.event})
                   </div>
                   <div className="text-slate-400">
                     [PROGRES] Progres saat ini: {activeRun.percent}% ({activeRun.currentStep})
@@ -598,7 +691,7 @@ export default function UpdateProdukPage() {
                   </div>
                   {cloudStatus.syncHistory.slice(0, 3).map((item) => (
                     <div key={item.id} className="text-cyan-300 text-[11px] truncate">
-                      • {item.type}: {item.fileName} ➔ {item.records.toLocaleString("id-ID")} produk diperbarui ({item.status})
+                      • {item.type}: {item.fileName} ➔ {item.records.toLocaleString("id-ID")} produk ({item.status})
                     </div>
                   ))}
                 </div>
@@ -622,94 +715,87 @@ export default function UpdateProdukPage() {
           )}
         </div>
 
-        {/* CARD RIWAYAT UPDATE TERAKHIR (Database Supabase & Cloud Runner) */}
+        {/* CARD RIWAYAT UPDATE TERAKHIR (3 KATEGORI UTAMA) */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200/80 p-5 sm:p-6 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
             <div>
               <div className="flex items-center gap-2">
                 <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_#10b981]" />
                 <h3 className="font-bold text-slate-800 text-sm sm:text-base">
-                  Riwayat Eksekusi Update Terakhir
+                  Status & Riwayat 3 Kategori Mesin Python
                 </h3>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                Status data riil yang telah sukses diperbarui oleh program otomatis (Jadwal 09:45 & 21:00 WIB)
+                Rekapitulasi data riil yang tersimpan di Supabase dari ketiga kategori mesin
               </p>
             </div>
             <button
               onClick={() => fetchCloudStatus(true)}
               className="self-start sm:self-auto px-3 py-1.5 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1.5"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${isLoadingStatus ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoadingStatus ? "animate-spin" : ""}`} />
               Segarkan Riwayat
             </button>
           </div>
 
-          {/* 3 Status Pilar Terakhir */}
+          {/* 3 Status Kategori Terakhir */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {/* Pilar 1: MDS BISA */}
-            <div className="p-3.5 rounded-xl border border-cyan-100 bg-gradient-to-br from-cyan-50/70 to-white">
+            {/* Kategori 1: Scrab (MDS BISA & Foto) */}
+            <div className="p-3.5 rounded-xl border border-indigo-100 bg-gradient-to-br from-indigo-50/70 to-white">
               <div className="flex items-center justify-between mb-1.5">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-700 flex items-center gap-1">
-                  <Database className="w-3.5 h-3.5 text-cyan-600" /> MDS BISA & Stok
-                </span>
-                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
-                  SUKSES
-                </span>
-              </div>
-              <p className="text-xs font-bold text-slate-800">
-                {cloudStatus.syncHistory.find(h => h.type === 'MDS_BISA_SYNC' || h.type === 'STOCK_SYNC') 
-                  ? `${cloudStatus.syncHistory.find(h => h.type === 'MDS_BISA_SYNC' || h.type === 'STOCK_SYNC')?.records.toLocaleString('id-ID')} Produk SOH`
-                  : 'Aktif Terjadwal'}
-              </p>
-              <p className="text-[11px] text-slate-500 mt-0.5">
-                {cloudStatus.syncHistory.find(h => h.type === 'MDS_BISA_SYNC' || h.type === 'STOCK_SYNC')
-                  ? new Date(cloudStatus.syncHistory.find(h => h.type === 'MDS_BISA_SYNC' || h.type === 'STOCK_SYNC')!.createdAt).toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + ' WIB'
-                  : '09:45 & 21:00 WIB'}
-              </p>
-            </div>
-
-            {/* Pilar 2: Foto CDN */}
-            <div className="p-3.5 rounded-xl border border-purple-100 bg-gradient-to-br from-purple-50/70 to-white">
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-purple-700 flex items-center gap-1">
-                  <Image className="w-3.5 h-3.5 text-purple-600" /> Foto & Collage Online
-                </span>
-                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
-                  SUKSES
-                </span>
-              </div>
-              <p className="text-xs font-bold text-slate-800">
-                {cloudStatus.syncHistory.find(h => h.type === 'PHOTO_SYNC')
-                  ? `${cloudStatus.syncHistory.find(h => h.type === 'PHOTO_SYNC')?.records.toLocaleString('id-ID')} Galeri Foto`
-                  : 'Up-to-Date'}
-              </p>
-              <p className="text-[11px] text-slate-500 mt-0.5">
-                {cloudStatus.syncHistory.find(h => h.type === 'PHOTO_SYNC')
-                  ? new Date(cloudStatus.syncHistory.find(h => h.type === 'PHOTO_SYNC')!.createdAt).toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + ' WIB'
-                  : 'Katalog Matahari.com'}
-              </p>
-            </div>
-
-            {/* Pilar 3: Promo Retail */}
-            <div className="p-3.5 rounded-xl border border-sky-100 bg-gradient-to-br from-sky-50/70 to-white">
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-sky-700 flex items-center gap-1">
-                  <Tag className="w-3.5 h-3.5 text-sky-600" /> Promo Retail (Python)
+                <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-700 flex items-center gap-1">
+                  <Flame className="w-3.5 h-3.5 text-indigo-600" /> 1. Scrab Brutal
                 </span>
                 <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
                   AKTIF
                 </span>
               </div>
+              <p className="text-xs font-bold text-slate-800">84.763 SKU • 35.293 Foto</p>
+              <p className="text-[11px] text-slate-500 mt-0.5">MDS BISA + Studio Matahari.com</p>
+            </div>
+
+            {/* Kategori 2: Update Stock Live */}
+            <div className="p-3.5 rounded-xl border border-cyan-100 bg-gradient-to-br from-cyan-50/70 to-white">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-700 flex items-center gap-1">
+                  <Zap className="w-3.5 h-3.5 text-cyan-600" /> 2. Update Stock
+                </span>
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                  TERPETAKAN
+                </span>
+              </div>
               <p className="text-xs font-bold text-slate-800">
-                {cloudStatus.syncHistory.find(h => h.type === 'UPDATE_PROMO')
-                  ? `${cloudStatus.syncHistory.find(h => h.type === 'UPDATE_PROMO')?.records.toLocaleString('id-ID')} Promo Termutakhir`
-                  : 'Aktif Berjalan'}
+                {cloudStatus.syncHistory.find((h) => h.type === "STOCK_SYNC" || h.type === "MDS_BISA_SYNC")
+                  ? `${cloudStatus.syncHistory
+                      .find((h) => h.type === "STOCK_SYNC" || h.type === "MDS_BISA_SYNC")
+                      ?.records.toLocaleString("id-ID")} Jalur SKU`
+                  : "84.763 Jalur SKU"}
+              </p>
+              <p className="text-[11px] text-slate-500 mt-0.5">Mapping SKU & Multi-Varian Artikel</p>
+            </div>
+
+            {/* Kategori 3: Update Promo Email */}
+            <div className="p-3.5 rounded-xl border border-sky-100 bg-gradient-to-br from-sky-50/70 to-white">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-sky-700 flex items-center gap-1">
+                  <Tag className="w-3.5 h-3.5 text-sky-600" /> 3. Promo Email
+                </span>
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                  SIAP
+                </span>
+              </div>
+              <p className="text-xs font-bold text-slate-800">
+                {cloudStatus.syncHistory.find((h) => h.type === "UPDATE_PROMO")
+                  ? `${cloudStatus.syncHistory.find((h) => h.type === "UPDATE_PROMO")?.records.toLocaleString("id-ID")} SKU Promo`
+                  : "Python Promo Parser"}
               </p>
               <p className="text-[11px] text-slate-500 mt-0.5 truncate">
-                {cloudStatus.syncHistory.find(h => h.type === 'UPDATE_PROMO')
-                  ? new Date(cloudStatus.syncHistory.find(h => h.type === 'UPDATE_PROMO')!.createdAt).toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + ' WIB'
-                  : 'Sinkronisasi Mingguan'}
+                {cloudStatus.syncHistory.find((h) => h.type === "UPDATE_PROMO")
+                  ? new Date(cloudStatus.syncHistory.find((h) => h.type === "UPDATE_PROMO")!.createdAt).toLocaleString(
+                      "id-ID",
+                      { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }
+                    ) + " WIB"
+                  : "Otomatis dari Folder PROMO/"}
               </p>
             </div>
           </div>
@@ -720,7 +806,7 @@ export default function UpdateProdukPage() {
               <thead className="bg-slate-50 text-[10px] uppercase font-bold text-slate-400 border-b border-slate-100">
                 <tr>
                   <th className="px-3.5 py-2.5">Waktu Eksekusi</th>
-                  <th className="px-3.5 py-2.5">Tipe Pekerjaan</th>
+                  <th className="px-3.5 py-2.5">Kategori Mesin</th>
                   <th className="px-3.5 py-2.5">Deskripsi / Target</th>
                   <th className="px-3.5 py-2.5 text-right">Data Diperbarui</th>
                   <th className="px-3.5 py-2.5 text-center">Status</th>
@@ -743,32 +829,35 @@ export default function UpdateProdukPage() {
                           hour: "2-digit",
                           minute: "2-digit",
                           second: "2-digit",
-                        })} WIB
+                        })}{" "}
+                        WIB
                       </td>
                       <td className="px-3.5 py-2.5 font-bold text-slate-800 whitespace-nowrap">
-                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] ${
-                          item.type.includes('MDS') || item.type.includes('STOCK')
-                            ? 'bg-cyan-50 text-cyan-700 border border-cyan-200'
-                            : item.type.includes('PHOTO')
-                            ? 'bg-purple-50 text-purple-700 border border-purple-200'
-                            : 'bg-sky-50 text-sky-700 border border-sky-200'
-                        }`}>
+                        <span
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] ${
+                            item.type.includes("STOCK")
+                              ? "bg-cyan-50 text-cyan-700 border border-cyan-200"
+                              : item.type.includes("MDS") || item.type.includes("SCRAB") || item.type.includes("PHOTO")
+                              ? "bg-indigo-50 text-indigo-700 border border-indigo-200"
+                              : "bg-sky-50 text-sky-700 border border-sky-200"
+                          }`}
+                        >
                           {item.type}
                         </span>
                       </td>
-                      <td className="px-3.5 py-2.5 text-slate-600 truncate max-w-xs">
-                        {item.fileName}
-                      </td>
+                      <td className="px-3.5 py-2.5 text-slate-600 truncate max-w-xs">{item.fileName}</td>
                       <td className="px-3.5 py-2.5 text-right font-mono font-bold text-slate-700 whitespace-nowrap">
                         {item.records.toLocaleString("id-ID")} item
                       </td>
                       <td className="px-3.5 py-2.5 text-center whitespace-nowrap">
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          item.status === 'SUCCESS'
-                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                            : 'bg-rose-100 text-rose-800 border border-rose-200'
-                        }`}>
-                          {item.status === 'SUCCESS' ? 'SUKSES' : 'GAGAL'}
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            item.status === "SUCCESS"
+                              ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                              : "bg-rose-100 text-rose-800 border border-rose-200"
+                          }`}
+                        >
+                          {item.status === "SUCCESS" ? "SUKSES" : "GAGAL"}
                         </span>
                       </td>
                     </tr>

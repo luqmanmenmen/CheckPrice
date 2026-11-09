@@ -36,6 +36,7 @@ import os
 import sys
 import re
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Dict, List, Set, Tuple, Any, Optional
@@ -52,8 +53,17 @@ load_dotenv()
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env.local"))
 
-SUPABASE_URL = os.getenv("SUPABASE_URL") or "https://lzynugpistiyhxqkgwmk.supabase.co"
-SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_KEY") or ""
+SUPABASE_URL = (
+    os.getenv("SUPABASE_URL")
+    or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
+    or "https://lzynugpistiyhxqkgwmk.supabase.co"
+)
+SUPABASE_KEY = (
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    or os.getenv("SUPABASE_KEY")
+    or os.getenv("SUPABASE_ANON_KEY")
+    or ""
+)
 
 if not SUPABASE_KEY:
     print("❌ Error: SUPABASE_KEY tidak ditemukan.")
@@ -476,11 +486,8 @@ def execute_brutal_image_scrape():
     print("🛡️  FILTER AKTIF: 100% Foto Produk Studio (Blokir Logo, Banner, Ikon, Size Chart)")
     print("=" * 80)
 
-    # 1. Muat seluruh baris produk secara paralel dari Supabase
-    print("📥 Memuat 84.763 produk dari Supabase dengan 8 Workers...")
-    count_res = sb.table("Product").select("sku", count="exact").limit(1).execute()
-    estimated_total = count_res.count or 85000
-    offsets = list(range(0, estimated_total + 1000, 1000))
+    # 1. Muat seluruh baris produk secara paralel dari Supabase (Wave Pagination bebas timeout)
+    print("📥 Memuat 84.763+ produk dari Supabase dengan 8 Workers...")
 
     def fetch_db_chunk(off: int) -> List[Dict[str, Any]]:
         for _ in range(3):
@@ -492,9 +499,24 @@ def execute_brutal_image_scrape():
         return []
 
     all_products: List[Dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        for rows in executor.map(fetch_db_chunk, offsets):
-            all_products.extend(rows)
+    offset = 0
+    wave_size = 16
+    while True:
+        offsets = [offset + i * 1000 for i in range(wave_size)]
+        reached_end = False
+        wave_rows = 0
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            for rows in executor.map(fetch_db_chunk, offsets):
+                if not rows:
+                    reached_end = True
+                    continue
+                wave_rows += len(rows)
+                all_products.extend(rows)
+                if len(rows) < 1000:
+                    reached_end = True
+        if reached_end or wave_rows == 0:
+            break
+        offset += wave_size * 1000
 
     # Deduplikasi jika ada pergeseran range
     unique_map: Dict[str, Dict[str, Any]] = {}
@@ -652,6 +674,26 @@ def execute_brutal_image_scrape():
         sibling_article_matched,
         brand_img_stats,
     )
+
+    try:
+        user_res = sb.table("User").select("id").eq("nik", "22054178").limit(1).execute()
+        user_id = user_res.data[0]["id"] if user_res.data else None
+        if not user_id:
+            u_fallback = sb.table("User").select("id").limit(1).execute()
+            user_id = u_fallback.data[0]["id"] if u_fallback.data else None
+        if user_id:
+            sb.table("SyncHistory").insert({
+                "id": f"sync_{uuid.uuid4().hex[:20]}",
+                "userId": user_id,
+                "type": "PHOTO_SYNC",
+                "fileName": f"Brutal Image Scraper Matahari.com ({final_with_img:,} SKU Berfoto)",
+                "status": "SUCCESS",
+                "records": int(final_with_img),
+                "createdAt": datetime.now(timezone.utc).isoformat(),
+            }).execute()
+            print(f"📝 [SyncHistory] Tercatat PHOTO_SYNC: {final_with_img:,} SKU berfoto!")
+    except Exception as e:
+        print(f"⚠️ Gagal mencatat SyncHistory: {e}")
 
     print("\n" + "=" * 80)
     print(f"🎉 SELESAI! Total Produk Berfoto Studio Resmi Kini: {final_with_img:,} / {total_db:,} SKU!")

@@ -1,8 +1,8 @@
-name: Retail Sync Engine (MDS BISA & Matahari Catalog)
+name: Retail Sync Engine (3 Kategori Python Turbo Engine)
 
-# PERMINTAAN USER: JANGAN MENGHABISKAN QUOTA GITHUB ACTIONS!
-# Cron otomatis dimatikan agar quota menit GitHub (2.000 menit/bulan) tetap 100% utuh & hemat.
-# Seluruh proses sinkronisasi & scraping brutal dijalankan oleh Local Python Engine di komputer user (0 Quota GitHub).
+# ARSITEKTUR MURNI PYTHON DI GITHUB ACTIONS (BUKAN DI VERCEL!)
+# Cron otomatis tetap dimatikan agar quota menit GitHub (2.000 menit/bulan) hemat.
+# Seluruh eksekusi dipicu instan dari Frontend UI (/super-admin/sinkronisasi-harian) atau Webhook Email Promo.
 
 on:
   # schedule:
@@ -12,34 +12,35 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: 'Pilih aksi sinkronisasi yang dijalankan'
+        description: 'Pilih kategori mesin Python yang dijalankan'
         required: true
         default: 'all'
         type: choice
         options:
-          - all
+          - scrab
           - mds-bisa
-          - stock-only
           - photos
+          - stock-only
           - promo
+          - all
       promo_url:
-        description: 'URL file promo (opsional, jika kosong akan ambil file terbaru di Storage)'
+        description: 'URL file promo (opsional, jika kosong akan ambil semua file di folder terbaru Storage PROMO/)'
         required: false
         default: ''
         type: string
       force:
-        description: 'Paksa sinkronisasi walau di luar jam operasional toko (force bypass)'
+        description: 'Paksa sinkronisasi (force bypass)'
         required: false
         default: false
         type: boolean
       session_cookie:
-        description: 'MDS Session Cookie (opsional, jika ada akan dipakai)'
+        description: 'MDS Session Cookie (opsional, jika kosong otomatis ambil dari Storage / Auto-Login)'
         required: false
         default: ''
         type: string
 
   repository_dispatch:
-    types: [trigger-sync-engine, trigger-mds-bisa, trigger-stock-only, trigger-photos, trigger-promo]
+    types: [trigger-sync-engine, trigger-scrab, trigger-mds-bisa, trigger-stock-only, trigger-photos, trigger-promo]
 
 concurrency:
   group: retail-sync-group
@@ -47,82 +48,61 @@ concurrency:
 
 jobs:
   sync:
-    name: Run Synchronization Engine
+    name: Run Python Retail Engine (3 Kategori)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 60
 
     steps:
-      - name: 📥 Checkout Repository
+      - name: 📥 Checkout Repository & Brankas Mapping 84.763 SKU
         uses: actions/checkout@v4
 
-      - name: 🟢 Setup Node.js Environment (v20)
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'npm'
-
-      - name: 🐍 Setup Python Environment (v3.11)
+      - name: 🐍 Setup Python Turbo Environment (v3.11)
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
           cache-dependency-path: 'python-engine/requirements.txt'
 
-      - name: 📦 Install Node Dependencies
-        run: |
-          npm install --no-audit --prefer-offline
-
       - name: 📦 Install Python Engine Dependencies
         run: |
           pip install -r python-engine/requirements.txt
 
-      - name: ⚙️ Generate Prisma Client
+      - name: 🔥 [KATEGORI 1A - SCRAB MDS BISA] Brutal Scraper MDS BISA (16 Workers • SKU & Barcode Sweep)
+        if: ${{ github.event.inputs.action == 'scrab' || github.event.inputs.action == 'mds-bisa' || github.event.inputs.action == 'all' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-mds-bisa' || github.event.action == 'trigger-sync-engine' || (github.event_name == 'workflow_dispatch' && github.event.inputs.action == '') }}
         run: |
-          npx prisma generate
+          python python-engine/morning_full_sweep.py --brutal
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DIRECT_URL: ${{ secrets.DIRECT_URL }}
-
-      - name: 🏪 Run Trigger 1A — MDS BISA Full Sync (Produk Baru, Barcode, Style Code & Stok)
-        if: ${{ github.event.inputs.action == 'all' || github.event.inputs.action == 'mds-bisa' || github.event_name == 'schedule' || github.event.action == 'trigger-mds-bisa' || github.event.action == 'trigger-sync-engine' || (github.event_name == 'workflow_dispatch' && github.event.inputs.action == '') }}
-        run: |
-          FORCE_FLAG="${{ github.event.inputs.force == 'true' && '--force' || '' }}"
-          node scripts/sync_mds_bisa_full.mjs $FORCE_FLAG
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DIRECT_URL: ${{ secrets.DIRECT_URL }}
           MDS_SESSION_COOKIE: ${{ github.event.inputs.session_cookie || secrets.MDS_SESSION_COOKIE }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
 
-      - name: ⚡ Run Trigger 1B — Fast Stock-Only Sync (Khusus Update Stok Toko)
-        if: ${{ github.event.inputs.action == 'stock-only' || github.event.action == 'trigger-stock-only' }}
+      - name: 📸 [KATEGORI 1B - SCRAB GAMBAR] Brutal Image Scraper Matahari.com (4-Jalur Pure Product Photos)
+        if: ${{ github.event.inputs.action == 'scrab' || github.event.inputs.action == 'photos' || github.event.inputs.action == 'all' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-photos' || github.event.action == 'trigger-sync-engine' }}
         run: |
-          FORCE_FLAG="${{ github.event.inputs.force == 'true' && '--force' || '' }}"
-          node scripts/sync_mds_bisa_full.mjs --stock-only $FORCE_FLAG
+          python python-engine/brutal_image_scraper.py
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
+
+      - name: ⚡ [KATEGORI 2 - UPDATE STOCK LIVE] Update Stok Terkini via Jalur Mapping 84.763 SKU & Artikel
+        if: ${{ github.event.inputs.action == 'stock-only' || github.event.inputs.action == 'all' || github.event.action == 'trigger-stock-only' }}
+        run: |
+          python python-engine/morning_full_sweep.py --stock-only
+        env:
           MDS_SESSION_COOKIE: ${{ github.event.inputs.session_cookie || secrets.MDS_SESSION_COOKIE }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
 
-      - name: 🖼️ Run Trigger 2 — Matahari Photo Catalog Sync
-        if: ${{ github.event.inputs.action == 'all' || github.event.inputs.action == 'photos' || github.event_name == 'schedule' || github.event.action == 'trigger-photos' || github.event.action == 'trigger-sync-engine' }}
-        run: |
-          node scripts/sync_matahari_images.js
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DIRECT_URL: ${{ secrets.DIRECT_URL }}
-
-      - name: 🏷️ Run Trigger 3 — Python Promo Parser Engine (Pilar Promo Email)
-        if: ${{ github.event.inputs.action == 'all' || github.event.inputs.action == 'promo' || github.event.action == 'trigger-promo' || github.event.action == 'trigger-sync-engine' }}
+      - name: 🏷️ [KATEGORI 3 - UPDATE PROMO EMAIL] Python Promo Email Parser Engine (Excel Storage + Gemini AI)
+        if: ${{ github.event.inputs.action == 'promo' || github.event.inputs.action == 'all' || github.event.action == 'trigger-promo' || github.event.action == 'trigger-sync-engine' }}
         run: |
           PROMO_FLAG="${{ github.event.inputs.promo_url != '' && format('--file={0}', github.event.inputs.promo_url) || '' }}"
           python python-engine/run_promo_sync.py $PROMO_FLAG
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DIRECT_URL: ${{ secrets.DIRECT_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
