@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma as db } from "@/lib/prisma";
 import { checkSingleItemStock } from "@/lib/mdsBisaClient";
+import {
+  expandRetailQuery,
+  computeProductRelevanceScore,
+  consultGeminiSearchAgent,
+} from "@/lib/smartSearchEngine";
 
 export const dynamic = 'force-dynamic';
 
@@ -27,7 +32,6 @@ export async function GET(
         if (!isNaN(toDateObj.getTime())) {
           toDateObj.setHours(23, 59, 59, 999);
           if (new Date() > toDateObj) {
-            // Bersihkan di memori langsung agar respons JSON super cepat
             p.hargaPromo = null;
             p.diskon = null;
             p.discountType = null;
@@ -35,7 +39,6 @@ export async function GET(
             p.fromDate = null;
             p.toDate = null;
 
-            // Update database secara background tanpa memblokir respons user
             db.product.update({
               where: { id: p.id },
               data: {
@@ -56,7 +59,7 @@ export async function GET(
     // Helper untuk mengambil seluruh varian (siblings) produk berdasarkan article
     const getProductSiblings = async (prod: any) => {
       let siblings: any[] = [];
-      if (prod.article && prod.article.trim()) {
+      if (prod.article && prod.article.trim() && !["0", "-", "PRODUK BARU"].includes(prod.article.trim().toUpperCase())) {
         const allSiblings = await db.product.findMany({
           where: { article: prod.article },
           orderBy: [{ color: 'asc' }, { size: 'asc' }, { description: 'asc' }]
@@ -83,6 +86,14 @@ export async function GET(
     if (!directProduct) {
       directProduct = await db.product.findFirst({ where: { barcode: rawInput } });
     }
+    if (!directProduct && /^\d+$/.test(rawInput)) {
+      const stripped = rawInput.replace(/^0+/, "");
+      if (stripped && stripped !== rawInput) {
+        directProduct = await db.product.findFirst({
+          where: { OR: [{ barcode: stripped }, { sku: stripped }] }
+        });
+      }
+    }
 
     if (directProduct) {
       directProduct = checkAndCleanPromo(directProduct);
@@ -91,74 +102,133 @@ export async function GET(
     }
 
     // ─────────────────────────────────────────────────────────────
-    //  TAHAP 2: CERDAS BY ARTIKEL & MULTI-KATA (SMART SEARCH)
+    //  TAHAP 2: EKSPANSI PINTAR (30% PARTIAL TEXT + SINONIM KASIR)
     // ─────────────────────────────────────────────────────────────
     const isSearchingDummy = rawInput.toLowerCase().includes("dummy");
-    const spacelessQuery = rawInput.replace(/[\s\-_]+/g, "");
-    const searchTerms = rawInput.split(/[\s\-_]+/).filter(t => t.length > 0);
-
-    // Kriteria pencarian Prisma
-    // 1. Pencocokan frasa penuh atau spaceless pada 4 Cell Utama:
-    //    Cell 1 (PARENT_NAME / article), Cell 2 (ITEM_DESCRIPTION / description),
-    //    Cell 3 (GROUP / brand), Cell 4 (DEPARTMENT / dept), plus SKU & Barcode.
-    const phraseConditions = [
-      { article: { contains: rawInput, mode: 'insensitive' as const } },
-      { description: { contains: rawInput, mode: 'insensitive' as const } },
-      { brand: { contains: rawInput, mode: 'insensitive' as const } },
-      { dept: { contains: rawInput, mode: 'insensitive' as const } },
-      { sku: { contains: rawInput, mode: 'insensitive' as const } },
-      { barcode: { contains: rawInput, mode: 'insensitive' as const } }
-    ];
-
-    if (spacelessQuery.length >= 3 && spacelessQuery !== rawInput) {
-      phraseConditions.push(
-        { article: { contains: spacelessQuery, mode: 'insensitive' as const } },
-        { description: { contains: spacelessQuery, mode: 'insensitive' as const } },
-        { brand: { contains: spacelessQuery, mode: 'insensitive' as const } },
-        { dept: { contains: spacelessQuery, mode: 'insensitive' as const } }
-      );
-    }
-
-    // 2. Pencocokan setiap kata token di seluruh atribut (Artikel, Deskripsi, Brand, Dept, Warna, Ukuran)
-    const tokenAndConditions = searchTerms.map(term => ({
-      OR: [
-        { article: { contains: term, mode: 'insensitive' as const } },
-        { description: { contains: term, mode: 'insensitive' as const } },
-        { brand: { contains: term, mode: 'insensitive' as const } },
-        { dept: { contains: term, mode: 'insensitive' as const } },
-        { color: { contains: term, mode: 'insensitive' as const } },
-        { size: { contains: term, mode: 'insensitive' as const } },
-        { sku: { contains: term, mode: 'insensitive' as const } },
-        { barcode: { contains: term, mode: 'insensitive' as const } }
-      ]
-    }));
-
-    // Gabungkan: Produk cocok jika memenuhi salah satu frasa UTUH ATAU memenuhi SEMUA token kata
-    const combinedWhere: any = {
-      OR: [
-        { OR: phraseConditions },
-        { AND: tokenAndConditions }
-      ]
-    };
-
-    // Filter produk dummy kecuali user memang sengaja mencari kata 'dummy'
-    if (!isSearchingDummy) {
-      combinedWhere.AND = [
-        {
+    const expanded = expandRetailQuery(rawInput);
+    const dummyFilter = !isSearchingDummy
+      ? {
           NOT: [
             { article: { contains: "DUMMY", mode: 'insensitive' as const } },
             { description: { contains: "SKU DUMMY", mode: 'insensitive' as const } },
             { sku: { contains: "DUMMY", mode: 'insensitive' as const } }
           ]
         }
-      ];
+      : undefined;
+
+    const buildTermOrClause = (term: string) => [
+      { article: { contains: term, mode: 'insensitive' as const } },
+      { description: { contains: term, mode: 'insensitive' as const } },
+      { brand: { contains: term, mode: 'insensitive' as const } },
+      { dept: { contains: term, mode: 'insensitive' as const } },
+      { color: { contains: term, mode: 'insensitive' as const } },
+      { size: { contains: term, mode: 'insensitive' as const } },
+      { sku: { contains: term, mode: 'insensitive' as const } },
+      { barcode: { contains: term, mode: 'insensitive' as const } }
+    ];
+
+    // 1. Pencocokan Frasa Utuh atau Spaceless
+    const phraseConditions = buildTermOrClause(rawInput);
+    if (expanded.spaceless.length >= 3 && expanded.spaceless !== rawInput.toUpperCase()) {
+      phraseConditions.push(
+        { article: { contains: expanded.spaceless, mode: 'insensitive' as const } },
+        { description: { contains: expanded.spaceless, mode: 'insensitive' as const } },
+        { brand: { contains: expanded.spaceless, mode: 'insensitive' as const } },
+        { dept: { contains: expanded.spaceless, mode: 'insensitive' as const } }
+      );
     }
 
-    // Ambil kandidat produk
-    const candidateMatches = await db.product.findMany({
-      where: combinedWhere,
-      take: 120 // Ambil sampel cukup untuk relevance scoring
+    // 2. Pencocokan Grup Sinonim per Kata (misal "kaos suko vnl" -> (KAOS|T-SHIRT|TEE) AND (SUKO) AND (VANILLA|VNL))
+    const tokenGroupAndConditions = expanded.tokenGroups.map(group => ({
+      OR: group.flatMap(term => buildTermOrClause(term))
+    }));
+
+    const strictWhere: any = {
+      OR: [
+        { OR: phraseConditions },
+        { AND: tokenGroupAndConditions }
+      ]
+    };
+    if (dummyFilter) strictWhere.AND = [dummyFilter];
+
+    const candidateMap = new Map<string, any>();
+
+    const strictMatches = await db.product.findMany({
+      where: strictWhere,
+      orderBy: [{ stok: 'desc' }],
+      take: 140
     });
+    for (const p of strictMatches) candidateMap.set(p.sku, p);
+
+    // ─────────────────────────────────────────────────────────────
+    //  TAHAP 2B: RELAXED 30% PARTIAL TEXT FALLBACK
+    //  Jika hasil strict < 15 (misal user hanya ketik 30% nama deskripsi atau ada kata yang meleset),
+    //  tarik kandidat menggunakan Relaxed OR lintas sinonim & potongan kata >= 3 huruf!
+    // ─────────────────────────────────────────────────────────────
+    if (candidateMap.size < 15 && expanded.allExpandedTerms.length > 0) {
+      const meaningfulTerms = expanded.allExpandedTerms.filter(t => t.length >= 3).slice(0, 14);
+      if (meaningfulTerms.length > 0) {
+        const relaxedWhere: any = {
+          OR: meaningfulTerms.flatMap(term => [
+            { article: { contains: term, mode: 'insensitive' as const } },
+            { description: { contains: term, mode: 'insensitive' as const } },
+            { brand: { contains: term, mode: 'insensitive' as const } },
+            { dept: { contains: term, mode: 'insensitive' as const } },
+            { color: { contains: term, mode: 'insensitive' as const } }
+          ])
+        };
+        if (dummyFilter) relaxedWhere.AND = [dummyFilter];
+
+        const relaxedMatches = await db.product.findMany({
+          where: relaxedWhere,
+          orderBy: [{ stok: 'desc' }],
+          take: 120
+        });
+        for (const p of relaxedMatches) {
+          if (!candidateMap.has(p.sku)) candidateMap.set(p.sku, p);
+        }
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    //  TAHAP 3: GEMINI AI RETAIL SEARCH AGENT
+    //  Jika kandidat masih sedikit (< 5) atau query berupa kalimat deskriptif / singkatan 30% yang unik,
+    //  minta bantuan Gemini AI Agent untuk menerjemahkan keinginan user ke kata kunci ERP!
+    // ─────────────────────────────────────────────────────────────
+    let aiExpandedTerms: string[] = [];
+    if (candidateMap.size < 5 && !/^\d+$/.test(rawInput) && rawInput.length >= 3) {
+      aiExpandedTerms = await consultGeminiSearchAgent(rawInput);
+      if (aiExpandedTerms.length > 0) {
+        // Tambahkan hasil terjemahan AI ke grup sinonim agar ikut dinilai di scoring
+        expanded.tokenGroups.push(aiExpandedTerms);
+        for (const t of aiExpandedTerms) {
+          if (!expanded.allExpandedTerms.includes(t)) expanded.allExpandedTerms.push(t);
+        }
+
+        // Cari terlebih dahulu produk yang cocok dengan mayoritas kata kunci AI (AND / Relaxed OR)
+        const aiWhere: any = {
+          OR: aiExpandedTerms.flatMap(term => [
+            { article: { contains: term, mode: 'insensitive' as const } },
+            { description: { contains: term, mode: 'insensitive' as const } },
+            { brand: { contains: term, mode: 'insensitive' as const } },
+            { dept: { contains: term, mode: 'insensitive' as const } },
+            { color: { contains: term, mode: 'insensitive' as const } }
+          ])
+        };
+        if (dummyFilter) aiWhere.AND = [dummyFilter];
+
+        const aiMatches = await db.product.findMany({
+          where: aiWhere,
+          orderBy: [{ stok: 'desc' }],
+          take: 120
+        });
+        for (const p of aiMatches) {
+          if (!candidateMap.has(p.sku)) candidateMap.set(p.sku, p);
+        }
+      }
+    }
+
+    const candidateMatches = Array.from(candidateMap.values());
 
     if (candidateMatches.length === 0) {
       // Self-Healing On-the-Fly: Jika input berupa Barcode (12-14 digit) atau SKU (8 digit),
@@ -183,122 +253,43 @@ export async function GET(
       return NextResponse.json(
         {
           error: `Produk tidak ditemukan untuk: "${rawInput}"`,
-          hint: `Total produk di database: ${totalCount}. Coba gunakan sebagian nama artikel, departemen, merk, atau scan barcode.`
+          hint: `Total produk di database: ${totalCount.toLocaleString('id-ID')} SKU. Coba ketik sebagian nama produk (30% teks), kode artikel, SKU, atau scan barcode.`
         },
         { status: 404 }
       );
     }
 
     // ─────────────────────────────────────────────────────────────
-    //  TAHAP 3: BOBOT RELEVANSI CERDAS (INTELLIGENT RELEVANCE RANKING)
+    //  TAHAP 4: BOBOT RELEVANSI CERDAS (30% FUZZY & SUBSEQUENCE RANKING)
     // ─────────────────────────────────────────────────────────────
-    const qUpper = rawInput.toUpperCase();
-    const qSpacelessUpper = spacelessQuery.toUpperCase();
+    const scoredProducts = candidateMatches.map(p => ({
+      product: p,
+      score: computeProductRelevanceScore(p, expanded, isSearchingDummy)
+    }));
 
-    const scoredProducts = candidateMatches.map(p => {
-      let score = 0;
-      const artUpper = (p.article || "").toUpperCase();
-      const descUpper = (p.description || "").toUpperCase();
-      const brandUpper = (p.brand || "").toUpperCase();
-      const deptUpper = (p.dept || "").toUpperCase();
-      const skuUpper = (p.sku || "").toUpperCase();
-      const barcodeUpper = (p.barcode || "").toUpperCase();
-      const colorUpper = (p.color || "").toUpperCase();
-
-      const artSpaceless = artUpper.replace(/[\s\-_]+/g, "");
-      const descSpaceless = descUpper.replace(/[\s\-_]+/g, "");
-      const brandSpaceless = brandUpper.replace(/[\s\-_]+/g, "");
-      const deptSpaceless = deptUpper.replace(/[\s\-_]+/g, "");
-
-      // 1. Exact Match pada salah satu dari 4 Cell Utama (Article / Dept / Brand / Desc)
-      if (artUpper === qUpper) score += 300;
-      else if (deptUpper === qUpper) score += 280;
-      else if (brandUpper === qUpper) score += 260;
-      else if (descUpper === qUpper) score += 250;
-      else if (artSpaceless === qSpacelessUpper) score += 240;
-      else if (deptSpaceless === qSpacelessUpper) score += 230;
-
-      // 2. Exact SKU / Barcode Match
-      if (skuUpper === qUpper || barcodeUpper === qUpper) score += 280;
-
-      // 3. Dimulai Dengan Query
-      if (artUpper.startsWith(qUpper)) score += 180;
-      if (deptUpper.startsWith(qUpper)) score += 150;
-      if (brandUpper.startsWith(qUpper)) score += 130;
-      if (descUpper.startsWith(qUpper)) score += 120;
-
-      // 4. Frasa query utuh terkandung di 4 Cell Utama
-      if (artUpper.includes(qUpper)) score += 140;
-      if (deptUpper.includes(qUpper)) score += 130;
-      if (brandUpper.includes(qUpper)) score += 100;
-      if (descUpper.includes(qUpper)) score += 70;
-
-      // 5. Spaceless match (contoh: 'na young' cocok dengan 'NAYOUNG' atau 'NA-YOUNG')
-      if (qSpacelessUpper.length >= 3) {
-        if (artSpaceless.includes(qSpacelessUpper)) score += 130;
-        if (deptSpaceless.includes(qSpacelessUpper)) score += 120;
-        if (brandSpaceless.includes(qSpacelessUpper)) score += 90;
-        if (descSpaceless.includes(qSpacelessUpper)) score += 60;
-      }
-
-      // 6. Evaluasi kecocokan token kata individu di seluruh 4 cell
-      let matchedTokens = 0;
-      for (const t of searchTerms) {
-        const tU = t.toUpperCase();
-        let tokenFound = false;
-        if (artUpper.includes(tU)) { score += 25; tokenFound = true; }
-        if (deptUpper.includes(tU)) { score += 25; tokenFound = true; }
-        if (brandUpper.includes(tU)) { score += 20; tokenFound = true; }
-        if (descUpper.includes(tU)) { score += 15; tokenFound = true; }
-        if (colorUpper.includes(tU)) { score += 15; tokenFound = true; }
-        if (tokenFound) matchedTokens++;
-      }
-      if (matchedTokens === searchTerms.length && searchTerms.length > 1) {
-        score += 40; // Bonus kelengkapan semua kata
-      }
-
-      // 7. Bonus ketersediaan stok fisik toko
-      if (p.stok > 0) score += 20;
-
-      // 8. Bonus kewajaran harga ritel (> Rp 5.000)
-      if (p.hargaNormal >= 5000) score += 15;
-
-      // 9. Penalti data dummy / harga tidak wajar jika tidak dicari
-      if (!isSearchingDummy) {
-        if (artUpper.includes("DUMMY") || descUpper.includes("DUMMY") || skuUpper.includes("DUMMY")) {
-          score -= 1000;
-        }
-        if (p.hargaNormal < 100) {
-          score -= 300;
-        }
-      }
-
-      return { product: p, score };
-    });
-
-    // Urutkan kandidat: Skor tertinggi -> Stok terbanyak -> Abjad nama
     scoredProducts.sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
       if (b.product.stok !== a.product.stok) return b.product.stok - a.product.stok;
-      return a.product.description.localeCompare(b.product.description);
+      return (a.product.description || "").localeCompare(b.product.description || "");
     });
 
     const rankedProducts = scoredProducts.map(sp => sp.product);
 
-    // Jika hanya 1 hasil atau skor produk teratas sangat dominan (exact match) dan halaman 1
+    // Jika hanya 1 hasil di halaman 1, tampilkan langsung kartu detailnya beserta seluruh varian
     if (rankedProducts.length === 1 && page === 1) {
-      const topProduct = await checkAndCleanPromo(rankedProducts[0]);
+      const topProduct = checkAndCleanPromo(rankedProducts[0]);
       const siblings = await getProductSiblings(topProduct);
-      return NextResponse.json({ data: topProduct, siblings });
+      return NextResponse.json({ data: topProduct, siblings, aiAssisted: aiExpandedTerms.length > 0 });
     }
 
     // Jika banyak hasil: Kembalikan daftar berpaginasi
     const total = rankedProducts.length;
     const pagedMatches = rankedProducts.slice(skip, skip + limit);
-    const cleanedMatches = await Promise.all(pagedMatches.map(checkAndCleanPromo));
+    const cleanedMatches = pagedMatches.map(checkAndCleanPromo);
 
     return NextResponse.json({
       data: cleanedMatches,
+      aiAssisted: aiExpandedTerms.length > 0,
       meta: {
         page,
         limit,

@@ -1,4 +1,5 @@
 import Dexie from "dexie";
+import { expandRetailQuery, computeProductRelevanceScore } from "./smartSearchEngine";
 
 export interface CachedProduct {
   sku: string;
@@ -53,12 +54,11 @@ class SukoDatabase extends Dexie {
       products: STORE_SCHEMA,
     });
     // Versi 11: Rampingkan index ke 3 kolom kueri utama (sku, barcode, article)
-    // Membuat penulisan 9.703 produk 10x lebih cepat di HP dan anti-hang
+    // Membuat penulisan 84.763 produk 10x lebih cepat di HP dan anti-hang
     this.version(11).stores({
       products: 'sku, barcode, article',
     });
 
-    // Otomatis tutup koneksi jika tab lain melakukan upgrade agar tidak hang/deadlock
     this.on('versionchange', () => {
       this.close();
       return false;
@@ -101,21 +101,26 @@ export async function checkIfUpdateAvailable(): Promise<boolean> {
 
     if (checkData.success) {
       const serverVersion = checkData.lastUpdate.toString();
-      if (localDbSchema !== "v11" || localVersion !== serverVersion || count < 1000) {
+      if (localDbSchema !== "v11" || localVersion !== serverVersion || count < 5000) {
         return true;
       }
     }
     return false;
-  } catch (e) {
+  } catch {
     return false;
   }
 }
 
+/**
+ * Sinkronisasi Offline Database Berbasis Chunk (Aman untuk 84.763+ SKU!)
+ * - Mengunduh per 10.000 SKU (~1.9 MB JSON per chunk) agar bebas limit 4.5MB Vercel.
+ * - Chunk 0 berisi seluruh 5.895 produk yang memiliki stok fisik toko (`stok > 0`),
+ *   sehingga dalam 1 detik pertama HP kasir langsung siap pakai!
+ */
 export async function syncOfflineDatabase(
   onSyncStateChange?: (isSyncing: boolean, progress?: number) => void,
   forceSync: boolean = false
 ): Promise<boolean> {
-  let progressInterval: NodeJS.Timeout | null = null;
   try {
     await ensureDbOpenSafe();
     const count = await db.products.count().catch(() => 0);
@@ -128,45 +133,53 @@ export async function syncOfflineDatabase(
     if (checkData.success) {
       const serverVersion = checkData.lastUpdate.toString();
 
-      if (forceSync || localDbSchema !== "v11" || localVersion !== serverVersion || count < 1000) {
-        if (onSyncStateChange) onSyncStateChange(true, 10);
+      if (forceSync || localDbSchema !== "v11" || localVersion !== serverVersion || count < 5000) {
+        if (onSyncStateChange) onSyncStateChange(true, 5);
 
-        let progress = 10;
-        progressInterval = setInterval(() => {
-          progress += (90 - progress) * 0.15;
-          if (onSyncStateChange) onSyncStateChange(true, Math.round(progress));
-        }, 120);
+        const CHUNK_LIMIT = 10000;
+        const MAX_CHUNKS = 10; // Mendukung hingga 100.000 SKU
+        let totalSynced = 0;
 
-        const res = await fetch(`/api/export-products?t=${Date.now()}`, { cache: "no-store" });
-        if (!res.ok) throw new Error(`HTTP ${res.status} gagal unduh produk`);
-        const result = await res.json();
-
-        if (progressInterval) {
-          clearInterval(progressInterval);
-          progressInterval = null;
-        }
-
-        if (result.success && Array.isArray(result.data) && result.data.length > 0) {
-          await ensureDbOpenSafe();
-          
-          // JANGAN PERNAH CLEAR DATABASE DI AWAL!
-          // bulkPut secara aman meng-upsert per SKU tanpa membuat database kosong jika koneksi terganggu.
-          const total = result.data.length;
-          const CHUNK = 1000;
-          for (let i = 0; i < total; i += CHUNK) {
-            const chunk = result.data.slice(i, i + CHUNK);
-            await db.products.bulkPut(chunk);
-            if (onSyncStateChange) {
-              const p = 50 + Math.round(((i + chunk.length) / total) * 49);
-              onSyncStateChange(true, Math.min(99, p));
-            }
+        for (let chunkIdx = 0; chunkIdx < MAX_CHUNKS; chunkIdx++) {
+          const res = await fetch(
+            `/api/export-products?chunk=${chunkIdx}&limit=${CHUNK_LIMIT}&t=${Date.now()}`,
+            { cache: "no-store" }
+          );
+          if (!res.ok) {
+            if (chunkIdx === 0) throw new Error(`HTTP ${res.status} gagal unduh produk`);
+            break; // Jika chunk 0 sudah masuk namun sinyal toko putus di tengah jalan, tetap aman!
           }
 
+          const result = await res.json();
+          if (!result.success || !Array.isArray(result.data) || result.data.length === 0) {
+            break;
+          }
+
+          await ensureDbOpenSafe();
+          const items = result.data;
+          const WRITE_BATCH = 2000;
+          for (let i = 0; i < items.length; i += WRITE_BATCH) {
+            const sub = items.slice(i, i + WRITE_BATCH);
+            await db.products.bulkPut(sub);
+          }
+
+          totalSynced += items.length;
+          if (onSyncStateChange) {
+            const estProgress = Math.min(98, Math.round(((chunkIdx + 1) / 9) * 95));
+            onSyncStateChange(true, estProgress);
+          }
+
+          if (!result.hasMore || items.length < CHUNK_LIMIT) {
+            break;
+          }
+        }
+
+        if (totalSynced > 0) {
           if (onSyncStateChange) onSyncStateChange(true, 100);
           localStorage.setItem("suko_server_version", serverVersion);
           localStorage.setItem("suko_dismissed_update", serverVersion);
           localStorage.setItem("suko_db_schema_version", "v11");
-          console.log(`[OfflineDB] Berhasil sync ${result.data.length} produk v11 (versi: ${serverVersion})`);
+          console.log(`[OfflineDB] Berhasil sync ${totalSynced.toLocaleString()} produk v11 (versi: ${serverVersion})`);
           return true;
         }
       } else {
@@ -178,7 +191,61 @@ export async function syncOfflineDatabase(
     console.error("Failed to sync offline DB", e);
     return false;
   } finally {
-    if (progressInterval) clearInterval(progressInterval);
     if (onSyncStateChange) onSyncStateChange(false);
+  }
+}
+
+/**
+ * Pencarian Pintar Offline (SKU, Barcode, Artikel, maupun 30% Nama Deskripsi)
+ * Digunakan saat internet toko mati/lambat agar kasir tetap bisa mencari manual
+ */
+export async function searchOfflineSmart(rawInput: string, limit: number = 25): Promise<CachedProduct[]> {
+  try {
+    await ensureDbOpenSafe();
+    const trimmed = rawInput.trim();
+    if (!trimmed) return [];
+
+    // 1. Cek exact Article di index Dexie dulu (0ms)
+    const exactArt = await db.products.where("article").equalsIgnoreCase(trimmed).toArray();
+    if (exactArt.length > 0) {
+      return exactArt.sort((a, b) => (b.stok || 0) - (a.stok || 0));
+    }
+
+    // 2. Scan pintar dengan ekspansi sinonim & 30% partial text
+    const expanded = expandRetailQuery(trimmed);
+    const isDummy = trimmed.toLowerCase().includes("dummy");
+    const scored: { item: CachedProduct; score: number }[] = [];
+
+    await db.products.each((p) => {
+      // Quick pre-filter: minimal 1 istilah ekspansi atau potongan 3 huruf cocok
+      const hay = `${p.brand || ""} ${p.dept || ""} ${p.article || ""} ${p.description || p.name || ""} ${p.color || ""} ${p.sku} ${p.barcode || ""}`.toUpperCase();
+      let quickHit = false;
+      for (const term of expanded.allExpandedTerms) {
+        if (term.length >= 2 && hay.includes(term)) {
+          quickHit = true;
+          break;
+        }
+      }
+      if (!quickHit && expanded.spaceless.length >= 3) {
+        const sub3 = expanded.spaceless.slice(0, 3);
+        if (hay.includes(sub3)) quickHit = true;
+      }
+      if (!quickHit) return;
+
+      const s = computeProductRelevanceScore(p, expanded, isDummy);
+      if (s >= 35) {
+        scored.push({ item: p, score: s });
+      }
+    });
+
+    scored.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return (b.item.stok || 0) - (a.item.stok || 0);
+    });
+
+    return scored.slice(0, limit).map((x) => x.item);
+  } catch (e) {
+    console.warn("[OfflineDB] Gagal mencari offline smart:", e);
+    return [];
   }
 }

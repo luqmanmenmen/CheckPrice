@@ -907,7 +907,46 @@ export default function Home() {
       }
     } catch {
       if (searchCounterRef.current === currentSearch && !product) {
-        setError("Terjadi kesalahan jaringan.");
+        try {
+          const { searchOfflineSmart } = await import('@/lib/offlineDb');
+          const offlineMatches = await searchOfflineSmart(trimmed, 20);
+          if (offlineMatches && offlineMatches.length > 0) {
+            const mappedList: ProductData[] = offlineMatches.map((m) => ({
+              id: 0,
+              sku: m.sku,
+              barcode: m.barcode || null,
+              article: m.article || null,
+              description: m.description || m.name,
+              acara: m.acara || null,
+              fromDate: null,
+              toDate: m.toDate || null,
+              hargaNormal: m.hargaNormal,
+              hargaPromo: m.hargaPromo || null,
+              diskon: m.diskon || null,
+              discountType: m.discountType || null,
+              brand: m.brand || null,
+              dept: m.dept || null,
+              color: m.color || null,
+              size: m.size || null,
+              stok: m.stok ?? 0,
+              promoFileName: null,
+              imageUrl: m.imageUrl || null,
+              images: m.images && m.images.length > 0 ? m.images : (m.imageUrl ? [m.imageUrl] : []),
+            }));
+            if (mappedList.length === 1) {
+              setProduct(mappedList[0]);
+              setSiblings(mappedList);
+              setProductsList([]);
+            } else {
+              setProductsList(mappedList);
+              setCurrentPage(1);
+              setTotalPages(1);
+            }
+            setError("");
+            return;
+          }
+        } catch {}
+        setError("Koneksi jaringan lambat & produk belum ditemukan di memori lokal.");
       }
     } finally {
       if (searchCounterRef.current === currentSearch) {
@@ -1446,7 +1485,13 @@ export default function Home() {
         <>
           {/* Search */}
           <div className="pt-2 flex flex-col gap-3 animate-in fade-in slide-in-from-bottom-4 duration-300">
-        <h2 className="text-sm font-bold text-slate-500 uppercase mb-2">Cari Info Produk</h2>
+        <div className="flex items-center justify-between mb-1">
+          <h2 className="text-sm font-bold text-slate-500 uppercase">Cari Info Produk</h2>
+          <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200/80">
+            <Sparkles className="w-3 h-3 text-indigo-600" />
+            AI Smart Search (SKU • Barcode • Artikel • 30% Teks)
+          </span>
+        </div>
         
         <div className="flex gap-2 items-center">
           <div className="relative flex-1">
@@ -1454,7 +1499,7 @@ export default function Home() {
             <input
               ref={inputRef}
               type="text"
-              placeholder="Cari Produk..."
+              placeholder="Ketik SKU, Barcode, Artikel, atau 30% Nama Produk..."
               className="w-full pl-10 pr-20 py-3.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all text-sm font-mono"
               value={manualInput}
               onChange={(e) => setManualInput(e.target.value)}

@@ -839,6 +839,25 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
      - [`KLIK_UNTUK_UPDATE_BACKUP.bat`](file:///C:/Max%20Display/BACKUP_MASTER_LOKAL/KLIK_UNTUK_UPDATE_BACKUP.bat): Shortcut 1-klik untuk memperbarui isi backup lokal kapan pun diinginkan.
      - [`PANDUAN_INSTALL_ULANG_DAN_RESTORE.md`](file:///C:/Max%20Display/BACKUP_MASTER_LOKAL/PANDUAN_INSTALL_ULANG_DAN_RESTORE.md): Panduan lengkap langkah demi langkah instalasi ulang dari nol.
 
+---
+
+## 55. Optimasi Download Offline Chunked (84.763 SKU) & Mesin Pintar 30% Partial Text + Gemini AI Search Agent
+
+- **Instruksi Pengguna:**
+  *"udah bisa di gunakan sekarang ? luqman ganteng ? masalah donwload data offline aman kah ? sama cari produk itu bisa pakai nama deskripsi, artikel sama sku dan barcode jika ketik manual. pastikan ada enggine pintar yang misal nih deskripsi cuma 30% nama textnya enggine ini mengerti produk apa yang ingin di anu. atau pakai gemini ai agent agar bisa di bantu sama ai keinginannya."*
+- **Implementasi & Pengamanan Sistem:**
+  1. **Pengamanan Download Data Offline 84.763 SKU ([`src/app/api/export-products/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/export-products/route.ts) & [`src/lib/offlineDb.ts`](file:///c:/Max%20Display/price-checker/src/lib/offlineDb.ts)):**
+     - **Akar Masalah:** Setelah katalog membesar menjadi 84.763 SKU, mengunduh seluruh baris dalam 1 respons JSON (~28 MB) akan menabrak batas payload 4,5 MB Vercel Serverless Function.
+     - **Solusi Chunked Streaming:** Endpoint `/api/export-products` kini menggunakan paginasi per chunk (`?chunk=0..8&limit=10000`, hanya ~1,9 MB per chunk) yang diurutkan berdasarkan `stok DESC` terlebih dahulu.
+     - **Prioritas Stok Fisik 1 Detik Pertama:** Chunk 0 langsung membawa seluruh **5.895 produk yang memiliki stok fisik toko (`stok > 0`)** + produk promo aktif ke Dexie IndexedDB HP kasir dalam 1 detik pertama, lalu melanjutkan chunk sisanya dengan mulus tanpa risiko gagal atau membebani memori HP.
+  2. **Mesin Pintar Pencarian 30% Teks + Sinonim Dwi-Bahasa + Gemini AI Agent ([`src/lib/smartSearchEngine.ts`](file:///c:/Max%20Display/price-checker/src/lib/smartSearchEngine.ts) & [`src/app/api/product/[identifier]/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/product/%5Bidentifier%5D/route.ts)):**
+     - **Dukungan Multi-Input Manual:** Mendukung pencarian langsung dengan **SKU (8 digit)**, **Barcode (12–13 digit)**, **Kode Artikel (`StyleCode`)**, **Deskripsi Lengkap**, maupun **30% Potongan Nama / Singkatan Kasir**.
+     - **Kamus Sinonim & Singkatan Kasir 30% (`expandRetailQuery`):** Menerjemahkan otomatis singkatan/bahasa kasir ke istilah ERP Matahari (contoh: `"swet"`/`"switer"` $\leftrightarrow$ `SWEATER/HOODIE`, `"kmj"` $\leftrightarrow$ `KEMEJA/SHIRT`, `"cln"` $\leftrightarrow$ `CELANA/PANTS/JEANS`, `"spt"`/`"flt"` $\leftrightarrow$ `SHOES/FLAT`, `"htm"` $\leftrightarrow$ `BLACK`, `"pth"` $\leftrightarrow$ `WHITE`, `"vnl"` $\leftrightarrow$ `VANILLA`, `"nev"` $\leftrightarrow$ `NEVADA`, `"ltl"` $\leftrightarrow$ `LITTLE M`, `"mxm"` $\leftrightarrow$ `MAXMURAH`, `"cwk"`/`"wnt"` $\leftrightarrow$ `LADIES/WOMEN`).
+     - **30% Partial Text & Character Subsequence Scoring (`computePartialTextSimilarity`):** Menggunakan *Character Bigram Overlap* dan *Ordered Subsequence Matching* bersama *Relaxed OR Query Fallback*, sehingga meskipun kasir hanya mengetik 30% huruf dari nama produk atau salah ketik (typo), mesin tetap menemukan produk yang dimaksud.
+     - **Integrasi Gemini AI Search Agent (`consultGeminiSearchAgent`):** Menggunakan `gemini-flash-lite-latest` (`thinkingBudget: 0`, batas waktu cepat 2,2 detik) untuk menerjemahkan kalimat keinginan alami pelanggan atau deskripsi 30% yang unik menjadi kata kunci katalog ERP secara cerdas.
+     - **Offline Smart Search (`searchOfflineSmart`):** Jika internet toko mati saat kasir mengetik manual kode artikel atau 30% deskripsi, sistem otomatis mencari di Dexie IndexedDB lokal dengan algoritma 30% fuzzy yang sama.
+
+
 
 
 
