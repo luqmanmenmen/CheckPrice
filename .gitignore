@@ -49,3 +49,5 @@ __pycache__/
 .venv/
 temp_*
 *.csv
+scratch/
+
