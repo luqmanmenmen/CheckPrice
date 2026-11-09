@@ -1,5 +1,5 @@
-export const APP_VERSION = "2.5.6";
-export const APP_BUILD_ID = "20261020-v2.5.6-responsive-sales-cards-ui-fix";
+export const APP_VERSION = "2.6.0";
+export const APP_BUILD_ID = "20261109-v2.6.0-instant-offline-scan-camera-fix";
 
 export interface VersionInfo {
   version: string;

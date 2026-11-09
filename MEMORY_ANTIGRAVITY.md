@@ -899,3 +899,21 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
        - Menjalankan [`python-engine/run_promo_sync.py`](file:///c:/Max%20Display/price-checker/python-engine/run_promo_sync.py) + `parser.py` + Gemini AI di GitHub Actions untuk membedah seluruh file Excel promo terbaru dari email (`PROMO/` di Supabase Storage), sambil melindungi `imageUrl`, `images[]`, `barcode`, dan `stok`.
   3. **Eliminasi 100% Eksekusi Berat di Vercel:**
      - Endpoint [`/api/admin/trigger/github-dispatch`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/github-dispatch/route.ts), [`/api/admin/trigger/mds-bisa`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/mds-bisa/route.ts), [`/api/admin/trigger/photos`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/photos/route.ts), dan [`/api/upload/sync-latest-blob`](file:///c:/Max%20Display/price-checker/src/app/api/upload/sync-latest-blob/route.ts) telah direkonstruksi sehingga **tidak ada satu pun proses scraping, loop stok, maupun bedah Excel promo yang berjalan di Vercel**. Semuanya meneruskan sinyal `workflow_dispatch` dalam 0,3 detik ke GitHub Actions Python Runner.
+
+
+---
+
+## 58. Perbaikan Cache "Update Sekarang" (Langsung Siap Scan 84.763 SKU Tanpa Refresh) & Mesin Kamera Native Anti-Black-Page
+
+- **Instruksi Pengguna:**
+  1. *"ini masalahnya sepertinya update sekarang sepertinya. abis donwload terus scan itu harus di refresh websnya hmmm coba kamu lihat dulu jangan rombak" analisis mungkin ini bukan systemnya yang error tapi cache nya"*
+  2. *"gaskeun intinya kalau udah donwload itu udah bisa lah discan dopnwlkoad db offline maksudku. terus ada keluhan anak" kamera tidak bisa nyala alias black page ga maunyala pastikan kameranyala ya"*
+- **Analisis & Implementasi Solusi:**
+  1. **Perbaikan Cache "Update Sekarang" & Jaminan 84.763 SKU Offline (`v2.6.0` / Schema `v12`):**
+     - [`src/lib/version.ts`](file:///c:/Max%20Display/price-checker/src/lib/version.ts): Menaikkan `APP_VERSION` dari `"2.5.6"` ke **`"2.6.0"`** agar seluruh perangkat karyawan otomatis membuang bundle cache lama.
+     - [`src/lib/offlineDb.ts`](file:///c:/Max%20Display/price-checker/src/lib/offlineDb.ts): Mengubah batas cek kelengkapan database offline dari `count < 5000` menjadi `count < 80000` (skema `"v12"`) serta menambahkan auto-retry 3x per chunk, sehingga produk baru dengan `stok: 0` (seperti Jaket Crop SKU `35229771` / Barcode `2340003318169` di Chunk 3) dijamin selalu terunduh utuh ke Dexie lokal.
+     - [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx): Seusai `syncOfflineDatabase` pada `handleManualSync()`, sistem otomatis membersihkan `sessionCacheRef.current.clear()`, membuka ulang koneksi Dexie (`ensureDbOpenSafe()`), menghapus Cache Storage/Service Worker lama, dan memperbaiki urutan `checkAppVersion()`, sehingga **begitu download selesai langsung siap di-scan detik itu juga (0ms) tanpa perlu refresh halaman manual**.
+  2. **Mesin Kamera Native `<video>` 4-Tier Fallback Anti-Black-Page ([`src/components/TextScanner.tsx`](file:///c:/Max%20Display/price-checker/src/components/TextScanner.tsx)):**
+     - Mengganti injeksi video internal `Html5Qrcode.start()` yang kerap mengalami *height collapse* / *deadlock* (`black page`) di HP Android/iOS dengan elemen React `<video ref={videoRef} autoPlay playsInline muted />` langsung berdimensi penuh (`absolute inset-0 w-full h-full object-cover`).
+     - Menerapkan **4-Tier Progressive `getUserMedia` Fallback**: (1) HD `facingMode` ideal, (2) Standard `facingMode` tanpa syarat resolusi, (3) Eksplisit `deviceId` kamera belakang via `enumerateDevices()`, dan (4) Universal `{ video: true }`.
+     - Dilengkapi **Watchdog 2 Detik Anti-Pause**, pemulihan otomatis saat buka kembali dari *minimize* (`visibilitychange`), tombol **🔄 Segarkan Kamera**, pelepasan penuh `MediaStreamTrack` saat ditutup, serta validasi **Check-Digit GS1 Modulo-10 & Anti-Blur** agar tidak salah baca saat lensa sedang fokus.

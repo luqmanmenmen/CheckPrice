@@ -350,14 +350,16 @@ export default function Home() {
     )
   );
 
-  // Download awal otomatis hanya jika database lokal masih kosong (produk < 1000)
+  // Download awal otomatis jika database lokal belum lengkap (< 80.000 SKU dari total 84.763 SKU)
   useEffect(() => {
     let isMounted = true;
     const initialSyncIfEmpty = async () => {
       try {
-        const { syncOfflineDatabase, db } = await import('@/lib/offlineDb');
-        const count = await db.products.count();
-        if (count < 1000) {
+        const { syncOfflineDatabase, db, ensureDbOpenSafe } = await import('@/lib/offlineDb');
+        await ensureDbOpenSafe();
+        const count = await db.products.count().catch(() => 0);
+        const schemaVer = localStorage.getItem("suko_db_schema_version");
+        if (count < 80000 || schemaVer !== "v12") {
           if (isMounted) setIsSyncing(true);
           await syncOfflineDatabase((syncing, prog) => {
             if (isMounted) {
@@ -365,6 +367,8 @@ export default function Home() {
               if (prog !== undefined) setSyncProgress(prog);
             }
           }, true);
+          sessionCacheRef.current.clear();
+          await ensureDbOpenSafe();
           if (serverVersion) {
             localStorage.setItem("suko_server_version", serverVersion);
             setLocalVersion(serverVersion);
@@ -396,35 +400,55 @@ export default function Home() {
     setSyncProgress(0);
     showToast("Memperbarui data & sistem...", "success");
     try {
-      const { syncOfflineDatabase } = await import('@/lib/offlineDb');
+      const { syncOfflineDatabase, ensureDbOpenSafe, db } = await import('@/lib/offlineDb');
       await syncOfflineDatabase((syncing, prog) => {
         setIsSyncing(syncing);
         if (prog !== undefined) setSyncProgress(prog);
       }, true);
 
+      // Reset penuh RAM cache & segarkan koneksi Dexie agar langsung siap di-scan tanpa refresh manual!
+      sessionCacheRef.current.clear();
+      await ensureDbOpenSafe();
+      const totalOffline = await db.products.count().catch(() => 0);
+
+      // Bersihkan Cache Storage & Service Worker lama di background
+      if (typeof window !== "undefined") {
+        try {
+          if ('serviceWorker' in navigator) {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            for (const r of regs) await r.unregister();
+          }
+          if ('caches' in window) {
+            const keys = await caches.keys();
+            for (const k of keys) await caches.delete(k);
+          }
+        } catch {}
+      }
+
+      // Cek apakah ada update versi kode UI/UX SEBELUM menimpa suko_client_version
+      const { checkAppVersion, forceAppUpdate, APP_VERSION } = await import('@/lib/version');
+      const verCheck = await checkAppVersion();
+
       const targetVersion = serverVersion || Date.now().toString();
       localStorage.setItem("suko_server_version", targetVersion);
       localStorage.setItem("suko_dismissed_update", targetVersion);
-      localStorage.setItem("suko_client_version", "2.5.6");
+      localStorage.setItem("suko_client_version", APP_VERSION);
+      localStorage.removeItem("suko_update_detected_at");
+
       setLocalVersion(targetVersion);
       setDismissedVersion(targetVersion);
       setHasAppCodeUpdate(false);
       mutateLastUpdate();
 
-      // Hapus tracker batas toleransi 1 hari setelah berhasil update
-      if (typeof window !== "undefined") {
-        localStorage.removeItem("suko_update_detected_at");
-      }
-
-      // Jika ada update versi kode UI/UX, perbarui juga bundle cache aplikasi
-      const { checkAppVersion, forceAppUpdate } = await import('@/lib/version');
-      const verCheck = await checkAppVersion();
       if (verCheck.hasUpdate) {
         await forceAppUpdate({ clearOfflineData: false });
         return;
       }
 
-      showToast("Semua data & sistem berhasil diperbarui!", "success");
+      showToast(
+        `Database offline (${totalOffline.toLocaleString('id-ID')} SKU) siap langsung di-scan!`,
+        "success"
+      );
     } catch (e) {
       showToast("Gagal update data offline", "error");
     } finally {
@@ -781,8 +805,9 @@ export default function Home() {
     setLoading(true);
 
     try {
-      // 1. OFFLINE-FIRST: Cek data di database lokal (Dexie) dulu
-      const { db } = await import('@/lib/offlineDb');
+      // 1. OFFLINE-FIRST: Pastikan Dexie terbuka & cek data di database lokal (Dexie) dulu
+      const { db, ensureDbOpenSafe } = await import('@/lib/offlineDb');
+      await ensureDbOpenSafe();
       let localData = null;
       
       // Jika halaman 1 (pencarian awal), coba cari berdasarkan SKU persis atau Barcode di memori HP
@@ -799,7 +824,7 @@ export default function Home() {
         }
       }
 
-      // Jika data ditemukan di HP, langsung tampilkan (sangat cepat & tanpa internet)
+      // Jika data ditemukan di HP, langsung tampilkan (0ms instan & tanpa internet!)
       if (localData) {
         if (searchCounterRef.current !== currentSearch) return;
         
@@ -859,19 +884,27 @@ export default function Home() {
         }
         setSiblings(currentSiblings);
         // Daftarkan SEMUA varian ke memory cache agar scan berikutnya 0ms
+        sessionCacheRef.current.set(trimmed.toLowerCase(), { product: localProduct, siblings: currentSiblings });
         currentSiblings.forEach((s) => {
           if (s.sku) sessionCacheRef.current.set(s.sku.toLowerCase(), { product: s, siblings: currentSiblings });
           if (s.barcode) sessionCacheRef.current.set(s.barcode.toLowerCase(), { product: s, siblings: currentSiblings });
         });
 
         setProductsList([]);
+        setLoading(false);
         if (isScanning) setIsScanning(false);
       }
 
-      // 2. Minta data terbaru/live ke server
-      const res = await fetch(`/api/product/${encodeURIComponent(trimmed)}?page=${page}`, {
-        cache: 'no-store'
-      });
+      // 2. Minta data terbaru/live ke server (di background jika localData sudah tampil)
+      let res: Response | null = null;
+      try {
+        res = await fetch(`/api/product/${encodeURIComponent(trimmed)}?page=${page}`, {
+          cache: 'no-store'
+        });
+      } catch (fetchErr) {
+        if (localData) return; // Jika sudah tampil dari Dexie lokal, abaikan error sinyal!
+        throw fetchErr;
+      }
       
       if (searchCounterRef.current !== currentSearch) return;
 
@@ -1688,8 +1721,8 @@ export default function Home() {
               <X className="w-6 h-6 text-white" />
             </button>
           </div>
-          <div className="flex-1 relative overflow-hidden bg-black flex items-center justify-center">
-            <div className="w-full h-full max-w-2xl mx-auto flex flex-col justify-center px-4">
+          <div className="flex-1 w-full h-full relative overflow-hidden bg-black">
+            <div className="absolute inset-0 w-full h-full max-w-2xl mx-auto">
               <TextScanner onScanResult={handleTextScanSuccess} />
             </div>
           </div>

@@ -101,7 +101,7 @@ export async function checkIfUpdateAvailable(): Promise<boolean> {
 
     if (checkData.success) {
       const serverVersion = checkData.lastUpdate.toString();
-      if (localDbSchema !== "v11" || localVersion !== serverVersion || count < 5000) {
+      if (localDbSchema !== "v12" || localVersion !== serverVersion || count < 80000) {
         return true;
       }
     }
@@ -116,6 +116,8 @@ export async function checkIfUpdateAvailable(): Promise<boolean> {
  * - Mengunduh per 10.000 SKU (~1.9 MB JSON per chunk) agar bebas limit 4.5MB Vercel.
  * - Chunk 0 berisi seluruh 5.895 produk yang memiliki stok fisik toko (`stok > 0`),
  *   sehingga dalam 1 detik pertama HP kasir langsung siap pakai!
+ * - Dilengkapi auto-retry 3x per chunk & verifikasi seluruh chunk selesai (84.763 SKU)
+ *   sehingga langsung siap di-scan instan tanpa perlu refresh web.
  */
 export async function syncOfflineDatabase(
   onSyncStateChange?: (isSyncing: boolean, progress?: number) => void,
@@ -133,31 +135,49 @@ export async function syncOfflineDatabase(
     if (checkData.success) {
       const serverVersion = checkData.lastUpdate.toString();
 
-      if (forceSync || localDbSchema !== "v11" || localVersion !== serverVersion || count < 5000) {
+      if (forceSync || localDbSchema !== "v12" || localVersion !== serverVersion || count < 80000) {
         if (onSyncStateChange) onSyncStateChange(true, 5);
 
         const CHUNK_LIMIT = 10000;
-        const MAX_CHUNKS = 10; // Mendukung hingga 100.000 SKU
+        const MAX_CHUNKS = 12; // Mendukung hingga 120.000 SKU
         let totalSynced = 0;
+        let completedAllChunks = false;
 
         for (let chunkIdx = 0; chunkIdx < MAX_CHUNKS; chunkIdx++) {
-          const res = await fetch(
-            `/api/export-products?chunk=${chunkIdx}&limit=${CHUNK_LIMIT}&t=${Date.now()}`,
-            { cache: "no-store" }
-          );
-          if (!res.ok) {
-            if (chunkIdx === 0) throw new Error(`HTTP ${res.status} gagal unduh produk`);
-            break; // Jika chunk 0 sudah masuk namun sinyal toko putus di tengah jalan, tetap aman!
+          let result: any = null;
+          let lastErr: any = null;
+
+          // Auto-retry hingga 3x per chunk jika jaringan Wi-Fi toko sempat kedip
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+              const res = await fetch(
+                `/api/export-products?chunk=${chunkIdx}&limit=${CHUNK_LIMIT}&t=${Date.now()}`,
+                { cache: "no-store" }
+              );
+              if (res.ok) {
+                result = await res.json();
+                break;
+              }
+              lastErr = new Error(`HTTP ${res.status}`);
+            } catch (err) {
+              lastErr = err;
+            }
+            await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
           }
 
-          const result = await res.json();
+          if (!result) {
+            if (chunkIdx === 0) throw lastErr || new Error("Gagal unduh chunk 0");
+            break;
+          }
+
           if (!result.success || !Array.isArray(result.data) || result.data.length === 0) {
+            completedAllChunks = true;
             break;
           }
 
           await ensureDbOpenSafe();
           const items = result.data;
-          const WRITE_BATCH = 2000;
+          const WRITE_BATCH = 2500;
           for (let i = 0; i < items.length; i += WRITE_BATCH) {
             const sub = items.slice(i, i + WRITE_BATCH);
             await db.products.bulkPut(sub);
@@ -170,16 +190,21 @@ export async function syncOfflineDatabase(
           }
 
           if (!result.hasMore || items.length < CHUNK_LIMIT) {
+            completedAllChunks = true;
             break;
           }
         }
 
         if (totalSynced > 0) {
+          await ensureDbOpenSafe();
+          const finalCount = await db.products.count().catch(() => totalSynced);
           if (onSyncStateChange) onSyncStateChange(true, 100);
-          localStorage.setItem("suko_server_version", serverVersion);
-          localStorage.setItem("suko_dismissed_update", serverVersion);
-          localStorage.setItem("suko_db_schema_version", "v11");
-          console.log(`[OfflineDB] Berhasil sync ${totalSynced.toLocaleString()} produk v11 (versi: ${serverVersion})`);
+          if (completedAllChunks || finalCount >= 80000) {
+            localStorage.setItem("suko_server_version", serverVersion);
+            localStorage.setItem("suko_dismissed_update", serverVersion);
+            localStorage.setItem("suko_db_schema_version", "v12");
+          }
+          console.log(`[OfflineDB] Berhasil sync ${totalSynced.toLocaleString()} produk (Total DB: ${finalCount.toLocaleString()} SKU, versi: ${serverVersion})`);
           return true;
         }
       } else {

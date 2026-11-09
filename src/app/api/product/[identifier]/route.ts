@@ -101,6 +101,58 @@ export async function GET(
       return NextResponse.json({ data: directProduct, siblings });
     }
 
+    // JALUR KILAT KODE ANGKA MURNI (SKU 8 digit / Barcode 12-14 digit):
+    // Hindari full-table ILIKE ke kolom teks (brand/dept/color/description) agar respons tetap < 200ms!
+    if (/^\d{8,14}$/.test(rawInput)) {
+      const numericMatches = await db.product.findMany({
+        where: {
+          OR: [
+            { sku: { contains: rawInput } },
+            { barcode: { contains: rawInput } },
+            { article: { contains: rawInput, mode: 'insensitive' as const } }
+          ]
+        },
+        orderBy: [{ stok: 'desc' }],
+        take: 20
+      });
+
+      if (numericMatches.length === 1) {
+        const top = checkAndCleanPromo(numericMatches[0]);
+        const siblings = await getProductSiblings(top);
+        return NextResponse.json({ data: top, siblings });
+      }
+      if (numericMatches.length > 1) {
+        return NextResponse.json({
+          data: numericMatches.map(checkAndCleanPromo),
+          meta: { page: 1, limit: 20, total: numericMatches.length, totalPages: 1 }
+        });
+      }
+
+      // Coba live MDS BISA StoreHub dengan batas waktu ketat 1.8 detik agar tidak lemot saat server toko tutup
+      try {
+        const liveRes: any = await Promise.race([
+          checkSingleItemStock(rawInput),
+          new Promise((resolve) => setTimeout(() => resolve({ success: false, timeout: true }), 1800))
+        ]);
+        if (liveRes?.success && liveRes?.sku) {
+          let fetched = await db.product.findUnique({ where: { sku: liveRes.sku } });
+          if (fetched) {
+            fetched = checkAndCleanPromo(fetched);
+            const siblings = await getProductSiblings(fetched);
+            return NextResponse.json({ data: fetched, siblings, source: 'MDS_BISA_LIVE' });
+          }
+        }
+      } catch {}
+
+      return NextResponse.json(
+        {
+          error: `Produk tidak ditemukan untuk: "${rawInput}"`,
+          hint: "Pastikan garis barcode fokus di tengah kotak kamera atau ketik 8 digit SKU / Kode Artikel."
+        },
+        { status: 404 }
+      );
+    }
+
     // ─────────────────────────────────────────────────────────────
     //  TAHAP 2: EKSPANSI PINTAR (30% PARTIAL TEXT + SINONIM KASIR)
     // ─────────────────────────────────────────────────────────────
