@@ -1,5 +1,11 @@
 import Dexie from "dexie";
-import { expandRetailQuery, computeProductRelevanceScore, groupProductsByArticle } from "./smartSearchEngine";
+import {
+  expandRetailQuery,
+  computeProductRelevanceScore,
+  groupProductsByArticle,
+  getProductArticleGroupKey,
+  isIgnoredCatalogProduct,
+} from "./smartSearchEngine";
 import {
   BrandGroupKey,
   CategoryKey,
@@ -7,12 +13,14 @@ import {
   ResolvedCategoryKey,
   SubBrandCount,
   BrandShowcaseSection,
+  CategoryShowcaseSection,
   classifyBrandGroup,
   classifyProductCategory,
   getNormalizedSubBrand,
   createEmptyCategoryCounts,
   sortSubBrandStats,
-  buildBrandShowcaseSections,
+  paginateBrandSections,
+  paginateCategorySections,
   compareBrowseItems,
 } from "./productTaxonomy";
 
@@ -178,8 +186,7 @@ export async function rebuildModelsIndexFromProducts(): Promise<CachedArticleMod
 
     const grouped = groupProductsByArticle(cleanedProducts);
     const models: CachedArticleModel[] = grouped.map((g) => {
-      const rawArt = String(g.article || "").trim().toUpperCase();
-      const key = rawArt && !["0", "-", "PRODUK BARU"].includes(rawArt) ? `A::${rawArt}` : `S::${g.sku}`;
+      const key = getProductArticleGroupKey(g);
       const row: CachedArticleModel = {
         key,
         sku: g.sku,
@@ -226,7 +233,7 @@ export async function rebuildModelsIndexFromProducts(): Promise<CachedArticleMod
   }
 }
 
-const MODELS_TAXONOMY_VERSION = "v14_muku_brand_sections";
+const MODELS_TAXONOMY_VERSION = "v15_brand_pages_dedup";
 
 export async function ensureModelsIndexReady(): Promise<CachedArticleModel[] | null> {
   if (memoryModelsCache && memoryModelsCache.length >= 1000) {
@@ -248,6 +255,37 @@ export async function ensureModelsIndexReady(): Promise<CachedArticleModel[] | n
         }
       }
 
+      // 1. Prioritaskan ambil index pre-computed langsung dari Python (`CatalogArticle` via /api/catalog-models) ~0.8 detik
+      try {
+        const fetchedModels: CachedArticleModel[] = [];
+        for (let chunk = 0; chunk < 4; chunk++) {
+          const res = await fetch(`/api/catalog-models?chunk=${chunk}&limit=9000&t=${Date.now()}`, {
+            cache: "no-store",
+          });
+          if (!res.ok) break;
+          const json = await res.json();
+          if (!json?.success || !Array.isArray(json.data) || json.data.length === 0) break;
+          for (const row of json.data) {
+            fetchedModels.push(sanitizeAndIndexModel(row as CachedArticleModel));
+          }
+          if (json.data.length < 9000) break;
+        }
+        if (fetchedModels.length >= 1000) {
+          await db.models.clear();
+          const WRITE_BATCH = 2500;
+          for (let i = 0; i < fetchedModels.length; i += WRITE_BATCH) {
+            const slice = fetchedModels.slice(i, i + WRITE_BATCH).map(({ _searchHay, ...rest }) => rest);
+            await db.models.bulkPut(slice as CachedArticleModel[]);
+          }
+          memoryModelsCache = fetchedModels;
+          if (typeof window !== "undefined") {
+            localStorage.setItem("suko_models_taxonomy_ver", MODELS_TAXONOMY_VERSION);
+          }
+          return memoryModelsCache;
+        }
+      } catch {}
+
+      // 2. Fallback lokal dari db.products jika sedang offline
       const prodCount = await db.products.count().catch(() => 0);
       if (prodCount >= 1000) {
         const rebuilt = await rebuildModelsIndexFromProducts();
@@ -461,6 +499,7 @@ export async function syncOfflineDatabase(
  */
 export type LocalSubBrandCount = SubBrandCount;
 export type LocalBrandShowcaseSection = BrandShowcaseSection<CachedArticleModel>;
+export type LocalCategoryShowcaseSection = CategoryShowcaseSection<CachedArticleModel>;
 
 export interface LocalQueryResponse {
   data: CachedArticleModel[];
@@ -473,11 +512,13 @@ export interface LocalQueryResponse {
   categoryCounts: Record<CategoryKey, number>;
   subBrandCounts?: LocalSubBrandCount[];
   brandShowcaseSections?: LocalBrandShowcaseSection[];
+  categoryShowcaseSections?: LocalCategoryShowcaseSection[];
+  sectionMode?: "BRAND_PAGES" | "CATEGORY_PAGES" | "LIST";
 }
 
 /**
- * Mesin kueri instan ~5-10ms di memori HP atas 19.881 model per artikel (~97.546 SKU).
- * Mengembalikan seluruh paginasi, hitungan Brand (SUKO/Mu+Ku/ZES), & Kategori tanpa menunggu jaringan!
+ * Mesin kueri instan ~5-10ms di memori HP atas 17k+ model per artikel (~97.546 SKU).
+ * Mengembalikan paginasi per Brand (untuk Mu+Ku), per Kategori (untuk SUKO/ZES), & filter tanpa delay jaringan!
  */
 export async function queryLocalModelsInstant({
   query = "",
@@ -486,6 +527,7 @@ export async function queryLocalModelsInstant({
   subBrand = "",
   page = 1,
   limit = 20,
+  groupSections = true,
 }: {
   query?: string;
   brandGroup?: BrandGroupKey;
@@ -493,6 +535,7 @@ export async function queryLocalModelsInstant({
   subBrand?: string;
   page?: number;
   limit?: number;
+  groupSections?: boolean;
 }): Promise<LocalQueryResponse | null> {
   const models = await ensureModelsIndexReady();
   if (!models || models.length < 1000) return null;
@@ -573,9 +616,7 @@ export async function queryLocalModelsInstant({
     });
     baseMatched = scored.map((x) => x.item);
   } else {
-    baseMatched = models.filter(
-      (m) => !((m.description || "").toUpperCase().includes("SKU DUMMY") || (m.article || "").toUpperCase().includes("DUMMY"))
-    );
+    baseMatched = models.filter((m) => !isIgnoredCatalogProduct(m));
     baseMatched.sort(compareBrowseItems);
   }
 
@@ -589,14 +630,11 @@ export async function queryLocalModelsInstant({
 
   for (let i = 0; i < baseMatched.length; i++) {
     const m = baseMatched[i];
+    if (!isDummy && isIgnoredCatalogProduct(m)) continue;
     const itemSubBrand = m.subBrand || getNormalizedSubBrand(m);
     const matchBrand = brandGroup === "ALL" || m.brandGroup === brandGroup;
     const matchCat = category === "ALL" || m.categoryKey === category;
-    const matchSubBrand =
-      !subBrandUpper ||
-      itemSubBrand === subBrandUpper ||
-      (m.brand || "").toUpperCase().includes(subBrandUpper) ||
-      (m.dept || "").toUpperCase().includes(subBrandUpper);
+    const matchSubBrand = !subBrandUpper || itemSubBrand === subBrandUpper;
 
     if (matchCat) {
       brandCounts.ALL += 1;
@@ -625,16 +663,52 @@ export async function queryLocalModelsInstant({
   const subBrandCounts = sortSubBrandStats(Array.from(mukuSubBrandTotals.values()), (x) => x.name);
 
   const total = finalMatched.length;
+
+  // Mode 1: Toko Multibrand Mu+Ku (tanpa merk spesifik): paginasi STRICT PER BRAND (8 brand/halaman, anti-dobel lintas page!)
+  if (brandGroup === "MUKU" && !subBrandUpper && groupSections && finalMatched.length > 0) {
+    const brandPages = paginateBrandSections(finalMatched, page, 8, 5);
+    return {
+      data: brandPages.sections.flatMap((s) => s.items),
+      total,
+      totalSkus,
+      page: brandPages.page,
+      totalPages: brandPages.totalPages,
+      brandCounts,
+      categoryCounts,
+      subBrandCounts,
+      brandShowcaseSections: brandPages.sections,
+      sectionMode: "BRAND_PAGES",
+    };
+  }
+
+  // Mode 2: Monostore SUKO / ZES atau merk spesifik Mu+Ku pada tab Semua Kategori:
+  // Paginasi STRICT PER KATEGORI (5 kategori/halaman, tiap kategori hanya muncul 1x — tidak pernah dobel di Hal 1, 2, dst!)
+  if (
+    (brandGroup === "SUKO" || brandGroup === "ZES" || (brandGroup === "MUKU" && Boolean(subBrandUpper))) &&
+    category === "ALL" &&
+    !trimmed &&
+    groupSections &&
+    finalMatched.length > 0
+  ) {
+    const catPages = paginateCategorySections(finalMatched, page, 5, 5);
+    return {
+      data: catPages.sections.flatMap((s) => s.items),
+      total,
+      totalSkus,
+      page: catPages.page,
+      totalPages: catPages.totalPages,
+      brandCounts,
+      categoryCounts,
+      subBrandCounts,
+      categoryShowcaseSections: catPages.sections,
+      sectionMode: "CATEGORY_PAGES",
+    };
+  }
+
+  // Mode 3: Daftar Artikel Berurutan (per kategori terpilih, hasil pencarian teks, atau mode Semua Artikel)
   const totalPages = Math.max(1, Math.ceil(total / limit));
   const safePage = Math.min(Math.max(1, page), totalPages);
   const skip = (safePage - 1) * limit;
-
-  // Untuk toko Multibrand Mu+Ku di halaman utama (tanpa filter merk spesifik):
-  // Tampilkan 1 baris showcase (5 artikel terbaik) per Brand dulu agar kasir tidak bingung!
-  const brandShowcaseSections =
-    brandGroup === "MUKU" && !subBrandUpper && !trimmed && safePage === 1 && finalMatched.length > 0
-      ? buildBrandShowcaseSections(finalMatched, 20, 5)
-      : undefined;
 
   return {
     data: finalMatched.slice(skip, skip + limit),
@@ -645,7 +719,7 @@ export async function queryLocalModelsInstant({
     brandCounts,
     categoryCounts,
     subBrandCounts,
-    brandShowcaseSections,
+    sectionMode: "LIST",
   };
 }
 

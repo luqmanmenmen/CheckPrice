@@ -479,6 +479,45 @@ Balas HANYA dalam format JSON array berisi string huruf kapital, contoh: ["SWEAT
 
 const INVALID_ARTICLE_SET = new Set(["", "0", "-", "PRODUK BARU", "N/A", "NONE"]);
 
+/** Menandai SKU dummy / tidak digunakan agar tidak pernah masuk hasil katalog */
+export function isIgnoredCatalogProduct(p: { description?: string | null; name?: string | null; article?: string | null }): boolean {
+  const descUpper = String(p?.description || p?.name || "").trim().toUpperCase();
+  const artUpper = String(p?.article || "").trim().toUpperCase();
+  return (
+    descUpper.includes("SKU DUMMY") ||
+    descUpper.includes("ITEM TIDAK DIGUNAKAN") ||
+    descUpper.includes("DUMMYZES") ||
+    artUpper.includes("DUMMY")
+  );
+}
+
+/**
+ * Kunci pengelompokan unik per artikel:
+ * Bila kolom `article` bernilai "0" / "-" / kosong (mis. 3.395 SKU ZES & 204 SKU anak),
+ * kelompokkan berdasarkan nama dasar produk (`brand::dept::baseDesc`) agar 1 sepatu/baju
+ * dengan 14 ukuran/warna tidak pecah menjadi 14 kartu dobel lintas halaman.
+ */
+export function getProductArticleGroupKey(item: {
+  article?: string | null;
+  description?: string | null;
+  name?: string | null;
+  brand?: string | null;
+  dept?: string | null;
+  sku?: string | null;
+}): string {
+  const rawArt = String(item?.article || "").trim().toUpperCase();
+  if (!INVALID_ARTICLE_SET.has(rawArt)) {
+    return `ART::${rawArt}`;
+  }
+  const baseDesc = String(item?.description || item?.name || "").split(":")[0].trim().toUpperCase();
+  if (baseDesc.length >= 3) {
+    const brandU = String(item?.brand || "").trim().toUpperCase();
+    const deptU = String(item?.dept || "").trim().toUpperCase();
+    return `DESC::${brandU}::${deptU}::${baseDesc}`;
+  }
+  return `SKU::${item?.sku || ""}`;
+}
+
 function isPromoActiveForProduct(p: any): boolean {
   if (p?.toDate) {
     const t = new Date(p.toDate);
@@ -512,8 +551,8 @@ export function groupProductsByArticle<T extends Record<string, any>>(items: T[]
   const groups = new Map<string, T[]>();
 
   for (const item of items) {
-    const rawArt = String(item.article || "").trim().toUpperCase();
-    const key = !INVALID_ARTICLE_SET.has(rawArt) ? `ART::${rawArt}` : `SKU::${item.sku}`;
+    if (isIgnoredCatalogProduct(item)) continue;
+    const key = getProductArticleGroupKey(item);
     const list = groups.get(key);
     if (list) {
       list.push(item);

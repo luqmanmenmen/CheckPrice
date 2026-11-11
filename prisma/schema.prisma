@@ -59,6 +59,46 @@ model Product {
   @@index([color(ops: raw("gin_trgm_ops"))], type: Gin, map: "Product_color_trgm_idx")
 }
 
+/// Tabel Katalog Pre-Grouped & Ternormalisasi yang dibangun oleh Python Engine (`build_catalog_index.py`)
+model CatalogArticle {
+  key               String   @id
+  sku               String
+  barcode           String?
+  article           String?
+  description       String
+  brand             String?
+  dept              String?
+  brandGroup        String   // "SUKO" | "MUKU" | "ZES"
+  subBrand          String   // Merk asli ter-normalisasi (bebas label divisi seperti CHILDREN BOYS)
+  categoryKey       String   // JAKET | ATASAN | CELANA | DRESS_ROK | SEPATU_SANDAL | TAS_AKSESORIS | BEAUTY | TIDUR_DALAM | OTHER
+  color             String?
+  size              String?
+  stok              Int      @default(0)
+  hargaNormal       Float    @default(0)
+  hargaPromo        Float?
+  diskon            String?
+  discountType      String?
+  acara             String?
+  toDate            String?
+  imageUrl          String?
+  articleGroupCount Int      @default(1)
+  articleTotalStok  Int      @default(0)
+  articleColors     String[] @default([])
+  articleSizes      String[] @default([])
+  articleHasPromo   Boolean  @default(false)
+  articlePromoLabel String?
+  sortRank          Int      @default(0)
+  updatedAt         DateTime @updatedAt
+
+  @@index([sortRank])
+  @@index([brandGroup, sortRank])
+  @@index([brandGroup, categoryKey, sortRank])
+  @@index([brandGroup, subBrand, sortRank])
+  @@index([brandGroup, subBrand, categoryKey, sortRank])
+  @@index([description(ops: raw("gin_trgm_ops"))], type: Gin, map: "CatalogArticle_description_trgm_idx")
+  @@index([subBrand(ops: raw("gin_trgm_ops"))], type: Gin, map: "CatalogArticle_subBrand_trgm_idx")
+}
+
 model DailySales {
   id        String   @id @default(cuid())
   productId Int

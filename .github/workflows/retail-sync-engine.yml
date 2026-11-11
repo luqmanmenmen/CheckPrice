@@ -106,3 +106,14 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+      - name: 🧠 [KATEGORI 4 - CATALOG BRAIN INDEX] Susun Tabel CatalogArticle (Pre-Grouped & Anti-Dobel)
+        if: ${{ success() }}
+        run: |
+          if [ -n "$DATABASE_URL" ]; then
+            python python-engine/build_catalog_index.py
+          else
+            echo "DATABASE_URL belum dikonfigurasi di GitHub Secrets, lewati rebuild CatalogArticle."
+          fi
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}

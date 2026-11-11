@@ -1094,6 +1094,19 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
      - Saat berada di **`Mu+Ku`** tanpa filter merk spesifik: chip **`Merk Mu+Ku:`** menampilkan jumlah artikel live per brand (`NEVADA`, `LITTLE M`, `MAXMURAH`, `COLE`, `CONNEXION`, `ST YVES`, `VOLO`, dst.), dan area hasil menampilkan **Showcase 1 baris (5 artikel unggulan) per Brand** (`brandShowcaseSections`) atau pengelompokan hasil per Brand saat mengetik query/pindah halaman, lengkap dengan tombol **`Lihat semua [Brand] →`** sebelum masuk ke rincian kategori brand tersebut.
   4. **Auto-Upgrade Index Lokal (`v14_muku_brand_sections`):** `db.models` terbangun ulang otomatis ~450ms di HP langsung dari `db.products` yang sudah tersimpan tanpa perlu download ulang data master.
 
+### 71. Python Catalog Brain (`CatalogArticle`) + Paginasi Anti-Dobel `BRAND_PAGES` & `CATEGORY_PAGES` (`v15_brand_pages_dedup`)
+- **Instruksi User & Arsitektur ("Python yang mikir, Vercel hanya display"):**
+  - Masalah sebelumnya: saat lanjut halaman (`Hal 1 -> Hal 2 -> Hal 3`), kategori/divisi seperti `"CHILDREN BOYS"` muncul ganda lintas halaman di `Mu+Ku` maupun pengulangan kategori & artikel tanpa style-code (`article = "0"`) pada `SUKO` & `ZES`.
+- **Implementasi Python-First ([`python-engine/build_catalog_index.py`](file:///c:/Max%20Display/price-checker/python-engine/build_catalog_index.py), [`prisma/schema.prisma`](file:///c:/Max%20Display/price-checker/prisma/schema.prisma), [`api/catalog-models`](file:///c:/Max%20Display/price-checker/src/app/api/catalog-models/route.ts), [`api/catalog`](file:///c:/Max%20Display/price-checker/src/app/api/catalog/route.ts), [`offlineDb.ts`](file:///c:/Max%20Display/price-checker/src/lib/offlineDb.ts), [`page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx)):**
+  1. **Tabel `CatalogArticle` Olahan Python (`17.320` Artikel Unik Bersih):**
+     - `build_catalog_index.py` menyapu seluruh `97.546` SKU PostgreSQL, membuang `515` baris dummy/mati (`"ITEM TIDAK DIGUNAKAN"`, `"SKU DUMMY"`, `"DUMMYZES"`), menggabungkan SKU ber-`article = "0"` via kunci dasar `DESC::brand::dept::baseDesc`, serta mengekstrak seluruh **24 divisi ERP** (`CHILDREN BOYS`, `CHILDREN GIRLS`, `MEN CONTEMP CASUAL`, `LADIES CONTEMP`, `YOUNG FASHION`, `INTIMATE`, `MEN FORMAL`, `HANDBAGS`, `FRAGRANCE`, dst.) ke **merk aslinya** (`DISNEY`, `CHARACTER`, `ST YVES`, `AOS`, `KINN`, `SHE SENSE`, `ANNISA`, `KHA`, `CROCODILE`, `CARDINAL`, dst.).
+     - Hasil live DB terverifikasi: **`SUKO: 1.176`**, **`ZES: 904`**, **`Mu+Ku: 15.240` (`280` brand asli, `0` divisi nyasar, `0` duplikat key)**.
+  2. **Paginasi Anti-Dobel di Ketiga Toko (`paginateBrandSections` & `paginateCategorySections`):**
+     - **`Mu+Ku` (tanpa sub-brand terpilih) -> `BRAND_PAGES` (`8` Brand Unik per Halaman):** Hal 1 (`NEVADA`, `LITTLE M`, `DISNEY`, `MAXMURAH`, `CHARACTER`, `ST YVES`, `AOS`, `CONNEXION`), Hal 2 (`COLE`, `VOLO`, `KHA`, `CARDINAL`, `KINN`, `ANNISA`, `SHE SENSE`, `YIPPI`), dst. Tidak ada brand yang muncul ganda lintas halaman bahkan saat tekan **Selanjutnya**.
+     - **`SUKO`, `ZES`, & Merk Terpilih `Mu+Ku` -> `CATEGORY_PAGES` (`5` Kategori Unik per Halaman) + Toggle `Semua Artikel`:** Di tab `Semua`, setiap kategori hanya muncul **1x** (`Hal 1/2`), plus 1 klik **`Per Kategori` ↔ `Semua Artikel`** atau **`Lihat semua [Kategori] →`** untuk mode daftar rata (`LIST`, 20 artikel deduplikasi per halaman).
+  3. **Sync Kilat HP dari `CatalogArticle` (`/api/catalog-models`) & CI Automation:** HP mengambil `17.320` model matang olahan Python langsung dalam ~2 chunk (<1 detik) untuk index `v15_brand_pages_dedup`, dan [`retail-sync-engine.yml`](file:///c:/Max%20Display/price-checker/.github/workflows/retail-sync-engine.yml) menyertakan langkah otomatis rebuild `CatalogArticle`.
+
+
 
 
 

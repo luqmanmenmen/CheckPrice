@@ -8,6 +8,8 @@ import {
   getNormalizedSubBrand,
   createEmptyCategoryCounts,
   sortSubBrandStats,
+  paginateBrandSections,
+  paginateCategorySections,
 } from "@/lib/productTaxonomy";
 
 export const PRODUCT_LIST_SELECT = {
@@ -166,12 +168,146 @@ export function filterByTaxonomy<T extends Record<string, any>>(
     }
     if (subUpper) {
       const sb = item.subBrand || getNormalizedSubBrand(item);
-      const match =
-        sb === subUpper ||
-        String(item.brand || "").toUpperCase().includes(subUpper) ||
-        String(item.dept || "").toUpperCase().includes(subUpper);
-      if (!match) return false;
+      if (sb !== subUpper) return false;
     }
     return true;
   });
+}
+
+/** Klausa Prisma OR untuk memfilter sub-brand normalisasi Mu+Ku sebelum filter JS presisi */
+export function buildSubBrandPrismaClause(subBrand: string): any | undefined {
+  const clean = subBrand.trim().toUpperCase();
+  if (!clean) return undefined;
+  const subClauses: any[] = [
+    { brand: { contains: clean, mode: "insensitive" } },
+    { dept: { contains: clean, mode: "insensitive" } },
+  ];
+  if (clean === "MUKU") {
+    subClauses.push(
+      { article: { startsWith: "MK-", mode: "insensitive" } },
+      { description: { contains: "MUKU", mode: "insensitive" } }
+    );
+  } else if (clean === "BYRCH & CO") {
+    subClauses.push(
+      { brand: { contains: "BYRCH", mode: "insensitive" } },
+      { dept: { contains: "BYRCH", mode: "insensitive" } }
+    );
+  } else if (clean === "ST YVES") {
+    subClauses.push(
+      { brand: { contains: "SAINT YVES", mode: "insensitive" } },
+      { dept: { contains: "SAINT YVES", mode: "insensitive" } }
+    );
+  } else if (clean === "NAYOUNG") {
+    subClauses.push(
+      { brand: { equals: "ELFORMULA", mode: "insensitive" } },
+      { description: { contains: "NA-YOUNG", mode: "insensitive" } }
+    );
+  } else if (clean === "DISNEY") {
+    subClauses.push({ dept: { contains: "THATS DONALD", mode: "insensitive" } });
+  } else if (clean === "CHARACTER") {
+    subClauses.push({ dept: { contains: "LICENSE", mode: "insensitive" } });
+  }
+  return { OR: subClauses };
+}
+
+/** Formatter payload seragam (per Brand / per Kategori / list biasa) untuk `/api/catalog` & `/api/product` */
+export function buildTaxonomyListPayload({
+  groupedList,
+  totalSkus,
+  brandGroup,
+  category,
+  subBrand = "",
+  page = 1,
+  limit = 20,
+  groupSections = true,
+  isBrowseMode = true,
+  brandCounts,
+  categoryCounts,
+}: {
+  groupedList: any[];
+  totalSkus: number;
+  brandGroup: BrandGroupKey;
+  category: CategoryKey;
+  subBrand?: string;
+  page?: number;
+  limit?: number;
+  groupSections?: boolean;
+  isBrowseMode?: boolean;
+  brandCounts: Record<BrandGroupKey, number>;
+  categoryCounts: Record<CategoryKey, number>;
+}) {
+  const total = groupedList.length;
+  const { subBrandCounts } = summarizeTaxonomyCounts(groupedList);
+
+  if (brandGroup === "MUKU" && !subBrand && groupSections && groupedList.length > 0) {
+    const brandPages = paginateBrandSections(groupedList, page, 8, 5);
+    return {
+      data: brandPages.sections.flatMap((s) => s.items),
+      meta: {
+        page: brandPages.page,
+        limit,
+        total,
+        totalSkus,
+        totalPages: brandPages.totalPages,
+        brandGroup,
+        category,
+        subBrand,
+        brandCounts,
+        categoryCounts,
+        subBrandCounts,
+        brandShowcaseSections: brandPages.sections,
+        sectionMode: "BRAND_PAGES" as const,
+      },
+    };
+  }
+
+  if (
+    isBrowseMode &&
+    (brandGroup === "SUKO" || brandGroup === "ZES" || (brandGroup === "MUKU" && Boolean(subBrand))) &&
+    category === "ALL" &&
+    groupSections &&
+    groupedList.length > 0
+  ) {
+    const catPages = paginateCategorySections(groupedList, page, 5, 5);
+    return {
+      data: catPages.sections.flatMap((s) => s.items),
+      meta: {
+        page: catPages.page,
+        limit,
+        total,
+        totalSkus,
+        totalPages: catPages.totalPages,
+        brandGroup,
+        category,
+        subBrand,
+        brandCounts,
+        categoryCounts,
+        subBrandCounts,
+        categoryShowcaseSections: catPages.sections,
+        sectionMode: "CATEGORY_PAGES" as const,
+      },
+    };
+  }
+
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  const safeSkip = (safePage - 1) * limit;
+
+  return {
+    data: groupedList.slice(safeSkip, safeSkip + limit),
+    meta: {
+      page: safePage,
+      limit,
+      total,
+      totalSkus,
+      totalPages,
+      brandGroup,
+      category,
+      subBrand,
+      brandCounts,
+      categoryCounts,
+      subBrandCounts,
+      sectionMode: "LIST" as const,
+    },
+  };
 }

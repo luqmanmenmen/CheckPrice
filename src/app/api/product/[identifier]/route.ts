@@ -20,6 +20,8 @@ import {
   getProductSiblings,
   summarizeTaxonomyCounts,
   filterByTaxonomy,
+  buildSubBrandPrismaClause,
+  buildTaxonomyListPayload,
 } from "@/lib/productQueryHelpers";
 
 export const dynamic = 'force-dynamic';
@@ -98,13 +100,14 @@ export async function GET(
     const { searchParams } = new URL(request.url);
     const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
     const limit = Math.min(50, Math.max(1, parseInt(searchParams.get('limit') || '20', 10)));
-    const skip = (page - 1) * limit;
+    const groupSections = searchParams.get('groupSections') !== '0';
 
     const rawBrand = (searchParams.get('brandGroup') || 'ALL').toUpperCase() as BrandGroupKey;
     const rawCategory = (searchParams.get('category') || 'ALL').toUpperCase() as CategoryKey;
+    const subBrand = (searchParams.get('subBrand') || '').trim().toUpperCase();
     const brandGroup: BrandGroupKey = VALID_BRANDS.has(rawBrand) ? rawBrand : 'ALL';
     const category: CategoryKey = VALID_CATEGORIES.has(rawCategory) ? rawCategory : 'ALL';
-    const hasTaxonomyFilter = brandGroup !== 'ALL' || category !== 'ALL';
+    const hasTaxonomyFilter = brandGroup !== 'ALL' || category !== 'ALL' || Boolean(subBrand);
 
     // ─────────────────────────────────────────────────────────────
     //  TAHAP 1: EXACT MATCH PRIORITAS (Hanya jika input memuat angka / format kode)
@@ -204,7 +207,7 @@ export async function GET(
     // ─────────────────────────────────────────────────────────────
     //  CACHE KILAT HALAMAN (Page 2 / Sebelumnya / Ulangi Kata = 1ms!)
     // ─────────────────────────────────────────────────────────────
-    const cacheKey = `${rawInput.toLowerCase()}::b=${brandGroup}::c=${category}`;
+    const cacheKey = `${rawInput.toLowerCase()}::b=${brandGroup}::s=${subBrand}::c=${category}`;
     const cachedList = getCachedSearchResult(cacheKey);
     if (cachedList) {
       const total = cachedList.groupedArticles.length;
@@ -213,20 +216,24 @@ export async function GET(
         const siblings = await getProductSiblings(topProduct);
         return NextResponse.json({ data: topProduct, siblings, aiAssisted: cachedList.aiAssisted });
       }
-      const pagedMatches = cachedList.groupedArticles.slice(skip, skip + limit);
+      const payload = buildTaxonomyListPayload({
+        groupedList: cachedList.groupedArticles,
+        totalSkus: cachedList.totalSkus,
+        brandGroup,
+        category,
+        subBrand,
+        page,
+        limit,
+        groupSections,
+        isBrowseMode: false,
+        brandCounts: cachedList.brandCounts,
+        categoryCounts: cachedList.categoryCounts,
+      });
       return NextResponse.json({
-        data: pagedMatches,
+        data: payload.data,
         aiAssisted: cachedList.aiAssisted,
         meta: {
-          page,
-          limit,
-          total,
-          totalSkus: cachedList.totalSkus,
-          totalPages: Math.max(1, Math.ceil(total / limit)),
-          brandGroup,
-          category,
-          brandCounts: cachedList.brandCounts,
-          categoryCounts: cachedList.categoryCounts,
+          ...payload.meta,
           cached: true,
         }
       });
@@ -243,12 +250,15 @@ export async function GET(
       extraAndFilters.push({
         NOT: [
           { article: { contains: "DUMMY", mode: 'insensitive' as const } },
-          { description: { contains: "SKU DUMMY", mode: 'insensitive' as const } }
+          { description: { contains: "SKU DUMMY", mode: 'insensitive' as const } },
+          { description: { contains: "ITEM TIDAK DIGUNAKAN", mode: 'insensitive' as const } }
         ]
       });
     }
     const brandWhere = buildBrandPrismaWhere(brandGroup);
     if (brandWhere) extraAndFilters.push(brandWhere);
+    const subWhere = buildSubBrandPrismaClause(subBrand);
+    if (subWhere) extraAndFilters.push(subWhere);
     const categoryWhere = buildCategoryPrismaWhere(category);
     if (categoryWhere) extraAndFilters.push(categoryWhere);
 
@@ -418,7 +428,7 @@ export async function GET(
     });
 
     const rankedProducts = cleanPromoList(scoredProducts.map(sp => sp.product));
-    const taxonomyFiltered = filterByTaxonomy(rankedProducts, brandGroup, category);
+    const taxonomyFiltered = filterByTaxonomy(rankedProducts, brandGroup, category, subBrand);
     const groupedArticles = groupProductsByArticle(taxonomyFiltered);
     const { brandCounts, categoryCounts } = summarizeTaxonomyCounts(groupedArticles);
 
@@ -437,23 +447,24 @@ export async function GET(
       return NextResponse.json({ data: topProduct, siblings, aiAssisted: aiExpandedTerms.length > 0 });
     }
 
-    const total = groupedArticles.length;
-    const pagedMatches = groupedArticles.slice(skip, skip + limit);
+    const payload = buildTaxonomyListPayload({
+      groupedList: groupedArticles,
+      totalSkus: taxonomyFiltered.length,
+      brandGroup,
+      category,
+      subBrand,
+      page,
+      limit,
+      groupSections,
+      isBrowseMode: false,
+      brandCounts,
+      categoryCounts,
+    });
 
     return NextResponse.json({
-      data: pagedMatches,
+      data: payload.data,
       aiAssisted: aiExpandedTerms.length > 0,
-      meta: {
-        page,
-        limit,
-        total,
-        totalSkus: taxonomyFiltered.length,
-        totalPages: Math.max(1, Math.ceil(total / limit)),
-        brandGroup,
-        category,
-        brandCounts,
-        categoryCounts,
-      }
+      meta: payload.meta,
     });
 
   } catch (error) {
