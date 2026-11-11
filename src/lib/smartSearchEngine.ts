@@ -199,10 +199,13 @@ export function expandRetailQuery(rawInput: string): ExpandedRetailQuery {
     if (cleanTok.length >= 2) group.add(cleanTok);
 
     // 1. Cek kamus sinonim langsung
+    let matchedDict = false;
     if (RETAIL_SYNONYM_DICTIONARY[tok]) {
+      matchedDict = true;
       for (const syn of RETAIL_SYNONYM_DICTIONARY[tok]) group.add(syn);
     }
     if (cleanTok && RETAIL_SYNONYM_DICTIONARY[cleanTok]) {
+      matchedDict = true;
       for (const syn of RETAIL_SYNONYM_DICTIONARY[cleanTok]) group.add(syn);
     }
 
@@ -210,14 +213,15 @@ export function expandRetailQuery(rawInput: string): ExpandedRetailQuery {
     if (cleanTok.length >= 3) {
       for (const [dictKey, syns] of Object.entries(RETAIL_SYNONYM_DICTIONARY)) {
         if (dictKey.length >= 4 && (dictKey.startsWith(cleanTok) || cleanTok.startsWith(dictKey))) {
+          matchedDict = true;
           group.add(dictKey);
           for (const s of syns.slice(0, 4)) group.add(s);
         }
       }
     }
 
-    // 3. Jika token >= 5 huruf, tambahkan potongan 60% & 40% depan (stemming toleransi typo ujung kata)
-    if (cleanTok.length >= 5 && !/^\d+$/.test(cleanTok)) {
+    // 3. Stemming typo hanya jika belum cocok di kamus sinonim dan kata cukup panjang (>= 6 huruf)
+    if (!matchedDict && cleanTok.length >= 6 && !/^\d+$/.test(cleanTok)) {
       group.add(cleanTok.slice(0, 4));
     }
 

@@ -1001,3 +1001,23 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   1. **Cockpit Header Gelap & Tab Terintegrasi:** Header profil, toggle `AKTIF | REHAT`, tab mode (`Facing Out` | `Tanya Stok` | `Cek Pesanan`), dan status `by luqman org` + tombol `Sync` diringkas ke satu header cockpit ramping (`from-slate-900 via-blue-950 to-indigo-950`) agar pencarian langsung berada di layar atas. Alert merah `Pembaruan Tersedia! UPDATE SEKARANG` tetap tampil otomatis saat ada update baru.
   2. **Bilah Cari 1-Baris & Pintasan 2-Kolom:** Input pencarian (`×` hapus di dalam) + tombol kamera Barcode hijau zamrud yang **selalu tampil** di sebelah kanan + tombol `Cari` biru, diikuti chip `Terakhir` & pintasan side-by-side 2-kolom (`Barang Baru!` & `Promo BOGO`) saat kondisi idle.
   3. **Katalog Konsep 3 Per Artikel:** Header hasil (`Hasil Pencarian: X Model` + total varian SKU), filter cepat 1-ketuk (`Semua`, `Ada Stok`, `Sedang Promo`), dan grid responsif (`grid-cols-1 sm:grid-cols-2 lg:grid-cols-3`) menampilkan foto teroptimasi (`?width=400`), badge promo, badge jumlah varian, badge monospace `article`, brand, judul lengkap 2 baris (`line-clamp-2`), ringkasan warna & rentang ukuran, harga normal/promo, serta total stok gabungan.
+
+---
+
+## 64. Auto-Scroll Paginasi Atas & Optimasi Radikal Kecepatan Pencarian Teks (`"jaket"` 6,6s $\rightarrow$ Kilat)
+
+- **Masalah Pengguna:**
+  1. Saat menekan tombol **Selanjutnya** di daftar hasil pencarian, posisi layar masih tertinggal di bawah (*"langsung ke atas scrollnya biar enak"*).
+  2. Ketika mengetik kata kunci umum seperti `"jaket"`, kemunculan daftar produk terasa sangat lambat (**~6,6 detik** pada endpoint `/api/product/jaket` di produksi) meski gambar CDN sudah cepat.
+- **Temuan Akar Masalah Pencarian Lambat (Bukti Observasi Langsung):**
+  1. **Mismatch Region Serverless (`sin1::iad1`):** Edge Vercel Singapura (`sin1`) mem-proxy fungsi `/api/product/[identifier]` ke `iad1` (US East Virginia), lalu fungsi dari US tersebut melakukan beberapa roundtrip sekuensial kembali ke database Neon Singapura (`ap-southeast-1`) $\rightarrow$ TTFB membengkak menjadi **4,53–6,63 detik**.
+  2. **Sequential Table Scan 97.546 Baris:** Tabel `"Product"` di Postgres sebelumnya hanya memiliki index `id`, `sku`, dan `barcode` (tanpa index `stok`, `article`, maupun `pg_trgm` GIN). Kueri Prisma menjalankan puluhan kondisi `ILIKE` lintas 8 kolom (termasuk kolom tak relevan seperti `sku`/`barcode`/`size`) $\rightarrow$ **7.111 ms** SQL scan sebelum diindeks.
+  3. **Query Berlebih & Spam Koneksi Promo:** Input kata huruf murni seperti `"jaket"` masih mengeksekusi 2 query exact `sku`/`barcode`, mengirim 30 kolom lebar (`images[]`, histori penjualan) untuk 320 baris, dan menembak `db.product.update` satu per satu untuk setiap promo kedaluwarsa.
+- **Perbaikan Menyeluruh:**
+  1. **Scroll Atas Halus (`src/app/page.tsx`):** Menambahkan `scrollPageToTop()` dan `handlePageChange()` pada tombol **Sebelumnya** & **Selanjutnya**, serta saat membuka kartu model dari hasil pencarian.
+  2. **Index Database Postgres (`prisma/schema.prisma` + `pg_trgm`):** Mengaktifkan ekstensi `pg_trgm` dan menambahkan `Product_article_idx`, `Product_stok_idx` (`DESC`), serta 5 GIN index (`gin_trgm_ops`) pada `description`, `article`, `brand`, `dept`, `color`. Hasil `EXPLAIN ANALYZE` turun drastis dari **7.111 ms** menjadi **~52–174 ms**.
+  3. **Optimasi Route API ([`vercel.json`](file:///c:/Max%20Display/price-checker/vercel.json), `src/app/api/product/[identifier]/route.ts`, & `src/lib/smartSearchEngine.ts`):**
+     - Menetapkan `"regions": ["sin1"]` di `vercel.json` (menggantikan `preferredRegion` yang deprecated di Next.js 16) agar seluruh Serverless Functions berjalan di Singapura dekat pengguna & Neon DB.
+     - Melewati exact lookup `sku`/`barcode` untuk query huruf tanpa angka, memfokuskan `ILIKE` ke kolom teks terindeks GIN, memangkas stem typo berlebih di `expandRetailQuery`, memakai `PRODUCT_LIST_SELECT` ramping, menyatukan cleanup promo kedaluwarsa dalam 1 `updateMany`, serta menambahkan LRU cache 60 detik di server (`searchListCache`).
+  4. **Cache Paginasi 0ms + Background Prefetch (`src/app/page.tsx`):** Menambahkan `listCacheRef` (TTL 60 detik) beserta *silent prefetch* halaman berikutnya + preload thumbnail 400px di latar belakang agar klik **Selanjutnya** / **Sebelumnya** tampil instan **0ms**.
+

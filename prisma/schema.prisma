@@ -1,11 +1,13 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_URL")
+  extensions = [pg_trgm]
 }
 
 model Product {
@@ -47,6 +49,14 @@ model Product {
   dailySales    DailySales[]
   updatedAt     DateTime @updatedAt
   createdAt     DateTime @default(now())
+
+  @@index([article])
+  @@index([stok(sort: Desc)])
+  @@index([description(ops: raw("gin_trgm_ops"))], type: Gin, map: "Product_description_trgm_idx")
+  @@index([article(ops: raw("gin_trgm_ops"))], type: Gin, map: "Product_article_trgm_idx")
+  @@index([brand(ops: raw("gin_trgm_ops"))], type: Gin, map: "Product_brand_trgm_idx")
+  @@index([dept(ops: raw("gin_trgm_ops"))], type: Gin, map: "Product_dept_trgm_idx")
+  @@index([color(ops: raw("gin_trgm_ops"))], type: Gin, map: "Product_color_trgm_idx")
 }
 
 model DailySales {

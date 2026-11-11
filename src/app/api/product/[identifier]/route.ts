@@ -10,6 +10,69 @@ import {
 
 export const dynamic = 'force-dynamic';
 
+const SEARCH_CACHE_TTL_MS = 60_000;
+const SEARCH_CACHE_MAX_KEYS = 80;
+const searchListCache = new Map<
+  string,
+  { groupedArticles: any[]; totalSkus: number; aiAssisted: boolean; expiresAt: number }
+>();
+
+const PRODUCT_LIST_SELECT = {
+  id: true,
+  sku: true,
+  barcode: true,
+  article: true,
+  description: true,
+  acara: true,
+  fromDate: true,
+  toDate: true,
+  hargaNormal: true,
+  hargaPromo: true,
+  diskon: true,
+  discountType: true,
+  brand: true,
+  dept: true,
+  color: true,
+  size: true,
+  stok: true,
+  imageUrl: true,
+  promoFileName: true,
+} as const;
+
+const SIZE_TOKEN_RE = /^(XXS|XS|S|M|L|XL|XXL|2XL|3XL|4XL|5XL|2L|3L|4L|ALL|\d{1,2})$/i;
+
+function isPromoExpired(toDate: string | null | undefined): boolean {
+  if (!toDate) return false;
+  const toDateObj = new Date(toDate);
+  if (isNaN(toDateObj.getTime())) return false;
+  toDateObj.setHours(23, 59, 59, 999);
+  return new Date() > toDateObj;
+}
+
+function getCachedSearchResult(key: string) {
+  const hit = searchListCache.get(key);
+  if (!hit) return null;
+  if (Date.now() > hit.expiresAt) {
+    searchListCache.delete(key);
+    return null;
+  }
+  return hit;
+}
+
+function setCachedSearchResult(
+  key: string,
+  value: { groupedArticles: any[]; totalSkus: number; aiAssisted: boolean }
+) {
+  if (searchListCache.size >= SEARCH_CACHE_MAX_KEYS) {
+    const oldestKey = searchListCache.keys().next().value;
+    if (oldestKey !== undefined) searchListCache.delete(oldestKey);
+  }
+  searchListCache.set(key, {
+    ...value,
+    expiresAt: Date.now() + SEARCH_CACHE_TTL_MS,
+  });
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ identifier: string }> }
@@ -22,40 +85,45 @@ export async function GET(
     }
 
     const { searchParams } = new URL(request.url);
-    const page = parseInt(searchParams.get('page') || '1', 10);
-    const limit = parseInt(searchParams.get('limit') || '20', 10);
+    const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
+    const limit = Math.min(50, Math.max(1, parseInt(searchParams.get('limit') || '20', 10)));
     const skip = (page - 1) * limit;
 
-    // Helper to auto-remove promo if expired (in-memory clean + asynchronous background DB update)
-    const checkAndCleanPromo = (p: any) => {
-      if (p && p.toDate) {
-        const toDateObj = new Date(p.toDate);
-        if (!isNaN(toDateObj.getTime())) {
-          toDateObj.setHours(23, 59, 59, 999);
-          if (new Date() > toDateObj) {
-            p.hargaPromo = null;
-            p.diskon = null;
-            p.discountType = null;
-            p.acara = null;
-            p.fromDate = null;
-            p.toDate = null;
-
-            db.product.update({
-              where: { id: p.id },
-              data: {
-                hargaPromo: null,
-                diskon: null,
-                discountType: null,
-                acara: null,
-                fromDate: null,
-                toDate: null
-              }
-            }).catch(e => console.error("Auto-clean promo background error:", e));
-          }
+    // Bersihkan promo kedaluwarsa di memori tanpa spam koneksi DB per-baris
+    const cleanPromoList = (rows: any[]): any[] => {
+      const expiredIds: number[] = [];
+      const cleaned = rows.map((p) => {
+        if (p && isPromoExpired(p.toDate)) {
+          if (typeof p.id === 'number' && p.id > 0) expiredIds.push(p.id);
+          return {
+            ...p,
+            hargaPromo: null,
+            diskon: null,
+            discountType: null,
+            acara: null,
+            fromDate: null,
+            toDate: null,
+          };
         }
+        return p;
+      });
+      if (expiredIds.length > 0) {
+        db.product.updateMany({
+          where: { id: { in: expiredIds } },
+          data: {
+            hargaPromo: null,
+            diskon: null,
+            discountType: null,
+            acara: null,
+            fromDate: null,
+            toDate: null,
+          },
+        }).catch((e) => console.error("Auto-clean promo background error:", e));
       }
-      return p;
+      return cleaned;
     };
+
+    const checkAndCleanPromo = (p: any) => cleanPromoList([p])[0];
 
     // Helper untuk mengambil seluruh varian (siblings) produk berdasarkan article
     const getProductSiblings = async (prod: any) => {
@@ -65,7 +133,7 @@ export async function GET(
           where: { article: prod.article },
           orderBy: [{ color: 'asc' }, { size: 'asc' }, { description: 'asc' }]
         });
-        siblings = allSiblings.map(checkAndCleanPromo);
+        siblings = cleanPromoList(allSiblings);
       } else if (prod.description) {
         const parts = prod.description.split(":");
         if (parts.length > 1) {
@@ -74,44 +142,47 @@ export async function GET(
             where: { description: { startsWith: parentName + ":" } },
             orderBy: { description: 'asc' }
           });
-          siblings = allSiblings.map(checkAndCleanPromo);
+          siblings = cleanPromoList(allSiblings);
         }
       }
       return siblings;
     };
 
     // ─────────────────────────────────────────────────────────────
-    //  TAHAP 1: EXACT MATCH PRIORITAS (SKU & BARCODE)
+    //  TAHAP 1: EXACT MATCH PRIORITAS (Hanya jika input memuat angka / format kode)
+    //  Menghemat 2-4 roundtrip SQL saat kasir mencari teks murni seperti "jaket"
     // ─────────────────────────────────────────────────────────────
-    let directProduct = await db.product.findFirst({ where: { sku: rawInput } });
-    if (!directProduct) {
-      directProduct = await db.product.findFirst({ where: { barcode: rawInput } });
-    }
-    if (!directProduct && /^\d+$/.test(rawInput)) {
-      const stripped = rawInput.replace(/^0+/, "");
-      if (stripped && stripped !== rawInput) {
-        directProduct = await db.product.findFirst({
-          where: { OR: [{ barcode: stripped }, { sku: stripped }] }
-        });
-      }
-      // Fallback cerdas: koreksi 1 digit check-digit GS1 EAN-13 jika user mengetik manual barcode 234000* (mis. 2340001264343 -> 2340001264345)
-      if (!directProduct && /^234000\d{7}$/.test(rawInput)) {
-        const validCd = calculateEan13CheckDigit(rawInput.slice(0, 12));
-        const fixedBarcode = rawInput.slice(0, 12) + validCd;
-        if (fixedBarcode !== rawInput) {
-          directProduct = await db.product.findFirst({ where: { barcode: fixedBarcode } });
+    const mayBeCode = /\d/.test(rawInput) && !/\s/.test(rawInput);
+    if (mayBeCode) {
+      let directProduct = await db.product.findFirst({
+        where: { OR: [{ sku: rawInput }, { barcode: rawInput }] }
+      });
+
+      if (!directProduct && /^\d+$/.test(rawInput)) {
+        const stripped = rawInput.replace(/^0+/, "");
+        if (stripped && stripped !== rawInput) {
+          directProduct = await db.product.findFirst({
+            where: { OR: [{ barcode: stripped }, { sku: stripped }] }
+          });
+        }
+        // Fallback cerdas: koreksi 1 digit check-digit GS1 EAN-13 jika user mengetik manual barcode 234000*
+        if (!directProduct && /^234000\d{7}$/.test(rawInput)) {
+          const validCd = calculateEan13CheckDigit(rawInput.slice(0, 12));
+          const fixedBarcode = rawInput.slice(0, 12) + validCd;
+          if (fixedBarcode !== rawInput) {
+            directProduct = await db.product.findFirst({ where: { barcode: fixedBarcode } });
+          }
         }
       }
-    }
 
-    if (directProduct) {
-      directProduct = checkAndCleanPromo(directProduct);
-      const siblings = await getProductSiblings(directProduct);
-      return NextResponse.json({ data: directProduct, siblings });
+      if (directProduct) {
+        directProduct = checkAndCleanPromo(directProduct);
+        const siblings = await getProductSiblings(directProduct);
+        return NextResponse.json({ data: directProduct, siblings });
+      }
     }
 
     // JALUR KILAT KODE ANGKA MURNI (SKU 8 digit / Barcode 12-14 digit):
-    // Hindari full-table ILIKE ke kolom teks (brand/dept/color/description) agar respons tetap < 200ms!
     if (/^\d{8,14}$/.test(rawInput)) {
       const numericMatches = await db.product.findMany({
         where: {
@@ -131,13 +202,14 @@ export async function GET(
         return NextResponse.json({ data: top, siblings });
       }
       if (numericMatches.length > 1) {
+        const cleaned = cleanPromoList(numericMatches);
         return NextResponse.json({
-          data: numericMatches.map(checkAndCleanPromo),
-          meta: { page: 1, limit: 20, total: numericMatches.length, totalPages: 1 }
+          data: cleaned,
+          meta: { page: 1, limit: 20, total: cleaned.length, totalSkus: cleaned.length, totalPages: 1 }
         });
       }
 
-      // Coba live MDS BISA StoreHub: 5.5 detik saat toko buka agar scan/cari barang baru 100% tembus di percobaan pertama!
+      // Coba live MDS BISA StoreHub: 5.5 detik saat toko buka agar scan/cari barang baru 100% tembus
       try {
         const liveTimeoutMs = isStoreOpen() ? 5500 : 1500;
         const liveRes: any = await Promise.race([
@@ -172,7 +244,35 @@ export async function GET(
     }
 
     // ─────────────────────────────────────────────────────────────
+    //  CACHE KILAT HALAMAN (Page 2 / Sebelumnya / Ulangi Kata = 1ms!)
+    // ─────────────────────────────────────────────────────────────
+    const cacheKey = rawInput.toLowerCase();
+    const cachedList = getCachedSearchResult(cacheKey);
+    if (cachedList) {
+      const total = cachedList.groupedArticles.length;
+      if (total === 1 && page === 1) {
+        const topProduct = cachedList.groupedArticles[0];
+        const siblings = await getProductSiblings(topProduct);
+        return NextResponse.json({ data: topProduct, siblings, aiAssisted: cachedList.aiAssisted });
+      }
+      const pagedMatches = cachedList.groupedArticles.slice(skip, skip + limit);
+      return NextResponse.json({
+        data: pagedMatches,
+        aiAssisted: cachedList.aiAssisted,
+        meta: {
+          page,
+          limit,
+          total,
+          totalSkus: cachedList.totalSkus,
+          totalPages: Math.max(1, Math.ceil(total / limit)),
+          cached: true,
+        }
+      });
+    }
+
+    // ─────────────────────────────────────────────────────────────
     //  TAHAP 2: EKSPANSI PINTAR (30% PARTIAL TEXT + SINONIM KASIR)
+    //  Hanya menyentuh kolom terindeks GIN pg_trgm agar eksekusi SQL ~50-150ms!
     // ─────────────────────────────────────────────────────────────
     const isSearchingDummy = rawInput.toLowerCase().includes("dummy");
     const expanded = expandRetailQuery(rawInput);
@@ -180,68 +280,79 @@ export async function GET(
       ? {
           NOT: [
             { article: { contains: "DUMMY", mode: 'insensitive' as const } },
-            { description: { contains: "SKU DUMMY", mode: 'insensitive' as const } },
-            { sku: { contains: "DUMMY", mode: 'insensitive' as const } }
+            { description: { contains: "SKU DUMMY", mode: 'insensitive' as const } }
           ]
         }
       : undefined;
 
-    const buildTermOrClause = (term: string) => [
-      { article: { contains: term, mode: 'insensitive' as const } },
-      { description: { contains: term, mode: 'insensitive' as const } },
-      { brand: { contains: term, mode: 'insensitive' as const } },
-      { dept: { contains: term, mode: 'insensitive' as const } },
-      { color: { contains: term, mode: 'insensitive' as const } },
-      { size: { contains: term, mode: 'insensitive' as const } },
-      { sku: { contains: term, mode: 'insensitive' as const } },
-      { barcode: { contains: term, mode: 'insensitive' as const } }
-    ];
+    const buildTermOrClause = (term: string) => {
+      const clauses: any[] = [
+        { description: { contains: term, mode: 'insensitive' as const } },
+        { article: { contains: term, mode: 'insensitive' as const } },
+        { brand: { contains: term, mode: 'insensitive' as const } },
+        { dept: { contains: term, mode: 'insensitive' as const } },
+        { color: { contains: term, mode: 'insensitive' as const } }
+      ];
+      if (SIZE_TOKEN_RE.test(term)) {
+        clauses.push({ size: { contains: term, mode: 'insensitive' as const } });
+      }
+      if (/\d/.test(term)) {
+        clauses.push(
+          { sku: { contains: term, mode: 'insensitive' as const } },
+          { barcode: { contains: term, mode: 'insensitive' as const } }
+        );
+      }
+      return clauses;
+    };
 
-    // 1. Pencocokan Frasa Utuh atau Spaceless
-    const phraseConditions = buildTermOrClause(rawInput);
-    if (expanded.spaceless.length >= 3 && expanded.spaceless !== rawInput.toUpperCase()) {
-      phraseConditions.push(
-        { article: { contains: expanded.spaceless, mode: 'insensitive' as const } },
-        { description: { contains: expanded.spaceless, mode: 'insensitive' as const } },
-        { brand: { contains: expanded.spaceless, mode: 'insensitive' as const } },
-        { dept: { contains: expanded.spaceless, mode: 'insensitive' as const } }
-      );
-    }
-
-    // 2. Pencocokan Grup Sinonim per Kata (misal "kaos suko vnl" -> (KAOS|T-SHIRT|TEE) AND (SUKO) AND (VANILLA|VNL))
     const tokenGroupAndConditions = expanded.tokenGroups.map(group => ({
       OR: group.flatMap(term => buildTermOrClause(term))
     }));
 
-    const strictWhere: any = {
-      OR: [
-        { OR: phraseConditions },
-        { AND: tokenGroupAndConditions }
-      ]
-    };
-    if (dummyFilter) strictWhere.AND = [dummyFilter];
+    // Tambahkan kondisi frasa utuh hanya jika multi-kata / punya bentuk tanpa spasi unik
+    const firstGroupHasRaw =
+      expanded.tokenGroups.length === 1 &&
+      expanded.tokenGroups[0].includes(rawInput.toUpperCase());
+
+    const strictOrBranches: any[] = [{ AND: tokenGroupAndConditions }];
+    if (!firstGroupHasRaw) {
+      strictOrBranches.unshift({ OR: buildTermOrClause(rawInput) });
+    }
+    if (expanded.spaceless.length >= 3 && expanded.spaceless !== rawInput.toUpperCase()) {
+      strictOrBranches.push({
+        OR: [
+          { article: { contains: expanded.spaceless, mode: 'insensitive' as const } },
+          { description: { contains: expanded.spaceless, mode: 'insensitive' as const } }
+        ]
+      });
+    }
+
+    const strictWhere: any =
+      strictOrBranches.length === 1 ? strictOrBranches[0] : { OR: strictOrBranches };
+    if (dummyFilter) {
+      strictWhere.AND = [...(strictWhere.AND || []), dummyFilter];
+    }
 
     const candidateMap = new Map<string, any>();
 
     const strictMatches = await db.product.findMany({
       where: strictWhere,
+      select: PRODUCT_LIST_SELECT,
       orderBy: [{ stok: 'desc' }],
-      take: 320
+      take: 240
     });
     for (const p of strictMatches) candidateMap.set(p.sku, p);
 
     // ─────────────────────────────────────────────────────────────
     //  TAHAP 2B: RELAXED 30% PARTIAL TEXT FALLBACK
-    //  Jika hasil strict < 15 (misal user hanya ketik 30% nama deskripsi atau ada kata yang meleset),
-    //  tarik kandidat menggunakan Relaxed OR lintas sinonim & potongan kata >= 3 huruf!
     // ─────────────────────────────────────────────────────────────
     if (candidateMap.size < 25 && expanded.allExpandedTerms.length > 0) {
-      const meaningfulTerms = expanded.allExpandedTerms.filter(t => t.length >= 3).slice(0, 14);
+      const meaningfulTerms = expanded.allExpandedTerms.filter(t => t.length >= 3).slice(0, 12);
       if (meaningfulTerms.length > 0) {
         const relaxedWhere: any = {
           OR: meaningfulTerms.flatMap(term => [
-            { article: { contains: term, mode: 'insensitive' as const } },
             { description: { contains: term, mode: 'insensitive' as const } },
+            { article: { contains: term, mode: 'insensitive' as const } },
             { brand: { contains: term, mode: 'insensitive' as const } },
             { dept: { contains: term, mode: 'insensitive' as const } },
             { color: { contains: term, mode: 'insensitive' as const } }
@@ -251,8 +362,9 @@ export async function GET(
 
         const relaxedMatches = await db.product.findMany({
           where: relaxedWhere,
+          select: PRODUCT_LIST_SELECT,
           orderBy: [{ stok: 'desc' }],
-          take: 220
+          take: 140
         });
         for (const p of relaxedMatches) {
           if (!candidateMap.has(p.sku)) candidateMap.set(p.sku, p);
@@ -262,24 +374,20 @@ export async function GET(
 
     // ─────────────────────────────────────────────────────────────
     //  TAHAP 3: GEMINI AI RETAIL SEARCH AGENT
-    //  Jika kandidat masih sedikit (< 5) atau query berupa kalimat deskriptif / singkatan 30% yang unik,
-    //  minta bantuan Gemini AI Agent untuk menerjemahkan keinginan user ke kata kunci ERP!
     // ─────────────────────────────────────────────────────────────
     let aiExpandedTerms: string[] = [];
     if (candidateMap.size < 5 && !/^\d+$/.test(rawInput) && rawInput.length >= 3) {
       aiExpandedTerms = await consultGeminiSearchAgent(rawInput);
       if (aiExpandedTerms.length > 0) {
-        // Tambahkan hasil terjemahan AI ke grup sinonim agar ikut dinilai di scoring
         expanded.tokenGroups.push(aiExpandedTerms);
         for (const t of aiExpandedTerms) {
           if (!expanded.allExpandedTerms.includes(t)) expanded.allExpandedTerms.push(t);
         }
 
-        // Cari terlebih dahulu produk yang cocok dengan mayoritas kata kunci AI (AND / Relaxed OR)
         const aiWhere: any = {
           OR: aiExpandedTerms.flatMap(term => [
-            { article: { contains: term, mode: 'insensitive' as const } },
             { description: { contains: term, mode: 'insensitive' as const } },
+            { article: { contains: term, mode: 'insensitive' as const } },
             { brand: { contains: term, mode: 'insensitive' as const } },
             { dept: { contains: term, mode: 'insensitive' as const } },
             { color: { contains: term, mode: 'insensitive' as const } }
@@ -289,8 +397,9 @@ export async function GET(
 
         const aiMatches = await db.product.findMany({
           where: aiWhere,
+          select: PRODUCT_LIST_SELECT,
           orderBy: [{ stok: 'desc' }],
-          take: 120
+          take: 100
         });
         for (const p of aiMatches) {
           if (!candidateMap.has(p.sku)) candidateMap.set(p.sku, p);
@@ -301,8 +410,6 @@ export async function GET(
     const candidateMatches = Array.from(candidateMap.values());
 
     if (candidateMatches.length === 0) {
-      // Self-Healing On-the-Fly: Jika input berupa Barcode (12-14 digit) atau SKU (8 digit),
-      // tembak langsung MDS BISA StoreHub jika toko sedang buka
       if (/^\d{8,14}$/.test(rawInput)) {
         try {
           const liveRes = await checkSingleItemStock(rawInput);
@@ -330,7 +437,7 @@ export async function GET(
     }
 
     // ─────────────────────────────────────────────────────────────
-    //  TAHAP 4: BOBOT RELEVANSI CERDAS (30% FUZZY & SUBSEQUENCE RANKING)
+    //  TAHAP 4: BOBOT RELEVANSI CERDAS & PENGELOMPOKAN ARTIKEL
     // ─────────────────────────────────────────────────────────────
     const scoredProducts = candidateMatches.map(p => ({
       product: p,
@@ -343,17 +450,22 @@ export async function GET(
       return (a.product.description || "").localeCompare(b.product.description || "");
     });
 
-    const rankedProducts = scoredProducts.map(sp => checkAndCleanPromo(sp.product));
+    const rankedProducts = cleanPromoList(scoredProducts.map(sp => sp.product));
     const groupedArticles = groupProductsByArticle(rankedProducts);
 
-    // Jika hanya 1 model/artikel di halaman 1, langsung buka kartu detail + seluruh variannya
+    // Simpan ke cache server 60s agar klik Selanjutnya/Sebelumnya = 1ms!
+    setCachedSearchResult(cacheKey, {
+      groupedArticles,
+      totalSkus: rankedProducts.length,
+      aiAssisted: aiExpandedTerms.length > 0,
+    });
+
     if (groupedArticles.length === 1 && page === 1) {
       const topProduct = groupedArticles[0];
       const siblings = await getProductSiblings(topProduct);
       return NextResponse.json({ data: topProduct, siblings, aiAssisted: aiExpandedTerms.length > 0 });
     }
 
-    // Jika banyak model: Kembalikan daftar artikel unik berpaginasi (Konsep 3: Anti Duplikat Size)
     const total = groupedArticles.length;
     const pagedMatches = groupedArticles.slice(skip, skip + limit);
 
@@ -365,7 +477,7 @@ export async function GET(
         limit,
         total,
         totalSkus: rankedProducts.length,
-        totalPages: Math.ceil(total / limit)
+        totalPages: Math.max(1, Math.ceil(total / limit))
       }
     });
 

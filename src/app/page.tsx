@@ -779,6 +779,9 @@ export default function Home() {
 
   const searchCounterRef = useRef(0);
   const sessionCacheRef = useRef<Map<string, { product: ProductData; siblings: ProductData[] }>>(new Map());
+  const listCacheRef = useRef<
+    Map<string, { list: ProductData[]; total: number; totalSkus: number; page: number; totalPages: number; cachedAt: number }>
+  >(new Map());
 
   // Ganti varian warna/ukuran secara instan (0ms) dari memori tanpa reload layar
   const handleSelectVariant = (targetSku: string) => {
@@ -848,16 +851,35 @@ export default function Home() {
       return;
     }
 
+    // 0C. Cek Cache Halaman Katalog (0ms instant untuk Selanjutnya / Sebelumnya / Ulangi Kata!)
+    const listCacheKey = `${trimmed.toLowerCase()}::p${page}`;
+    const cachedPage = listCacheRef.current.get(listCacheKey);
+    if (cachedPage && Date.now() - cachedPage.cachedAt < 60_000) {
+      setProduct(null);
+      setSiblings([]);
+      setProductsList(cachedPage.list);
+      setResultFilter("ALL");
+      setTotalModelsCount(cachedPage.total);
+      setTotalSkusCount(cachedPage.totalSkus);
+      setCurrentPage(cachedPage.page);
+      setTotalPages(cachedPage.totalPages);
+      setLoading(false);
+      if (isScanning) setIsScanning(false);
+      preloadProductImages(cachedPage.list.map((item) => item.imageUrl), 400);
+      if (shouldScrollTop && typeof window !== "undefined") {
+        requestAnimationFrame(() => scrollPageToTop());
+      }
+      return;
+    }
+
     setLoading(true);
 
     try {
-      // 1. OFFLINE-FIRST: Pastikan Dexie terbuka & cek data di database lokal (Dexie) dulu
-      const { db, ensureDbOpenSafe } = await import('@/lib/offlineDb');
-      await ensureDbOpenSafe();
+      // 1. OFFLINE-FIRST: Cek SKU/Barcode di Dexie hanya bila input berbentuk kode berangka
       let localData = null;
-      
-      // Jika halaman 1 (pencarian awal), coba cari berdasarkan SKU persis atau Barcode di memori HP
-      if (page === 1) {
+      if (page === 1 && /\d/.test(trimmed) && !/\s/.test(trimmed)) {
+        const { db, ensureDbOpenSafe } = await import('@/lib/offlineDb');
+        await ensureDbOpenSafe();
         localData = await db.products.where('sku').equals(trimmed).first();
         if (!localData) {
           localData = await db.products.where('barcode').equals(trimmed).first();
@@ -868,78 +890,77 @@ export default function Home() {
             localData = await db.products.where('barcode').equals(stripped).first();
           }
         }
-      }
 
-      // Jika data ditemukan di HP, langsung tampilkan (0ms instan & tanpa internet!)
-      if (localData) {
-        if (searchCounterRef.current !== currentSearch) return;
-        
-        setError("");
-        const localProduct: ProductData = {
-          id: 0,
-          sku: localData.sku,
-          barcode: localData.barcode || null,
-          article: localData.article || null,
-          description: localData.description || localData.name,
-          acara: localData.acara || null,
-          fromDate: null,
-          toDate: localData.toDate,
-          hargaNormal: localData.hargaNormal,
-          hargaPromo: localData.hargaPromo,
-          diskon: localData.diskon || null,
-          discountType: localData.discountType || null,
-          brand: localData.brand || null,
-          dept: localData.dept || null,
-          color: localData.color || null,
-          size: localData.size || null,
-          stok: localData.stok ?? 0,
-          promoFileName: null,
-          imageUrl: localData.imageUrl || null,
-          images: localData.images && localData.images.length > 0 ? localData.images : (localData.imageUrl ? [localData.imageUrl] : [])
-        };
-        setProduct(localProduct);
+        // Jika data ditemukan di HP, langsung tampilkan (0ms instan & tanpa internet!)
+        if (localData) {
+          if (searchCounterRef.current !== currentSearch) return;
 
-        // Ambil siblings varian dari Dexie secara instan (stok & warna varian lain langsung muncul!)
-        let currentSiblings: ProductData[] = [localProduct];
-        if (localData.article) {
-          const localSiblings = await db.products.where('article').equals(localData.article).toArray();
-          if (localSiblings && localSiblings.length > 0) {
-            currentSiblings = localSiblings.map(s => ({
-              id: 0,
-              sku: s.sku,
-              barcode: s.barcode || null,
-              article: s.article || null,
-              description: s.description || s.name,
-              acara: s.acara || null,
-              fromDate: null,
-              toDate: s.toDate || null,
-              hargaNormal: s.hargaNormal,
-              hargaPromo: s.hargaPromo || null,
-              diskon: s.diskon || null,
-              discountType: s.discountType || null,
-              brand: s.brand || null,
-              dept: s.dept || null,
-              color: s.color || null,
-              size: s.size || null,
-              stok: s.stok ?? 0,
-              promoFileName: null,
-              imageUrl: s.imageUrl || null,
-              images: s.images && s.images.length > 0 ? s.images : (s.imageUrl ? [s.imageUrl] : [])
-            }));
+          setError("");
+          const localProduct: ProductData = {
+            id: 0,
+            sku: localData.sku,
+            barcode: localData.barcode || null,
+            article: localData.article || null,
+            description: localData.description || localData.name,
+            acara: localData.acara || null,
+            fromDate: null,
+            toDate: localData.toDate,
+            hargaNormal: localData.hargaNormal,
+            hargaPromo: localData.hargaPromo,
+            diskon: localData.diskon || null,
+            discountType: localData.discountType || null,
+            brand: localData.brand || null,
+            dept: localData.dept || null,
+            color: localData.color || null,
+            size: localData.size || null,
+            stok: localData.stok ?? 0,
+            promoFileName: null,
+            imageUrl: localData.imageUrl || null,
+            images: localData.images && localData.images.length > 0 ? localData.images : (localData.imageUrl ? [localData.imageUrl] : [])
+          };
+          setProduct(localProduct);
+
+          // Ambil siblings varian dari Dexie secara instan (stok & warna varian lain langsung muncul!)
+          let currentSiblings: ProductData[] = [localProduct];
+          if (localData.article) {
+            const localSiblings = await db.products.where('article').equals(localData.article).toArray();
+            if (localSiblings && localSiblings.length > 0) {
+              currentSiblings = localSiblings.map(s => ({
+                id: 0,
+                sku: s.sku,
+                barcode: s.barcode || null,
+                article: s.article || null,
+                description: s.description || s.name,
+                acara: s.acara || null,
+                fromDate: null,
+                toDate: s.toDate || null,
+                hargaNormal: s.hargaNormal,
+                hargaPromo: s.hargaPromo || null,
+                diskon: s.diskon || null,
+                discountType: s.discountType || null,
+                brand: s.brand || null,
+                dept: s.dept || null,
+                color: s.color || null,
+                size: s.size || null,
+                stok: s.stok ?? 0,
+                promoFileName: null,
+                imageUrl: s.imageUrl || null,
+                images: s.images && s.images.length > 0 ? s.images : (s.imageUrl ? [s.imageUrl] : [])
+              }));
+            }
           }
-        }
-        setSiblings(currentSiblings);
-        preloadProductImages([localProduct.imageUrl, ...currentSiblings.map((s) => s.imageUrl)], 400);
-        // Daftarkan SEMUA varian ke memory cache agar scan berikutnya 0ms
-        sessionCacheRef.current.set(trimmed.toLowerCase(), { product: localProduct, siblings: currentSiblings });
-        currentSiblings.forEach((s) => {
-          if (s.sku) sessionCacheRef.current.set(s.sku.toLowerCase(), { product: s, siblings: currentSiblings });
-          if (s.barcode) sessionCacheRef.current.set(s.barcode.toLowerCase(), { product: s, siblings: currentSiblings });
-        });
+          setSiblings(currentSiblings);
+          preloadProductImages([localProduct.imageUrl, ...currentSiblings.map((s) => s.imageUrl)], 400);
+          sessionCacheRef.current.set(trimmed.toLowerCase(), { product: localProduct, siblings: currentSiblings });
+          currentSiblings.forEach((s) => {
+            if (s.sku) sessionCacheRef.current.set(s.sku.toLowerCase(), { product: s, siblings: currentSiblings });
+            if (s.barcode) sessionCacheRef.current.set(s.barcode.toLowerCase(), { product: s, siblings: currentSiblings });
+          });
 
-        setProductsList([]);
-        setLoading(false);
-        if (isScanning) setIsScanning(false);
+          setProductsList([]);
+          setLoading(false);
+          if (isScanning) setIsScanning(false);
+        }
       }
 
       // 2. Minta data terbaru/live ke server (di background jika localData sudah tampil)
@@ -972,16 +993,54 @@ export default function Home() {
             }
             return;
           }
+          const resolvedPage = data.meta?.page || page;
+          const resolvedTotalPages = data.meta?.totalPages || 1;
+          const resolvedTotal = data.meta?.total ?? data.data.length;
+          const resolvedTotalSkus = data.meta?.totalSkus ?? data.data.length;
+
+          setProduct(null);
+          setSiblings([]);
           setProductsList(data.data);
           setResultFilter("ALL");
-          setTotalModelsCount(data.meta?.total ?? data.data.length);
-          setTotalSkusCount(data.meta?.totalSkus ?? data.data.length);
+          setTotalModelsCount(resolvedTotal);
+          setTotalSkusCount(resolvedTotalSkus);
           recordRecentSearch(trimmed);
           preloadProductImages(data.data.map((item: any) => item.imageUrl), 400);
-          setCurrentPage(data.meta?.page || 1);
-          setTotalPages(data.meta?.totalPages || 1);
+          setCurrentPage(resolvedPage);
+          setTotalPages(resolvedTotalPages);
+          listCacheRef.current.set(`${trimmed.toLowerCase()}::p${resolvedPage}`, {
+            list: data.data,
+            total: resolvedTotal,
+            totalSkus: resolvedTotalSkus,
+            page: resolvedPage,
+            totalPages: resolvedTotalPages,
+            cachedAt: Date.now(),
+          });
+
           if (shouldScrollTop && typeof window !== "undefined") {
             requestAnimationFrame(() => scrollPageToTop());
+          }
+
+          // Prefetch diam-diam halaman berikutnya + thumbnail 400px agar tombol Selanjutnya 0ms!
+          const nextPageNum = resolvedPage + 1;
+          const nextCacheKey = `${trimmed.toLowerCase()}::p${nextPageNum}`;
+          if (resolvedPage < resolvedTotalPages && !listCacheRef.current.has(nextCacheKey)) {
+            fetch(`/api/product/${encodeURIComponent(trimmed)}?page=${nextPageNum}`, { cache: 'no-store' })
+              .then((r) => (r.ok ? r.json() : null))
+              .then((nextJson) => {
+                if (nextJson && Array.isArray(nextJson.data) && nextJson.data.length > 0) {
+                  listCacheRef.current.set(nextCacheKey, {
+                    list: nextJson.data,
+                    total: nextJson.meta?.total ?? resolvedTotal,
+                    totalSkus: nextJson.meta?.totalSkus ?? resolvedTotalSkus,
+                    page: nextJson.meta?.page || nextPageNum,
+                    totalPages: nextJson.meta?.totalPages || resolvedTotalPages,
+                    cachedAt: Date.now(),
+                  });
+                  preloadProductImages(nextJson.data.map((item: any) => item.imageUrl), 400);
+                }
+              })
+              .catch(() => {});
           }
         } else {
           setProduct(data.data);
