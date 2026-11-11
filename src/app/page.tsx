@@ -1626,8 +1626,20 @@ export default function Home() {
                         <span className="text-[10px] font-bold uppercase text-slate-400">
                           {t.type === 'REQUEST' ? 'Request' : t.type === 'FACING_OUT' ? 'Facing Out' : 'Tanya Stok'}
                         </span>
-                        <p className="font-black text-lg text-slate-800">{t.sku}</p>
-                        <p className="text-sm font-bold text-slate-600 truncate leading-tight">{t.productName}</p>
+                        <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                          {t.article && !["0", "-", "PRODUK BARU"].includes(String(t.article).trim().toUpperCase()) && (
+                            <span className="font-mono font-black text-sm bg-slate-900 text-white px-2 py-0.5 rounded-md">
+                              {t.article}
+                            </span>
+                          )}
+                          <span className="font-black text-base text-slate-800">{t.sku}</span>
+                        </div>
+                        <p className="text-sm font-bold text-slate-700 leading-snug whitespace-normal break-words mt-1">{t.productName}</p>
+                        {(t.color || t.productSize || t.size || t.qty) && (
+                          <p className="text-xs font-semibold text-slate-500 mt-1">
+                            {[t.color, t.size || t.productSize ? `Size ${t.size || t.productSize}` : null, t.qty ? `${t.qty} pcs` : null].filter(Boolean).join(" • ")}
+                          </p>
+                        )}
                         {t.hargaNormal > 0 && (
                           <p className="text-xs font-semibold text-blue-600 mt-0.5">Rp {t.hargaNormal.toLocaleString('id-ID')}</p>
                         )}
@@ -2450,12 +2462,12 @@ export default function Home() {
           {/* Desktop Cart Items Preview */}
           <div className="hidden lg:flex flex-col gap-2 mb-4 max-h-[40vh] overflow-y-auto pr-1">
             {cart.map((item, idx) => (
-              <div key={idx} className="text-xs border rounded p-2 flex justify-between items-center bg-slate-50">
-                <div className="truncate pr-2">
-                  <span className="font-bold block truncate">{item.productName.split(':')[0]}</span>
-                  <span className="text-slate-500">{item.sku}</span>
+              <div key={idx} className="text-xs border rounded-lg p-2.5 flex justify-between items-start gap-2 bg-slate-50">
+                <div className="min-w-0 flex-1">
+                  <span className="font-bold block whitespace-normal break-words text-slate-800">{item.productName.split(':')[0]}</span>
+                  <span className="text-slate-500 font-mono">{item.sku}{item.size ? ` • ${item.size}` : ''}{item.qty ? ` • ${item.qty} pcs` : ''}</span>
                 </div>
-                <div className="font-bold text-blue-700">{item.type === 'REQUEST' ? 'REQ' : 'CEK'}</div>
+                <div className="font-bold text-blue-700 shrink-0">{item.type === 'REQUEST' ? 'REQ' : 'CEK'}</div>
               </div>
             ))}
           </div>

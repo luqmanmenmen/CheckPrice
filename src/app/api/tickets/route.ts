@@ -63,29 +63,81 @@ export async function GET(req: NextRequest) {
     }
 
     const skus = [...new Set(tickets.map((t: any) => t.sku))];
-    const products = await prisma.product.findMany({
-      where: { sku: { in: skus } },
-      select: { sku: true, description: true, hargaNormal: true, color: true, size: true, imageUrl: true }
-    });
-    
+    const products = skus.length > 0
+      ? await prisma.product.findMany({
+          where: { sku: { in: skus } },
+          select: {
+            sku: true,
+            barcode: true,
+            article: true,
+            brand: true,
+            dept: true,
+            description: true,
+            hargaNormal: true,
+            hargaPromo: true,
+            stok: true,
+            color: true,
+            size: true,
+            imageUrl: true
+          }
+        })
+      : [];
+
+    // Fallback foto berdasarkan artikel jika SKU varian tertentu belum punya imageUrl
+    const articlesNeedingPhoto = [...new Set(
+      products
+        .filter(p => !p.imageUrl && p.article && !["0", "-", "PRODUK BARU"].includes(p.article.trim().toUpperCase()))
+        .map(p => p.article!)
+    )];
+    const articlePhotoMap = new Map<string, string>();
+    if (articlesNeedingPhoto.length > 0) {
+      const siblingPhotos = await prisma.product.findMany({
+        where: {
+          article: { in: articlesNeedingPhoto },
+          imageUrl: { not: null }
+        },
+        select: { article: true, imageUrl: true }
+      });
+      for (const sp of siblingPhotos) {
+        if (sp.article && sp.imageUrl && !articlePhotoMap.has(sp.article)) {
+          articlePhotoMap.set(sp.article, sp.imageUrl);
+        }
+      }
+    }
+
     const productMap = Object.fromEntries(
-      products.map(p => [p.sku, { 
-        name: p.description, 
+      products.map(p => [p.sku, {
+        name: p.description,
+        article: p.article || null,
+        brand: p.brand || null,
+        dept: p.dept || null,
+        barcode: p.barcode || null,
         hargaNormal: p.hargaNormal,
+        hargaPromo: p.hargaPromo || null,
+        stok: p.stok ?? 0,
         color: p.color,
         productSize: p.size,
-        imageUrl: p.imageUrl
+        imageUrl: p.imageUrl || (p.article ? articlePhotoMap.get(p.article) || null : null)
       }])
     );
 
-    const ticketsWithProduct = tickets.map((t: any) => ({
-      ...t,
-      productName: productMap[t.sku]?.name || "Produk Tidak Diketahui",
-      hargaNormal: productMap[t.sku]?.hargaNormal || 0,
-      color: productMap[t.sku]?.color || null,
-      productSize: productMap[t.sku]?.productSize || null,
-      imageUrl: productMap[t.sku]?.imageUrl || null
-    }));
+    const ticketsWithProduct = tickets.map((t: any) => {
+      const prod = productMap[t.sku];
+      return {
+        ...t,
+        productName: prod?.name || "Produk Tidak Diketahui",
+        article: prod?.article || null,
+        brand: prod?.brand || null,
+        dept: prod?.dept || null,
+        barcode: prod?.barcode || null,
+        hargaNormal: prod?.hargaNormal || 0,
+        hargaPromo: prod?.hargaPromo || null,
+        stok: prod?.stok ?? null,
+        color: prod?.color || null,
+        productSize: prod?.productSize || null,
+        imageUrl: prod?.imageUrl || null
+      };
+    });
 
     return NextResponse.json({ success: true, tickets: ticketsWithProduct });
   } catch (error) {

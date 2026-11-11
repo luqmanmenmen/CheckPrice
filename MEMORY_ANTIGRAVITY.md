@@ -955,3 +955,21 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
     - Total katalog Supabase melonjak dari **`84.764` $\rightarrow$ `97.546 SKU`** (**`+12.782 SKU` baru** diserap masuk hanya dalam 1 jam, mencapai area barcode `2340002596xx`).
     - Seluruh `97.546` jalur SKU/Barcode/Artikel telah diekspor & diamankan ke [`python-engine/mapped_sku_paths.json.gz`](file:///c:/Max%20Display/price-checker/python-engine/mapped_sku_paths.json.gz) (`712.3 KB`).
     - Saat dilanjutkan nanti, tinggal jalankan kembali `morning_full_sweep.py --brutal --upc-first` (mesin otomatis melewati seluruh `97.546` SKU/Barcode yang sudah tercatat dan langsung menyapu sisa celah `2340002597xx..282999`, `316001..360000`, `215001..235899`, `120000..148999`, dll.).
+
+
+
+---
+
+## 61. Rombakan UI/UX Halaman Gudang Stock (`/warehouse`) & Pengayaan Kode Artikel API Tiket
+
+- **Instruksi Pengguna:**
+  - *"brader pas di gudang stock itu loh artikel dan nama kepotong jadi bingung mau cari. di gudang stock ini uiux yang bagus sesuai bagus ringkas detail jadi enak brader"*
+- **Akar Masalah:**
+  1. [`GET /api/tickets`](file:///c:/Max%20Display/price-checker/src/app/api/tickets/route.ts) sebelumnya hanya me-return `productName`, `color`, `productSize`, `hargaNormal`, dan `imageUrl` **tanpa mengambil `article`, `brand`, `dept`, `barcode`, `hargaPromo`, dan `stok`**, sehingga kode artikel tidak pernah muncul di layar Gudang Stock.
+  2. Di [`src/app/warehouse/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/warehouse/page.tsx) dan daftar pesanan [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx), nama produk terpotong/rancu (`truncate` & pemisahan teks sempit) dan belum ada fitur pencarian cepat maupun hirarki *picking* gudang.
+- **Implementasi Solusi:**
+  1. **Pengayaan API [`src/app/api/tickets/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/tickets/route.ts):** Menambahkan `article`, `brand`, `dept`, `barcode`, `hargaPromo`, dan `stok` pada respons tiket, plus fallback foto studio otomatis per `article` jika varian SKU tertentu belum memiliki `imageUrl` tersendiri.
+  2. **Desain Ulang Picking UI/UX [`src/app/warehouse/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/warehouse/page.tsx):**
+     - **Nol Pemotongan Teks (`whitespace-normal break-words`):** Kode Artikel ditonjolkan besar dalam badge gelap monospace + tombol **Copy 1-ketuk**, diikuti **Nama Produk lengkap**, **Brand/Dept**, dan badge **Stok Sistem**.
+     - **Grid Picking 3 Kolom Ringkas:** Menonjolkan **Warna**, **Ukuran**, dan **Qty Ambil (`Pcs`)** agar langsung terbaca sekilas di rak gudang, beserta **SKU**, **Barcode**, harga normal/promo, dan foto produk terkompresi CDN (`?width=400`) + zoom lightbox.
+     - **Pencarian & Kontrol Cepat Gudang:** Kolom pencarian instan lintas Artikel/Nama/SKU/Barcode/Warna/Brand/Pemesan, tab filter (`Semua`, `Menunggu`, `Selesai`), ringkasan statistik 3-kartu, auto-expand pesanan `PENDING`, dan tombol **✓ Ready Semua** per pesanan.
