@@ -1106,6 +1106,17 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
      - **`SUKO`, `ZES`, & Merk Terpilih `Mu+Ku` -> `CATEGORY_PAGES` (`5` Kategori Unik per Halaman) + Toggle `Semua Artikel`:** Di tab `Semua`, setiap kategori hanya muncul **1x** (`Hal 1/2`), plus 1 klik **`Per Kategori` ↔ `Semua Artikel`** atau **`Lihat semua [Kategori] →`** untuk mode daftar rata (`LIST`, 20 artikel deduplikasi per halaman).
   3. **Sync Kilat HP dari `CatalogArticle` (`/api/catalog-models`) & CI Automation:** HP mengambil `17.320` model matang olahan Python langsung dalam ~2 chunk (<1 detik) untuk index `v15_brand_pages_dedup`, dan [`retail-sync-engine.yml`](file:///c:/Max%20Display/price-checker/.github/workflows/retail-sync-engine.yml) menyertakan langkah otomatis rebuild `CatalogArticle`.
 
+### 72. Rombakan Detail Produk: Full-Width Portrait Gallery + Rapid Facing Out Per Warna & Size
+- **Desain Disetujui User (Preview v3 $\rightarrow$ Production):**
+  1. **Foto Full-Bleed Edge-to-Edge ([`ProductImageSlider.tsx`](file:///c:/Max%20Display/price-checker/src/components/ProductImageSlider.tsx)):**
+     - Menghilangkan kotak pembungkus kecil (`max-w` & padding putih); kini memakai `w-full aspect-[3/4]` (`imageWidth = 800` HD) penuh tepi di HP maupun 5/12 kolom kiri Split Layout di Desktop, lengkap strip thumbnail 6 sudut foto, badge warna/counter di pojok foto, dan Lightbox layar penuh.
+  2. **Utility Bar & Price/Live-Stock Ringkas ([`page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx)):**
+     - Tombol **`← Kembali`** yang mengembalikan konteks halaman katalog terakhir (`preDetailSearchRef`), badge salin 1-klik (`ART`, `SKU`, `UPC`), panel harga + `Sisa Stok (EOH)` + `⚡ Live Stok Artikel`, qty cepat, tombol Facing Out/Tanya Stok aktif, & cetak label PDF.
+  3. **Matrix Rapid Facing Out Dikelompokkan Per Warna:**
+     - Seluruh ukuran (`S`, `M`, `L`, `XL`, dll.) dikelompokkan rapi di dalam kartu masing-masing warnanya (`BEIGE`, `BLACK`, dst.).
+     - **1 ketuk kotak size (`quickTapSizePill`)** langsung menambah `+1` dan menyinkronkan foto warna; tombol **`⚡ +1 Semua Size` (`addFullColorSetQty`)** menambahkan seluruh size tersedia pada warna tersebut sekaligus tanpa scan ulang barcode satu per satu, dirangkum di sticky bottom bar (`+ Tambah Lagi` / `Simpan Facing Out →`).
+
+
 
 
 

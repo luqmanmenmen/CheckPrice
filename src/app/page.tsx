@@ -865,6 +865,8 @@ export default function Home() {
     >
   >(new Map());
 
+  const preDetailSearchRef = useRef<{ query: string; page: number } | null>(null);
+
   // Ganti varian warna/ukuran secara instan (0ms) dari memori tanpa reload layar
   const handleSelectVariant = (targetSku: string) => {
     setManualInput(targetSku);
@@ -879,6 +881,31 @@ export default function Home() {
 
     // 2. Jika tidak ada di siblings aktif, cari via searchProduct
     searchProduct(targetSku);
+  };
+
+  const handleBackToCatalog = () => {
+    setProduct(null);
+    setSiblings([]);
+    setMultiVariantQty({});
+    const prev = preDetailSearchRef.current;
+    preDetailSearchRef.current = null;
+    if (prev) {
+      setManualInput(prev.query);
+      if (prev.query.trim() || selectedBrandGroup !== "ALL" || selectedCategory !== "ALL" || selectedSubBrand) {
+        searchProduct(prev.query, prev.page, true);
+        return;
+      }
+    }
+    if (selectedBrandGroup !== "ALL" || selectedCategory !== "ALL" || selectedSubBrand) {
+      searchProduct(manualInput, currentPage, true);
+    }
+  };
+
+  const handleCopyText = (text: string, label: string) => {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+    showToast(`${label} ${text} disalin!`, "info");
   };
 
   const scrollPageToTop = () => {
@@ -1533,6 +1560,30 @@ export default function Home() {
       }
       return copy;
     });
+  };
+
+  /** 1 ketuk kotak ukuran di dalam kartu warna -> langsung +1 & ganti preview varian */
+  const quickTapSizePill = (targetSku: string) => {
+    handleSelectVariant(targetSku);
+    adjustVariantQty(targetSku, 1);
+  };
+
+  /** Tambah cepat +1 untuk semua size yang tersedia di dalam 1 warna sekaligus */
+  const addFullColorSetQty = (items: { sku: string; stok: number }[], e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!items || items.length === 0) return;
+    const hasAnyStock = items.some((x) => (x.stok ?? 0) > 0);
+    const targets = hasAnyStock ? items.filter((x) => (x.stok ?? 0) > 0) : items;
+    if (targets.length === 0) return;
+    handleSelectVariant(targets[0].sku);
+    setMultiVariantQty((prev) => {
+      const next = { ...prev };
+      for (const t of targets) {
+        next[t.sku] = (next[t.sku] || 0) + 1;
+      }
+      return next;
+    });
+    showToast(`+1 semua ukuran (${targets.length} size) ditambahkan!`, "success");
   };
 
   const addToCart = (type: string, qty: number, size: string, keepOpen: boolean = false) => {
@@ -2529,6 +2580,7 @@ export default function Home() {
               key={cleanArticle ? `${cleanArticle}-${p.sku}` : (p.id || p.sku)}
               type="button"
               onClick={() => {
+                preDetailSearchRef.current = { query: manualInput, page: currentPage };
                 setProduct(p);
                 setSiblings([p]);
                 setProductsList([]);
@@ -2852,596 +2904,641 @@ export default function Home() {
         );
       })()}
 
-      {/* Product Card */}
+      {/* Product Detail Modern Split Cockpit + Rapid Facing Out Per Warna */}
       {product && (() => {
         const parsedInfo = parseProductInfo(product);
-
-        // Group siblings by Size, then map Colors
-        const variantsGroupedBySize: Record<string, any[]> = {};
         const sourceSiblings = (siblings && siblings.length > 0) ? siblings : [product];
+        const activeColorUpper = (parsedInfo.color || "STANDAR").toUpperCase();
+        const productBrandGroup = classifyBrandGroup(product);
+        const productBrandMeta = getBrandGroupMeta(productBrandGroup);
+        const productCatKey = classifyProductCategory(product);
+        const productCatLabel = CATEGORY_LABELS[productCatKey];
 
-        sourceSiblings.forEach(s => {
+        // Kelompokkan varian PER WARNA terlebih dahulu agar kasir bisa tap banyak warna/size dalam 1 artikel tanpa scan ulang
+        const colorMap = new Map<
+          string,
+          {
+            color: string;
+            hex: string | null;
+            isDark: boolean;
+            totalStock: number;
+            repSku: string;
+            sizes: any[];
+          }
+        >();
+
+        let totalArticleStockAllVariants = 0;
+
+        sourceSiblings.forEach((s) => {
           const sInfo = parseProductInfo(s);
-          const color = sInfo.color || "STANDAR";
-          const size = sInfo.size || "ALL SIZE";
+          const color = (sInfo.color || "STANDAR").trim().toUpperCase();
+          const size = (sInfo.size || "ALL SIZE").trim();
+          const stokVal = s.stok ?? 0;
+          totalArticleStockAllVariants += Math.max(0, stokVal);
 
-          const isVariantPromoExpired = s.toDate ? (() => {
-            const t = new Date(s.toDate);
-            t.setHours(23, 59, 59, 999);
-            return new Date() > t;
-          })() : false;
+          const isVariantPromoExpired = s.toDate
+            ? (() => {
+                const t = new Date(s.toDate);
+                t.setHours(23, 59, 59, 999);
+                return new Date() > t;
+              })()
+            : false;
 
-          const isVariantOnPromo = !isVariantPromoExpired && Boolean(
-            (s.hargaPromo && s.hargaPromo > 0 && s.hargaPromo < s.hargaNormal) ||
-            s.discountType
-          );
+          const isVariantOnPromo =
+            !isVariantPromoExpired &&
+            Boolean(
+              (s.hargaPromo && s.hargaPromo > 0 && s.hargaPromo < s.hargaNormal) ||
+                s.discountType
+            );
 
-          if (!variantsGroupedBySize[size]) variantsGroupedBySize[size] = [];
-          if (!variantsGroupedBySize[size].some(item => item.sku === s.sku)) {
-            variantsGroupedBySize[size].push({
+          let group = colorMap.get(color);
+          if (!group) {
+            const cData = getColorData(color);
+            group = {
+              color,
+              hex: cData?.hex || null,
+              isDark: Boolean(cData?.isDark),
+              totalStock: 0,
+              repSku: s.sku,
+              sizes: [],
+            };
+            colorMap.set(color, group);
+          }
+
+          if (!group.sizes.some((item) => item.sku === s.sku)) {
+            group.totalStock += Math.max(0, stokVal);
+            if (s.sku === product.sku || (!group.repSku && s.imageUrl)) {
+              group.repSku = s.sku;
+            }
+            group.sizes.push({
               sku: s.sku,
+              barcode: s.barcode || null,
               color,
               size,
-              stok: s.stok ?? 0,
+              stok: stokVal,
               hargaNormal: s.hargaNormal,
               hargaPromo: isVariantPromoExpired ? null : s.hargaPromo,
               discountType: isVariantPromoExpired ? null : s.discountType,
               isOnPromo: isVariantOnPromo,
-              isCurrent: s.sku === product.sku
+              isCurrent: s.sku === product.sku,
             });
           }
         });
 
-        return (
-          <div className="bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden">
+        const colorGroupsList = Array.from(colorMap.values())
+          .map((cg) => ({
+            ...cg,
+            sizes: cg.sizes.sort((a, b) => sortSizes(a.size, b.size)),
+          }))
+          .sort((a, b) => {
+            if (a.color === activeColorUpper && b.color !== activeColorUpper) return -1;
+            if (b.color === activeColorUpper && a.color !== activeColorUpper) return 1;
+            return a.color.localeCompare(b.color);
+          });
 
-            {/* Discount Badge Header */}
+        const heroImages = (() => {
+          if (product.images && product.images.length > 0) return product.images;
+          if (product.imageUrl) return [product.imageUrl];
+          const sameColorSib = sourceSiblings.find(
+            (s) => s.imageUrl && s.color && product.color && s.color.toUpperCase() === product.color.toUpperCase()
+          );
+          if (sameColorSib?.imageUrl) return [sameColorSib.imageUrl];
+          const anySibWithImg = sourceSiblings.find((s) => s.imageUrl);
+          return anySibWithImg?.imageUrl ? [anySibWithImg.imageUrl] : [];
+        })();
+
+        const selectedVariantEntries = Object.entries(multiVariantQty).filter(([, q]) => q > 0);
+        const selectedVariantsCount = selectedVariantEntries.length;
+        const selectedTotalPcs = selectedVariantEntries.reduce((acc, [, q]) => acc + q, 0);
+        const targetCartActionType: "FACING_OUT" | "STOCK_CHECK" =
+          activeTab === "STOCK_CHECK" ? "STOCK_CHECK" : "FACING_OUT";
+        const isFacingAction = targetCartActionType === "FACING_OUT";
+        const totalInCartPcs = cart.reduce((acc, c) => acc + (c.qty || 1), 0);
+
+        return (
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-200/80 overflow-hidden">
+            {/* Sticky / Top Utility Bar */}
+            <div className="px-3.5 sm:px-5 py-2.5 border-b border-slate-100 bg-slate-50/90 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <button
+                  type="button"
+                  onClick={handleBackToCatalog}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-xs font-bold text-slate-700 transition-colors cursor-pointer shrink-0 shadow-2xs"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                  <span>Kembali</span>
+                </button>
+                <div className="flex items-center gap-1.5 text-xs text-slate-500 min-w-0">
+                  <span className={`text-[10px] font-black px-2 py-0.5 rounded border shrink-0 ${productBrandMeta.badgeClass}`}>
+                    {productBrandMeta.shortLabel}
+                  </span>
+                  {product.dept && (
+                    <span className="font-semibold text-slate-600 truncate hidden sm:inline">
+                      {product.dept}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono">
+                {product.article && (
+                  <button
+                    type="button"
+                    onClick={() => handleCopyText(product.article!, "Artikel")}
+                    className="px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 font-black cursor-pointer transition-colors"
+                    title="Ketuk untuk salin Kode Artikel"
+                  >
+                    ART: {product.article}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => handleCopyText(product.sku, "SKU")}
+                  className="px-2.5 py-1 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-bold cursor-pointer transition-colors"
+                  title="Ketuk untuk salin SKU"
+                >
+                  SKU: {product.sku}
+                </button>
+                {product.barcode && (
+                  <button
+                    type="button"
+                    onClick={() => handleCopyText(product.barcode!, "Barcode")}
+                    className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold cursor-pointer transition-colors"
+                    title="Ketuk untuk salin Barcode"
+                  >
+                    <Barcode className="w-3 h-3" />
+                    {product.barcode}
+                  </button>
+                )}
+                {totalInCartPcs > 0 && (
+                  <span className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-sans font-black tabular-nums">
+                    Keranjang: {totalInCartPcs} pcs
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Discount Badge Header saat Promo Aktif */}
             {isOnPromo && (
-              <div className="bg-gradient-to-r from-purple-600 via-indigo-600 to-rose-600 px-5 py-3 flex flex-wrap items-center justify-between gap-2 text-white">
-                <div className="flex items-center gap-2 font-bold text-sm min-w-0">
+              <div className="bg-gradient-to-r from-purple-600 via-indigo-600 to-rose-600 px-4 sm:px-5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-white">
+                <div className="flex items-center gap-2 font-bold text-xs sm:text-sm min-w-0">
                   <Tag className="w-4 h-4 shrink-0 text-amber-300" />
                   <span className="truncate">{product.discountType ? product.discountType : "SPECIAL PRICE"}</span>
                 </div>
                 {hasHargaPromo ? (
-                  <span className="bg-white text-red-600 font-extrabold text-xs sm:text-sm px-3 py-1 rounded-full shadow-sm shrink-0">
+                  <span className="bg-white text-red-600 font-extrabold text-xs px-3 py-0.5 rounded-full shadow-sm shrink-0">
                     HEMAT {formatRupiah(product.hargaNormal - product.hargaPromo!)}
                   </span>
                 ) : (
-                  <span className="bg-white/20 backdrop-blur-sm text-white font-extrabold text-[11px] px-2.5 py-1 rounded-full shadow-sm shrink-0 uppercase tracking-wider">
+                  <span className="bg-white/20 backdrop-blur-sm text-white font-extrabold text-[11px] px-2.5 py-0.5 rounded-full shadow-sm shrink-0 uppercase tracking-wider">
                     PROMO AKTIF
                   </span>
                 )}
               </div>
             )}
 
-            <div className="p-5 flex flex-col gap-4">
+            {/* Split Layout Utama: Foto Full-Width Kiri (5 Col) + Info & Matrix Warna Kanan (7 Col) */}
+            <div className="p-0 md:p-5 grid grid-cols-1 md:grid-cols-12 gap-0 md:gap-6 items-start">
 
-              {/* Product Header: Title & Badges */}
-              <div>
-                <h2 className="text-xl font-bold text-slate-800 leading-snug">{parsedInfo.name}</h2>
-                <div className="flex flex-wrap gap-2 mt-2.5">
-                  {parsedInfo.color && (
-                    <div className="flex items-center overflow-hidden rounded-md border border-indigo-100 bg-indigo-50/50">
-                      <span className="bg-indigo-100/80 px-2 py-1 text-[10px] font-bold text-indigo-800 uppercase tracking-wider border-r border-indigo-100">
-                        Warna
-                      </span>
-                      <span className="px-2.5 py-1 text-xs font-semibold text-indigo-950">
-                        {parsedInfo.color}
-                      </span>
-                    </div>
-                  )}
-
-                  {parsedInfo.size && (
-                    <div className="flex items-center overflow-hidden rounded-md border border-indigo-100 bg-indigo-50/50">
-                      <span className="bg-indigo-100/80 px-2 py-1 text-[10px] font-bold text-indigo-800 uppercase tracking-wider border-r border-indigo-100">
-                        Ukuran
-                      </span>
-                      <span className="px-2.5 py-1 text-xs font-semibold text-indigo-950">
-                        {parsedInfo.size}
-                      </span>
-                    </div>
-                  )}
-                  
-                  {product.brand && (
-                    <div className="flex items-center overflow-hidden rounded-md border border-slate-200 bg-slate-50">
-                      <span className="bg-slate-200/80 px-2 py-1 text-[10px] font-bold text-slate-700 uppercase tracking-wider border-r border-slate-200">
-                        Group
-                      </span>
-                      <span className="px-2.5 py-1 text-xs font-semibold text-slate-800">
-                        {product.brand}
-                      </span>
-                    </div>
-                  )}
-
-                  {product.dept && (
-                    <div className="flex items-center overflow-hidden rounded-md border border-slate-200 bg-slate-50">
-                      <span className="bg-slate-200/80 px-2 py-1 text-[10px] font-bold text-slate-700 uppercase tracking-wider border-r border-slate-200">
-                        Dept
-                      </span>
-                      <span className="px-2.5 py-1 text-xs font-semibold text-slate-800">
-                        {product.dept}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Promo Banner di bawah Deskripsi — Aman dan Tidak Pernah Ter-crop */}
-              {isOnPromo && (
-                <div className="w-full bg-gradient-to-r from-purple-50 via-indigo-50 to-pink-50 border border-purple-200/90 rounded-xl p-3 flex items-center justify-between gap-3 shadow-xs">
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-purple-600 to-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-                      <Tag className="w-4 h-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-[10px] font-bold text-purple-600 uppercase tracking-wider leading-tight">
-                        Program Promo Toko
-                      </p>
-                      <p className="text-sm font-black text-purple-950 leading-snug break-words">
-                        {product.discountType || product.diskon || "PROMO SPESIAL"}
-                      </p>
-                    </div>
-                  </div>
-                  <span className="bg-purple-600 text-white text-[10px] font-black px-2.5 py-1 rounded-full shrink-0 shadow-xs uppercase tracking-wide">
-                    {hasHargaPromo ? `HEMAT ${formatRupiah(product.hargaNormal - product.hargaPromo!)}` : "PROMO AKTIF"}
-                  </span>
-                </div>
-              )}
-
-              {/* Meta badges */}
-              <div className="flex flex-wrap gap-2">
-                <span className="flex items-center gap-1 bg-slate-100 text-slate-600 text-xs font-mono px-2.5 py-1.5 rounded-lg">
-                  <Package2 className="w-3.5 h-3.5" />
-                  SKU: {product.sku}
-                </span>
-                {product.article && (
-                  <span className="flex items-center gap-1.5 bg-blue-100 text-blue-800 text-xs font-black font-mono px-3 py-1.5 rounded-lg border border-blue-200 shadow-sm" title="Artikel Induk (Group)">
-                    <Layers className="w-3.5 h-3.5 opacity-70" />
-                    ARTIKEL: {product.article}
-                  </span>
-                )}
-                {product.barcode && (
-                  <span className="flex items-center gap-1.5 bg-emerald-100 text-emerald-800 text-xs font-black font-mono px-3 py-1.5 rounded-lg border border-emerald-200 shadow-sm" title="Barcode UPC / EAN-13 Hangtag">
-                    <Barcode className="w-3.5 h-3.5 text-emerald-600" />
-                    BARCODE: {product.barcode}
-                  </span>
-                )}
-                {isPromoExpired && (
-                  <span className="bg-rose-100 text-rose-700 text-xs font-bold px-2.5 py-1.5 rounded-lg border border-rose-200">
-                    Masa Berlaku Promo Habis
-                  </span>
-                )}
-              </div>
-
-              {/* Harga & Stok */}
-              <div className="bg-slate-50 rounded-xl p-4 border flex flex-col gap-4">
-                {isOnPromo ? (
-                  <div className="flex flex-col gap-3">
-                    <div className="flex items-end justify-between gap-3">
-                      <div>
-                        <p className="text-xs text-slate-500 uppercase font-medium mb-1">
-                          {hasHargaPromo ? "Harga Promo" : "Harga Normal Satuan"}
-                        </p>
-                        <p className="text-3xl sm:text-4xl font-extrabold text-red-600 leading-none">
-                          {formatRupiah(product.hargaPromo && product.hargaPromo > 0 ? product.hargaPromo : product.hargaNormal)}
-                        </p>
-                        {hasHargaPromo && (
-                          <p className="text-base text-slate-400 line-through mt-1">
-                            {formatRupiah(product.hargaNormal)}
-                          </p>
-                        )}
-                      </div>
-                      {hasHargaPromo && discountPct > 0 && (
-                        <div className="bg-red-600 text-white rounded-lg px-2.5 py-1.5 text-center shrink-0 shadow-sm flex flex-col justify-center items-center h-fit">
-                          <p className="text-sm font-black leading-none">{discountPct}%</p>
-                          <p className="text-[9px] font-bold uppercase mt-0.5 opacity-90 tracking-wide">OFF</p>
-                        </div>
-                      )}
-                    </div>
-
-                    {!hasHargaPromo && (
-                      <div className="w-full bg-purple-100/90 border border-purple-200/90 rounded-xl p-2.5 flex items-center gap-2 text-purple-950">
-                        <Tag className="w-4 h-4 text-purple-700 shrink-0" />
-                        <span className="text-xs font-black tracking-wide break-words flex-1">
-                          {product.discountType || product.diskon || "PROMO SPESIAL KASIR"}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div>
-                    <p className="text-xs text-slate-500 uppercase font-medium mb-1">Harga Normal</p>
-                    <p className="text-4xl font-extrabold text-slate-800 leading-none">
-                      {formatRupiah(product.hargaNormal)}
-                    </p>
-                  </div>
-                )}
-                
-                {/* Stok Box */}
-                <div className="pt-4 border-t flex items-center justify-between gap-2">
-                  <div>
-                    <div className="flex items-center gap-1.5">
-                      <p className="text-xs font-bold text-slate-500 uppercase">Sisa Stok (EOH)</p>
-                      {liveStockVerified && (
-                        <span className="text-[10px] font-black text-emerald-700 bg-emerald-100/90 border border-emerald-300 px-1.5 py-0.5 rounded-md animate-in fade-in">
-                          ✓ {liveStockVerified}
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-[10px] text-slate-400">Total ketersediaan unit fisik</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={handleCheckLiveStock}
-                      disabled={checkingLiveStock}
-                      title="Periksa stok langsung ke server kasir toko 719 untuk seluruh varian artikel ini"
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold transition-all disabled:opacity-50 active:scale-95 shadow-2xs"
-                    >
-                      {checkingLiveStock ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-600" />
-                      ) : (
-                        <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
-                      )}
-                      <span>{checkingLiveStock ? "Cek Artikel..." : "⚡ Live Stok Artikel"}</span>
-                    </button>
-                    <span className={`px-4 py-1.5 rounded-lg text-lg font-black tracking-wide ${
-                      (product.stok ?? 0) > 10 ? 'bg-green-100 text-green-700' :
-                      (product.stok ?? 0) > 0 ? 'bg-amber-100 text-amber-700' :
-                      'bg-red-100 text-red-700'
-                    }`}>
-                      {product.stok ?? 0} <span className="text-[10px] font-bold uppercase opacity-80">pcs</span>
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* ── 🖼️ BOX IMAGE: FOTO MODEL & DETAIL AKURAT PER SKU & WARNA ── */}
-              <div className="bg-slate-50/90 rounded-2xl p-4 sm:p-5 border border-slate-200/90 flex flex-col items-center shadow-xs">
-                <div className="w-full flex items-center justify-between mb-3 px-1">
-                  <span className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    Foto Model & Detail Produk
-                  </span>
-                  {parsedInfo.color && (
-                    <span className="text-[11px] font-black bg-white text-indigo-900 border border-indigo-200 px-2.5 py-0.5 rounded-full uppercase">
-                      Warna: {parsedInfo.color}
-                    </span>
-                  )}
-                </div>
+              {/* KOLOM KIRI: Galeri Foto 3:4 Full-Width (Tanpa kotak pembungkus kecil) */}
+              <div className="md:col-span-5">
                 <ProductImageSlider
-                  images={(() => {
-                    if (product.images && product.images.length > 0) return product.images;
-                    if (product.imageUrl) return [product.imageUrl];
-                    const sameColorSib = sourceSiblings.find(
-                      (s) => s.imageUrl && s.color && product.color && s.color.toUpperCase() === product.color.toUpperCase()
-                    );
-                    if (sameColorSib?.imageUrl) return [sameColorSib.imageUrl];
-                    const anySibWithImg = sourceSiblings.find((s) => s.imageUrl);
-                    return anySibWithImg?.imageUrl ? [anySibWithImg.imageUrl] : [];
-                  })()}
+                  images={heroImages}
                   alt={`${parsedInfo.name} - ${parsedInfo.color || product.sku}`}
-                  className="w-48 h-64 sm:w-56 sm:h-72"
+                  className="w-full aspect-[3/4]"
+                  roundedClass="rounded-none md:rounded-2xl"
+                  imageWidth={800}
+                  showThumbnails={true}
+                  colorBadge={parsedInfo.color || product.color || null}
                 />
               </div>
 
-              {/* Matrix Varian Produk (Siblings) + Multi-Pick Qty per Warna & Ukuran */}
-              {Object.keys(variantsGroupedBySize).length > 0 && (() => {
-                const selectedVariantEntries = Object.entries(multiVariantQty).filter(([, q]) => q > 0);
-                const selectedVariantsCount = selectedVariantEntries.length;
-                const selectedTotalPcs = selectedVariantEntries.reduce((acc, [, q]) => acc + q, 0);
+              {/* KOLOM KANAN: Detail Inti, Harga/Stok & Rapid Facing Out Matrix Per Warna */}
+              <div className="md:col-span-7 p-4 md:p-0 flex flex-col gap-4 min-w-0">
 
-                return (
-                <div className="bg-white rounded-xl p-4 border border-slate-200 mt-2 shadow-sm">
-                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                    <div>
-                      <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                        <Layers className="w-4 h-4 text-indigo-500" />
-                        Pilih Banyak Warna & Ukuran Sekaligus
-                      </h3>
-                      <p className="text-[11px] text-slate-400 mt-0.5">
-                        Tekan <span className="font-bold text-emerald-600">+</span> pada kotak warna/size untuk memilih beberapa varian sekaligus tanpa scan ulang
-                      </p>
-                    </div>
-                    <span className="text-[11px] font-bold bg-indigo-50 text-indigo-700 px-2.5 py-0.5 rounded-full">
-                      {sourceSiblings.length} Pilihan
+                {/* Judul & Ringkasan */}
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] font-bold bg-slate-100 text-slate-700 px-2.5 py-0.5 rounded-full">
+                      {productCatLabel}
                     </span>
-                  </div>
-                  <div className="flex flex-col gap-3 mt-3">
-                    {Object.entries(variantsGroupedBySize)
-                      .sort((a, b) => sortSizes(a[0], b[0]))
-                      .map(([size, items]) => (
-                      <div key={size} className="flex items-start sm:items-center gap-2 sm:gap-3 border-b border-slate-100 pb-3 last:border-0 last:pb-0">
-                        <div className="w-10 h-10 shrink-0 bg-slate-100 rounded-lg flex items-center justify-center border font-black text-slate-700 text-sm mt-1 sm:mt-0">
-                          {size}
-                        </div>
-                        <div className="flex-1 flex gap-2.5 overflow-x-auto sm:overflow-visible sm:flex-wrap pb-2 sm:pb-0 snap-x">
-                          {items.map((item, idx) => {
-                            const cData = getColorData(item.color);
-                            const bgStyle = cData ? { backgroundColor: cData.hex } : {};
-                            const pickedQty = multiVariantQty[item.sku] || 0;
-                            
-                            let buttonClass = `flex flex-col border rounded-xl px-3 py-2.5 min-w-[142px] sm:min-w-[132px] shrink-0 snap-start text-left transition-all duration-100 border-black/10 cursor-pointer `;
-                            if (pickedQty > 0) {
-                              buttonClass += cData
-                                ? 'ring-2 ring-emerald-500 ring-offset-2 shadow-md font-bold '
-                                : 'bg-emerald-50/70 border-emerald-500 ring-2 ring-emerald-500 shadow-md font-bold ';
-                            } else if (item.isCurrent) {
-                              buttonClass += cData 
-                                ? 'ring-2 ring-indigo-500 ring-offset-2 shadow-sm font-bold ' 
-                                : 'bg-indigo-50 border-indigo-500 ring-2 ring-indigo-500 shadow-sm font-bold ';
-                            } else {
-                              buttonClass += cData 
-                                ? 'hover:ring-2 hover:ring-slate-300 ' 
-                                : 'bg-white hover:bg-slate-50 hover:border-indigo-200 ';
-                            }
-
-                            const titleColor = cData 
-                              ? (cData.isDark ? 'text-white' : 'text-slate-900')
-                              : (item.isCurrent ? 'text-indigo-800' : 'text-slate-600');
-                              
-                            const subColor = cData
-                              ? (cData.isDark ? 'text-white/70' : 'text-slate-500')
-                              : 'text-slate-400';
-
-                            const itemHasPromo = item.isOnPromo;
-                            const hasPromoPrice = Boolean(item.hargaPromo && item.hargaPromo > 0 && item.hargaPromo < item.hargaNormal);
-
-                            return (
-                              <div
-                                key={idx}
-                                onClick={() => handleSelectVariant(item.sku)}
-                                style={bgStyle}
-                                className={buttonClass}
-                              >
-                                <div className="flex items-center justify-between w-full mb-1 gap-1">
-                                  <span className={`text-[11px] font-bold uppercase truncate ${titleColor}`} title={item.color}>
-                                    {item.color}
-                                  </span>
-                                  {pickedQty > 0 ? (
-                                    <span className="bg-emerald-600 text-white text-[9px] font-black px-1.5 py-0.5 rounded shadow-xs shrink-0 uppercase">
-                                      +{pickedQty}
-                                    </span>
-                                  ) : itemHasPromo ? (
-                                    <span className="bg-red-600 text-white text-[8px] font-black px-1.5 py-0.5 rounded shadow-xs shrink-0 tracking-tight leading-none uppercase">
-                                      PROMO
-                                    </span>
-                                  ) : null}
-                                </div>
-                                <div className="flex items-center justify-between mt-0.5 gap-2">
-                                  <span className={`text-[10px] font-mono ${subColor}`}>{item.sku.slice(-4)}</span>
-                                  <span className={`text-xs font-black ${item.stok > 0 ? (cData && cData.isDark ? 'text-green-300' : 'text-green-600') : (cData && cData.isDark ? 'text-red-300' : 'text-red-500')}`}>
-                                    {item.stok} <span className="text-[9px] font-normal opacity-80">pcs</span>
-                                  </span>
-                                </div>
-                                <div className="mt-1.5 pt-1.5 border-t border-black/10 flex items-center justify-between gap-1 w-full">
-                                  {hasPromoPrice ? (
-                                    <>
-                                      <span className={`text-[9px] line-through font-medium ${cData && cData.isDark ? 'text-white/60' : 'text-slate-400'}`}>
-                                        {formatRupiah(item.hargaNormal)}
-                                      </span>
-                                      <span className={`text-[10px] font-black ${cData && cData.isDark ? 'text-amber-300' : 'text-red-600'}`}>
-                                        {formatRupiah(item.hargaPromo)}
-                                      </span>
-                                    </>
-                                  ) : (
-                                    <span className={`text-[10px] font-bold ml-auto ${cData && cData.isDark ? 'text-white/80' : 'text-slate-600'}`}>
-                                      {formatRupiah(item.hargaNormal)}
-                                    </span>
-                                  )}
-                                </div>
-
-                                {/* Kontrol Qty Multi-Warna & Multi-Size Langsung di Tiap Kartu Varian */}
-                                <div
-                                  onClick={(e) => e.stopPropagation()}
-                                  className="mt-2 pt-1.5 border-t border-black/10 flex items-center justify-between gap-1 w-full"
-                                >
-                                  <button
-                                    type="button"
-                                    onClick={(e) => adjustVariantQty(item.sku, -1, e)}
-                                    disabled={pickedQty === 0}
-                                    className={`w-6 h-6 rounded-md font-black text-xs flex items-center justify-center transition-colors ${
-                                      pickedQty > 0
-                                        ? "bg-white text-slate-800 shadow-xs hover:bg-rose-50 hover:text-rose-600 border border-slate-200"
-                                        : "bg-black/10 text-slate-400 opacity-40 cursor-not-allowed"
-                                    }`}
-                                  >
-                                    -
-                                  </button>
-                                  <span
-                                    className={`text-[11px] font-black px-1.5 py-0.5 rounded ${
-                                      pickedQty > 0
-                                        ? "bg-emerald-600 text-white shadow-2xs"
-                                        : cData && cData.isDark
-                                        ? "text-white/80"
-                                        : "text-slate-600"
-                                    }`}
-                                  >
-                                    {pickedQty > 0 ? `${pickedQty} pcs` : "Pilih"}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    onClick={(e) => adjustVariantQty(item.sku, 1, e)}
-                                    className="w-6 h-6 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center justify-center shadow-xs active:scale-90 transition-transform"
-                                  >
-                                    +
-                                  </button>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Panel Ringkasan Multi-Warna & Multi-Size yang Dipilih */}
-                  {selectedVariantsCount > 0 && (
-                    <div className="mt-4 p-3.5 rounded-xl bg-emerald-50/90 border border-emerald-200 flex flex-col gap-2.5 animate-in fade-in duration-200">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-black text-emerald-900 uppercase tracking-wide">
-                          🎯 Dipilih: {selectedVariantsCount} Varian ({selectedTotalPcs} Pcs)
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setMultiVariantQty({})}
-                          className="text-[11px] font-bold text-rose-600 hover:underline"
-                        >
-                          Reset Pilihan
-                        </button>
-                      </div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {selectedVariantEntries.map(([vSku, vQty]) => {
-                          const foundSib = sourceSiblings.find((s) => s.sku === vSku);
-                          const info = foundSib ? parseProductInfo(foundSib) : { color: "", size: "" };
-                          return (
-                            <span
-                              key={vSku}
-                              className="inline-flex items-center gap-1.5 bg-white text-slate-800 border border-emerald-300 px-2.5 py-1 rounded-lg text-xs font-bold shadow-2xs"
-                            >
-                              <span>{info.color || "STANDAR"}</span>
-                              <span className="bg-indigo-100 text-indigo-800 px-1.5 py-0.5 rounded text-[10px] font-black">
-                                {info.size || "ALL"}
-                              </span>
-                              <span className="text-emerald-700 font-black">x{vQty}</span>
-                            </span>
-                          );
-                        })}
-                      </div>
-                      <div className="flex flex-col sm:flex-row gap-2 mt-1">
-                        {activeTab === "FACING_OUT" ? (
-                          <button
-                            type="button"
-                            onClick={() => addMultipleVariantsToCart("FACING_OUT", false)}
-                            className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-black py-3 px-4 rounded-xl shadow-md active:scale-95 transition-all flex items-center justify-center gap-2 text-sm"
-                          >
-                            <Package2 className="w-4 h-4" />
-                            Masukkan Semua ke Facing Out ({selectedVariantsCount} Varian • {selectedTotalPcs} Pcs)
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => addMultipleVariantsToCart("STOCK_CHECK", false)}
-                            className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3 px-4 rounded-xl shadow-md active:scale-95 transition-all flex items-center justify-center gap-2 text-sm"
-                          >
-                            <MessageSquare className="w-4 h-4" />
-                            Tanya Stok Semua Pilihan ({selectedVariantsCount} Varian • {selectedTotalPcs} Pcs)
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-                );
-              })()}
-
-              {/* Aksi Gudang (Varian Tunggal Aktif) */}
-              <div className="flex flex-col gap-3 mt-4 bg-slate-50 p-4 rounded-xl border border-slate-100">
-                <div className="flex justify-between items-center">
-                  <p className="text-xs font-bold text-slate-500 uppercase">Masukkan Varian Aktif ({parsedInfo.color || "-"} • {parsedInfo.size || "-"})</p>
-                  
-                  <div className="flex items-center gap-3">
-                    {/* Continuous Toggle */}
-                    <label className="flex items-center gap-1.5 cursor-pointer" title="Otomatis buka kamera setelah ditambahkan">
-                      <input 
-                        type="checkbox" 
-                        className="w-3.5 h-3.5 text-blue-600 rounded border-gray-300 focus:ring-blue-500" 
-                        checked={continuousMode}
-                        onChange={(e) => setContinuousMode(e.target.checked)}
-                      />
-                      <span className="text-[10px] font-bold text-slate-500 uppercase">Scan Lanjut</span>
-                    </label>
-
-                    <div className="h-4 w-px bg-slate-300"></div>
-
-                    {/* Qty Selector */}
-                    <div className="flex items-center gap-2 bg-white px-2 py-1 rounded-lg border shadow-sm">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase">QTY:</span>
-                      <button onClick={() => setQty(Math.max(1, qty - 1))} className="w-6 h-6 flex items-center justify-center bg-slate-100 text-slate-600 rounded hover:bg-slate-200 font-bold">-</button>
-                      <span className="text-sm font-black text-slate-700 w-6 text-center">{qty}</span>
-                      <button onClick={() => setQty(qty + 1)} className="w-6 h-6 flex items-center justify-center bg-slate-100 text-slate-600 rounded hover:bg-slate-200 font-bold">+</button>
-                    </div>
-                  </div>
-                </div>
-                
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
-                  {activeTab === "FACING_OUT" && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => addToCart("FACING_OUT", qty, parsedInfo.size || product.size || "", true)}
-                        className="w-full bg-white text-amber-700 border-2 border-amber-400 font-bold py-3 rounded-xl flex items-center justify-center gap-1.5 hover:bg-amber-50 active:scale-95 transition-all text-xs sm:text-sm"
-                      >
-                        ➕ Tambah & Pilih Warna Lain
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => addToCart("FACING_OUT", qty, parsedInfo.size || product.size || "", false)}
-                        className="w-full bg-amber-500 text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 hover:bg-amber-600 shadow-md active:scale-95 transition-all text-xs sm:text-sm"
-                      >
-                        <Package2 className="w-5 h-5" /> Facing Out (Selesai)
-                      </button>
-                    </>
-                  )}
-                  {activeTab === "STOCK_CHECK" && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => addToCart("STOCK_CHECK", qty, parsedInfo.size || product.size || "", true)}
-                        className="w-full bg-white text-indigo-700 border-2 border-indigo-400 font-bold py-3 rounded-xl flex items-center justify-center gap-1.5 hover:bg-indigo-50 active:scale-95 transition-all text-xs sm:text-sm"
-                      >
-                        ➕ Tambah & Pilih Warna Lain
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => addToCart("STOCK_CHECK", qty, parsedInfo.size || product.size || "", false)}
-                        className="w-full bg-indigo-600 text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 hover:bg-indigo-700 shadow-md active:scale-95 transition-all text-xs sm:text-sm"
-                      >
-                        <MessageSquare className="w-5 h-5" /> Tanya Stok (Selesai)
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* Cetak Label */}
-              <div className="flex flex-col gap-2 mt-2 pt-4 border-t border-slate-100">
-                <button onClick={handlePrintLabel} className="w-full bg-slate-800 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-slate-700 active:scale-95 transition-all shadow-sm">
-                  <span className="text-lg">🖨️</span> Cetak Label Harga (PDF)
-                </button>
-              </div>
-
-              {/* Promo Info - hanya tampil jika ada harga promo aktif */}
-              {isOnPromo && product.acara && (
-                <div className={`border rounded-xl p-3.5 flex flex-col gap-1.5 ${isPromoExpired ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
-                  <div className="flex justify-between items-start">
-                    <p className={`text-xs font-bold uppercase tracking-wide ${isPromoExpired ? 'text-red-700' : 'text-amber-700'}`}>
-                      Info Promo
-                    </p>
+                    <span className="text-[11px] font-black bg-indigo-600 text-white px-2.5 py-0.5 rounded-full">
+                      {parsedInfo.color || "STANDAR"} • {parsedInfo.size || "ALL"}
+                    </span>
+                    <span className="text-[11px] font-bold text-slate-500 bg-slate-50 border border-slate-200 px-2.5 py-0.5 rounded-full tabular-nums">
+                      Total Artikel: {totalArticleStockAllVariants} pcs ({sourceSiblings.length} Varian)
+                    </span>
                     {isPromoExpired && (
-                      <span className="bg-red-600 text-white text-[10px] font-bold px-2 py-0.5 rounded uppercase animate-pulse">
-                        Promo Habis
+                      <span className="bg-rose-100 text-rose-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-rose-200">
+                        Masa Berlaku Promo Habis
                       </span>
                     )}
                   </div>
-                  <p className={`text-sm font-medium leading-snug ${isPromoExpired ? 'text-red-800' : 'text-amber-800'}`}>
-                    {product.acara}
-                  </p>
-                  {(product.fromDate || product.toDate) && (
-                    <div className={`flex items-center gap-1.5 text-xs mt-1 ${isPromoExpired ? 'text-red-700' : 'text-amber-700'}`}>
-                      <CalendarRange className="w-3.5 h-3.5" />
-                      <span>{formatDate(product.fromDate)} – {formatDate(product.toDate)}</span>
-                    </div>
-                  )}
-                  {product.promoFileName && (
-                    <div className="flex items-start gap-1.5 text-[10px] mt-2 pt-2 border-t border-amber-200/50 text-amber-700/70">
-                      <span className="font-bold uppercase shrink-0">SUMBER FILE:</span>
-                      <span className="font-mono break-all">{product.promoFileName}</span>
-                    </div>
-                  )}
+                  <h2 className="text-xl sm:text-2xl font-black text-slate-900 leading-snug tracking-tight">
+                    {parsedInfo.name}
+                  </h2>
                 </div>
-              )}
 
+                {/* Box Harga + Sisa Stok EOH + Live Stok + Aksi Varian Aktif */}
+                <div className="bg-slate-50/90 rounded-2xl p-4 border border-slate-200/80 flex flex-col gap-3.5">
+                  <div className="flex flex-wrap items-end justify-between gap-3">
+                    <div>
+                      <p className="text-[11px] text-slate-500 uppercase font-bold tracking-wider">
+                        {isOnPromo && hasHargaPromo ? "Harga Promo Spesial" : isOnPromo ? "Harga Normal Satuan" : "Harga Normal"}
+                      </p>
+                      <div className="flex items-baseline gap-2.5 mt-0.5">
+                        <p className={`text-3xl sm:text-4xl font-black tabular-nums leading-none ${isOnPromo ? "text-red-600" : "text-slate-900"}`}>
+                          {formatRupiah(isOnPromo && product.hargaPromo && product.hargaPromo > 0 ? product.hargaPromo : product.hargaNormal)}
+                        </p>
+                        {isOnPromo && hasHargaPromo && (
+                          <p className="text-sm sm:text-base text-slate-400 line-through font-semibold tabular-nums">
+                            {formatRupiah(product.hargaNormal)}
+                          </p>
+                        )}
+                        {isOnPromo && hasHargaPromo && discountPct > 0 && (
+                          <span className="bg-red-600 text-white text-[11px] font-black px-2 py-0.5 rounded-md">
+                            -{discountPct}%
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleCheckLiveStock}
+                        disabled={checkingLiveStock}
+                        title="Periksa stok langsung ke server kasir toko 719 untuk seluruh varian artikel ini"
+                        className="flex items-center gap-1.5 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold transition-all disabled:opacity-50 active:scale-95 cursor-pointer"
+                      >
+                        {checkingLiveStock ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-600" />
+                        ) : (
+                          <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
+                        )}
+                        <span>{checkingLiveStock ? "Cek..." : "⚡ Live Stok"}</span>
+                      </button>
+
+                      <div
+                        className={`px-3.5 py-1.5 rounded-xl text-center border ${
+                          (product.stok ?? 0) > 10
+                            ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                            : (product.stok ?? 0) > 0
+                            ? "bg-amber-50 text-amber-700 border-amber-200"
+                            : "bg-red-50 text-red-700 border-red-200"
+                        }`}
+                      >
+                        <p className="text-[9px] font-black uppercase opacity-80 leading-tight">
+                          {liveStockVerified ? `✓ ${liveStockVerified}` : "Stok EOH"}
+                        </p>
+                        <p className="text-base font-black tabular-nums leading-tight">
+                          {product.stok ?? 0} <span className="text-[10px] font-bold">pcs</span>
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {isOnPromo && !hasHargaPromo && (
+                    <div className="bg-purple-100/90 border border-purple-200 rounded-xl px-3 py-2 flex items-center gap-2 text-purple-950">
+                      <Tag className="w-4 h-4 text-purple-700 shrink-0" />
+                      <span className="text-xs font-black tracking-wide break-words">
+                        {product.discountType || product.diskon || "PROMO SPESIAL KASIR"}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Aksi Cepat Varian Tunggal + Cetak Label */}
+                  <div className="pt-3 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <div className="inline-flex items-center bg-white border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
+                        <button
+                          type="button"
+                          onClick={() => setQty(Math.max(1, qty - 1))}
+                          className="w-8 h-8 flex items-center justify-center text-slate-600 hover:bg-slate-100 font-black cursor-pointer"
+                        >
+                          −
+                        </button>
+                        <span className="w-8 text-center text-xs font-black text-slate-800 tabular-nums">
+                          {qty}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setQty(qty + 1)}
+                          className="w-8 h-8 flex items-center justify-center text-slate-600 hover:bg-slate-100 font-black cursor-pointer"
+                        >
+                          +
+                        </button>
+                      </div>
+
+                      <label
+                        className="flex items-center gap-1.5 cursor-pointer select-none"
+                        title="Otomatis buka kamera setelah ditambahkan"
+                      >
+                        <input
+                          type="checkbox"
+                          className="w-3.5 h-3.5 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                          checked={continuousMode}
+                          onChange={(e) => setContinuousMode(e.target.checked)}
+                        />
+                        <span className="text-[11px] font-bold text-slate-600">Scan Lanjut</span>
+                      </label>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-1 sm:flex-initial justify-end">
+                      <button
+                        type="button"
+                        onClick={() => addToCart(targetCartActionType, qty, parsedInfo.size || product.size || "", false)}
+                        className={`flex-1 sm:flex-initial px-4 py-2 rounded-xl text-white font-black text-xs flex items-center justify-center gap-1.5 shadow-sm active:scale-95 transition-all cursor-pointer ${
+                          isFacingAction
+                            ? "bg-amber-500 hover:bg-amber-600"
+                            : "bg-indigo-600 hover:bg-indigo-700"
+                        }`}
+                      >
+                        {isFacingAction ? <Package2 className="w-4 h-4" /> : <MessageSquare className="w-4 h-4" />}
+                        <span>{isFacingAction ? `Facing Out (${parsedInfo.color || ""} ${parsedInfo.size || ""})` : "Tanya Stok"}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handlePrintLabel}
+                        className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs flex items-center gap-1 shadow-2xs active:scale-95 transition-all cursor-pointer shrink-0"
+                        title="Cetak Label Harga (PDF)"
+                      >
+                        <span>🖨️</span>
+                        <span className="hidden sm:inline">Label</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ════════════════════════════════════════════════════════════════
+                    TAMBAH CEPAT PER WARNA & SIZE (Sekali Scan, Isi Semua Warna!)
+                    ════════════════════════════════════════════════════════════════ */}
+                {colorGroupsList.length > 0 && (
+                  <div className="flex flex-col gap-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-sm font-black text-slate-800 flex items-center gap-2">
+                          <span className={`w-2.5 h-2.5 rounded-full ${isFacingAction ? "bg-emerald-500" : "bg-indigo-500"}`} />
+                          <span>Tambah Cepat Per Warna ({colorGroupsList.length} Warna • {sourceSiblings.length} Varian)</span>
+                        </h3>
+                        <p className="text-[11px] text-slate-500 mt-0.5">
+                          Ketuk langsung kotak size di dalam warna untuk <strong>+1</strong> tanpa perlu scan ulang barcode satu per satu.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-2.5">
+                      {colorGroupsList.map((cg) => {
+                        const isActiveColorGroup = cg.color === activeColorUpper;
+                        const colorPickedPcs = cg.sizes.reduce((s, item) => s + (multiVariantQty[item.sku] || 0), 0);
+
+                        return (
+                          <div
+                            key={cg.color}
+                            onClick={() => handleSelectVariant(cg.repSku)}
+                            className={`rounded-2xl border-2 p-3 sm:p-3.5 transition-all cursor-pointer flex flex-col gap-2.5 ${
+                              isActiveColorGroup
+                                ? "border-indigo-500 bg-indigo-50/20 shadow-xs"
+                                : "border-slate-200 bg-white hover:border-slate-300"
+                            }`}
+                          >
+                            {/* Header Kartu Warna */}
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <span
+                                  className="w-6 h-6 rounded-full border border-black/15 shadow-2xs shrink-0 flex items-center justify-center text-[9px] font-black"
+                                  style={cg.hex ? { backgroundColor: cg.hex, color: cg.isDark ? "#fff" : "#0f172a" } : { backgroundColor: "#e2e8f0" }}
+                                >
+                                  {cg.hex ? "" : cg.color.slice(0, 1)}
+                                </span>
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="text-xs sm:text-sm font-black text-slate-900 uppercase tracking-wide">
+                                      {cg.color}
+                                    </span>
+                                    {isActiveColorGroup ? (
+                                      <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-indigo-600 text-white uppercase">
+                                        Foto Aktif
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] font-semibold text-slate-400">
+                                        (Ketuk lihat foto)
+                                      </span>
+                                    )}
+                                    {colorPickedPcs > 0 && (
+                                      <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-600 text-white tabular-nums">
+                                        +{colorPickedPcs} dipilih
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-[11px] text-slate-500 tabular-nums">
+                                    Total warna: <strong className="text-slate-700">{cg.totalStock} pcs</strong> • {cg.sizes.length} ukuran
+                                  </p>
+                                </div>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={(e) => addFullColorSetQty(cg.sizes, e)}
+                                className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border border-slate-200 hover:border-emerald-300 text-[11px] font-extrabold transition-colors shrink-0 cursor-pointer shadow-2xs"
+                              >
+                                ⚡ +1 Semua Size
+                              </button>
+                            </div>
+
+                            {/* Kotak Ukuran di dalam Kartu Warna (1-Tap Add!) */}
+                            <div
+                              className="grid grid-cols-2 sm:grid-cols-4 gap-2"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {cg.sizes.map((item) => {
+                                const pickedQty = multiVariantQty[item.sku] || 0;
+                                const hasPromoPrice = Boolean(
+                                  item.hargaPromo && item.hargaPromo > 0 && item.hargaPromo < item.hargaNormal
+                                );
+                                return (
+                                  <div
+                                    key={item.sku}
+                                    onClick={() => quickTapSizePill(item.sku)}
+                                    className={`rounded-xl p-2.5 bg-white border-2 flex flex-col justify-between gap-1.5 cursor-pointer transition-all select-none ${
+                                      pickedQty > 0
+                                        ? "border-emerald-500 ring-2 ring-emerald-500/20 shadow-xs"
+                                        : item.isCurrent
+                                        ? "border-indigo-500 bg-indigo-50/30"
+                                        : "border-slate-200 hover:border-indigo-300"
+                                    }`}
+                                  >
+                                    <div className="flex items-center justify-between gap-1">
+                                      <span className="text-sm sm:text-base font-black text-slate-900 leading-none">
+                                        {item.size}
+                                      </span>
+                                      {pickedQty > 0 ? (
+                                        <span className="px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-black tabular-nums">
+                                          +{pickedQty}
+                                        </span>
+                                      ) : (
+                                        <span className="w-5 h-5 rounded-md bg-slate-100 text-slate-600 border border-slate-200 flex items-center justify-center text-xs font-black">
+                                          +
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    <div className="flex items-center justify-between gap-1 text-[11px] tabular-nums">
+                                      <span
+                                        className={`font-bold ${
+                                          item.stok > 0 ? "text-emerald-600" : "text-slate-400"
+                                        }`}
+                                      >
+                                        Stok {item.stok}
+                                      </span>
+                                      {item.isOnPromo && (
+                                        <span className="text-[9px] font-black px-1 py-0.5 rounded bg-rose-100 text-rose-700">
+                                          {hasPromoPrice ? formatRupiah(item.hargaPromo) : "PROMO"}
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    {pickedQty > 0 ? (
+                                      <div
+                                        className="flex items-center justify-between gap-1 pt-1 border-t border-slate-100"
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        <button
+                                          type="button"
+                                          onClick={(e) => adjustVariantQty(item.sku, -1, e)}
+                                          className="flex-1 h-6 rounded-md bg-slate-100 hover:bg-rose-50 hover:text-rose-600 text-slate-700 font-black text-xs cursor-pointer"
+                                        >
+                                          −
+                                        </button>
+                                        <span className="text-[11px] font-black text-emerald-700 px-1 tabular-nums">
+                                          {pickedQty}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={(e) => adjustVariantQty(item.sku, 1, e)}
+                                          className="flex-1 h-6 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs cursor-pointer"
+                                        >
+                                          +
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 pt-1 border-t border-slate-100">
+                                        <span>#{item.sku.slice(-4)}</span>
+                                        <span>{formatRupiah(item.hargaNormal)}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Detail Acara Promo (bila ada) */}
+                {isOnPromo && product.acara && (
+                  <div
+                    className={`border rounded-xl p-3.5 flex flex-col gap-1.5 ${
+                      isPromoExpired ? "bg-red-50 border-red-200" : "bg-amber-50 border-amber-200"
+                    }`}
+                  >
+                    <div className="flex justify-between items-start">
+                      <p
+                        className={`text-xs font-bold uppercase tracking-wide ${
+                          isPromoExpired ? "text-red-700" : "text-amber-700"
+                        }`}
+                      >
+                        Info Promo
+                      </p>
+                      {isPromoExpired && (
+                        <span className="bg-red-600 text-white text-[10px] font-bold px-2 py-0.5 rounded uppercase animate-pulse">
+                          Promo Habis
+                        </span>
+                      )}
+                    </div>
+                    <p
+                      className={`text-sm font-medium leading-snug ${
+                        isPromoExpired ? "text-red-800" : "text-amber-800"
+                      }`}
+                    >
+                      {product.acara}
+                    </p>
+                    {(product.fromDate || product.toDate) && (
+                      <div
+                        className={`flex items-center gap-1.5 text-xs mt-1 ${
+                          isPromoExpired ? "text-red-700" : "text-amber-700"
+                        }`}
+                      >
+                        <CalendarRange className="w-3.5 h-3.5" />
+                        <span>
+                          {formatDate(product.fromDate)} – {formatDate(product.toDate)}
+                        </span>
+                      </div>
+                    )}
+                    {product.promoFileName && (
+                      <div className="flex items-start gap-1.5 text-[10px] mt-2 pt-2 border-t border-amber-200/50 text-amber-700/70">
+                        <span className="font-bold uppercase shrink-0">SUMBER FILE:</span>
+                        <span className="font-mono break-all">{product.promoFileName}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
+
+            {/* Sticky Bar Floating Saat Ada Multi-Varian Dipilih */}
+            {selectedVariantsCount > 0 && (
+              <div className="fixed bottom-4 inset-x-3 sm:max-w-2xl sm:mx-auto z-40 bg-white/95 backdrop-blur-md border-2 border-emerald-500 rounded-2xl p-3 sm:p-3.5 shadow-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 animate-in fade-in duration-200">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-black text-emerald-700 uppercase tracking-wide">
+                      🎯 {selectedVariantsCount} Varian ({selectedTotalPcs} Pcs)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setMultiVariantQty({})}
+                      className="text-[11px] font-bold text-rose-600 hover:underline cursor-pointer"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-slate-600 truncate mt-0.5">
+                    {selectedVariantEntries
+                      .map(([vSku, vQty]) => {
+                        const foundSib = sourceSiblings.find((s) => s.sku === vSku);
+                        const info = foundSib ? parseProductInfo(foundSib) : { color: "", size: "" };
+                        return `${info.color || "STD"} ${info.size || "ALL"} x${vQty}`;
+                      })
+                      .join(" • ")}
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => addMultipleVariantsToCart(targetCartActionType, true)}
+                    className="px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold text-xs cursor-pointer"
+                  >
+                    + Tambah Lagi
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => addMultipleVariantsToCart(targetCartActionType, false)}
+                    className={`flex-1 sm:flex-initial px-4 py-2 rounded-xl text-white font-black text-xs shadow-md active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                      isFacingAction
+                        ? "bg-emerald-600 hover:bg-emerald-700"
+                        : "bg-indigo-600 hover:bg-indigo-700"
+                    }`}
+                  >
+                    <span>{isFacingAction ? `Simpan Facing Out (${selectedTotalPcs}) →` : `Kirim Tanya Stok (${selectedTotalPcs}) →`}</span>
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         );
       })()}

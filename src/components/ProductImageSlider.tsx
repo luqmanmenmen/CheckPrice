@@ -49,15 +49,23 @@ interface ProductImageSliderProps {
   images?: string[] | null;
   alt: string;
   className?: string;
+  roundedClass?: string;
   aspectRatio?: string;
   allowZoom?: boolean;
+  imageWidth?: number;
+  showThumbnails?: boolean;
+  colorBadge?: string | null;
 }
 
 export default function ProductImageSlider({
   images,
   alt,
-  className = "w-40 h-52 sm:w-48 sm:h-60",
+  className = "w-full aspect-[3/4]",
+  roundedClass = "rounded-2xl",
   allowZoom = true,
+  imageWidth = 400,
+  showThumbnails = false,
+  colorBadge = null,
 }: ProductImageSliderProps) {
   const cleanImages = (images || []).filter(
     (u): u is string => typeof u === "string" && u.trim().length > 0
@@ -75,9 +83,9 @@ export default function ProductImageSlider({
     setHasError({});
     // Preload slide ke-2 dst di background setelah gambar utama
     if (cleanImages.length > 1) {
-      preloadProductImages(cleanImages.slice(1), 400);
+      preloadProductImages(cleanImages.slice(1), imageWidth);
     }
-  }, [firstImageKey]);
+  }, [firstImageKey, imageWidth]);
 
   // Touch Swipe Handling
   const touchStartX = useRef<number | null>(null);
@@ -120,10 +128,10 @@ export default function ProductImageSlider({
   if (cleanImages.length === 0) {
     return (
       <div
-        className={`relative ${className} rounded-2xl bg-slate-100 flex flex-col items-center justify-center border border-slate-200 text-slate-400 p-4`}
+        className={`relative ${className} ${roundedClass} bg-gradient-to-br from-slate-100 to-slate-200/70 flex flex-col items-center justify-center border border-slate-200 text-slate-400 p-4`}
       >
-        <ImageIcon className="w-8 h-8 opacity-40 mb-1" />
-        <span className="text-[10px] font-bold uppercase tracking-wider opacity-60">
+        <ImageIcon className="w-10 h-10 opacity-40 mb-1.5" />
+        <span className="text-[11px] font-bold uppercase tracking-wider opacity-70">
           Foto Belum Tersedia
         </span>
       </div>
@@ -134,16 +142,16 @@ export default function ProductImageSlider({
   const rawCurrentSrc = cleanImages[safeIndex] || cleanImages[0];
   const displaySrc = useRawFallback[safeIndex]
     ? rawCurrentSrc
-    : optimizeRetailImageUrl(rawCurrentSrc, 400);
+    : optimizeRetailImageUrl(rawCurrentSrc, imageWidth);
   const isMulti = cleanImages.length > 1;
 
   // Untuk Lightbox Zoom gunakan resolusi HD (width=1000)
   const hdZoomImages = cleanImages.map((u) => optimizeRetailImageUrl(u, 1000));
 
   return (
-    <>
+    <div className="flex flex-col gap-2.5 w-full">
       <div
-        className={`relative ${className} rounded-2xl overflow-hidden bg-slate-100 shadow-md border border-slate-200/90 select-none group touch-pan-y`}
+        className={`relative ${className} ${roundedClass} overflow-hidden bg-slate-100 shadow-sm border border-slate-200/90 select-none group touch-pan-y`}
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
@@ -172,33 +180,11 @@ export default function ProductImageSlider({
                   setHasError((prev) => ({ ...prev, [safeIndex]: true }));
                 }
               }}
-              className="w-full h-full object-cover object-top cursor-pointer"
+              className="w-full h-full object-cover object-top cursor-zoom-in transition-transform duration-300 group-hover:scale-[1.02]"
               onClick={() => allowZoom && setIsZoomed(true)}
             />
           )}
         </div>
-
-        {/* Badge Counter Gambar (misal: 1 / 5) */}
-        {isMulti && (
-          <div className="absolute top-2.5 right-2.5 z-20 bg-slate-950/70 backdrop-blur-md text-white text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm tracking-wider">
-            {safeIndex + 1} / {cleanImages.length}
-          </div>
-        )}
-
-        {/* Tombol Zoom Icon */}
-        {allowZoom && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setIsZoomed(true);
-            }}
-            className="absolute top-2.5 left-2.5 z-20 w-6 h-6 rounded-full bg-slate-950/50 backdrop-blur-md text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-slate-950/80"
-            title="Perbesar Foto"
-          >
-            <Maximize2 className="w-3.5 h-3.5" />
-          </button>
-        )}
 
         {/* Tombol Navigasi Kiri / Kanan */}
         {isMulti && (
@@ -209,7 +195,7 @@ export default function ProductImageSlider({
                 e.stopPropagation();
                 handlePrev();
               }}
-              className="absolute left-1.5 top-1/2 -translate-y-1/2 z-20 w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-slate-950/40 hover:bg-slate-950/80 backdrop-blur-md text-white flex items-center justify-center shadow-md transition-all active:scale-95"
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 z-20 w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-white/85 hover:bg-white text-slate-900 border border-black/10 shadow-md flex items-center justify-center transition-all active:scale-95 sm:opacity-0 sm:group-hover:opacity-100 cursor-pointer"
               aria-label="Foto Sebelumnya"
             >
               <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5" />
@@ -220,34 +206,80 @@ export default function ProductImageSlider({
                 e.stopPropagation();
                 handleNext();
               }}
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 z-20 w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-slate-950/40 hover:bg-slate-950/80 backdrop-blur-md text-white flex items-center justify-center shadow-md transition-all active:scale-95"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 z-20 w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-white/85 hover:bg-white text-slate-900 border border-black/10 shadow-md flex items-center justify-center transition-all active:scale-95 sm:opacity-0 sm:group-hover:opacity-100 cursor-pointer"
               aria-label="Foto Selanjutnya"
             >
               <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
-
-            {/* Indikator Titik (Dots) di Bagian Bawah */}
-            <div className="absolute bottom-2 inset-x-0 z-20 flex justify-center items-center gap-1.5 px-3">
-              {cleanImages.map((_, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setCurrentIndex(idx);
-                  }}
-                  className={`transition-all duration-200 rounded-full ${
-                    idx === safeIndex
-                      ? "w-4 h-1.5 bg-white shadow-md"
-                      : "w-1.5 h-1.5 bg-white/50 hover:bg-white/80"
-                  }`}
-                  aria-label={`Ke foto ${idx + 1}`}
-                />
-              ))}
-            </div>
           </>
         )}
+
+        {/* Bar Badge Bawah Gambar (Warna, Counter 1/6, & Tombol Layar Penuh) */}
+        <div className="absolute bottom-2.5 inset-x-2.5 z-20 flex items-center justify-between gap-2 pointer-events-none">
+          {colorBadge ? (
+            <span className="px-2.5 py-1 rounded-full bg-slate-950/75 backdrop-blur-md text-white text-[11px] font-black uppercase tracking-wide shadow-sm truncate max-w-[55%]">
+              Warna: {colorBadge}
+            </span>
+          ) : (
+            <span />
+          )}
+          <div className="flex items-center gap-1.5 pointer-events-auto">
+            {isMulti && (
+              <span className="px-2.5 py-1 rounded-full bg-slate-950/75 backdrop-blur-md text-white text-[11px] font-mono font-bold tabular-nums shadow-sm">
+                {safeIndex + 1}/{cleanImages.length}
+              </span>
+            )}
+            {allowZoom && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsZoomed(true);
+                }}
+                className="px-2.5 py-1 rounded-full bg-slate-950/75 hover:bg-slate-950 backdrop-blur-md text-white text-[11px] font-bold flex items-center gap-1 shadow-sm cursor-pointer transition-colors"
+                title="Perbesar Foto Layar Penuh"
+              >
+                <Maximize2 className="w-3 h-3" />
+                <span className="hidden sm:inline">Layar Penuh</span>
+              </button>
+            )}
+          </div>
+        </div>
       </div>
+
+      {/* Strip Thumbnail Klik-Cepat di bawah Gambar Utama */}
+      {showThumbnails && isMulti && (
+        <div className="flex items-center gap-1.5 overflow-x-auto px-3 sm:px-0 pb-0.5">
+          {cleanImages.map((imgUrl, idx) => {
+            const thumbSrc = optimizeRetailImageUrl(imgUrl, 160);
+            const active = idx === safeIndex;
+            return (
+              <button
+                key={`${imgUrl}-${idx}`}
+                type="button"
+                onClick={() => setCurrentIndex(idx)}
+                className={`relative shrink-0 w-13 sm:w-14 aspect-[3/4] rounded-xl overflow-hidden border-2 transition-all cursor-pointer bg-slate-100 ${
+                  active
+                    ? "border-slate-900 ring-2 ring-slate-900/15 shadow-xs"
+                    : "border-slate-200 opacity-70 hover:opacity-100"
+                }`}
+                aria-label={`Lihat sudut foto ${idx + 1}`}
+              >
+                <img
+                  src={thumbSrc}
+                  alt={`${alt} thumbnail ${idx + 1}`}
+                  loading="lazy"
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full object-cover object-top"
+                />
+                <span className="absolute bottom-0.5 right-0.5 px-1 rounded bg-black/65 text-white text-[9px] font-mono font-bold">
+                  {idx + 1}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Modal Lightbox Zoom */}
       <ImageLightboxModal
@@ -257,6 +289,6 @@ export default function ProductImageSlider({
         initialIndex={safeIndex}
         title={alt}
       />
-    </>
+    </div>
   );
 }
