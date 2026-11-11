@@ -1021,3 +1021,16 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
      - Melewati exact lookup `sku`/`barcode` untuk query huruf tanpa angka, memfokuskan `ILIKE` ke kolom teks terindeks GIN, memangkas stem typo berlebih di `expandRetailQuery`, memakai `PRODUCT_LIST_SELECT` ramping, menyatukan cleanup promo kedaluwarsa dalam 1 `updateMany`, serta menambahkan LRU cache 60 detik di server (`searchListCache`).
   4. **Cache Paginasi 0ms + Background Prefetch (`src/app/page.tsx`):** Menambahkan `listCacheRef` (TTL 60 detik) beserta *silent prefetch* halaman berikutnya + preload thumbnail 400px di latar belakang agar klik **Selanjutnya** / **Sebelumnya** tampil instan **0ms**.
 
+---
+
+## 65. Penyempurnaan Kartu Katalog Portrait 5-Kolom Desktop & Foto Bersih Tanpa Badge
+
+- **Masalah dari Screenshot Pengguna:**
+  1. Badge merah `HARGA SPESIAL` dan pill `varian` menimpa area foto model (`absolute top-1.5`) sehingga menutupi/merusak tampilan wajah & pakaian.
+  2. Ukuran kotak foto sebelumnya (`sm:h-44` di grid 2-3 kolom) berbentuk *landscape* melebar sehingga memotong bagian bawah model (hanya tampak kepala) dan terasa terlalu renggang di desktop.
+- **Perbaikan di [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx):**
+  1. **Foto 100% Bersih & Proporsi Portrait (`aspect-[3/4]`):** Seluruh badge overlay di atas foto dihapus; container gambar selalu memakai rasio portrait vertical `aspect-[3/4]` dengan `object-cover object-top` sehingga model tampil utuh dari kepala sampai pakaian tanpa terpotong horizontal.
+  2. **Grid Multi-Kolom Padat hingga 5 Kartu Sekaligus (`grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5`):** Menampilkan 2 kartu portrait per baris di HP, 3–4 kartu di layar *split*/tablet, dan **5 kartu portrait sekaligus** per baris di desktop (`20` item/halaman = `4` baris penuh simetris).
+  3. **Badge Promo & Varian Dipindah ke Area Info:** Label `HARGA SPESIAL`/`PROMO`/`ACARA` dan jumlah varian (`X var`) ditempatkan rapi bersama badge `article`, brand, warna/ukuran, harga, dan stok di bawah foto.
+
+

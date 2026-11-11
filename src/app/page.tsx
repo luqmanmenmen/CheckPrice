@@ -1983,7 +1983,7 @@ export default function Home() {
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2.5 sm:gap-3">
                 {filteredProducts.map((p) => {
                   const info = parseProductInfo(p);
                   const cleanArticle =
@@ -2003,8 +2003,8 @@ export default function Home() {
                   const variantCount = p.articleGroupCount ?? 1;
                   const colorsSummary =
                     p.articleColors && p.articleColors.length > 0
-                      ? p.articleColors.slice(0, 3).join(", ") +
-                        (p.articleColors.length > 3 ? ` +${p.articleColors.length - 3}` : "")
+                      ? p.articleColors.slice(0, 2).join(", ") +
+                        (p.articleColors.length > 2 ? ` +${p.articleColors.length - 2}` : "")
                       : info.color;
                   const sizesSummary =
                     p.articleSizes && p.articleSizes.length > 1
@@ -2023,10 +2023,10 @@ export default function Home() {
                         scrollPageToTop();
                         searchProduct(p.sku);
                       }}
-                      className="group text-left bg-white border border-slate-200 hover:border-blue-400 hover:shadow-md rounded-xl overflow-hidden transition-all flex flex-row sm:flex-col cursor-pointer"
+                      className="group text-left bg-white border border-slate-200 hover:border-blue-400 hover:shadow-md rounded-xl overflow-hidden transition-all flex flex-col h-full cursor-pointer"
                     >
-                      {/* Product Photo Thumbnail */}
-                      <div className="relative w-24 min-h-[112px] sm:w-full sm:h-44 bg-slate-100 shrink-0 overflow-hidden border-r sm:border-r-0 sm:border-b border-slate-100">
+                      {/* Clean Portrait Product Photo (Zero Overlay Badges) */}
+                      <div className="w-full aspect-[3/4] bg-slate-50 shrink-0 overflow-hidden border-b border-slate-100">
                         {p.imageUrl ? (
                           <img
                             src={optimizeRetailImageUrl(p.imageUrl, 400)}
@@ -2042,75 +2042,75 @@ export default function Home() {
                             <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">No Foto</span>
                           </div>
                         )}
-
-                        {hasPromo && promoBadge && (
-                          <span className="absolute top-1.5 left-1.5 bg-rose-600/95 text-white text-[9px] font-black px-1.5 py-0.5 rounded-md shadow-xs uppercase tracking-wide max-w-[125px] truncate">
-                            {promoBadge}
-                          </span>
-                        )}
-
-                        {variantCount > 1 && (
-                          <span className="absolute top-1.5 right-1.5 bg-slate-900/80 backdrop-blur-xs text-white text-[9px] font-bold px-1.5 py-0.5 rounded-md">
-                            {variantCount} varian
-                          </span>
-                        )}
                       </div>
 
-                      {/* Card Body */}
-                      <div className="flex-1 p-2.5 sm:p-3 flex flex-col justify-between min-w-0">
+                      {/* Card Body (Artikel, Brand, Varian, Promo Tag, & Harga di Samping/Bawah) */}
+                      <div className="flex-1 p-2 sm:p-2.5 flex flex-col justify-between min-w-0">
                         <div>
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="text-[10px] font-mono font-bold bg-slate-900 text-white px-2 py-0.5 rounded">
+                          <div className="flex items-center gap-1 flex-wrap">
+                            <span className="text-[9px] sm:text-[10px] font-mono font-bold bg-slate-900 text-white px-1.5 py-0.5 rounded">
                               {cleanArticle || p.sku}
                             </span>
                             {p.brand && (
-                              <span className="text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100 px-1.5 py-0.5 rounded truncate max-w-[115px]">
+                              <span className="text-[9px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100 px-1.5 py-0.5 rounded truncate max-w-[85px]">
                                 {p.brand}
+                              </span>
+                            )}
+                            {variantCount > 1 && (
+                              <span className="text-[9px] font-bold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">
+                                {variantCount} var
                               </span>
                             )}
                           </div>
 
-                          <p className="font-bold text-slate-900 text-xs sm:text-sm leading-snug line-clamp-2 mt-1.5 group-hover:text-blue-700 transition-colors">
+                          <p className="font-bold text-slate-900 text-[11px] sm:text-xs leading-snug line-clamp-2 mt-1.5 group-hover:text-blue-700 transition-colors">
                             {info.name}
                           </p>
 
                           {(colorsSummary || sizesSummary) && (
-                            <div className="flex flex-wrap gap-1 mt-1.5">
+                            <div className="flex flex-wrap gap-1 mt-1">
                               {colorsSummary && (
-                                <span className="text-[10px] font-semibold bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded truncate max-w-[160px]">
+                                <span className="text-[9px] font-semibold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded truncate max-w-full">
                                   {colorsSummary}
                                 </span>
                               )}
                               {sizesSummary && (
-                                <span className="text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-100 px-1.5 py-0.5 rounded">
-                                  Size: {sizesSummary}
+                                <span className="text-[9px] font-semibold bg-blue-50 text-blue-700 border border-blue-100 px-1.5 py-0.5 rounded">
+                                  {sizesSummary}
                                 </span>
                               )}
                             </div>
                           )}
                         </div>
 
-                        <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
-                          <div className="min-w-0">
-                            {hasLowerPromoPrice && p.hargaNormal > (p.hargaPromo || 0) && (
-                              <p className="text-[10px] text-slate-400 line-through leading-none">
-                                {formatRupiah(p.hargaNormal)}
+                        <div className="mt-2 pt-1.5 border-t border-slate-100 flex flex-col gap-1">
+                          {hasPromo && promoBadge && (
+                            <span className="inline-block self-start text-[9px] font-black px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 uppercase tracking-tight max-w-full truncate">
+                              {promoBadge}
+                            </span>
+                          )}
+                          <div className="flex items-end justify-between gap-1">
+                            <div className="min-w-0">
+                              {hasLowerPromoPrice && p.hargaNormal > (p.hargaPromo || 0) && (
+                                <p className="text-[9px] text-slate-400 line-through leading-none">
+                                  {formatRupiah(p.hargaNormal)}
+                                </p>
+                              )}
+                              <p className={`text-xs font-black leading-tight truncate ${hasLowerPromoPrice ? 'text-rose-600' : 'text-blue-700'}`}>
+                                {formatRupiah(displayPrice)}
                               </p>
-                            )}
-                            <p className={`text-xs sm:text-sm font-black leading-tight ${hasLowerPromoPrice ? 'text-rose-600' : 'text-blue-700'}`}>
-                              {formatRupiah(displayPrice)}
-                            </p>
-                          </div>
+                            </div>
 
-                          <span
-                            className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md border shrink-0 ${
-                              totalStok > 0
-                                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                                : "bg-rose-50 text-rose-700 border-rose-200"
-                            }`}
-                          >
-                            Stok: {totalStok} pcs
-                          </span>
+                            <span
+                              className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded border shrink-0 ${
+                                totalStok > 0
+                                  ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                  : "bg-rose-50 text-rose-700 border-rose-200"
+                              }`}
+                            >
+                              Stok: {totalStok}
+                            </span>
+                          </div>
                         </div>
                       </div>
                     </button>
