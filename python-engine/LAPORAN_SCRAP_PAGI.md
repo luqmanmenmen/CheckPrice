@@ -1,18 +1,18 @@
 # 📋 LAPORAN HASIL BRUTAL SCRAPING & SINKRONISASI TOTAL MDS BISA
 **Tanggal Eksekusi:** 11 November 2026  
-**Waktu Mulai:** 15:03:08 WIB  
-**Waktu Pembaruan Terakhir:** 15:04:09 WIB  
-**Durasi Pemindaian Berjalan:** 1.0 Menit  
+**Waktu Mulai:** 15:06:40 WIB  
+**Waktu Pembaruan Terakhir:** 15:07:28 WIB  
+**Durasi Pemindaian Berjalan:** 0.8 Menit  
 **Mode Mesin:** Turbo Multi-Threaded (16 Workers + HTTP Keep-Alive + Dual SKU/UPC Check-Digit Sweep)
 
 ---
 
 ## 1. Ringkasan Eksekutif Bank Data Toko 719
 - **Total Master Produk Awal (Sebelum Scrap):** 9,703 SKU  
-- **Total Master Produk Saat Ini di Supabase:** **84,860 SKU**  
-- **Total Produk Baru Berhasil Diserap:** **+75,157 SKU** *(+41 di sesi turbo ini)*  
-- **Produk Terpetakan Diperbarui Stok/Barcode:** **0 SKU**  
-- **Brankas Jalur Mapping SKU:** `python-engine/mapped_sku_paths.json.gz` (**84,860 Jalur SKU & Barcode Aktif**)  
+- **Total Master Produk Saat Ini di Supabase:** **84,912 SKU**  
+- **Total Produk Baru Berhasil Diserap:** **+75,209 SKU** *(+52 di sesi turbo ini)*  
+- **Produk Terpetakan Diperbarui Stok/Barcode:** **12 SKU**  
+- **Brankas Jalur Mapping SKU:** `python-engine/mapped_sku_paths.json.gz` (**84,912 Jalur SKU & Barcode Aktif**)  
 - **Atribut Terserap Lengkap:** `SKU`, `Barcode UPC (EAN-13)`, `Artikel (StyleCode)`, `Deskripsi`, `Brand`, `Departemen`, `Warna`, `Ukuran`, `Harga Normal`, dan `Stok Riil Toko (termasuk Stok 0 pcs)`  
 - **Status Database:** 100% Produk Langsung Aktif & Dapat Di-scan Kasir (`luqmanganteng.my.id`)  
 
@@ -23,11 +23,11 @@ Berikut adalah rincian produk yang berhasil ditangkap dari StoreHub MDS BISA dan
 
 | No | Merk / Departemen | Jumlah Produk Diserap | Status di Sistem |
 | :--- | :--- | :--- | :--- |
-| 1 | **NEVADA** | 16,857 Item | ✅ Aktif & Siap Scan |
-| 2 | **LITTLE M** | 9,288 Item | ✅ Aktif & Siap Scan |
+| 1 | **NEVADA** | 16,858 Item | ✅ Aktif & Siap Scan |
+| 2 | **LITTLE M** | 9,292 Item | ✅ Aktif & Siap Scan |
 | 3 | **SUKO CASUAL** | 5,823 Item | ✅ Aktif & Siap Scan |
-| 4 | **CONNEXION** | 3,846 Item | ✅ Aktif & Siap Scan |
-| 5 | **COLE** | 3,475 Item | ✅ Aktif & Siap Scan |
+| 4 | **CONNEXION** | 3,867 Item | ✅ Aktif & Siap Scan |
+| 5 | **COLE** | 3,486 Item | ✅ Aktif & Siap Scan |
 | 6 | **DISNEY** | 3,416 Item | ✅ Aktif & Siap Scan |
 | 7 | **ZES WOMEN** | 3,329 Item | ✅ Aktif & Siap Scan |
 | 8 | **LITTLE M BABY** | 3,160 Item | ✅ Aktif & Siap Scan |
@@ -36,7 +36,7 @@ Berikut adalah rincian produk yang berhasil ditangkap dari StoreHub MDS BISA dan
 | 11 | **CHARACTER** | 2,492 Item | ✅ Aktif & Siap Scan |
 | 12 | **ZES MEN** | 2,326 Item | ✅ Aktif & Siap Scan |
 | 13 | **AOS MENS** | 2,182 Item | ✅ Aktif & Siap Scan |
-| 14 | **SAINT YVES** | 1,607 Item | ✅ Aktif & Siap Scan |
+| 14 | **SAINT YVES** | 1,608 Item | ✅ Aktif & Siap Scan |
 | 15 | **MaxMurah Ladies** | 1,344 Item | ✅ Aktif & Siap Scan |
 | 16 | **SUKO BOYS** | 1,094 Item | ✅ Aktif & Siap Scan |
 | 17 | **SUKO GIRLS** | 1,025 Item | ✅ Aktif & Siap Scan |
@@ -77,7 +77,7 @@ Berikut adalah rincian produk yang berhasil ditangkap dari StoreHub MDS BISA dan
 | 52 | **ST MORITZ** | 121 Item | ✅ Aktif & Siap Scan |
 | 53 | **CARDINAL FEMME** | 118 Item | ✅ Aktif & Siap Scan |
 | 54 | **DISNEY SLEEPWEAR** | 116 Item | ✅ Aktif & Siap Scan |
-| 55 | **STANLEY ADAMS** | 113 Item | ✅ Aktif & Siap Scan |
+| 55 | **STANLEY ADAMS** | 115 Item | ✅ Aktif & Siap Scan |
 | 56 | **ROHDE** | 108 Item | ✅ Aktif & Siap Scan |
 | 57 | **MAXMURAH HANDBAGS** | 106 Item | ✅ Aktif & Siap Scan |
 | 58 | **SUKO TOYS** | 105 Item | ✅ Aktif & Siap Scan |
@@ -88,7 +88,7 @@ Berikut adalah rincian produk yang berhasil ditangkap dari StoreHub MDS BISA dan
 | 63 | **PETER KEIZA** | 91 Item | ✅ Aktif & Siap Scan |
 | 64 | **KENGO** | 90 Item | ✅ Aktif & Siap Scan |
 | 65 | **CROCODILE** | 87 Item | ✅ Aktif & Siap Scan |
-| 66 | **AMERICAN JEANS** | 76 Item | ✅ Aktif & Siap Scan |
+| 66 | **AMERICAN JEANS** | 77 Item | ✅ Aktif & Siap Scan |
 | 67 | **ROYAL SPORTING HOUSE** | 76 Item | ✅ Aktif & Siap Scan |
 | 68 | **TULIP** | 75 Item | ✅ Aktif & Siap Scan |
 | 69 | **LEE VIERRA** | 69 Item | ✅ Aktif & Siap Scan |

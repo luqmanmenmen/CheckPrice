@@ -846,10 +846,19 @@ def flush_buffer(
     """Menyimpan batch produk secara aman ke Supabase (deduplikasi SKU & penanganan konflik barcode)."""
     if not buffer_by_sku:
         return
+    MDS_UPSERT_KEYS = (
+        "sku", "barcode", "article", "description", "brand",
+        "dept", "color", "size", "hargaNormal", "stok", "updatedAt",
+    )
     records = []
     for r in buffer_by_sku.values():
-        clean_r = dict(r)
-        clean_r.pop("_from_registry_only", None)
+        clean_r = {k: r.get(k) for k in MDS_UPSERT_KEYS if k in r or k in ("sku", "description", "hargaNormal", "stok", "updatedAt")}
+        if clean_r.get("barcode") is None:
+            clean_r["barcode"] = None
+        if clean_r.get("article") is None:
+            clean_r["article"] = "PRODUK BARU"
+        for opt_k in ("brand", "dept", "color", "size"):
+            clean_r.setdefault(opt_k, None)
         records.append(clean_r)
     buffer_by_sku.clear()
 
