@@ -25,10 +25,6 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-import psycopg2
-from psycopg2.extras import execute_values
-from dotenv import load_dotenv
-
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
 
@@ -149,6 +145,8 @@ def is_ignored_product(desc: Optional[str], article: Optional[str]) -> bool:
     return (
         "SKU DUMMY" in d
         or "ITEM TIDAK DIGUNAKAN" in d
+        or "ITEM TIDAK DAPAT" in d
+        or "TIDAK DI GUNAKAN" in d
         or "DUMMYZES" in d
         or "DUMMY" in a
     )
@@ -163,7 +161,10 @@ def get_article_group_key(
 ) -> str:
     raw_art = (article or "").strip().upper()
     if raw_art not in INVALID_ARTICLES:
-        return f"ART::{raw_art}"
+        # Pisahkan kode artikel yang bertabrakan antar Toko (ZES/SUKO/MUKU) & Kategori (mis. THEA/JULIAN Sandal vs Cardigan)
+        b_group = classify_brand_group(brand, dept)
+        c_key = classify_product_category(brand, dept, desc)
+        return f"ART::{b_group}::{c_key}::{raw_art}"
     base_desc = (desc or "").split(":")[0].strip().upper()
     if len(base_desc) >= 3:
         b_u = (brand or "").strip().upper()
@@ -335,6 +336,8 @@ def sort_size_key(sz: str) -> Tuple[int, float, str]:
 
 
 def resolve_db_url() -> str:
+    from dotenv import load_dotenv
+
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     load_dotenv(os.path.join(base_dir, ".env"))
     load_dotenv(os.path.join(base_dir, ".env.local"))
@@ -347,6 +350,9 @@ def resolve_db_url() -> str:
 
 
 def build_and_verify_catalog() -> Dict[str, Any]:
+    import psycopg2
+    from psycopg2.extras import execute_values
+
     t0 = time.time()
     db_url = resolve_db_url()
     conn = psycopg2.connect(db_url)

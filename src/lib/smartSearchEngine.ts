@@ -486,6 +486,8 @@ export function isIgnoredCatalogProduct(p: { description?: string | null; name?:
   return (
     descUpper.includes("SKU DUMMY") ||
     descUpper.includes("ITEM TIDAK DIGUNAKAN") ||
+    descUpper.includes("ITEM TIDAK DAPAT") ||
+    descUpper.includes("TIDAK DI GUNAKAN") ||
     descUpper.includes("DUMMYZES") ||
     artUpper.includes("DUMMY")
   );
@@ -493,9 +495,10 @@ export function isIgnoredCatalogProduct(p: { description?: string | null; name?:
 
 /**
  * Kunci pengelompokan unik per artikel:
- * Bila kolom `article` bernilai "0" / "-" / kosong (mis. 3.395 SKU ZES & 204 SKU anak),
- * kelompokkan berdasarkan nama dasar produk (`brand::dept::baseDesc`) agar 1 sepatu/baju
- * dengan 14 ukuran/warna tidak pecah menjadi 14 kartu dobel lintas halaman.
+ * - Untuk artikel valid: isolasi berdasarkan `brandGroup::categoryKey::article` agar kode artikel
+ *   yang kebetulan kembar (misal THEA/JULIAN Sandal VOLO vs Cardigan/Sweatshirt ZES) tidak tercampur.
+ * - Bila kolom `article` bernilai "0" / "-" / kosong (mis. 3.395 SKU ZES & 204 SKU anak),
+ *   kelompokkan berdasarkan nama dasar produk (`brand::dept::baseDesc`).
  */
 export function getProductArticleGroupKey(item: {
   article?: string | null;
@@ -507,7 +510,9 @@ export function getProductArticleGroupKey(item: {
 }): string {
   const rawArt = String(item?.article || "").trim().toUpperCase();
   if (!INVALID_ARTICLE_SET.has(rawArt)) {
-    return `ART::${rawArt}`;
+    const bGroup = classifyBrandGroup(item);
+    const catKey = classifyProductCategory(item);
+    return `ART::${bGroup}::${catKey}::${rawArt}`;
   }
   const baseDesc = String(item?.description || item?.name || "").split(":")[0].trim().toUpperCase();
   if (baseDesc.length >= 3) {

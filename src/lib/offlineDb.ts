@@ -233,7 +233,7 @@ export async function rebuildModelsIndexFromProducts(): Promise<CachedArticleMod
   }
 }
 
-const MODELS_TAXONOMY_VERSION = "v15_brand_pages_dedup";
+const MODELS_TAXONOMY_VERSION = "v16_zes_clean_dedup";
 
 export async function ensureModelsIndexReady(): Promise<CachedArticleModel[] | null> {
   if (memoryModelsCache && memoryModelsCache.length >= 1000) {

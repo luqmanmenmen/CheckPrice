@@ -88,6 +88,12 @@ export function checkAndCleanPromo(p: any) {
 
 export async function getProductSiblings(prod: any): Promise<any[]> {
   let siblings: any[] = [];
+  const targetBrandGroup = classifyBrandGroup(prod);
+  const targetCategory = classifyProductCategory(prod);
+  const matchesTargetScope = (s: any) =>
+    classifyBrandGroup(s) === targetBrandGroup &&
+    classifyProductCategory(s) === targetCategory;
+
   if (
     prod.article &&
     prod.article.trim() &&
@@ -97,16 +103,21 @@ export async function getProductSiblings(prod: any): Promise<any[]> {
       where: { article: prod.article },
       orderBy: [{ color: "asc" }, { size: "asc" }, { description: "asc" }],
     });
-    siblings = cleanPromoList(allSiblings);
+    const scoped = allSiblings.filter(matchesTargetScope);
+    siblings = cleanPromoList(scoped.length > 0 ? scoped : allSiblings);
   } else if (prod.description) {
     const parts = prod.description.split(":");
     if (parts.length > 1) {
       const parentName = parts[0].trim();
       const allSiblings = await db.product.findMany({
-        where: { description: { startsWith: parentName + ":" } },
+        where: {
+          description: { startsWith: parentName + ":" },
+          ...(prod.brand ? { brand: prod.brand } : {}),
+        },
         orderBy: { description: "asc" },
       });
-      siblings = cleanPromoList(allSiblings);
+      const scoped = allSiblings.filter(matchesTargetScope);
+      siblings = cleanPromoList(scoped.length > 0 ? scoped : allSiblings);
     }
   }
   return siblings;

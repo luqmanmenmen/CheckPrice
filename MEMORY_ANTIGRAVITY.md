@@ -1116,6 +1116,15 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
      - Seluruh ukuran (`S`, `M`, `L`, `XL`, dll.) dikelompokkan rapi di dalam kartu masing-masing warnanya (`BEIGE`, `BLACK`, dst.).
      - **1 ketuk kotak size (`quickTapSizePill`)** langsung menambah `+1` dan menyinkronkan foto warna; tombol **`⚡ +1 Semua Size` (`addFullColorSetQty`)** menambahkan seluruh size tersedia pada warna tersebut sekaligus tanpa scan ulang barcode satu per satu, dirangkum di sticky bottom bar (`+ Tambah Lagi` / `Simpan Facing Out →`).
 
+### 73. Audit & Pembersihan Foto Nyasar ZES + Isolasi Artikel Lintas Toko/Kategori (`v16_zes_clean_dedup`)
+- **Akar Masalah Katalog ZES (`0/107` Foto Milik ZES):**
+  - Audit 96 sitemap produk `matahari.com` + tabel `Product` membuktikan katalog web resmi `matahari.com` belum menyediakan foto studio untuk `ZES`. Seluruh 107 baris `ZES` yang sempat berfoto ternyata hasil propagasi salah `brutal_image_scraper.py` dari brand sandal/sepatu & dalaman (`VOLO`/`COLE`/`NEVADA`) karena kode artikel human-name kembar (mis. `THEA` Cardigan ZES vs Sandal VOLO; `JULIAN` Sweatshirt ZES vs Sandal VOLO).
+  - Pengelompokan artikel sebelumnya (`ART::{rawArt}`) menggabungkan produk beda toko/kategori yang kebetulan memakai kode artikel sama (`THEA 19 var`, `JULIAN 22 var`).
+- **Solusi End-to-End Python + Database + UI (`task-7561`, `task-7641`):**
+  1. **Scrubbing DB:** `293` SKU dengan URL foto nyasar lintas toko/kategori & item `DUMMY` dibersihkan (`imageUrl = NULL`, `REMAINING_ZES_WITH_PHOTO = 0`).
+  2. **Isolasi Scraper & Indexing:** `brutal_image_scraper.py` kini mengunci propagasi sibling per `(brand_group, category_key, article[, color])`; `build_catalog_index.py`, `smartSearchEngine.ts`, `getProductSiblings`, & filter API kini memisahkan `ART::{brandGroup}::{categoryKey}::{rawArt}` serta memblokir varian teks dummy `ITEM TIDAK DAPAT` / `TIDAK DI GUNAKAN`. Rebuild `CatalogArticle` menghasilkan `17.362` artikel unik (`ZES: 914`, `SUKO: 1.180`, `Mu+Ku: 15.268`, melewati `533` dummy), memisahkan `THEA`/`JULIAN` per toko & kategori.
+  3. **Poster Warna Kartu Tanpa Foto + Banner ZES:** Bump `MODELS_TAXONOMY_VERSION` ke `"v16_zes_clean_dedup"` (`offlineDb.ts`), kartu tanpa foto di `page.tsx` ditingkatkan menjadi poster bertema kategori + dot variasi warna asli (`getColorData`), serta ditambah banner `INFO ZES` agar kasir paham status foto web ZES.
+
 
 
 

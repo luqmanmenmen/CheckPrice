@@ -251,7 +251,9 @@ export async function GET(
         NOT: [
           { article: { contains: "DUMMY", mode: 'insensitive' as const } },
           { description: { contains: "SKU DUMMY", mode: 'insensitive' as const } },
-          { description: { contains: "ITEM TIDAK DIGUNAKAN", mode: 'insensitive' as const } }
+          { description: { contains: "ITEM TIDAK DIGUNAKAN", mode: 'insensitive' as const } },
+          { description: { contains: "ITEM TIDAK DAPAT", mode: 'insensitive' as const } },
+          { description: { contains: "TIDAK DI GUNAKAN", mode: 'insensitive' as const } }
         ]
       });
     }

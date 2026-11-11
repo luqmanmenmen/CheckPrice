@@ -46,6 +46,14 @@ from urllib3.util.retry import Retry
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from build_catalog_index import (
+    INVALID_ARTICLES as CATALOG_INVALID_ARTICLES,
+    classify_brand_group,
+    classify_product_category,
+    is_ignored_product,
+)
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
 
@@ -180,8 +188,8 @@ def add_to_gallery(sku_galleries: Dict[str, List[str]], key: str, urls: List[str
 def parse_shopify_product(
     prod: Dict[str, Any],
     sku_galleries: Dict[str, List[str]],
-    shopify_art_color_galleries: Dict[Tuple[str, str], List[str]],
-    shopify_art_galleries: Dict[str, List[str]],
+    shopify_art_color_galleries: Dict[Tuple[str, str, str, str], List[str]],
+    shopify_art_galleries: Dict[Tuple[str, str, str], List[str]],
 ):
     """Mengekstrak pemetaan SKU & Kode Artikel -> Galeri Foto Produk Asli dari objek Shopify."""
     images = prod.get("images") or []
@@ -259,16 +267,23 @@ def parse_shopify_product(
     for f_sku, f_imgs in filename_sku_to_imgs.items():
         add_to_gallery(sku_galleries, f_sku, f_imgs)
 
+    # Isolasi artikel Shopify berdasarkan (brand_group, category_key) agar sandal/dalaman tidak menulari jaket/kemeja
+    sp_vendor = str(prod.get("vendor") or "")
+    sp_type = str(prod.get("product_type") or "")
+    sp_title = str(prod.get("title") or "")
+    sp_brand_group = classify_brand_group(sp_vendor, f"{sp_type} {sp_title}")
+    sp_cat_key = classify_product_category(sp_vendor, sp_type, sp_title)
+
     # Simpan per warna ke semua varian SKU di warna tersebut
     for color, skus in color_to_skus.items():
         c_imgs = color_to_imgs.get(color) or all_product_imgs
         for sku in skus:
             add_to_gallery(sku_galleries, sku, c_imgs)
         if extracted_art and color:
-            shopify_art_color_galleries.setdefault((extracted_art, color), c_imgs[:6])
+            shopify_art_color_galleries.setdefault((sp_brand_group, sp_cat_key, extracted_art, color), c_imgs[:6])
 
     if extracted_art:
-        shopify_art_galleries.setdefault(extracted_art, all_product_imgs[:6])
+        shopify_art_galleries.setdefault((sp_brand_group, sp_cat_key, extracted_art), all_product_imgs[:6])
 
 
 def sweep_sitemaps(sku_galleries: Dict[str, List[str]]) -> int:
@@ -313,8 +328,8 @@ def sweep_sitemaps(sku_galleries: Dict[str, List[str]]) -> int:
 
 def sweep_global_products_json(
     sku_galleries: Dict[str, List[str]],
-    shopify_art_color_galleries: Dict[Tuple[str, str], List[str]],
-    shopify_art_galleries: Dict[str, List[str]],
+    shopify_art_color_galleries: Dict[Tuple[str, str, str, str], List[str]],
+    shopify_art_galleries: Dict[Tuple[str, str, str], List[str]],
 ):
     """JALUR 2: Menyedot 100 halaman Global `/products.json?limit=250&page=1..100` (25.000 artikel induk)."""
     print("\n🚀 [JALUR 2] Menyedot 100 halaman Global `/products.json` (25.000 Artikel Induk) dengan 16 Workers...")
@@ -381,8 +396,8 @@ def discover_top_collections() -> List[str]:
 
 def sweep_major_collections(
     sku_galleries: Dict[str, List[str]],
-    shopify_art_color_galleries: Dict[Tuple[str, str], List[str]],
-    shopify_art_galleries: Dict[str, List[str]],
+    shopify_art_color_galleries: Dict[Tuple[str, str, str, str], List[str]],
+    shopify_art_galleries: Dict[Tuple[str, str, str], List[str]],
 ):
     """JALUR 3: Menyedot koleksi brand & kategori terbesar di matahari.com."""
     collections = discover_top_collections()
@@ -534,10 +549,14 @@ def execute_brutal_image_scrape():
     )
 
     sku_galleries: Dict[str, List[str]] = {}
-    shopify_art_color_galleries: Dict[Tuple[str, str], List[str]] = {}
-    shopify_art_galleries: Dict[str, List[str]] = {}
+    shopify_art_color_galleries: Dict[Tuple[str, str, str, str], List[str]] = {}
+    shopify_art_galleries: Dict[Tuple[str, str, str], List[str]] = {}
 
     for p in all_products:
+        desc = str(p.get("description") or "")
+        art = str(p.get("article") or "").strip().upper()
+        if is_ignored_product(desc, art):
+            continue
         sku = str(p.get("sku") or "").strip()
         img = clean_img_url(str(p.get("imageUrl") or ""))
         raw_imgs = p.get("images") or ([] if not img else [img])
@@ -554,30 +573,36 @@ def execute_brutal_image_scrape():
     # 4. Jalankan JALUR 3 (Koleksi Brand & Kategori Raksasa)
     sweep_major_collections(sku_galleries, shopify_art_color_galleries, shopify_art_galleries)
 
-    # 5. JALUR 4: Bangun indeks Collage Sibling `(article, color)` & `(article)` yang terverifikasi
-    print("\n🔍 [JALUR 4] Memetakan foto & melakukan Propagasi Cerdas Collage (`(article, color)` & `(article)`)...")
+    # 5. JALUR 4: Bangun indeks Collage Sibling yang terisolasi per (BrandGroup, Category, Article[, Color])
+    # sehingga kode artikel kembar lintas toko/kategori (misal THEA/JULIAN sandal vs cardigan) tidak pernah tertular!
+    print("\n🔍 [JALUR 4] Memetakan foto & melakukan Propagasi Cerdas Collage per (Toko, Kategori, Artikel)...")
 
-    article_color_galleries: Dict[Tuple[str, str], List[str]] = dict(shopify_art_color_galleries)
-    article_galleries: Dict[str, List[str]] = dict(shopify_art_galleries)
+    article_color_galleries: Dict[Tuple[str, str, str, str], List[str]] = dict(shopify_art_color_galleries)
+    article_galleries: Dict[Tuple[str, str, str], List[str]] = dict(shopify_art_galleries)
 
-    INVALID_ARTICLES = {"", "0", "-", "PRODUK BARU", "PRODUK LAMA", "N/A", "NONE", "NULL"}
+    INVALID_ARTICLES = CATALOG_INVALID_ARTICLES | {"NONE", "NULL"}
 
     for p in all_products:
-        sku = str(p.get("sku") or "").strip()
+        desc = str(p.get("description") or "")
         art = str(p.get("article") or "").strip().upper()
+        if is_ignored_product(desc, art):
+            continue
+        sku = str(p.get("sku") or "").strip()
         col = str(p.get("color") or "").strip().upper()
+        b_group = classify_brand_group(p.get("brand"), p.get("dept"))
+        c_key = classify_product_category(p.get("brand"), p.get("dept"), desc)
         gal = sku_galleries.get(sku)
         if gal and art not in INVALID_ARTICLES:
             if col and col not in ("", "-", "NO COLOR"):
-                article_color_galleries.setdefault((art, col), gal)
-            article_galleries.setdefault(art, gal)
+                article_color_galleries.setdefault((b_group, c_key, art, col), gal)
+            article_galleries.setdefault((b_group, c_key, art), gal)
 
     print(
-        f"   📌 Indeks Foto Produk Valid: {len(sku_galleries):,} SKU | "
-        f"{len(article_color_galleries):,} (Artikel,Warna) | {len(article_galleries):,} Artikel"
+        f"   📌 Indeks Foto Produk Valid (Scoped): {len(sku_galleries):,} SKU | "
+        f"{len(article_color_galleries):,} (Toko,Kategori,Artikel,Warna) | {len(article_galleries):,} Artikel"
     )
 
-    # 6. Pasangkan foto ke seluruh produk di DB yang belum punya foto (atau galeri masih 1 foto padahal ada multi-angle)
+    # 6. Pasangkan foto ke seluruh produk di DB yang belum punya foto (Direct SKU -> Scoped Sibling)
     direct_matched = 0
     sibling_color_matched = 0
     sibling_article_matched = 0
@@ -589,9 +614,15 @@ def execute_brutal_image_scrape():
         if p.get("imageUrl"):
             continue
 
-        sku = str(p.get("sku") or "").strip()
+        desc = str(p.get("description") or "")
         art = str(p.get("article") or "").strip().upper()
+        if is_ignored_product(desc, art):
+            continue
+
+        sku = str(p.get("sku") or "").strip()
         col = str(p.get("color") or "").strip().upper()
+        b_group = classify_brand_group(p.get("brand"), p.get("dept"))
+        c_key = classify_product_category(p.get("brand"), p.get("dept"), desc)
         valid_art = art not in INVALID_ARTICLES
 
         chosen_gal: Optional[List[str]] = None
@@ -600,13 +631,13 @@ def execute_brutal_image_scrape():
         if sku in sku_galleries:
             chosen_gal = sku_galleries[sku]
             direct_matched += 1
-        # Prioritas B: Exact (Article, Color) sibling match (baju & warna sama persis, beda ukuran S/M/L/XL)
-        elif valid_art and col and (art, col) in article_color_galleries:
-            chosen_gal = article_color_galleries[(art, col)]
+        # Prioritas B: Exact (Toko, Kategori, Article, Color) sibling match
+        elif valid_art and col and (b_group, c_key, art, col) in article_color_galleries:
+            chosen_gal = article_color_galleries[(b_group, c_key, art, col)]
             sibling_color_matched += 1
-        # Prioritas C: Exact Article sibling match (kode artikel sama persis)
-        elif valid_art and art in article_galleries:
-            chosen_gal = article_galleries[art]
+        # Prioritas C: Exact (Toko, Kategori, Article) sibling match
+        elif valid_art and (b_group, c_key, art) in article_galleries:
+            chosen_gal = article_galleries[(b_group, c_key, art)]
             sibling_article_matched += 1
 
         if chosen_gal:

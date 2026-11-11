@@ -2564,7 +2564,20 @@ export default function Home() {
           const brandGroup = getItemBrandGroup(p);
           const brandMeta = getBrandGroupMeta(brandGroup);
           const catKey = getItemCategory(p);
+          const catMeta = CATEGORY_OPTIONS.find((c) => c.key === catKey);
           const subBrandLabel = (p as any).subBrand || getNormalizedSubBrand(p);
+          const swatchColors =
+            p.articleColors && p.articleColors.length > 0
+              ? p.articleColors
+              : info.color
+              ? [info.color]
+              : [];
+          const posterTintClass =
+            brandGroup === "ZES"
+              ? "from-purple-50/80 via-slate-50 to-indigo-50/60"
+              : brandGroup === "SUKO"
+              ? "from-indigo-50/80 via-slate-50 to-blue-50/60"
+              : "from-emerald-50/70 via-slate-50 to-teal-50/50";
           const colorsSummary =
             p.articleColors && p.articleColors.length > 0
               ? p.articleColors.slice(0, 2).join(", ") +
@@ -2602,13 +2615,41 @@ export default function Home() {
                     className="w-full h-full object-cover object-top group-hover:scale-105 transition-transform duration-300"
                   />
                 ) : (
-                  <div className="w-full h-full bg-gradient-to-br from-slate-50 via-slate-100/80 to-slate-200/60 flex flex-col items-center justify-center text-slate-300 gap-1.5 px-2 text-center">
-                    <Package2 className="w-7 h-7 text-slate-300" />
-                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 line-clamp-1">
-                      {subBrandLabel}
+                  <div className={`w-full h-full bg-gradient-to-br ${posterTintClass} flex flex-col items-center justify-between py-4 px-2.5 text-center`}>
+                    <span className="text-[8.5px] font-black uppercase tracking-widest text-slate-400/90">
+                      {brandMeta.shortLabel} • {catMeta?.shortLabel || "Produk"}
                     </span>
-                    <span className="text-[8px] font-semibold uppercase tracking-wide text-slate-400/80">
-                      Belum Ada Foto
+                    <div className="flex flex-col items-center gap-2">
+                      <div className="w-11 h-11 rounded-2xl bg-white/95 shadow-xs border border-slate-200/80 flex items-center justify-center text-xl">
+                        {catMeta?.icon ? (
+                          <span>{catMeta.icon}</span>
+                        ) : (
+                          <Package2 className="w-5 h-5 text-slate-400" />
+                        )}
+                      </div>
+                      {swatchColors.length > 0 && (
+                        <div className="flex items-center justify-center gap-1 flex-wrap max-w-[110px]">
+                          {swatchColors.slice(0, 4).map((colName) => {
+                            const cData = getColorData(colName);
+                            return (
+                              <span
+                                key={colName}
+                                title={colName}
+                                className="w-3.5 h-3.5 rounded-full border border-slate-300/90 shadow-2xs shrink-0"
+                                style={{ backgroundColor: cData?.hex || "#CBD5E1" }}
+                              />
+                            );
+                          })}
+                          {swatchColors.length > 4 && (
+                            <span className="text-[9px] font-bold text-slate-500">
+                              +{swatchColors.length - 4}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <span className="text-[8.5px] font-bold text-slate-400 bg-white/80 border border-slate-200/70 px-2 py-0.5 rounded-full">
+                      Foto Web Belum Tersedia
                     </span>
                   </div>
                 )}
@@ -2787,6 +2828,17 @@ export default function Home() {
                 )}
               </div>
             </div>
+
+            {selectedBrandGroup === "ZES" && !manualInput.trim() && (
+              <div className="mb-3 px-3 py-2 rounded-xl bg-purple-50/70 border border-purple-200/80 text-[11px] text-purple-900 flex items-center gap-2">
+                <span className="font-black bg-purple-600 text-white px-1.5 py-0.5 rounded text-[9px] shrink-0">
+                  INFO ZES
+                </span>
+                <span className="leading-snug">
+                  <strong>matahari.com</strong> belum menyediakan foto studio resmi untuk ZES. Foto merk lain yang sempat tertaut sudah dibersihkan — kartu tetap menampilkan artikel, warna, ukuran, &amp; harga akurat.
+                </span>
+              </div>
+            )}
 
             {/* Catalog Grid Cards (Per Brand Mu+Ku, Per Kategori SUKO/ZES, atau Daftar Artikel) */}
             {!hasVisibleContent ? (

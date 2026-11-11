@@ -252,6 +252,8 @@ export async function GET(request: NextRequest) {
       { NOT: { article: { contains: "DUMMY", mode: "insensitive" } } },
       { NOT: { description: { contains: "SKU DUMMY", mode: "insensitive" } } },
       { NOT: { description: { contains: "ITEM TIDAK DIGUNAKAN", mode: "insensitive" } } },
+      { NOT: { description: { contains: "ITEM TIDAK DAPAT", mode: "insensitive" } } },
+      { NOT: { description: { contains: "TIDAK DI GUNAKAN", mode: "insensitive" } } },
     ];
 
     const brandWhere = buildBrandPrismaWhere(brandGroup);
