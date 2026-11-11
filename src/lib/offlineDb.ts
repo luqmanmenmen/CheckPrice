@@ -1,5 +1,6 @@
 import Dexie from "dexie";
 import { expandRetailQuery, computeProductRelevanceScore, groupProductsByArticle } from "./smartSearchEngine";
+import { BrandGroupKey, CategoryKey, classifyBrandGroup, classifyProductCategory } from "./productTaxonomy";
 
 export interface CachedProduct {
   sku: string;
@@ -224,16 +225,29 @@ export async function syncOfflineDatabase(
  * Pencarian Pintar Offline (SKU, Barcode, Artikel, maupun 30% Nama Deskripsi)
  * Digunakan saat internet toko mati/lambat agar kasir tetap bisa mencari manual
  */
-export async function searchOfflineSmart(rawInput: string, limit: number = 25): Promise<CachedProduct[]> {
+export async function searchOfflineSmart(
+  rawInput: string,
+  limit: number = 25,
+  brandGroup: BrandGroupKey = "ALL",
+  category: CategoryKey = "ALL"
+): Promise<CachedProduct[]> {
   try {
     await ensureDbOpenSafe();
     const trimmed = rawInput.trim();
     if (!trimmed) return [];
 
+    const matchesFilter = (p: CachedProduct) => {
+      if (brandGroup !== "ALL" && classifyBrandGroup(p) !== brandGroup) return false;
+      if (category !== "ALL" && classifyProductCategory(p) !== category) return false;
+      return true;
+    };
+
     // 1. Cek exact Article di index Dexie dulu (0ms)
-    const exactArt = await db.products.where("article").equalsIgnoreCase(trimmed).toArray();
-    if (exactArt.length > 0) {
-      return exactArt.sort((a, b) => (b.stok || 0) - (a.stok || 0));
+    if (brandGroup === "ALL" && category === "ALL") {
+      const exactArt = await db.products.where("article").equalsIgnoreCase(trimmed).toArray();
+      if (exactArt.length > 0) {
+        return exactArt.sort((a, b) => (b.stok || 0) - (a.stok || 0));
+      }
     }
 
     // 2. Scan pintar dengan ekspansi sinonim & 30% partial text
@@ -242,6 +256,7 @@ export async function searchOfflineSmart(rawInput: string, limit: number = 25): 
     const scored: { item: CachedProduct; score: number }[] = [];
 
     await db.products.each((p) => {
+      if (!matchesFilter(p)) return;
       // Quick pre-filter: minimal 1 istilah ekspansi atau potongan 3 huruf cocok
       const hay = `${p.brand || ""} ${p.dept || ""} ${p.article || ""} ${p.description || p.name || ""} ${p.color || ""} ${p.sku} ${p.barcode || ""}`.toUpperCase();
       let quickHit = false;
@@ -272,6 +287,31 @@ export async function searchOfflineSmart(rawInput: string, limit: number = 25): 
     return grouped.slice(0, limit);
   } catch (e) {
     console.warn("[OfflineDB] Gagal mencari offline smart:", e);
+    return [];
+  }
+}
+
+/**
+ * Menjelajah katalog lokal Dexie per Brand Concept (SUKO/Mu+Ku/ZES) & Kategori saat offline
+ */
+export async function browseOfflineCatalog(
+  brandGroup: BrandGroupKey = "ALL",
+  category: CategoryKey = "ALL",
+  limit: number = 40
+): Promise<CachedProduct[]> {
+  try {
+    await ensureDbOpenSafe();
+    const matched: CachedProduct[] = [];
+    await db.products.each((p) => {
+      if ((p.description || "").toUpperCase().includes("DUMMY")) return;
+      if (brandGroup !== "ALL" && classifyBrandGroup(p) !== brandGroup) return;
+      if (category !== "ALL" && classifyProductCategory(p) !== category) return;
+      matched.push(p);
+    });
+    matched.sort((a, b) => (b.stok || 0) - (a.stok || 0));
+    return groupProductsByArticle(matched).slice(0, limit);
+  } catch (e) {
+    console.warn("[OfflineDB] Gagal jelajah katalog offline:", e);
     return [];
   }
 }

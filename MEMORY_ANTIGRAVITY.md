@@ -1033,4 +1033,16 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   2. **Grid Multi-Kolom Padat hingga 5 Kartu Sekaligus (`grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5`):** Menampilkan 2 kartu portrait per baris di HP, 3–4 kartu di layar *split*/tablet, dan **5 kartu portrait sekaligus** per baris di desktop (`20` item/halaman = `4` baris penuh simetris).
   3. **Badge Promo & Varian Dipindah ke Area Info:** Label `HARGA SPESIAL`/`PROMO`/`ACARA` dan jumlah varian (`X var`) ditempatkan rapi bersama badge `article`, brand, warna/ukuran, harga, dan stok di bawah foto.
 
+---
+
+## 66. Filter Pemisah Brand (`SUKO` / `Mu+Ku` / `ZES`) & Pengelompokan Kategori Produk
+
+- **Instruksi Pengguna:** Meminta agar produk dipisahkan jelas per brand (**SUKO**, **Mu+Ku**, **ZES**) dan dikelompokkan berdasarkan kategori (**Jaket**, **Celana**, **Atasan**, **Dress & Rok**, dll.).
+- **Implementasi Terintegrasi (Single Source of Truth):**
+  1. [`src/lib/productTaxonomy.ts`](file:///c:/Max%20Display/price-checker/src/lib/productTaxonomy.ts): Mendefinisikan klasifikasi akurat berbasis data DB untuk Brand Concept (`SUKO`, `MUKU`/`Mu+Ku`, `ZES`, `OTHER` — memastikan `MK-`/`-MK`/`MUKU`/`MU+KU` teridentifikasi akurat tanpa tertukar sandal `MICKEY`) dan Kategori (`JAKET`, `ATASAN`, `CELANA`, `DRESS_ROK`, `SEPATU_SANDAL`, `TAS_AKSESORIS`, `TIDUR_DALAM`, `OTHER`), lengkap dengan generator `where` Prisma yang memanfaatkan GIN `pg_trgm`.
+  2. [`src/lib/productQueryHelpers.ts`](file:///c:/Max%20Display/price-checker/src/lib/productQueryHelpers.ts), [`GET /api/catalog`](file:///c:/Max%20Display/price-checker/src/app/api/catalog/route.ts), & [`GET /api/product/[identifier]`](file:///c:/Max%20Display/price-checker/src/app/api/product/%5Bidentifier%5D/route.ts): Berbagi helper `cleanPromoList`, `getProductSiblings`, `summarizeTaxonomyCounts`, dan `filterByTaxonomy`. Mendukung jelajah langsung katalog per brand/kategori dari beranda (tanpa harus mengetik kata kunci) maupun filter lintas pencarian teks, lengkap dengan cache server 60 detik.
+  3. [`src/lib/offlineDb.ts`](file:///c:/Max%20Display/price-checker/src/lib/offlineDb.ts): Menambahkan `browseOfflineCatalog()` & parameter filter brand/kategori ke `searchOfflineSmart()`.
+  4. [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx): Menambahkan bar filter **Brand (`Semua | SUKO | Mu+Ku | ZES | Lainnya`)** + bar **Kategori (`Jaket | Atasan | Celana | Dress/Rok | Sepatu | Tas/Accs | Tidur/Dalam`)** dengan counter model, toggle **Kelompok Kategori** yang memisahkan hasil menjadi section kategori ber-grid 5-kolom portrait, badge brand berwarna khas pada tiap kartu, dan *background prefetch* halaman berikutnya.
+
+
 

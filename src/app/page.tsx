@@ -14,6 +14,19 @@ import ProductImageSlider, { optimizeRetailImageUrl, preloadProductImages } from
 import ShiftLoader from "@/components/ShiftLoader";
 import ImageLightboxModal from "@/components/ImageLightboxModal";
 import { createPortal } from "react-dom";
+import {
+  BrandGroupKey,
+  CategoryKey,
+  ResolvedBrandGroup,
+  ResolvedCategoryKey,
+  BRAND_GROUP_OPTIONS,
+  CATEGORY_OPTIONS,
+  CATEGORY_LABELS,
+  CATEGORY_DISPLAY_ORDER,
+  classifyBrandGroup,
+  classifyProductCategory,
+  getBrandGroupMeta,
+} from "@/lib/productTaxonomy";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
@@ -46,6 +59,8 @@ type ProductData = {
   articleSizes?: string[];
   articleHasPromo?: boolean;
   articlePromoLabel?: string | null;
+  brandGroup?: ResolvedBrandGroup;
+  categoryKey?: ResolvedCategoryKey;
 };
 
 // Parse product info to get clean product name, color, and size
@@ -214,6 +229,11 @@ export default function Home() {
   const [siblings, setSiblings] = useState<ProductData[]>([]);
   const [productsList, setProductsList] = useState<ProductData[]>([]);
   const [resultFilter, setResultFilter] = useState<"ALL" | "STOCK" | "PROMO">("ALL");
+  const [selectedBrandGroup, setSelectedBrandGroup] = useState<BrandGroupKey>("ALL");
+  const [selectedCategory, setSelectedCategory] = useState<CategoryKey>("ALL");
+  const [groupByCategory, setGroupByCategory] = useState<boolean>(true);
+  const [taxonomyBrandCounts, setTaxonomyBrandCounts] = useState<Record<string, number> | null>(null);
+  const [taxonomyCategoryCounts, setTaxonomyCategoryCounts] = useState<Record<string, number> | null>(null);
   const [totalModelsCount, setTotalModelsCount] = useState(0);
   const [totalSkusCount, setTotalSkusCount] = useState(0);
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
@@ -780,7 +800,19 @@ export default function Home() {
   const searchCounterRef = useRef(0);
   const sessionCacheRef = useRef<Map<string, { product: ProductData; siblings: ProductData[] }>>(new Map());
   const listCacheRef = useRef<
-    Map<string, { list: ProductData[]; total: number; totalSkus: number; page: number; totalPages: number; cachedAt: number }>
+    Map<
+      string,
+      {
+        list: ProductData[];
+        total: number;
+        totalSkus: number;
+        page: number;
+        totalPages: number;
+        brandCounts?: Record<string, number> | null;
+        categoryCounts?: Record<string, number> | null;
+        cachedAt: number;
+      }
+    >
   >(new Map());
 
   // Ganti varian warna/ukuran secara instan (0ms) dari memori tanpa reload layar
@@ -811,16 +843,91 @@ export default function Home() {
     searchProduct(manualInput, nextPage, true);
   };
 
-  const searchProduct = async (identifier: string, page: number = 1, shouldScrollTop: boolean = false) => {
+  const buildSearchEndpointUrl = (
+    trimmedQuery: string,
+    targetPage: number,
+    brandGroup: BrandGroupKey,
+    category: CategoryKey
+  ) => {
+    if (!trimmedQuery) {
+      return `/api/catalog?brandGroup=${encodeURIComponent(brandGroup)}&category=${encodeURIComponent(category)}&page=${targetPage}`;
+    }
+    const params = new URLSearchParams({ page: String(targetPage) });
+    if (brandGroup !== "ALL") params.set("brandGroup", brandGroup);
+    if (category !== "ALL") params.set("category", category);
+    return `/api/product/${encodeURIComponent(trimmedQuery)}?${params.toString()}`;
+  };
+
+  const handleBrandFilterChange = (nextBrand: BrandGroupKey) => {
+    const resolvedBrand: BrandGroupKey = selectedBrandGroup === nextBrand && nextBrand !== "ALL" ? "ALL" : nextBrand;
+    setSelectedBrandGroup(resolvedBrand);
+    if (!manualInput.trim() && resolvedBrand === "ALL" && selectedCategory === "ALL") {
+      setProductsList([]);
+      setProduct(null);
+      setSiblings([]);
+      setTotalModelsCount(0);
+      setTotalSkusCount(0);
+      setTaxonomyBrandCounts(null);
+      setTaxonomyCategoryCounts(null);
+      setError("");
+      return;
+    }
+    searchProduct(manualInput, 1, false, resolvedBrand, selectedCategory);
+  };
+
+  const handleCategoryFilterChange = (nextCategory: CategoryKey) => {
+    const resolvedCat: CategoryKey = selectedCategory === nextCategory && nextCategory !== "ALL" ? "ALL" : nextCategory;
+    setSelectedCategory(resolvedCat);
+    if (!manualInput.trim() && selectedBrandGroup === "ALL" && resolvedCat === "ALL") {
+      setProductsList([]);
+      setProduct(null);
+      setSiblings([]);
+      setTotalModelsCount(0);
+      setTotalSkusCount(0);
+      setTaxonomyBrandCounts(null);
+      setTaxonomyCategoryCounts(null);
+      setError("");
+      return;
+    }
+    searchProduct(manualInput, 1, false, selectedBrandGroup, resolvedCat);
+  };
+
+  const handleResetTaxonomyFilters = () => {
+    setSelectedBrandGroup("ALL");
+    setSelectedCategory("ALL");
+    if (!manualInput.trim()) {
+      setProductsList([]);
+      setProduct(null);
+      setSiblings([]);
+      setTotalModelsCount(0);
+      setTotalSkusCount(0);
+      setTaxonomyBrandCounts(null);
+      setTaxonomyCategoryCounts(null);
+      setError("");
+      return;
+    }
+    searchProduct(manualInput, 1, false, "ALL", "ALL");
+  };
+
+  const searchProduct = async (
+    identifier: string,
+    page: number = 1,
+    shouldScrollTop: boolean = false,
+    overrideBrandGroup?: BrandGroupKey,
+    overrideCategory?: CategoryKey
+  ) => {
     const trimmed = identifier.trim();
-    if (!trimmed) return;
+    const activeBrand = overrideBrandGroup ?? selectedBrandGroup;
+    const activeCategory = overrideCategory ?? selectedCategory;
+    const hasTaxonomyFilter = activeBrand !== "ALL" || activeCategory !== "ALL";
+
+    if (!trimmed && !hasTaxonomyFilter) return;
 
     const currentSearch = ++searchCounterRef.current;
     setError("");
 
     // 0A. CEK SIBLING LANGSUNG (0ms INSTAN!):
-    // Jika yang di-scan adalah salah satu varian warna/ukuran dari produk yang sedang aktif di layar
-    if (page === 1 && siblings && siblings.length > 0) {
+    if (trimmed && !hasTaxonomyFilter && page === 1 && siblings && siblings.length > 0) {
       const existingSibling = siblings.find(
         s => (s.sku && s.sku.toLowerCase() === trimmed.toLowerCase()) ||
              (s.barcode && s.barcode.toLowerCase() === trimmed.toLowerCase())
@@ -841,7 +948,9 @@ export default function Home() {
     }
 
     // 0B. Cek Session Cache Memory (0ms instant!)
-    const inMemory = sessionCacheRef.current.get(trimmed.toLowerCase()) || sessionCacheRef.current.get(trimmed);
+    const inMemory = trimmed && !hasTaxonomyFilter
+      ? (sessionCacheRef.current.get(trimmed.toLowerCase()) || sessionCacheRef.current.get(trimmed))
+      : undefined;
     if (inMemory && page === 1) {
       setProduct(inMemory.product);
       setSiblings(inMemory.siblings);
@@ -851,8 +960,8 @@ export default function Home() {
       return;
     }
 
-    // 0C. Cek Cache Halaman Katalog (0ms instant untuk Selanjutnya / Sebelumnya / Ulangi Kata!)
-    const listCacheKey = `${trimmed.toLowerCase()}::p${page}`;
+    // 0C. Cek Cache Halaman Katalog (0ms instant untuk Selanjutnya / Sebelumnya / Filter!)
+    const listCacheKey = `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::c=${activeCategory}::p${page}`;
     const cachedPage = listCacheRef.current.get(listCacheKey);
     if (cachedPage && Date.now() - cachedPage.cachedAt < 60_000) {
       setProduct(null);
@@ -861,6 +970,8 @@ export default function Home() {
       setResultFilter("ALL");
       setTotalModelsCount(cachedPage.total);
       setTotalSkusCount(cachedPage.totalSkus);
+      if (cachedPage.brandCounts !== undefined) setTaxonomyBrandCounts(cachedPage.brandCounts || null);
+      if (cachedPage.categoryCounts !== undefined) setTaxonomyCategoryCounts(cachedPage.categoryCounts || null);
       setCurrentPage(cachedPage.page);
       setTotalPages(cachedPage.totalPages);
       setLoading(false);
@@ -877,7 +988,7 @@ export default function Home() {
     try {
       // 1. OFFLINE-FIRST: Cek SKU/Barcode di Dexie hanya bila input berbentuk kode berangka
       let localData = null;
-      if (page === 1 && /\d/.test(trimmed) && !/\s/.test(trimmed)) {
+      if (trimmed && !hasTaxonomyFilter && page === 1 && /\d/.test(trimmed) && !/\s/.test(trimmed)) {
         const { db, ensureDbOpenSafe } = await import('@/lib/offlineDb');
         await ensureDbOpenSafe();
         localData = await db.products.where('sku').equals(trimmed).first();
@@ -965,8 +1076,9 @@ export default function Home() {
 
       // 2. Minta data terbaru/live ke server (di background jika localData sudah tampil)
       let res: Response | null = null;
+      const endpointUrl = buildSearchEndpointUrl(trimmed, page, activeBrand, activeCategory);
       try {
-        res = await fetch(`/api/product/${encodeURIComponent(trimmed)}?page=${page}`, {
+        res = await fetch(endpointUrl, {
           cache: 'no-store'
         });
       } catch (fetchErr) {
@@ -985,11 +1097,17 @@ export default function Home() {
             setProductsList([]);
             setProduct(null);
             setSiblings([]);
-            const isDigitCode = /^\d{8,14}$/.test(trimmed);
-            if (isDigitCode) {
-              setError(`Produk tidak ditemukan untuk: "${trimmed}". (Produk baru belum tercatat di database master toko. Akan otomatis disinkronkan saat toko buka besok).`);
-            } else {
-              setError(`Produk tidak ditemukan untuk: "${trimmed}"`);
+            setTotalModelsCount(0);
+            setTotalSkusCount(0);
+            setTaxonomyBrandCounts(data.meta?.brandCounts || null);
+            setTaxonomyCategoryCounts(data.meta?.categoryCounts || null);
+            if (!hasTaxonomyFilter && trimmed) {
+              const isDigitCode = /^\d{8,14}$/.test(trimmed);
+              if (isDigitCode) {
+                setError(`Produk tidak ditemukan untuk: "${trimmed}". (Produk baru belum tercatat di database master toko. Akan otomatis disinkronkan saat toko buka besok).`);
+              } else {
+                setError(`Produk tidak ditemukan untuk: "${trimmed}"`);
+              }
             }
             return;
           }
@@ -997,6 +1115,8 @@ export default function Home() {
           const resolvedTotalPages = data.meta?.totalPages || 1;
           const resolvedTotal = data.meta?.total ?? data.data.length;
           const resolvedTotalSkus = data.meta?.totalSkus ?? data.data.length;
+          const resolvedBrandCounts = data.meta?.brandCounts || null;
+          const resolvedCategoryCounts = data.meta?.categoryCounts || null;
 
           setProduct(null);
           setSiblings([]);
@@ -1004,18 +1124,25 @@ export default function Home() {
           setResultFilter("ALL");
           setTotalModelsCount(resolvedTotal);
           setTotalSkusCount(resolvedTotalSkus);
-          recordRecentSearch(trimmed);
+          setTaxonomyBrandCounts(resolvedBrandCounts);
+          setTaxonomyCategoryCounts(resolvedCategoryCounts);
+          if (trimmed) recordRecentSearch(trimmed);
           preloadProductImages(data.data.map((item: any) => item.imageUrl), 400);
           setCurrentPage(resolvedPage);
           setTotalPages(resolvedTotalPages);
-          listCacheRef.current.set(`${trimmed.toLowerCase()}::p${resolvedPage}`, {
-            list: data.data,
-            total: resolvedTotal,
-            totalSkus: resolvedTotalSkus,
-            page: resolvedPage,
-            totalPages: resolvedTotalPages,
-            cachedAt: Date.now(),
-          });
+          listCacheRef.current.set(
+            `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::c=${activeCategory}::p${resolvedPage}`,
+            {
+              list: data.data,
+              total: resolvedTotal,
+              totalSkus: resolvedTotalSkus,
+              page: resolvedPage,
+              totalPages: resolvedTotalPages,
+              brandCounts: resolvedBrandCounts,
+              categoryCounts: resolvedCategoryCounts,
+              cachedAt: Date.now(),
+            }
+          );
 
           if (shouldScrollTop && typeof window !== "undefined") {
             requestAnimationFrame(() => scrollPageToTop());
@@ -1023,9 +1150,9 @@ export default function Home() {
 
           // Prefetch diam-diam halaman berikutnya + thumbnail 400px agar tombol Selanjutnya 0ms!
           const nextPageNum = resolvedPage + 1;
-          const nextCacheKey = `${trimmed.toLowerCase()}::p${nextPageNum}`;
+          const nextCacheKey = `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::c=${activeCategory}::p${nextPageNum}`;
           if (resolvedPage < resolvedTotalPages && !listCacheRef.current.has(nextCacheKey)) {
-            fetch(`/api/product/${encodeURIComponent(trimmed)}?page=${nextPageNum}`, { cache: 'no-store' })
+            fetch(buildSearchEndpointUrl(trimmed, nextPageNum, activeBrand, activeCategory), { cache: 'no-store' })
               .then((r) => (r.ok ? r.json() : null))
               .then((nextJson) => {
                 if (nextJson && Array.isArray(nextJson.data) && nextJson.data.length > 0) {
@@ -1035,6 +1162,8 @@ export default function Home() {
                     totalSkus: nextJson.meta?.totalSkus ?? resolvedTotalSkus,
                     page: nextJson.meta?.page || nextPageNum,
                     totalPages: nextJson.meta?.totalPages || resolvedTotalPages,
+                    brandCounts: nextJson.meta?.brandCounts || resolvedBrandCounts,
+                    categoryCounts: nextJson.meta?.categoryCounts || resolvedCategoryCounts,
                     cachedAt: Date.now(),
                   });
                   preloadProductImages(nextJson.data.map((item: any) => item.imageUrl), 400);
@@ -1091,8 +1220,10 @@ export default function Home() {
     } catch {
       if (searchCounterRef.current === currentSearch && !product) {
         try {
-          const { searchOfflineSmart } = await import('@/lib/offlineDb');
-          const offlineMatches = await searchOfflineSmart(trimmed, 20);
+          const { searchOfflineSmart, browseOfflineCatalog } = await import('@/lib/offlineDb');
+          const offlineMatches = trimmed
+            ? await searchOfflineSmart(trimmed, 40, activeBrand, activeCategory)
+            : await browseOfflineCatalog(activeBrand, activeCategory, 40);
           if (offlineMatches && offlineMatches.length > 0) {
             const mappedList: ProductData[] = offlineMatches.map((m) => ({
               id: 0,
@@ -1116,7 +1247,7 @@ export default function Home() {
               imageUrl: m.imageUrl || null,
               images: m.images && m.images.length > 0 ? m.images : (m.imageUrl ? [m.imageUrl] : []),
             }));
-            if (mappedList.length === 1) {
+            if (mappedList.length === 1 && !hasTaxonomyFilter) {
               setProduct(mappedList[0]);
               setSiblings(mappedList);
               setProductsList([]);
@@ -1305,6 +1436,10 @@ export default function Home() {
     setSiblings([]);
     setProductsList([]);
     setResultFilter("ALL");
+    setSelectedBrandGroup("ALL");
+    setSelectedCategory("ALL");
+    setTaxonomyBrandCounts(null);
+    setTaxonomyCategoryCounts(null);
     setTotalModelsCount(0);
     setTotalSkusCount(0);
     setMultiVariantQty({});
@@ -1806,8 +1941,81 @@ export default function Home() {
               </button>
             </div>
 
+            {/* Bar Filter Pemisah Brand (SUKO, Mu+Ku, ZES) & Pengelompokan Kategori */}
+            {!product && (
+              <div className="bg-white rounded-xl border border-slate-200/80 p-2.5 shadow-2xs flex flex-col gap-2">
+                {/* Bar 1: Pemisah Produk Brand Toko */}
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+                  <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider shrink-0 mr-0.5">
+                    Brand:
+                  </span>
+                  {BRAND_GROUP_OPTIONS.map((opt) => {
+                    const isActive = selectedBrandGroup === opt.key;
+                    const countVal = taxonomyBrandCounts?.[opt.key];
+                    return (
+                      <button
+                        key={opt.key}
+                        type="button"
+                        onClick={() => handleBrandFilterChange(opt.key)}
+                        className={`text-[11px] font-bold px-2.5 py-1 rounded-lg border transition-all whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1 ${
+                          isActive ? opt.activeClass : opt.idleClass
+                        }`}
+                      >
+                        <span>{opt.shortLabel}</span>
+                        {typeof countVal === "number" && (selectedBrandGroup === "ALL" || isActive) && (
+                          <span className={`text-[9px] px-1 rounded ${isActive ? "bg-white/20 text-white" : "bg-black/5 text-slate-500"}`}>
+                            {countVal}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                  {(selectedBrandGroup !== "ALL" || selectedCategory !== "ALL") && (
+                    <button
+                      type="button"
+                      onClick={handleResetTaxonomyFilters}
+                      className="ml-auto text-[10px] font-bold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-2 py-1 rounded-lg whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      Reset Filter
+                    </button>
+                  )}
+                </div>
+
+                {/* Bar 2: Pengelompokan Kategori Produk */}
+                <div className="flex items-center gap-1.5 overflow-x-auto pt-1 border-t border-slate-100">
+                  <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider shrink-0 mr-0.5">
+                    Kategori:
+                  </span>
+                  {CATEGORY_OPTIONS.map((cat) => {
+                    const isActive = selectedCategory === cat.key;
+                    const countVal = taxonomyCategoryCounts?.[cat.key];
+                    return (
+                      <button
+                        key={cat.key}
+                        type="button"
+                        onClick={() => handleCategoryFilterChange(cat.key)}
+                        className={`text-[11px] font-bold px-2.5 py-1 rounded-lg border transition-all whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1 ${
+                          isActive
+                            ? "bg-indigo-600 text-white border-indigo-700 shadow-xs"
+                            : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200"
+                        }`}
+                      >
+                        <span>{cat.icon}</span>
+                        <span>{cat.shortLabel}</span>
+                        {typeof countVal === "number" && (selectedCategory === "ALL" || isActive) && countVal > 0 && (
+                          <span className={`text-[9px] px-1 rounded ${isActive ? "bg-white/20 text-white" : "bg-slate-200/70 text-slate-600"}`}>
+                            {countVal}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* Idle Quick Recent Chips & 2-Column Shortcut Banners */}
-            {!product && productsList.length === 0 && !loading && (
+            {!product && productsList.length === 0 && !loading && selectedBrandGroup === "ALL" && selectedCategory === "ALL" && (
               <div className="flex flex-col gap-2.5 pt-0.5">
                 {recentSearches.length > 0 && (
                   <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
@@ -1885,6 +2093,14 @@ export default function Home() {
 
 
 
+      {/* Loading Indicator */}
+      {loading && (
+        <div className="bg-blue-50/90 border border-blue-200 text-blue-700 rounded-xl px-3.5 py-2.5 flex items-center justify-center gap-2 text-xs font-bold animate-pulse">
+          <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+          <span>Memuat katalog &amp; stok produk...</span>
+        </div>
+      )}
+
       {/* Error */}
       {error && (
         <div className="bg-red-50 text-red-700 p-4 rounded-xl text-center border border-red-200 text-sm font-medium animate-in zoom-in duration-200">
@@ -1892,7 +2108,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* Konsep 3: Hasil Pencarian Dikelompokkan Per Artikel */}
+      {/* Konsep 3: Hasil Pencarian / Katalog Brand & Kategori */}
       {productsList.length > 0 && (() => {
         const isProductOnPromo = (item: ProductData) =>
           Boolean(
@@ -1913,15 +2129,191 @@ export default function Home() {
           return true;
         });
 
+        const getItemCategory = (item: ProductData): ResolvedCategoryKey =>
+          item.categoryKey || classifyProductCategory(item);
+
+        const getItemBrandGroup = (item: ProductData): ResolvedBrandGroup =>
+          item.brandGroup || classifyBrandGroup(item);
+
+        // Kelompokkan per kategori jika mode Kelompok Kategori aktif & kategori filter masih "ALL"
+        const groupedSections =
+          groupByCategory && selectedCategory === "ALL"
+            ? CATEGORY_DISPLAY_ORDER.map((catKey) => ({
+                catKey,
+                label: CATEGORY_LABELS[catKey],
+                icon: CATEGORY_OPTIONS.find((o) => o.key === catKey)?.icon || "📦",
+                items: filteredProducts.filter((item) => getItemCategory(item) === catKey),
+              })).filter((sec) => sec.items.length > 0)
+            : [];
+
+        const shouldRenderCategorySections = groupedSections.length > 0 && groupByCategory && selectedCategory === "ALL";
+
+        const activeBrandLabel = selectedBrandGroup !== "ALL" ? getBrandGroupMeta(selectedBrandGroup).shortLabel : null;
+        const activeCatLabel = selectedCategory !== "ALL" ? CATEGORY_LABELS[selectedCategory] : null;
+        const headerPrefix = manualInput.trim() ? "Hasil Pencarian" : "Katalog Produk";
+
+        const renderProductCard = (p: ProductData) => {
+          const info = parseProductInfo(p);
+          const cleanArticle =
+            p.article && !["0", "-", "PRODUK BARU"].includes(p.article.trim().toUpperCase())
+              ? p.article.trim()
+              : null;
+          const hasLowerPromoPrice = Boolean(
+            p.hargaPromo && p.hargaPromo > 0 && (!p.hargaNormal || p.hargaPromo < p.hargaNormal)
+          );
+          const hasPromo = isProductOnPromo(p);
+          const promoBadge =
+            p.articlePromoLabel ||
+            p.diskon ||
+            (hasLowerPromoPrice ? "PROMO" : p.acara ? "ACARA" : null);
+          const displayPrice = hasLowerPromoPrice ? (p.hargaPromo || p.hargaNormal) : p.hargaNormal;
+          const totalStok = getTotalStock(p);
+          const variantCount = p.articleGroupCount ?? 1;
+          const brandGroup = getItemBrandGroup(p);
+          const brandMeta = getBrandGroupMeta(brandGroup);
+          const catKey = getItemCategory(p);
+          const colorsSummary =
+            p.articleColors && p.articleColors.length > 0
+              ? p.articleColors.slice(0, 2).join(", ") +
+                (p.articleColors.length > 2 ? ` +${p.articleColors.length - 2}` : "")
+              : info.color;
+          const sizesSummary =
+            p.articleSizes && p.articleSizes.length > 1
+              ? `${p.articleSizes[0]}–${p.articleSizes[p.articleSizes.length - 1]}`
+              : p.articleSizes?.[0] || info.size;
+
+          return (
+            <button
+              key={cleanArticle ? `${cleanArticle}-${p.sku}` : (p.id || p.sku)}
+              type="button"
+              onClick={() => {
+                setProduct(p);
+                setSiblings([p]);
+                setProductsList([]);
+                setManualInput(p.sku);
+                scrollPageToTop();
+                searchProduct(p.sku, 1, false, "ALL", "ALL");
+              }}
+              className="group text-left bg-white border border-slate-200 hover:border-blue-400 hover:shadow-md rounded-xl overflow-hidden transition-all flex flex-col h-full cursor-pointer"
+            >
+              {/* Clean Portrait Product Photo (Zero Overlay Badges) */}
+              <div className="w-full aspect-[3/4] bg-slate-50 shrink-0 overflow-hidden border-b border-slate-100">
+                {p.imageUrl ? (
+                  <img
+                    src={optimizeRetailImageUrl(p.imageUrl, 400)}
+                    alt={info.name}
+                    loading="eager"
+                    decoding="sync"
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full object-cover object-top group-hover:scale-105 transition-transform duration-300"
+                  />
+                ) : (
+                  <div className="w-full h-full flex flex-col items-center justify-center text-slate-300 gap-1">
+                    <Package2 className="w-7 h-7" />
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">No Foto</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Card Body (Brand SUKO/Mu+Ku/ZES, Artikel, Kategori, Promo Tag, & Harga di Samping/Bawah) */}
+              <div className="flex-1 p-2 sm:p-2.5 flex flex-col justify-between min-w-0">
+                <div>
+                  <div className="flex items-center gap-1 flex-wrap">
+                    <span className="text-[9px] sm:text-[10px] font-mono font-bold bg-slate-900 text-white px-1.5 py-0.5 rounded">
+                      {cleanArticle || p.sku}
+                    </span>
+                    {brandGroup !== "OTHER" ? (
+                      <span className={`text-[9px] font-black px-1.5 py-0.5 rounded border ${brandMeta.badgeClass}`}>
+                        {brandMeta.shortLabel}
+                      </span>
+                    ) : (
+                      p.brand && (
+                        <span className="text-[9px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100 px-1.5 py-0.5 rounded truncate max-w-[85px]">
+                          {p.brand}
+                        </span>
+                      )
+                    )}
+                    {variantCount > 1 && (
+                      <span className="text-[9px] font-bold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">
+                        {variantCount} var
+                      </span>
+                    )}
+                  </div>
+
+                  <p className="font-bold text-slate-900 text-[11px] sm:text-xs leading-snug line-clamp-2 mt-1.5 group-hover:text-blue-700 transition-colors">
+                    {info.name}
+                  </p>
+
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    <span className="text-[9px] font-semibold bg-indigo-50/70 text-indigo-700 border border-indigo-100 px-1.5 py-0.5 rounded">
+                      {CATEGORY_LABELS[catKey]}
+                    </span>
+                    {colorsSummary && (
+                      <span className="text-[9px] font-semibold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded truncate max-w-full">
+                        {colorsSummary}
+                      </span>
+                    )}
+                    {sizesSummary && (
+                      <span className="text-[9px] font-semibold bg-blue-50 text-blue-700 border border-blue-100 px-1.5 py-0.5 rounded">
+                        {sizesSummary}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-2 pt-1.5 border-t border-slate-100 flex flex-col gap-1">
+                  {hasPromo && promoBadge && (
+                    <span className="inline-block self-start text-[9px] font-black px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 uppercase tracking-tight max-w-full truncate">
+                      {promoBadge}
+                    </span>
+                  )}
+                  <div className="flex items-end justify-between gap-1">
+                    <div className="min-w-0">
+                      {hasLowerPromoPrice && p.hargaNormal > (p.hargaPromo || 0) && (
+                        <p className="text-[9px] text-slate-400 line-through leading-none">
+                          {formatRupiah(p.hargaNormal)}
+                        </p>
+                      )}
+                      <p className={`text-xs font-black leading-tight truncate ${hasLowerPromoPrice ? 'text-rose-600' : 'text-blue-700'}`}>
+                        {formatRupiah(displayPrice)}
+                      </p>
+                    </div>
+
+                    <span
+                      className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded border shrink-0 ${
+                        totalStok > 0
+                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                          : "bg-rose-50 text-rose-700 border-rose-200"
+                      }`}
+                    >
+                      Stok: {totalStok}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </button>
+          );
+        };
+
         return (
           <div className="bg-white rounded-2xl shadow-lg border border-slate-200/80 overflow-hidden animate-in slide-in-from-bottom-6 duration-400 p-3.5 sm:p-4">
             {/* Header & 1-Tap Filter Bar */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-slate-100 mb-3">
               <div>
-                <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex items-center gap-1.5 flex-wrap">
                   <h2 className="text-xs sm:text-sm font-black text-slate-800 uppercase tracking-wide">
-                    Hasil Pencarian: <span className="text-blue-600">{modelCount} Model</span>
+                    {headerPrefix}: <span className="text-blue-600">{modelCount} Model</span>
                   </h2>
+                  {activeBrandLabel && (
+                    <span className="text-[10px] font-black bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
+                      {activeBrandLabel}
+                    </span>
+                  )}
+                  {activeCatLabel && (
+                    <span className="text-[10px] font-black bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-full">
+                      {activeCatLabel}
+                    </span>
+                  )}
                   {totalSkusCount > modelCount && (
                     <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full border border-slate-200">
                       {totalSkusCount} SKU varian
@@ -1967,10 +2359,24 @@ export default function Home() {
                 >
                   Sedang Promo ({promoCount})
                 </button>
+                {selectedCategory === "ALL" && (
+                  <button
+                    type="button"
+                    onClick={() => setGroupByCategory((prev) => !prev)}
+                    className={`text-[11px] font-bold px-2.5 py-1.5 rounded-lg border transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1 ${
+                      groupByCategory
+                        ? "bg-indigo-600 text-white border-indigo-700 shadow-xs"
+                        : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-indigo-50"
+                    }`}
+                  >
+                    <Layers className="w-3 h-3" />
+                    <span>Kelompok Kategori</span>
+                  </button>
+                )}
               </div>
             </div>
 
-            {/* Catalog Grid Cards */}
+            {/* Catalog Grid Cards (Dikelompokkan per Kategori atau Urut Relevansi) */}
             {filteredProducts.length === 0 ? (
               <div className="py-8 text-center flex flex-col items-center gap-2 text-slate-500">
                 <p className="text-xs sm:text-sm font-semibold">Tidak ada model di halaman ini untuk filter yang dipilih.</p>
@@ -1982,140 +2388,40 @@ export default function Home() {
                   Tampilkan Semua
                 </button>
               </div>
+            ) : shouldRenderCategorySections ? (
+              <div className="flex flex-col gap-5">
+                {groupedSections.map((section) => (
+                  <div key={section.catKey} className="flex flex-col gap-2.5">
+                    <div className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-sm leading-none">{section.icon}</span>
+                        <h3 className="text-xs sm:text-sm font-black text-slate-800 uppercase tracking-wide truncate">
+                          {section.label}
+                        </h3>
+                        <span className="text-[10px] font-bold bg-white text-slate-600 border border-slate-200 px-2 py-0.5 rounded-full shrink-0">
+                          {section.items.length} Model
+                        </span>
+                      </div>
+                      {section.catKey !== "OTHER" && (
+                        <button
+                          type="button"
+                          onClick={() => handleCategoryFilterChange(section.catKey)}
+                          className="text-[10px] sm:text-[11px] font-bold text-indigo-700 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                        >
+                          Fokus {section.label} →
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2.5 sm:gap-3">
+                      {section.items.map(renderProductCard)}
+                    </div>
+                  </div>
+                ))}
+              </div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2.5 sm:gap-3">
-                {filteredProducts.map((p) => {
-                  const info = parseProductInfo(p);
-                  const cleanArticle =
-                    p.article && !["0", "-", "PRODUK BARU"].includes(p.article.trim().toUpperCase())
-                      ? p.article.trim()
-                      : null;
-                  const hasLowerPromoPrice = Boolean(
-                    p.hargaPromo && p.hargaPromo > 0 && (!p.hargaNormal || p.hargaPromo < p.hargaNormal)
-                  );
-                  const hasPromo = isProductOnPromo(p);
-                  const promoBadge =
-                    p.articlePromoLabel ||
-                    p.diskon ||
-                    (hasLowerPromoPrice ? "PROMO" : p.acara ? "ACARA" : null);
-                  const displayPrice = hasLowerPromoPrice ? (p.hargaPromo || p.hargaNormal) : p.hargaNormal;
-                  const totalStok = getTotalStock(p);
-                  const variantCount = p.articleGroupCount ?? 1;
-                  const colorsSummary =
-                    p.articleColors && p.articleColors.length > 0
-                      ? p.articleColors.slice(0, 2).join(", ") +
-                        (p.articleColors.length > 2 ? ` +${p.articleColors.length - 2}` : "")
-                      : info.color;
-                  const sizesSummary =
-                    p.articleSizes && p.articleSizes.length > 1
-                      ? `${p.articleSizes[0]}–${p.articleSizes[p.articleSizes.length - 1]}`
-                      : p.articleSizes?.[0] || info.size;
-
-                  return (
-                    <button
-                      key={cleanArticle ? `${cleanArticle}-${p.sku}` : (p.id || p.sku)}
-                      type="button"
-                      onClick={() => {
-                        setProduct(p);
-                        setSiblings([p]);
-                        setProductsList([]);
-                        setManualInput(p.sku);
-                        scrollPageToTop();
-                        searchProduct(p.sku);
-                      }}
-                      className="group text-left bg-white border border-slate-200 hover:border-blue-400 hover:shadow-md rounded-xl overflow-hidden transition-all flex flex-col h-full cursor-pointer"
-                    >
-                      {/* Clean Portrait Product Photo (Zero Overlay Badges) */}
-                      <div className="w-full aspect-[3/4] bg-slate-50 shrink-0 overflow-hidden border-b border-slate-100">
-                        {p.imageUrl ? (
-                          <img
-                            src={optimizeRetailImageUrl(p.imageUrl, 400)}
-                            alt={info.name}
-                            loading="eager"
-                            decoding="sync"
-                            referrerPolicy="no-referrer"
-                            className="w-full h-full object-cover object-top group-hover:scale-105 transition-transform duration-300"
-                          />
-                        ) : (
-                          <div className="w-full h-full flex flex-col items-center justify-center text-slate-300 gap-1">
-                            <Package2 className="w-7 h-7" />
-                            <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">No Foto</span>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Card Body (Artikel, Brand, Varian, Promo Tag, & Harga di Samping/Bawah) */}
-                      <div className="flex-1 p-2 sm:p-2.5 flex flex-col justify-between min-w-0">
-                        <div>
-                          <div className="flex items-center gap-1 flex-wrap">
-                            <span className="text-[9px] sm:text-[10px] font-mono font-bold bg-slate-900 text-white px-1.5 py-0.5 rounded">
-                              {cleanArticle || p.sku}
-                            </span>
-                            {p.brand && (
-                              <span className="text-[9px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100 px-1.5 py-0.5 rounded truncate max-w-[85px]">
-                                {p.brand}
-                              </span>
-                            )}
-                            {variantCount > 1 && (
-                              <span className="text-[9px] font-bold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">
-                                {variantCount} var
-                              </span>
-                            )}
-                          </div>
-
-                          <p className="font-bold text-slate-900 text-[11px] sm:text-xs leading-snug line-clamp-2 mt-1.5 group-hover:text-blue-700 transition-colors">
-                            {info.name}
-                          </p>
-
-                          {(colorsSummary || sizesSummary) && (
-                            <div className="flex flex-wrap gap-1 mt-1">
-                              {colorsSummary && (
-                                <span className="text-[9px] font-semibold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded truncate max-w-full">
-                                  {colorsSummary}
-                                </span>
-                              )}
-                              {sizesSummary && (
-                                <span className="text-[9px] font-semibold bg-blue-50 text-blue-700 border border-blue-100 px-1.5 py-0.5 rounded">
-                                  {sizesSummary}
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="mt-2 pt-1.5 border-t border-slate-100 flex flex-col gap-1">
-                          {hasPromo && promoBadge && (
-                            <span className="inline-block self-start text-[9px] font-black px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 uppercase tracking-tight max-w-full truncate">
-                              {promoBadge}
-                            </span>
-                          )}
-                          <div className="flex items-end justify-between gap-1">
-                            <div className="min-w-0">
-                              {hasLowerPromoPrice && p.hargaNormal > (p.hargaPromo || 0) && (
-                                <p className="text-[9px] text-slate-400 line-through leading-none">
-                                  {formatRupiah(p.hargaNormal)}
-                                </p>
-                              )}
-                              <p className={`text-xs font-black leading-tight truncate ${hasLowerPromoPrice ? 'text-rose-600' : 'text-blue-700'}`}>
-                                {formatRupiah(displayPrice)}
-                              </p>
-                            </div>
-
-                            <span
-                              className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded border shrink-0 ${
-                                totalStok > 0
-                                  ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                                  : "bg-rose-50 text-rose-700 border-rose-200"
-                              }`}
-                            >
-                              Stok: {totalStok}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
+                {filteredProducts.map(renderProductCard)}
               </div>
             )}
 
@@ -2741,28 +3047,52 @@ export default function Home() {
         );
       })()}
 
-      {/* Sleek Empty State */}
+      {/* Sleek Empty State / Active Filter No-Match */}
       {!product && productsList.length === 0 && !loading && !error && (
-        <div className="flex flex-col items-center py-8 px-4 gap-3 text-slate-400">
-          <div className="w-12 h-12 rounded-2xl bg-slate-100 border border-slate-200/70 flex items-center justify-center text-slate-400">
-            <Search className="w-6 h-6" />
+        selectedBrandGroup !== "ALL" || selectedCategory !== "ALL" ? (
+          <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center flex flex-col items-center gap-3 shadow-xs">
+            <Package2 className="w-10 h-10 text-slate-300" />
+            <div>
+              <p className="text-sm font-bold text-slate-700">
+                Tidak ada model untuk kombinasi filter ini
+              </p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {[
+                  selectedBrandGroup !== "ALL" ? `Brand: ${getBrandGroupMeta(selectedBrandGroup).shortLabel}` : null,
+                  selectedCategory !== "ALL" ? `Kategori: ${CATEGORY_LABELS[selectedCategory]}` : null,
+                ].filter(Boolean).join(" • ")}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleResetTaxonomyFilters}
+              className="text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl transition-colors cursor-pointer"
+            >
+              Reset Filter Brand &amp; Kategori
+            </button>
           </div>
-          <div className="text-center">
-            <p className="text-xs sm:text-sm font-bold text-slate-600">Siap mencari produk atau scan barcode</p>
-            <p className="text-[11px] text-slate-400 mt-0.5">Contoh: ketik kode artikel, SKU <span className="font-mono">13463728</span>, atau <span className="font-medium text-slate-500">&quot;Kemeja&quot;</span></p>
+        ) : (
+          <div className="flex flex-col items-center py-8 px-4 gap-3 text-slate-400">
+            <div className="w-12 h-12 rounded-2xl bg-slate-100 border border-slate-200/70 flex items-center justify-center text-slate-400">
+              <Search className="w-6 h-6" />
+            </div>
+            <div className="text-center">
+              <p className="text-xs sm:text-sm font-bold text-slate-600">Siap mencari produk, memilih brand (SUKO / Mu+Ku / ZES), atau scan barcode</p>
+              <p className="text-[11px] text-slate-400 mt-0.5">Contoh: ketik kode artikel, SKU <span className="font-mono">13463728</span>, atau pilih filter Brand &amp; Kategori di atas</p>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
+              <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/70">
+                ⚡ 0ms Foto Produk
+              </span>
+              <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200/70">
+                📦 Offline 97rb+ SKU
+              </span>
+              <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200/70">
+                🌐 Live by luqman org
+              </span>
+            </div>
           </div>
-          <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
-            <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/70">
-              ⚡ 0ms Foto Produk
-            </span>
-            <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200/70">
-              📦 Offline 97rb+ SKU
-            </span>
-            <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200/70">
-              🌐 Live by luqman org
-            </span>
-          </div>
-        </div>
+        )
       )}
       </>
       )}

@@ -7,6 +7,20 @@ import {
   consultGeminiSearchAgent,
   groupProductsByArticle,
 } from "@/lib/smartSearchEngine";
+import {
+  BrandGroupKey,
+  CategoryKey,
+  buildBrandPrismaWhere,
+  buildCategoryPrismaWhere,
+} from "@/lib/productTaxonomy";
+import {
+  PRODUCT_LIST_SELECT,
+  cleanPromoList,
+  checkAndCleanPromo,
+  getProductSiblings,
+  summarizeTaxonomyCounts,
+  filterByTaxonomy,
+} from "@/lib/productQueryHelpers";
 
 export const dynamic = 'force-dynamic';
 
@@ -14,40 +28,30 @@ const SEARCH_CACHE_TTL_MS = 60_000;
 const SEARCH_CACHE_MAX_KEYS = 80;
 const searchListCache = new Map<
   string,
-  { groupedArticles: any[]; totalSkus: number; aiAssisted: boolean; expiresAt: number }
+  {
+    groupedArticles: any[];
+    totalSkus: number;
+    aiAssisted: boolean;
+    brandCounts: Record<BrandGroupKey, number>;
+    categoryCounts: Record<CategoryKey, number>;
+    expiresAt: number;
+  }
 >();
 
-const PRODUCT_LIST_SELECT = {
-  id: true,
-  sku: true,
-  barcode: true,
-  article: true,
-  description: true,
-  acara: true,
-  fromDate: true,
-  toDate: true,
-  hargaNormal: true,
-  hargaPromo: true,
-  diskon: true,
-  discountType: true,
-  brand: true,
-  dept: true,
-  color: true,
-  size: true,
-  stok: true,
-  imageUrl: true,
-  promoFileName: true,
-} as const;
+const VALID_BRANDS = new Set<BrandGroupKey>(["ALL", "SUKO", "MUKU", "ZES", "OTHER"]);
+const VALID_CATEGORIES = new Set<CategoryKey>([
+  "ALL",
+  "JAKET",
+  "ATASAN",
+  "CELANA",
+  "DRESS_ROK",
+  "SEPATU_SANDAL",
+  "TAS_AKSESORIS",
+  "TIDUR_DALAM",
+  "OTHER",
+]);
 
 const SIZE_TOKEN_RE = /^(XXS|XS|S|M|L|XL|XXL|2XL|3XL|4XL|5XL|2L|3L|4L|ALL|\d{1,2})$/i;
-
-function isPromoExpired(toDate: string | null | undefined): boolean {
-  if (!toDate) return false;
-  const toDateObj = new Date(toDate);
-  if (isNaN(toDateObj.getTime())) return false;
-  toDateObj.setHours(23, 59, 59, 999);
-  return new Date() > toDateObj;
-}
 
 function getCachedSearchResult(key: string) {
   const hit = searchListCache.get(key);
@@ -61,7 +65,13 @@ function getCachedSearchResult(key: string) {
 
 function setCachedSearchResult(
   key: string,
-  value: { groupedArticles: any[]; totalSkus: number; aiAssisted: boolean }
+  value: {
+    groupedArticles: any[];
+    totalSkus: number;
+    aiAssisted: boolean;
+    brandCounts: Record<BrandGroupKey, number>;
+    categoryCounts: Record<CategoryKey, number>;
+  }
 ) {
   if (searchListCache.size >= SEARCH_CACHE_MAX_KEYS) {
     const oldestKey = searchListCache.keys().next().value;
@@ -89,64 +99,11 @@ export async function GET(
     const limit = Math.min(50, Math.max(1, parseInt(searchParams.get('limit') || '20', 10)));
     const skip = (page - 1) * limit;
 
-    // Bersihkan promo kedaluwarsa di memori tanpa spam koneksi DB per-baris
-    const cleanPromoList = (rows: any[]): any[] => {
-      const expiredIds: number[] = [];
-      const cleaned = rows.map((p) => {
-        if (p && isPromoExpired(p.toDate)) {
-          if (typeof p.id === 'number' && p.id > 0) expiredIds.push(p.id);
-          return {
-            ...p,
-            hargaPromo: null,
-            diskon: null,
-            discountType: null,
-            acara: null,
-            fromDate: null,
-            toDate: null,
-          };
-        }
-        return p;
-      });
-      if (expiredIds.length > 0) {
-        db.product.updateMany({
-          where: { id: { in: expiredIds } },
-          data: {
-            hargaPromo: null,
-            diskon: null,
-            discountType: null,
-            acara: null,
-            fromDate: null,
-            toDate: null,
-          },
-        }).catch((e) => console.error("Auto-clean promo background error:", e));
-      }
-      return cleaned;
-    };
-
-    const checkAndCleanPromo = (p: any) => cleanPromoList([p])[0];
-
-    // Helper untuk mengambil seluruh varian (siblings) produk berdasarkan article
-    const getProductSiblings = async (prod: any) => {
-      let siblings: any[] = [];
-      if (prod.article && prod.article.trim() && !["0", "-", "PRODUK BARU"].includes(prod.article.trim().toUpperCase())) {
-        const allSiblings = await db.product.findMany({
-          where: { article: prod.article },
-          orderBy: [{ color: 'asc' }, { size: 'asc' }, { description: 'asc' }]
-        });
-        siblings = cleanPromoList(allSiblings);
-      } else if (prod.description) {
-        const parts = prod.description.split(":");
-        if (parts.length > 1) {
-          const parentName = parts[0].trim();
-          const allSiblings = await db.product.findMany({
-            where: { description: { startsWith: parentName + ":" } },
-            orderBy: { description: 'asc' }
-          });
-          siblings = cleanPromoList(allSiblings);
-        }
-      }
-      return siblings;
-    };
+    const rawBrand = (searchParams.get('brandGroup') || 'ALL').toUpperCase() as BrandGroupKey;
+    const rawCategory = (searchParams.get('category') || 'ALL').toUpperCase() as CategoryKey;
+    const brandGroup: BrandGroupKey = VALID_BRANDS.has(rawBrand) ? rawBrand : 'ALL';
+    const category: CategoryKey = VALID_CATEGORIES.has(rawCategory) ? rawCategory : 'ALL';
+    const hasTaxonomyFilter = brandGroup !== 'ALL' || category !== 'ALL';
 
     // ─────────────────────────────────────────────────────────────
     //  TAHAP 1: EXACT MATCH PRIORITAS (Hanya jika input memuat angka / format kode)
@@ -246,11 +203,11 @@ export async function GET(
     // ─────────────────────────────────────────────────────────────
     //  CACHE KILAT HALAMAN (Page 2 / Sebelumnya / Ulangi Kata = 1ms!)
     // ─────────────────────────────────────────────────────────────
-    const cacheKey = rawInput.toLowerCase();
+    const cacheKey = `${rawInput.toLowerCase()}::b=${brandGroup}::c=${category}`;
     const cachedList = getCachedSearchResult(cacheKey);
     if (cachedList) {
       const total = cachedList.groupedArticles.length;
-      if (total === 1 && page === 1) {
+      if (total === 1 && page === 1 && !hasTaxonomyFilter) {
         const topProduct = cachedList.groupedArticles[0];
         const siblings = await getProductSiblings(topProduct);
         return NextResponse.json({ data: topProduct, siblings, aiAssisted: cachedList.aiAssisted });
@@ -265,6 +222,10 @@ export async function GET(
           total,
           totalSkus: cachedList.totalSkus,
           totalPages: Math.max(1, Math.ceil(total / limit)),
+          brandGroup,
+          category,
+          brandCounts: cachedList.brandCounts,
+          categoryCounts: cachedList.categoryCounts,
           cached: true,
         }
       });
@@ -276,14 +237,19 @@ export async function GET(
     // ─────────────────────────────────────────────────────────────
     const isSearchingDummy = rawInput.toLowerCase().includes("dummy");
     const expanded = expandRetailQuery(rawInput);
-    const dummyFilter = !isSearchingDummy
-      ? {
-          NOT: [
-            { article: { contains: "DUMMY", mode: 'insensitive' as const } },
-            { description: { contains: "SKU DUMMY", mode: 'insensitive' as const } }
-          ]
-        }
-      : undefined;
+    const extraAndFilters: any[] = [];
+    if (!isSearchingDummy) {
+      extraAndFilters.push({
+        NOT: [
+          { article: { contains: "DUMMY", mode: 'insensitive' as const } },
+          { description: { contains: "SKU DUMMY", mode: 'insensitive' as const } }
+        ]
+      });
+    }
+    const brandWhere = buildBrandPrismaWhere(brandGroup);
+    if (brandWhere) extraAndFilters.push(brandWhere);
+    const categoryWhere = buildCategoryPrismaWhere(category);
+    if (categoryWhere) extraAndFilters.push(categoryWhere);
 
     const buildTermOrClause = (term: string) => {
       const clauses: any[] = [
@@ -329,8 +295,8 @@ export async function GET(
 
     const strictWhere: any =
       strictOrBranches.length === 1 ? strictOrBranches[0] : { OR: strictOrBranches };
-    if (dummyFilter) {
-      strictWhere.AND = [...(strictWhere.AND || []), dummyFilter];
+    if (extraAndFilters.length > 0) {
+      strictWhere.AND = [...(strictWhere.AND || []), ...extraAndFilters];
     }
 
     const candidateMap = new Map<string, any>();
@@ -358,7 +324,7 @@ export async function GET(
             { color: { contains: term, mode: 'insensitive' as const } }
           ])
         };
-        if (dummyFilter) relaxedWhere.AND = [dummyFilter];
+        if (extraAndFilters.length > 0) relaxedWhere.AND = extraAndFilters;
 
         const relaxedMatches = await db.product.findMany({
           where: relaxedWhere,
@@ -393,7 +359,7 @@ export async function GET(
             { color: { contains: term, mode: 'insensitive' as const } }
           ])
         };
-        if (dummyFilter) aiWhere.AND = [dummyFilter];
+        if (extraAndFilters.length > 0) aiWhere.AND = extraAndFilters;
 
         const aiMatches = await db.product.findMany({
           where: aiWhere,
@@ -451,16 +417,20 @@ export async function GET(
     });
 
     const rankedProducts = cleanPromoList(scoredProducts.map(sp => sp.product));
-    const groupedArticles = groupProductsByArticle(rankedProducts);
+    const taxonomyFiltered = filterByTaxonomy(rankedProducts, brandGroup, category);
+    const groupedArticles = groupProductsByArticle(taxonomyFiltered);
+    const { brandCounts, categoryCounts } = summarizeTaxonomyCounts(groupedArticles);
 
     // Simpan ke cache server 60s agar klik Selanjutnya/Sebelumnya = 1ms!
     setCachedSearchResult(cacheKey, {
       groupedArticles,
-      totalSkus: rankedProducts.length,
+      totalSkus: taxonomyFiltered.length,
       aiAssisted: aiExpandedTerms.length > 0,
+      brandCounts,
+      categoryCounts,
     });
 
-    if (groupedArticles.length === 1 && page === 1) {
+    if (groupedArticles.length === 1 && page === 1 && !hasTaxonomyFilter) {
       const topProduct = groupedArticles[0];
       const siblings = await getProductSiblings(topProduct);
       return NextResponse.json({ data: topProduct, siblings, aiAssisted: aiExpandedTerms.length > 0 });
@@ -476,8 +446,12 @@ export async function GET(
         page,
         limit,
         total,
-        totalSkus: rankedProducts.length,
-        totalPages: Math.max(1, Math.ceil(total / limit))
+        totalSkus: taxonomyFiltered.length,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+        brandGroup,
+        category,
+        brandCounts,
+        categoryCounts,
       }
     });
 

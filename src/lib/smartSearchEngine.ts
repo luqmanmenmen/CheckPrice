@@ -11,6 +11,13 @@
  * =============================================================================
  */
 
+import {
+  classifyBrandGroup,
+  classifyProductCategory,
+  ResolvedBrandGroup,
+  ResolvedCategoryKey,
+} from "./productTaxonomy";
+
 export interface ExpandedRetailQuery {
   raw: string;
   cleaned: string;
@@ -498,6 +505,8 @@ export function groupProductsByArticle<T extends Record<string, any>>(items: T[]
     articleSizes: string[];
     articleHasPromo: boolean;
     articlePromoLabel: string | null;
+    brandGroup: ResolvedBrandGroup;
+    categoryKey: ResolvedCategoryKey;
   }
 > {
   const groups = new Map<string, T[]>();
@@ -534,6 +543,8 @@ export function groupProductsByArticle<T extends Record<string, any>>(items: T[]
       articleSizes: string[];
       articleHasPromo: boolean;
       articlePromoLabel: string | null;
+      brandGroup: ResolvedBrandGroup;
+      categoryKey: ResolvedCategoryKey;
     }
   > = [];
 
@@ -595,6 +606,8 @@ export function groupProductsByArticle<T extends Record<string, any>>(items: T[]
       articleSizes: Array.from(sizeSet).sort(sortSizes),
       articleHasPromo: Boolean(promoVariant),
       articlePromoLabel: promoLabel,
+      brandGroup: classifyBrandGroup(rep),
+      categoryKey: classifyProductCategory(rep),
     });
   }
 
