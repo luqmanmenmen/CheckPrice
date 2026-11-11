@@ -466,3 +466,134 @@ Balas HANYA dalam format JSON array berisi string huruf kapital, contoh: ["SWEAT
   }
 }
 
+const INVALID_ARTICLE_SET = new Set(["", "0", "-", "PRODUK BARU", "N/A", "NONE"]);
+
+function isPromoActiveForProduct(p: any): boolean {
+  if (p?.toDate) {
+    const t = new Date(p.toDate);
+    if (!isNaN(t.getTime())) {
+      t.setHours(23, 59, 59, 999);
+      if (new Date() > t) return false;
+    }
+  }
+  return Boolean(
+    (p?.hargaPromo && Number(p.hargaPromo) > 0 && Number(p.hargaPromo) < Number(p.hargaNormal || 0)) ||
+    p?.discountType
+  );
+}
+
+/**
+ * Mengelompokkan daftar SKU hasil pencarian per Kode Artikel (Konsep 3 Catalog Grouping),
+ * sehingga tidak ada puluhan baris duplikat untuk size S/M/L/XL dari model yang sama.
+ */
+export function groupProductsByArticle<T extends Record<string, any>>(items: T[]): Array<
+  T & {
+    articleGroupCount: number;
+    articleTotalStok: number;
+    articleColors: string[];
+    articleSizes: string[];
+    articleHasPromo: boolean;
+    articlePromoLabel: string | null;
+  }
+> {
+  const groups = new Map<string, T[]>();
+
+  for (const item of items) {
+    const rawArt = String(item.article || "").trim().toUpperCase();
+    const key = !INVALID_ARTICLE_SET.has(rawArt) ? `ART::${rawArt}` : `SKU::${item.sku}`;
+    const list = groups.get(key);
+    if (list) {
+      list.push(item);
+    } else {
+      groups.set(key, [item]);
+    }
+  }
+
+  const sizeRank = ["XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL", "3XL", "4XL", "5XL", "ALL SIZE", "ALLSIZE"];
+  const sortSizes = (a: string, b: string) => {
+    const ia = sizeRank.indexOf(a.toUpperCase());
+    const ib = sizeRank.indexOf(b.toUpperCase());
+    if (ia !== -1 && ib !== -1) return ia - ib;
+    if (ia !== -1) return -1;
+    if (ib !== -1) return 1;
+    const na = parseFloat(a);
+    const nb = parseFloat(b);
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    return a.localeCompare(b);
+  };
+
+  const result: Array<
+    T & {
+      articleGroupCount: number;
+      articleTotalStok: number;
+      articleColors: string[];
+      articleSizes: string[];
+      articleHasPromo: boolean;
+      articlePromoLabel: string | null;
+    }
+  > = [];
+
+  for (const variants of groups.values()) {
+    // Pilih perwakilan terbaik: utamakan yang ada foto + stok > 0 + promo aktif
+    const sorted = [...variants].sort((a, b) => {
+      const aImg = a.imageUrl ? 1 : 0;
+      const bImg = b.imageUrl ? 1 : 0;
+      if (bImg !== aImg) return bImg - aImg;
+      const aPromo = isPromoActiveForProduct(a) ? 1 : 0;
+      const bPromo = isPromoActiveForProduct(b) ? 1 : 0;
+      if (bPromo !== aPromo) return bPromo - aPromo;
+      return (Number(b.stok) || 0) - (Number(a.stok) || 0);
+    });
+
+    const rep = { ...sorted[0] };
+    const bestPhoto = variants.find((v) => v.imageUrl)?.imageUrl || rep.imageUrl || null;
+    const promoVariant = variants.find((v) => isPromoActiveForProduct(v));
+
+    const colorSet = new Set<string>();
+    const sizeSet = new Set<string>();
+    let totalStok = 0;
+
+    for (const v of variants) {
+      totalStok += Math.max(0, Number(v.stok) || 0);
+      const col = String(v.color || "").trim();
+      if (col && !["-", "SOLID"].includes(col.toUpperCase())) colorSet.add(col);
+      const sz = String(v.size || "").trim();
+      if (sz && !["-", "SOLID"].includes(sz.toUpperCase())) sizeSet.add(sz);
+    }
+
+    if (bestPhoto) (rep as any).imageUrl = bestPhoto;
+    if (promoVariant) {
+      (rep as any).hargaPromo = promoVariant.hargaPromo ?? rep.hargaPromo;
+      (rep as any).discountType = promoVariant.discountType ?? rep.discountType;
+      (rep as any).diskon = promoVariant.diskon ?? rep.diskon;
+      (rep as any).acara = promoVariant.acara ?? rep.acara;
+    }
+
+    let promoLabel: string | null = null;
+    if (promoVariant) {
+      const dt = String(promoVariant.discountType || "").trim();
+      const dsk = String(promoVariant.diskon || "").trim();
+      if (dt) promoLabel = dt;
+      else if (dsk) promoLabel = dsk;
+      else if (promoVariant.hargaPromo && promoVariant.hargaNormal > promoVariant.hargaPromo) {
+        const pct = Math.round(((promoVariant.hargaNormal - promoVariant.hargaPromo) / promoVariant.hargaNormal) * 100);
+        promoLabel = pct >= 5 ? `DISKON ${pct}%` : "PROMO";
+      } else {
+        promoLabel = "PROMO";
+      }
+    }
+
+    result.push({
+      ...rep,
+      articleGroupCount: variants.length,
+      articleTotalStok: totalStok,
+      articleColors: Array.from(colorSet).sort(),
+      articleSizes: Array.from(sizeSet).sort(sortSizes),
+      articleHasPromo: Boolean(promoVariant),
+      articlePromoLabel: promoLabel,
+    });
+  }
+
+  return result;
+}
+

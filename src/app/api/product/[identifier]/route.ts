@@ -5,6 +5,7 @@ import {
   expandRetailQuery,
   computeProductRelevanceScore,
   consultGeminiSearchAgent,
+  groupProductsByArticle,
 } from "@/lib/smartSearchEngine";
 
 export const dynamic = 'force-dynamic';
@@ -225,7 +226,7 @@ export async function GET(
     const strictMatches = await db.product.findMany({
       where: strictWhere,
       orderBy: [{ stok: 'desc' }],
-      take: 140
+      take: 320
     });
     for (const p of strictMatches) candidateMap.set(p.sku, p);
 
@@ -234,7 +235,7 @@ export async function GET(
     //  Jika hasil strict < 15 (misal user hanya ketik 30% nama deskripsi atau ada kata yang meleset),
     //  tarik kandidat menggunakan Relaxed OR lintas sinonim & potongan kata >= 3 huruf!
     // ─────────────────────────────────────────────────────────────
-    if (candidateMap.size < 15 && expanded.allExpandedTerms.length > 0) {
+    if (candidateMap.size < 25 && expanded.allExpandedTerms.length > 0) {
       const meaningfulTerms = expanded.allExpandedTerms.filter(t => t.length >= 3).slice(0, 14);
       if (meaningfulTerms.length > 0) {
         const relaxedWhere: any = {
@@ -251,7 +252,7 @@ export async function GET(
         const relaxedMatches = await db.product.findMany({
           where: relaxedWhere,
           orderBy: [{ stok: 'desc' }],
-          take: 120
+          take: 220
         });
         for (const p of relaxedMatches) {
           if (!candidateMap.has(p.sku)) candidateMap.set(p.sku, p);
@@ -342,27 +343,28 @@ export async function GET(
       return (a.product.description || "").localeCompare(b.product.description || "");
     });
 
-    const rankedProducts = scoredProducts.map(sp => sp.product);
+    const rankedProducts = scoredProducts.map(sp => checkAndCleanPromo(sp.product));
+    const groupedArticles = groupProductsByArticle(rankedProducts);
 
-    // Jika hanya 1 hasil di halaman 1, tampilkan langsung kartu detailnya beserta seluruh varian
-    if (rankedProducts.length === 1 && page === 1) {
-      const topProduct = checkAndCleanPromo(rankedProducts[0]);
+    // Jika hanya 1 model/artikel di halaman 1, langsung buka kartu detail + seluruh variannya
+    if (groupedArticles.length === 1 && page === 1) {
+      const topProduct = groupedArticles[0];
       const siblings = await getProductSiblings(topProduct);
       return NextResponse.json({ data: topProduct, siblings, aiAssisted: aiExpandedTerms.length > 0 });
     }
 
-    // Jika banyak hasil: Kembalikan daftar berpaginasi
-    const total = rankedProducts.length;
-    const pagedMatches = rankedProducts.slice(skip, skip + limit);
-    const cleanedMatches = pagedMatches.map(checkAndCleanPromo);
+    // Jika banyak model: Kembalikan daftar artikel unik berpaginasi (Konsep 3: Anti Duplikat Size)
+    const total = groupedArticles.length;
+    const pagedMatches = groupedArticles.slice(skip, skip + limit);
 
     return NextResponse.json({
-      data: cleanedMatches,
+      data: pagedMatches,
       aiAssisted: aiExpandedTerms.length > 0,
       meta: {
         page,
         limit,
         total,
+        totalSkus: rankedProducts.length,
         totalPages: Math.ceil(total / limit)
       }
     });

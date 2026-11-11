@@ -40,6 +40,12 @@ type ProductData = {
   promoFileName: string | null;
   imageUrl?: string | null;
   images?: string[];
+  articleGroupCount?: number;
+  articleTotalStok?: number;
+  articleColors?: string[];
+  articleSizes?: string[];
+  articleHasPromo?: boolean;
+  articlePromoLabel?: string | null;
 };
 
 // Parse product info to get clean product name, color, and size
@@ -207,10 +213,38 @@ export default function Home() {
   const [product, setProduct] = useState<ProductData | null>(null);
   const [siblings, setSiblings] = useState<ProductData[]>([]);
   const [productsList, setProductsList] = useState<ProductData[]>([]);
+  const [resultFilter, setResultFilter] = useState<"ALL" | "STOCK" | "PROMO">("ALL");
+  const [totalModelsCount, setTotalModelsCount] = useState(0);
+  const [totalSkusCount, setTotalSkusCount] = useState(0);
+  const [recentSearches, setRecentSearches] = useState<string[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [error, setError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const raw = localStorage.getItem("suko_recent_searches");
+        if (raw) {
+          const arr = JSON.parse(raw);
+          if (Array.isArray(arr)) setRecentSearches(arr.slice(0, 6));
+        }
+      } catch {}
+    }
+  }, []);
+
+  const recordRecentSearch = (term: string) => {
+    const clean = term.trim();
+    if (!clean || clean.length < 2) return;
+    setRecentSearches((prev) => {
+      const next = [clean, ...prev.filter((x) => x.toLowerCase() !== clean.toLowerCase())].slice(0, 6);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("suko_recent_searches", JSON.stringify(next));
+      }
+      return next;
+    });
+  };
   
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [orderPreviewImage, setOrderPreviewImage] = useState<{ url: string; title: string; sku: string } | null>(null);
@@ -927,11 +961,16 @@ export default function Home() {
             return;
           }
           setProductsList(data.data);
+          setResultFilter("ALL");
+          setTotalModelsCount(data.meta?.total ?? data.data.length);
+          setTotalSkusCount(data.meta?.totalSkus ?? data.data.length);
+          recordRecentSearch(trimmed);
           preloadProductImages(data.data.map((item: any) => item.imageUrl), 400);
           setCurrentPage(data.meta?.page || 1);
           setTotalPages(data.meta?.totalPages || 1);
         } else {
           setProduct(data.data);
+          recordRecentSearch(data.data?.article && !["0", "-", "PRODUK BARU"].includes(String(data.data.article).toUpperCase()) ? data.data.article : trimmed);
           const serverSiblings = data.siblings || [];
           setSiblings(serverSiblings);
           setProductsList([]);
@@ -1009,6 +1048,9 @@ export default function Home() {
               setProductsList([]);
             } else {
               setProductsList(mappedList);
+              setResultFilter("ALL");
+              setTotalModelsCount(mappedList.length);
+              setTotalSkusCount(mappedList.length);
               setCurrentPage(1);
               setTotalPages(1);
             }
@@ -1188,6 +1230,9 @@ export default function Home() {
     setProduct(null);
     setSiblings([]);
     setProductsList([]);
+    setResultFilter("ALL");
+    setTotalModelsCount(0);
+    setTotalSkusCount(0);
     setMultiVariantQty({});
     setError("");
     setQty(1);
@@ -1286,139 +1331,170 @@ export default function Home() {
     <div className="w-full h-full">
       <div className={`flex flex-col lg:flex-row gap-6 max-w-7xl mx-auto w-full ${cart.length > 0 ? 'pb-32' : 'pb-6'}`}>
         <div className="flex-1 flex flex-col w-full">
-          {/* User Header */}
-          {user && (
-            <div className="bg-gradient-to-r from-blue-700 to-indigo-800 lg:rounded-2xl p-5 pt-8 lg:pt-5 pb-6 shadow-md rounded-b-3xl flex justify-between items-center text-white mb-5">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center backdrop-blur-sm border border-white/30 shrink-0">
-                  <UserCircle2 className="w-6 h-6" />
-                </div>
-                <div className="flex flex-col items-start gap-0.5">
-                  <Link href="/profile" className="group cursor-pointer flex flex-col items-start">
-                    <h1 className="font-bold text-sm md:text-base leading-tight group-hover:text-blue-100 transition-colors truncate max-w-[170px]">
-                      {user.name.replace(/\s*\(Developer\)/i, '').trim()}
-                    </h1>
-                    <div className="flex flex-col items-start gap-1 mt-0.5">
-                      <p className="text-[10px] text-blue-200 font-medium tracking-wide uppercase group-hover:text-white transition-colors">
-                        {user.jobTitle || 'Sales Area'}
-                      </p>
+          {/* Slim Dark Cockpit Header + Integrated Mode Tabs + System Status */}
+          <div className="bg-gradient-to-br from-slate-900 via-blue-950 to-indigo-950 lg:rounded-2xl rounded-b-2xl px-3.5 pt-4 pb-3 shadow-lg border-b border-indigo-500/20 lg:border text-white mb-3">
+            {/* Row 1: User Profile & Active/Break Toggle */}
+            {user && (
+              <div className="flex justify-between items-center gap-2 pb-2.5">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-9 h-9 bg-white/10 rounded-full flex items-center justify-center backdrop-blur-sm border border-white/20 shrink-0">
+                    <UserCircle2 className="w-5 h-5 text-blue-200" />
+                  </div>
+                  <Link href="/profile" className="group cursor-pointer min-w-0 flex flex-col items-start">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <h1 className="font-bold text-sm leading-tight group-hover:text-blue-200 transition-colors truncate max-w-[165px] sm:max-w-xs">
+                        {user.name.replace(/\s*\(Developer\)/i, '').trim()}
+                      </h1>
                       {user.name?.toLowerCase().includes('developer') && (
-                        <span className="text-[9px] font-black bg-white/20 text-white border border-white/30 px-2 py-0.5 rounded tracking-wider uppercase shadow-xs">
-                          Developer
+                        <span className="text-[9px] font-black bg-indigo-500/40 text-indigo-100 border border-indigo-400/40 px-1.5 py-0.5 rounded uppercase tracking-wider">
+                          DEV
                         </span>
                       )}
                     </div>
+                    <p className="text-[10px] text-blue-200/80 font-medium tracking-wide uppercase truncate">
+                      {user.jobTitle || 'Sales Area'} • by luqman org
+                    </p>
                   </Link>
                 </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <div 
-                  className={`relative flex p-0.5 rounded-full shadow-inner w-[90px] md:w-28 h-7 cursor-pointer border transition-colors ${togglingStatus ? 'opacity-50 pointer-events-none' : ''} ${user.status === 'ACTIVE' ? 'bg-slate-800/20 border-slate-700/30' : 'bg-slate-800/40 border-slate-700/50'}`} 
-                  onClick={toggleStatus}
-                >
-                  {/* Animated Pill Background */}
-                  <div 
-                    className={`absolute top-0.5 bottom-0.5 w-[calc(50%-2px)] rounded-full shadow-sm transition-all duration-300 ease-in-out ${user.status === 'ACTIVE' ? 'bg-green-500 left-0.5' : 'bg-amber-500 left-[50%]'}`}
-                  />
-                  <div className={`relative flex-1 flex items-center justify-center text-[9px] md:text-[10px] font-bold z-10 transition-colors duration-300 ${user.status === 'ACTIVE' ? 'text-white' : 'text-slate-500'}`}>
-                    AKTIF
-                  </div>
-                  <div className={`relative flex-1 flex items-center justify-center text-[9px] md:text-[10px] font-bold z-10 transition-colors duration-300 ${user.status === 'BREAK' ? 'text-white' : 'text-slate-500'}`}>
-                    REHAT
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <div
+                    className={`relative flex p-0.5 rounded-full shadow-inner w-[88px] md:w-24 h-7 cursor-pointer border transition-colors ${togglingStatus ? 'opacity-50 pointer-events-none' : ''} ${user.status === 'ACTIVE' ? 'bg-slate-950/60 border-white/15' : 'bg-slate-950/80 border-amber-400/30'}`}
+                    onClick={toggleStatus}
+                  >
+                    <div
+                      className={`absolute top-0.5 bottom-0.5 w-[calc(50%-2px)] rounded-full shadow-sm transition-all duration-300 ease-in-out ${user.status === 'ACTIVE' ? 'bg-emerald-500 left-0.5' : 'bg-amber-500 left-[50%]'}`}
+                    />
+                    <div className={`relative flex-1 flex items-center justify-center text-[9px] font-black z-10 transition-colors duration-300 ${user.status === 'ACTIVE' ? 'text-white' : 'text-slate-400'}`}>
+                      AKTIF
+                    </div>
+                    <div className={`relative flex-1 flex items-center justify-center text-[9px] font-black z-10 transition-colors duration-300 ${user.status === 'BREAK' ? 'text-white' : 'text-slate-400'}`}>
+                      REHAT
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-      {/* Main Content Wrapper */}
-      <div className="px-4 lg:px-0 flex flex-col gap-5">
-
-        {/* Database Status Info */}
-        <div className="flex flex-col gap-2">
-          {hasNewUpdate && (
-            <div className="bg-rose-500 rounded-xl p-3 shadow-md border border-rose-600 flex items-center justify-between animate-in slide-in-from-top-2 gap-3">
-              <div className="flex items-center gap-3">
-                <CloudDownload className="w-6 h-6 text-white animate-bounce shrink-0" />
-                <div>
-                  <p className="text-white font-black text-sm uppercase tracking-wide leading-tight">Pembaruan Tersedia!</p>
-                  <p className="text-rose-100 text-[10px] font-medium leading-tight mt-0.5">Update data promo, harga, dan fitur sistem terbaru.</p>
+            {/* Row 2: Integrated Mode Selector Tabs */}
+            <div className="grid grid-cols-3 gap-1 p-1 bg-slate-950/45 rounded-xl border border-white/10">
+              <button
+                type="button"
+                onClick={() => setActiveTab("FACING_OUT")}
+                className={`py-2 px-2 rounded-lg flex items-center justify-center gap-1.5 text-xs transition-all cursor-pointer ${
+                  activeTab === "FACING_OUT"
+                    ? "bg-white text-amber-600 font-bold shadow-sm"
+                    : "text-slate-300 font-medium hover:text-white hover:bg-white/5"
+                }`}
+              >
+                <Package2 className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Facing Out</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("STOCK_CHECK")}
+                className={`py-2 px-2 rounded-lg flex items-center justify-center gap-1.5 text-xs transition-all cursor-pointer ${
+                  activeTab === "STOCK_CHECK"
+                    ? "bg-white text-indigo-700 font-bold shadow-sm"
+                    : "text-slate-300 font-medium hover:text-white hover:bg-white/5"
+                }`}
+              >
+                <MessageSquare className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Tanya Stok</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("ORDERS")}
+                className={`py-2 px-2 rounded-lg flex items-center justify-center gap-1.5 text-xs transition-all cursor-pointer ${
+                  activeTab === "ORDERS"
+                    ? "bg-white text-amber-700 font-bold shadow-sm"
+                    : "text-slate-300 font-medium hover:text-white hover:bg-white/5"
+                }`}
+              >
+                <div className="relative shrink-0">
+                  <Bell className={`w-3.5 h-3.5 ${activeTab === 'ORDERS' ? 'text-amber-600' : 'text-slate-300'}`} />
+                  {(pendingCount > 0 || processedCount > 0) && (
+                    <span className="absolute -top-1 -right-1 flex h-2 w-2">
+                      <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${processedCount > 0 ? 'bg-emerald-400' : 'bg-amber-400'}`}></span>
+                      <span className={`relative inline-flex rounded-full h-2 w-2 border border-slate-900 ${processedCount > 0 ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
+                    </span>
+                  )}
                 </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button 
-                  onClick={() => handleManualSync()}
-                  disabled={isSyncing}
-                  className={`px-3 py-2 bg-white text-rose-600 font-black text-xs rounded-lg hover:bg-rose-50 transition-colors shadow-sm shrink-0 whitespace-nowrap cursor-pointer ${isSyncing ? 'opacity-50' : ''}`}
-                >
-                  {isSyncing ? "UPDATE..." : "UPDATE SEKARANG"}
-                </button>
-                <button
-                  onClick={() => {
-                    const targetVersion = serverVersion || Date.now().toString();
-                    localStorage.setItem("suko_server_version", targetVersion);
-                    localStorage.setItem("suko_dismissed_update", targetVersion);
-                    setLocalVersion(targetVersion);
-                    setDismissedVersion(targetVersion);
-                    setHasAppCodeUpdate(false);
-                  }}
-                  title="Tutup pemberitahuan"
-                  className="p-1.5 text-white/80 hover:text-white hover:bg-rose-600 rounded-lg transition-colors cursor-pointer shrink-0"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
+                <span className="truncate">Cek Pesanan</span>
+              </button>
             </div>
-          )}
 
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-white rounded-2xl p-3.5 border border-slate-200/90 shadow-sm gap-2">
-            <div className="flex items-start sm:items-center gap-2.5">
-              <div className={`w-2.5 h-2.5 rounded-full mt-1 sm:mt-0 shrink-0 ${lastUpdateDate === 'Memuat...' ? 'bg-amber-400 animate-pulse' : 'bg-emerald-500 shadow-[0_0_8px_#10b981]'}`} />
-              <div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Status Update Sistem</p>
-                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200/80">
-                    Otomatis 09:45 & 21:00 WIB
+            {/* Row 3: Slim System Status Strip */}
+            <div className="mt-2.5 flex items-center justify-between gap-2 bg-white/10 border border-white/10 rounded-xl px-2.5 py-1.5 text-[10px]">
+              <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                <span className="inline-flex items-center gap-1.5 text-slate-200 font-semibold shrink-0">
+                  <span className={`w-2 h-2 rounded-full ${lastUpdateDate === 'Memuat...' ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400 shadow-[0_0_6px_#34d399]'}`} />
+                  <span className="truncate max-w-[155px] sm:max-w-none">{lastUpdateDate}</span>
+                </span>
+                {updateData?.pillars?.mdsBisa && (
+                  <span className="hidden sm:inline-flex items-center gap-1 bg-cyan-400/15 text-cyan-200 px-2 py-0.5 rounded-md border border-cyan-300/20 font-semibold">
+                    by luqman org: {updateData.pillars.mdsBisa.records.toLocaleString('id-ID')}
                   </span>
-                </div>
-                <p className="text-xs font-bold text-slate-800 mt-0.5">
-                  Terakhir Diperbarui: <span className="text-blue-600">{lastUpdateDate}</span>
-                </p>
-
-                {/* Indikator Pilar Sync Terakhir */}
-                {updateData?.pillars && (
-                  <div className="flex items-center gap-2 mt-1.5 flex-wrap text-[10px] text-slate-500">
-                    {updateData.pillars.mdsBisa && (
-                      <span className="inline-flex items-center gap-1 bg-cyan-50 text-cyan-700 px-2 py-0.5 rounded-full border border-cyan-100 font-medium">
-                        📦 by luqman org: {updateData.pillars.mdsBisa.records.toLocaleString('id-ID')} item ({updateData.pillars.mdsBisa.status})
-                      </span>
-                    )}
-                    {updateData.pillars.photos && (
-                      <span className="inline-flex items-center gap-1 bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full border border-purple-100 font-medium">
-                        🖼️ Foto: {updateData.pillars.photos.records.toLocaleString('id-ID')} ({updateData.pillars.photos.status})
-                      </span>
-                    )}
-                    {updateData.pillars.promo && (
-                      <span className="inline-flex items-center gap-1 bg-sky-50 text-sky-700 px-2 py-0.5 rounded-full border border-sky-100 font-medium">
-                        🏷️ Promo: {updateData.pillars.promo.records.toLocaleString('id-ID')} item ({updateData.pillars.promo.status})
-                      </span>
-                    )}
-                  </div>
+                )}
+                {updateData?.pillars?.promo && (
+                  <span className="inline-flex items-center gap-1 bg-indigo-400/20 text-indigo-100 px-1.5 py-0.5 rounded-md border border-indigo-300/20 font-semibold">
+                    Promo: {updateData.pillars.promo.records.toLocaleString('id-ID')}
+                  </span>
                 )}
               </div>
+              {!hasNewUpdate && (
+                <button
+                  type="button"
+                  onClick={() => handleManualSync()}
+                  disabled={isSyncing}
+                  title="Sinkronkan database offline lokal"
+                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white/15 hover:bg-white/25 text-white font-bold transition-colors shrink-0 cursor-pointer ${isSyncing ? 'opacity-50' : ''}`}
+                >
+                  <CloudDownload className={`w-3.5 h-3.5 ${isSyncing ? 'animate-bounce text-cyan-300' : ''}`} />
+                  <span className="hidden sm:inline">Sync</span>
+                </button>
+              )}
             </div>
-            {!hasNewUpdate && (
-              <button 
+          </div>
+
+      {/* Main Content Wrapper */}
+      <div className="px-3.5 lg:px-0 flex flex-col gap-3.5">
+
+        {/* Update Alert Banner */}
+        {hasNewUpdate && (
+          <div className="bg-rose-500 rounded-xl p-3 shadow-md border border-rose-600 flex items-center justify-between animate-in slide-in-from-top-2 gap-3">
+            <div className="flex items-center gap-3">
+              <CloudDownload className="w-6 h-6 text-white animate-bounce shrink-0" />
+              <div>
+                <p className="text-white font-black text-sm uppercase tracking-wide leading-tight">Pembaruan Tersedia!</p>
+                <p className="text-rose-100 text-[10px] font-medium leading-tight mt-0.5">Update data promo, harga, dan fitur sistem terbaru.</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
                 onClick={() => handleManualSync()}
                 disabled={isSyncing}
-                title="Sinkronkan database offline lokal"
-                className={`self-end sm:self-center p-2 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-500 transition-colors border border-slate-200 shrink-0 ${isSyncing ? 'opacity-50' : ''}`}
+                className={`px-3 py-2 bg-white text-rose-600 font-black text-xs rounded-lg hover:bg-rose-50 transition-colors shadow-sm shrink-0 whitespace-nowrap cursor-pointer ${isSyncing ? 'opacity-50' : ''}`}
               >
-                <CloudDownload className={`w-4 h-4 ${isSyncing ? 'animate-bounce text-blue-500' : ''}`} />
+                {isSyncing ? "UPDATE..." : "UPDATE SEKARANG"}
               </button>
-            )}
+              <button
+                onClick={() => {
+                  const targetVersion = serverVersion || Date.now().toString();
+                  localStorage.setItem("suko_server_version", targetVersion);
+                  localStorage.setItem("suko_dismissed_update", targetVersion);
+                  setLocalVersion(targetVersion);
+                  setDismissedVersion(targetVersion);
+                  setHasAppCodeUpdate(false);
+                }}
+                title="Tutup pemberitahuan"
+                className="p-1.5 text-white/80 hover:text-white hover:bg-rose-600 rounded-lg transition-colors cursor-pointer shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       {/* Logout Summary Modal (Portal) */}
       {mounted && showSummary && createPortal(
         <div className="fixed inset-0 bg-slate-950/75 backdrop-blur-sm z-[99990] p-4 flex flex-col justify-center items-center">
@@ -1515,80 +1591,6 @@ export default function Home() {
         document.body
       )}
 
-      {/* New Arrivals Banner */}
-      <Link href="/barang-baru" className="block w-full">
-        <div className="bg-gradient-to-r from-emerald-500 to-teal-600 rounded-2xl p-4 text-white shadow-lg shadow-emerald-200 flex items-center justify-between mb-3 hover:scale-[1.02] transition-transform">
-          <div className="flex items-center gap-3">
-            <div className="bg-white/20 p-2 rounded-xl backdrop-blur-sm">
-              <Sparkles className="w-6 h-6 text-yellow-300" />
-            </div>
-            <div>
-              <h3 className="font-black text-lg leading-none mb-1">Barang Baru!</h3>
-              <p className="text-xs text-emerald-50 font-medium">Cek daftar produk yang baru masuk toko</p>
-            </div>
-          </div>
-          <ArrowRight className="w-5 h-5 text-emerald-100" />
-        </div>
-      </Link>
-
-      {/* Promo Unik Banner */}
-      <Link href="/promo-unik" className="block w-full">
-        <div className="bg-gradient-to-r from-purple-500 to-indigo-600 rounded-2xl p-4 text-white shadow-lg shadow-purple-200 flex items-center justify-between mb-2 hover:scale-[1.02] transition-transform">
-          <div className="flex items-center gap-3">
-            <div className="bg-white/20 p-2 rounded-xl backdrop-blur-sm">
-              <Gift className="w-6 h-6 text-pink-300" />
-            </div>
-            <div>
-              <h3 className="font-black text-lg leading-none mb-1">Promo BOGO & Unik</h3>
-              <p className="text-xs text-purple-50 font-medium">Cek promo BG, diskon persen, dan lainnya!</p>
-            </div>
-          </div>
-          <ArrowRight className="w-5 h-5 text-purple-100" />
-        </div>
-      </Link>
-
-      {/* Menu / Tabs Selection */}
-      <div className="pt-2">
-        <h2 className="text-sm font-bold text-slate-500 uppercase mb-2">Pilih Mode Pemindaian</h2>
-        <div className="relative flex p-1 bg-slate-200/80 rounded-xl shadow-inner overflow-x-auto gap-1">
-          <button
-            onClick={() => setActiveTab("FACING_OUT")}
-            className={`relative flex-1 py-3 px-2 rounded-lg flex items-center justify-center gap-2 transition-all duration-300 z-10 ${
-              activeTab === "FACING_OUT" ? "bg-white shadow-sm text-amber-600 font-bold" : "text-slate-500 font-medium hover:text-slate-700"
-            }`}
-          >
-            <Package2 className="w-4 h-4" />
-            <span className="text-xs font-semibold whitespace-nowrap">Facing Out</span>
-          </button>
-          <button
-            onClick={() => setActiveTab("STOCK_CHECK")}
-            className={`relative flex-1 py-3 px-2 rounded-lg flex items-center justify-center gap-2 transition-all duration-300 z-10 ${
-              activeTab === "STOCK_CHECK" ? "bg-white shadow-sm text-indigo-700 font-bold" : "text-slate-500 font-medium hover:text-slate-700"
-            }`}
-          >
-            <MessageSquare className="w-4 h-4" />
-            <span className="text-xs font-semibold whitespace-nowrap">Tanya Stok</span>
-          </button>
-          <button
-            onClick={() => setActiveTab("ORDERS")}
-            className={`relative flex-1 py-3 px-2 rounded-lg flex items-center justify-center gap-2 transition-all duration-300 z-10 ${
-              activeTab === "ORDERS" ? "bg-white shadow-sm text-amber-700 font-bold" : "text-slate-500 font-medium hover:text-slate-700"
-            }`}
-          >
-            <div className="relative">
-               <Bell className={`w-4 h-4 ${activeTab === 'ORDERS' ? 'text-amber-600' : 'text-slate-400'}`} />
-               {(pendingCount > 0 || processedCount > 0) && (
-                 <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
-                   <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${processedCount > 0 ? 'bg-green-400' : 'bg-amber-400'}`}></span>
-                   <span className={`relative inline-flex rounded-full h-2.5 w-2.5 border-white border ${processedCount > 0 ? 'bg-green-500' : 'bg-amber-500'}`}></span>
-                 </span>
-               )}
-            </div>
-            <span className="text-xs font-semibold whitespace-nowrap">Cek Pesanan</span>
-          </button>
-        </div>
-      </div>
-
       {activeTab === "ORDERS" ? (
         <div className="pt-2 flex flex-col gap-3 animate-in fade-in slide-in-from-bottom-4 duration-300">
           <h2 className="text-sm font-bold text-slate-500 uppercase mb-1">Daftar Pesanan Aktif</h2>
@@ -1672,57 +1674,120 @@ export default function Home() {
         </div>
       ) : (
         <>
-          {/* Search */}
-          <div className="pt-2 flex flex-col gap-3 animate-in fade-in slide-in-from-bottom-4 duration-300">
-        <div className="flex items-center justify-between mb-1">
-          <h2 className="text-sm font-bold text-slate-500 uppercase">Cari Info Produk</h2>
-          <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200/80">
-            <Sparkles className="w-3 h-3 text-indigo-600" />
-            AI Smart Search (SKU • Barcode • Artikel • 30% Teks)
-          </span>
-        </div>
-        
-        <div className="flex gap-2 items-center">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-5 h-5" />
-            <input
-              ref={inputRef}
-              type="text"
-              placeholder="Ketik SKU, Barcode, Artikel, atau 30% Nama Produk..."
-              className="w-full pl-10 pr-20 py-3.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all text-sm font-mono"
-              value={manualInput}
-              onChange={(e) => setManualInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && searchProduct(manualInput)}
-              autoFocus
-            />
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
-              {manualInput && (
-                <button onClick={handleClear} className="text-slate-400 hover:text-slate-600">
-                  <X className="w-5 h-5" />
-                </button>
-              )}
-              {!manualInput && (
-                <button 
-                  type="button"
-                  onClick={() => setIsScanning(!isScanning)}
-                  title="Scan Barcode Produk"
-                  className={`p-1.5 rounded-lg text-slate-400 hover:text-emerald-600 transition-colors ${isScanning ? "text-emerald-600 bg-emerald-50" : ""}`}
-                >
-                  <Barcode className="w-5 h-5" />
-                </button>
-              )}
+          {/* Compact 1-Row Search & Scan Cockpit */}
+          <div className="flex flex-col gap-2.5 animate-in fade-in slide-in-from-bottom-4 duration-300">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-xs font-extrabold text-slate-500 uppercase tracking-wider">Cari Info Produk</h2>
+              <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200/80">
+                <Sparkles className="w-3 h-3 text-indigo-600" />
+                AI Smart • Artikel, SKU & Teks
+              </span>
             </div>
+
+            <div className="flex gap-2 items-center">
+              <div className="relative flex-1 min-w-0">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
+                <input
+                  ref={inputRef}
+                  type="text"
+                  placeholder="Ketik Artikel, SKU, Barcode, atau Nama Produk..."
+                  className="w-full pl-9 pr-9 py-3 rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-400 transition-all text-sm font-medium shadow-xs placeholder:text-slate-400"
+                  value={manualInput}
+                  onChange={(e) => setManualInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && searchProduct(manualInput)}
+                  autoFocus
+                />
+                {manualInput && (
+                  <button
+                    type="button"
+                    onClick={handleClear}
+                    title="Hapus pencarian"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-700 transition-colors cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsScanning(!isScanning)}
+                title="Scan Barcode Produk"
+                className={`p-3 rounded-xl border transition-all shadow-xs shrink-0 cursor-pointer flex items-center justify-center ${
+                  isScanning
+                    ? "bg-emerald-600 text-white border-emerald-700 ring-2 ring-emerald-200"
+                    : "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
+                }`}
+              >
+                <Barcode className="w-5 h-5" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => searchProduct(manualInput)}
+                disabled={loading}
+                className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white px-4 sm:px-5 py-3 rounded-xl transition-all font-bold shadow-sm text-sm shrink-0 cursor-pointer disabled:opacity-60"
+              >
+                Cari
+              </button>
+            </div>
+
+            {/* Idle Quick Recent Chips & 2-Column Shortcut Banners */}
+            {!product && productsList.length === 0 && !loading && (
+              <div className="flex flex-col gap-2.5 pt-0.5">
+                {recentSearches.length > 0 && (
+                  <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase shrink-0">Terakhir:</span>
+                    {recentSearches.map((term) => (
+                      <button
+                        key={term}
+                        type="button"
+                        onClick={() => {
+                          setManualInput(term);
+                          searchProduct(term);
+                        }}
+                        className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-white hover:bg-blue-50 hover:text-blue-700 text-slate-600 border border-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-2xs"
+                      >
+                        {term}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  <Link href="/barang-baru" className="block group">
+                    <div className="bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl p-3 text-white shadow-sm hover:shadow-md transition-all flex items-center justify-between gap-2 h-full">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="bg-white/20 p-1.5 rounded-lg backdrop-blur-sm shrink-0">
+                          <Sparkles className="w-4 h-4 text-yellow-200" />
+                        </div>
+                        <div className="min-w-0">
+                          <h3 className="font-black text-xs sm:text-sm leading-tight truncate">Barang Baru!</h3>
+                          <p className="text-[10px] text-emerald-50/90 leading-tight truncate mt-0.5">Produk baru masuk</p>
+                        </div>
+                      </div>
+                      <ArrowRight className="w-4 h-4 text-emerald-100 shrink-0 group-hover:translate-x-0.5 transition-transform" />
+                    </div>
+                  </Link>
+
+                  <Link href="/promo-unik" className="block group">
+                    <div className="bg-gradient-to-br from-purple-500 to-indigo-600 rounded-xl p-3 text-white shadow-sm hover:shadow-md transition-all flex items-center justify-between gap-2 h-full">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="bg-white/20 p-1.5 rounded-lg backdrop-blur-sm shrink-0">
+                          <Gift className="w-4 h-4 text-pink-200" />
+                        </div>
+                        <div className="min-w-0">
+                          <h3 className="font-black text-xs sm:text-sm leading-tight truncate">Promo BOGO</h3>
+                          <p className="text-[10px] text-purple-50/90 leading-tight truncate mt-0.5">BG, diskon &amp; unik</p>
+                        </div>
+                      </div>
+                      <ArrowRight className="w-4 h-4 text-purple-100 shrink-0 group-hover:translate-x-0.5 transition-transform" />
+                    </div>
+                  </Link>
+                </div>
+              </div>
+            )}
           </div>
-          <button
-            onClick={() => searchProduct(manualInput)}
-            className="bg-blue-600 text-white px-5 py-3.5 rounded-xl hover:bg-blue-700 transition-colors font-semibold shadow-sm text-sm"
-          >
-            Cari
-          </button>
-        </div>
-
-
-      </div>
 
       {/* Full Screen Barcode Scanner */}
       {isScanning && (
@@ -1753,91 +1818,259 @@ export default function Home() {
         </div>
       )}
 
-      {/* Products List Selection */}
-      {productsList.length > 0 && (
-        <div className="bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden animate-in slide-in-from-bottom-6 duration-400 p-4">
-          <h2 className="text-sm font-bold text-slate-500 uppercase mb-3">Pilih Produk:</h2>
-          <div className="flex flex-col gap-2">
-            {productsList.map((p) => {
-              const info = parseProductInfo(p);
-              return (
-                <button
-                  key={p.id || p.sku}
-                  onClick={() => {
-                    // Tampilkan produk & gambar yang sudah di-cache seketika (0ms tanpa tunggu loading!)
-                    setProduct(p);
-                    setSiblings([p]);
-                    setProductsList([]);
-                    setManualInput(p.sku);
-                    searchProduct(p.sku);
-                  }}
-                  className="text-left p-3 border rounded-xl hover:bg-blue-50 hover:border-blue-200 transition-colors flex gap-3 items-center"
-                >
-                  {p.imageUrl && (
-                    <div className="w-12 h-16 rounded-lg overflow-hidden bg-slate-100 border border-slate-200 shrink-0">
-                      <img
-                        src={optimizeRetailImageUrl(p.imageUrl, 400)}
-                        alt={info.name}
-                        loading="eager"
-                        decoding="sync"
-                        referrerPolicy="no-referrer"
-                        className="w-full h-full object-cover object-top"
-                      />
-                    </div>
+      {/* Konsep 3: Hasil Pencarian Dikelompokkan Per Artikel */}
+      {productsList.length > 0 && (() => {
+        const isProductOnPromo = (item: ProductData) =>
+          Boolean(
+            item.articleHasPromo ||
+            (item.hargaPromo && item.hargaPromo > 0 && (!item.hargaNormal || item.hargaPromo < item.hargaNormal)) ||
+            item.diskon ||
+            item.acara
+          );
+        const getTotalStock = (item: ProductData) => item.articleTotalStok ?? item.stok ?? 0;
+
+        const stockCount = productsList.filter((item) => getTotalStock(item) > 0).length;
+        const promoCount = productsList.filter((item) => isProductOnPromo(item)).length;
+        const modelCount = totalModelsCount || productsList.length;
+
+        const filteredProducts = productsList.filter((item) => {
+          if (resultFilter === "STOCK") return getTotalStock(item) > 0;
+          if (resultFilter === "PROMO") return isProductOnPromo(item);
+          return true;
+        });
+
+        return (
+          <div className="bg-white rounded-2xl shadow-lg border border-slate-200/80 overflow-hidden animate-in slide-in-from-bottom-6 duration-400 p-3.5 sm:p-4">
+            {/* Header & 1-Tap Filter Bar */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-slate-100 mb-3">
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="text-xs sm:text-sm font-black text-slate-800 uppercase tracking-wide">
+                    Hasil Pencarian: <span className="text-blue-600">{modelCount} Model</span>
+                  </h2>
+                  {totalSkusCount > modelCount && (
+                    <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full border border-slate-200">
+                      {totalSkusCount} SKU varian
+                    </span>
                   )}
-                  <div className="flex-1 min-w-0">
-                    <p className="font-bold text-slate-800 truncate">{info.name}</p>
-                    {(info.color || info.size) && (
-                      <div className="flex flex-wrap gap-1.5 mt-1.5">
-                        {info.color && (
-                          <span className="text-[10px] font-bold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded border border-indigo-100">
-                            Warna: {info.color}
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Dikelompokkan per artikel • Ketuk kartu untuk cek semua warna &amp; ukuran
+                </p>
+              </div>
+
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+                <button
+                  type="button"
+                  onClick={() => setResultFilter("ALL")}
+                  className={`text-[11px] font-bold px-2.5 py-1.5 rounded-lg border transition-colors whitespace-nowrap cursor-pointer ${
+                    resultFilter === "ALL"
+                      ? "bg-slate-900 text-white border-slate-900 shadow-xs"
+                      : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                  }`}
+                >
+                  Semua ({productsList.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setResultFilter("STOCK")}
+                  className={`text-[11px] font-bold px-2.5 py-1.5 rounded-lg border transition-colors whitespace-nowrap cursor-pointer ${
+                    resultFilter === "STOCK"
+                      ? "bg-emerald-600 text-white border-emerald-700 shadow-xs"
+                      : "bg-emerald-50/70 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
+                  }`}
+                >
+                  Ada Stok ({stockCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setResultFilter("PROMO")}
+                  className={`text-[11px] font-bold px-2.5 py-1.5 rounded-lg border transition-colors whitespace-nowrap cursor-pointer ${
+                    resultFilter === "PROMO"
+                      ? "bg-rose-600 text-white border-rose-700 shadow-xs"
+                      : "bg-rose-50/70 text-rose-700 border-rose-200 hover:bg-rose-100"
+                  }`}
+                >
+                  Sedang Promo ({promoCount})
+                </button>
+              </div>
+            </div>
+
+            {/* Catalog Grid Cards */}
+            {filteredProducts.length === 0 ? (
+              <div className="py-8 text-center flex flex-col items-center gap-2 text-slate-500">
+                <p className="text-xs sm:text-sm font-semibold">Tidak ada model di halaman ini untuk filter yang dipilih.</p>
+                <button
+                  type="button"
+                  onClick={() => setResultFilter("ALL")}
+                  className="text-xs font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg border border-blue-200 transition-colors cursor-pointer"
+                >
+                  Tampilkan Semua
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {filteredProducts.map((p) => {
+                  const info = parseProductInfo(p);
+                  const cleanArticle =
+                    p.article && !["0", "-", "PRODUK BARU"].includes(p.article.trim().toUpperCase())
+                      ? p.article.trim()
+                      : null;
+                  const hasLowerPromoPrice = Boolean(
+                    p.hargaPromo && p.hargaPromo > 0 && (!p.hargaNormal || p.hargaPromo < p.hargaNormal)
+                  );
+                  const hasPromo = isProductOnPromo(p);
+                  const promoBadge =
+                    p.articlePromoLabel ||
+                    p.diskon ||
+                    (hasLowerPromoPrice ? "PROMO" : p.acara ? "ACARA" : null);
+                  const displayPrice = hasLowerPromoPrice ? (p.hargaPromo || p.hargaNormal) : p.hargaNormal;
+                  const totalStok = getTotalStock(p);
+                  const variantCount = p.articleGroupCount ?? 1;
+                  const colorsSummary =
+                    p.articleColors && p.articleColors.length > 0
+                      ? p.articleColors.slice(0, 3).join(", ") +
+                        (p.articleColors.length > 3 ? ` +${p.articleColors.length - 3}` : "")
+                      : info.color;
+                  const sizesSummary =
+                    p.articleSizes && p.articleSizes.length > 1
+                      ? `${p.articleSizes[0]}–${p.articleSizes[p.articleSizes.length - 1]}`
+                      : p.articleSizes?.[0] || info.size;
+
+                  return (
+                    <button
+                      key={cleanArticle ? `${cleanArticle}-${p.sku}` : (p.id || p.sku)}
+                      type="button"
+                      onClick={() => {
+                        setProduct(p);
+                        setSiblings([p]);
+                        setProductsList([]);
+                        setManualInput(p.sku);
+                        searchProduct(p.sku);
+                      }}
+                      className="group text-left bg-white border border-slate-200 hover:border-blue-400 hover:shadow-md rounded-xl overflow-hidden transition-all flex flex-row sm:flex-col cursor-pointer"
+                    >
+                      {/* Product Photo Thumbnail */}
+                      <div className="relative w-24 min-h-[112px] sm:w-full sm:h-44 bg-slate-100 shrink-0 overflow-hidden border-r sm:border-r-0 sm:border-b border-slate-100">
+                        {p.imageUrl ? (
+                          <img
+                            src={optimizeRetailImageUrl(p.imageUrl, 400)}
+                            alt={info.name}
+                            loading="eager"
+                            decoding="sync"
+                            referrerPolicy="no-referrer"
+                            className="w-full h-full object-cover object-top group-hover:scale-105 transition-transform duration-300"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex flex-col items-center justify-center text-slate-300 gap-1">
+                            <Package2 className="w-7 h-7" />
+                            <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">No Foto</span>
+                          </div>
+                        )}
+
+                        {hasPromo && promoBadge && (
+                          <span className="absolute top-1.5 left-1.5 bg-rose-600/95 text-white text-[9px] font-black px-1.5 py-0.5 rounded-md shadow-xs uppercase tracking-wide max-w-[125px] truncate">
+                            {promoBadge}
                           </span>
                         )}
-                        {info.size && (
-                          <span className="text-[10px] font-bold bg-slate-100 text-slate-700 px-2 py-0.5 rounded border border-slate-200">
-                            Ukuran: {info.size}
+
+                        {variantCount > 1 && (
+                          <span className="absolute top-1.5 right-1.5 bg-slate-900/80 backdrop-blur-xs text-white text-[9px] font-bold px-1.5 py-0.5 rounded-md">
+                            {variantCount} varian
                           </span>
                         )}
                       </div>
-                    )}
-                    <div className="flex gap-2 mt-2 items-center flex-wrap">
-                      <span className="text-[10px] font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-600">SKU: {p.sku}</span>
-                      <span className="text-[10px] font-bold text-blue-600">{formatRupiah(p.hargaPromo || p.hargaNormal)}</span>
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${(p.stok ?? 0) > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                        Stok: {p.stok ?? 0} pcs
-                      </span>
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
 
-          {/* Pagination Controls */}
-          {totalPages > 1 && (
-            <div className="flex justify-between items-center mt-4 pt-4 border-t border-slate-100">
-              <button 
-                onClick={() => searchProduct(manualInput, currentPage - 1)}
-                disabled={currentPage <= 1 || loading}
-                className="px-4 py-2 bg-slate-100 text-slate-600 font-bold text-xs rounded-lg disabled:opacity-50 hover:bg-slate-200 transition-colors"
-              >
-                Sebelumnya
-              </button>
-              <span className="text-xs font-bold text-slate-500">
-                Hal {currentPage} dari {totalPages}
-              </span>
-              <button 
-                onClick={() => searchProduct(manualInput, currentPage + 1)}
-                disabled={currentPage >= totalPages || loading}
-                className="px-4 py-2 bg-blue-100 text-blue-700 font-bold text-xs rounded-lg disabled:opacity-50 hover:bg-blue-200 transition-colors"
-              >
-                Selanjutnya
-              </button>
-            </div>
-          )}
-        </div>
-      )}
+                      {/* Card Body */}
+                      <div className="flex-1 p-2.5 sm:p-3 flex flex-col justify-between min-w-0">
+                        <div>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-[10px] font-mono font-bold bg-slate-900 text-white px-2 py-0.5 rounded">
+                              {cleanArticle || p.sku}
+                            </span>
+                            {p.brand && (
+                              <span className="text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100 px-1.5 py-0.5 rounded truncate max-w-[115px]">
+                                {p.brand}
+                              </span>
+                            )}
+                          </div>
+
+                          <p className="font-bold text-slate-900 text-xs sm:text-sm leading-snug line-clamp-2 mt-1.5 group-hover:text-blue-700 transition-colors">
+                            {info.name}
+                          </p>
+
+                          {(colorsSummary || sizesSummary) && (
+                            <div className="flex flex-wrap gap-1 mt-1.5">
+                              {colorsSummary && (
+                                <span className="text-[10px] font-semibold bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded truncate max-w-[160px]">
+                                  {colorsSummary}
+                                </span>
+                              )}
+                              {sizesSummary && (
+                                <span className="text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-100 px-1.5 py-0.5 rounded">
+                                  Size: {sizesSummary}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            {hasLowerPromoPrice && p.hargaNormal > (p.hargaPromo || 0) && (
+                              <p className="text-[10px] text-slate-400 line-through leading-none">
+                                {formatRupiah(p.hargaNormal)}
+                              </p>
+                            )}
+                            <p className={`text-xs sm:text-sm font-black leading-tight ${hasLowerPromoPrice ? 'text-rose-600' : 'text-blue-700'}`}>
+                              {formatRupiah(displayPrice)}
+                            </p>
+                          </div>
+
+                          <span
+                            className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md border shrink-0 ${
+                              totalStok > 0
+                                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                : "bg-rose-50 text-rose-700 border-rose-200"
+                            }`}
+                          >
+                            Stok: {totalStok} pcs
+                          </span>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+              <div className="flex justify-between items-center mt-4 pt-3.5 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => searchProduct(manualInput, currentPage - 1)}
+                  disabled={currentPage <= 1 || loading}
+                  className="px-4 py-2 bg-slate-100 text-slate-600 font-bold text-xs rounded-lg disabled:opacity-50 hover:bg-slate-200 transition-colors cursor-pointer"
+                >
+                  Sebelumnya
+                </button>
+                <span className="text-xs font-bold text-slate-500">
+                  Hal {currentPage} dari {totalPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => searchProduct(manualInput, currentPage + 1)}
+                  disabled={currentPage >= totalPages || loading}
+                  className="px-4 py-2 bg-blue-100 text-blue-700 font-bold text-xs rounded-lg disabled:opacity-50 hover:bg-blue-200 transition-colors cursor-pointer"
+                >
+                  Selanjutnya
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Product Card */}
       {product && (() => {
@@ -2433,12 +2666,27 @@ export default function Home() {
         );
       })()}
 
-      {/* Empty state */}
+      {/* Sleek Empty State */}
       {!product && productsList.length === 0 && !loading && !error && (
-        <div className="flex flex-col items-center py-12 gap-3 text-slate-400">
-          <Search className="w-14 h-14 opacity-30" />
-          <p className="text-sm">Masukkan SKU, Barcode, atau Nama Produk</p>
-          <p className="text-xs opacity-70 text-center">Contoh: 13463728 atau "Kemeja"</p>
+        <div className="flex flex-col items-center py-8 px-4 gap-3 text-slate-400">
+          <div className="w-12 h-12 rounded-2xl bg-slate-100 border border-slate-200/70 flex items-center justify-center text-slate-400">
+            <Search className="w-6 h-6" />
+          </div>
+          <div className="text-center">
+            <p className="text-xs sm:text-sm font-bold text-slate-600">Siap mencari produk atau scan barcode</p>
+            <p className="text-[11px] text-slate-400 mt-0.5">Contoh: ketik kode artikel, SKU <span className="font-mono">13463728</span>, atau <span className="font-medium text-slate-500">&quot;Kemeja&quot;</span></p>
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
+            <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/70">
+              ⚡ 0ms Foto Produk
+            </span>
+            <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200/70">
+              📦 Offline 97rb+ SKU
+            </span>
+            <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200/70">
+              🌐 Live by luqman org
+            </span>
+          </div>
         </div>
       )}
       </>

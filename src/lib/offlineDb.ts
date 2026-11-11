@@ -1,5 +1,5 @@
 import Dexie from "dexie";
-import { expandRetailQuery, computeProductRelevanceScore } from "./smartSearchEngine";
+import { expandRetailQuery, computeProductRelevanceScore, groupProductsByArticle } from "./smartSearchEngine";
 
 export interface CachedProduct {
   sku: string;
@@ -268,7 +268,8 @@ export async function searchOfflineSmart(rawInput: string, limit: number = 25): 
       return (b.item.stok || 0) - (a.item.stok || 0);
     });
 
-    return scored.slice(0, limit).map((x) => x.item);
+    const grouped = groupProductsByArticle(scored.map((x) => x.item));
+    return grouped.slice(0, limit);
   } catch (e) {
     console.warn("[OfflineDB] Gagal mencari offline smart:", e);
     return [];
