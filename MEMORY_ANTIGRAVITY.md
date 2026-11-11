@@ -936,3 +936,17 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
      - **RAM Preloading & Optimistic Display:** Saat pencarian teks atau scan produk, seluruh foto varian warna lain langsung di-preload di background (`preloadProductImages`). Begitu item diklik dari daftar pencarian teks, gambar langsung muncul dalam 0ms karena memakai cache RAM yang sama (`decoding="sync"`, `loading="eager"`).
      - **Fallback Foto Antar-Varian:** Jika varian ukuran tertentu belum memiliki URL gambar tersendiri, sistem otomatis meminjam foto dari varian warna atau artikel yang sama.
      - **Preconnect:** Menanamkan `<link rel="preconnect" href="https://cdn.shopify.com" />` di `layout.tsx` untuk mengeliminasi latensi koneksi jaringan.
+
+
+
+---
+
+## 60. Perbaikan Realtime Self-Healing MDS BISA (`checkSingleItemStock`) & Ekspansi Sapuan Celah Produk Baru
+
+- **Instruksi Pengguna:**
+  - *"buanyak banget loh produk yang belum masuk ayo cari lagi produk yang belum ketemu di mds bisa loh ada adehhhh"* (melampirkan contoh `SKU 68168801` / `BC 2340002540868` `SSTH1-BD6` SEGA & `BC 2340001264343` $\rightarrow$ `2340001264345` `SKU 19138275` `SPVSEXPC` STANLEY ADAMS yang ada di StoreHub MDS BISA namun tidak terdeteksi di app).
+- **Akar Masalah yang Ditemukan:**
+  1. **Bug Kritis Overwrite Cookie (`or "db76d"`):** Di [`python-engine/morning_full_sweep.py`](file:///c:/Max%20Display/price-checker/python-engine/morning_full_sweep.py) dan [`src/lib/mdsBisaClient.ts`](file:///c:/Max%20Display/price-checker/src/lib/mdsBisaClient.ts), pengecekan session menganggap cookie `db76d...` (cookie sticky HAProxy tanpa autentikasi `mso_session`) sebagai login berhasil, sehingga menimpa `secrets/mds_cookie.txt` di Supabase Storage dengan cookie mati 98 byte.
+  2. **Bug Live Return Barcode vs SKU (`mdsBisaClient.ts`):** Saat scan barcode 13 digit baru (misal `2340002540868`), `checkSingleItemStock()` mengupsert ke DB menggunakan `sku: itemSku` (`68168801`), namun me-return `sku: cleanSku` (`2340002540868`), sehingga [`/api/product/[identifier]`](file:///c:/Max%20Display/price-checker/src/app/api/product/%5Bidentifier%5D/route.ts) gagal menemukan baris baru tersebut di DB. Ditambah `fallbackToDb()` sebelumnya keliru mengembalikan `success: true` meski produk `null`.
+  3. **Timeout & Deteksi Auth:** Batas waktu `1800ms` terlalu pendek untuk cold StoreHub lookup (dinaikkan menjadi `5500ms` saat toko buka `09:00–21:30 WIB`), serta deteksi redirect Next.js `303`/`NEXT_REDIRECT` menuju `/login` ditambahkan agar refresh cookie & action hash otomatis berjalan mulus, dilengkapi fallback koreksi check-digit GS1 EAN-13 (misal `2340001264343` $\rightarrow$ `2340001264345`).
+  4. **Cakupan Blok `234000*` & Ekspansi Tetangga Modulo-10 (`morning_full_sweep.py`):** Menutup seluruh lubang blok besar yang sebelumnya terlewat (`244501..282999`, `316001..360000`, `215001..235899`, `120000..148999`, dst.) + otomatis menyapu varian tetangga SKU Modulo-10 (`body7 ± 12`) setiap kali produk baru ditemukan, dan mengaktifkan `--upc-first` pada [`.github/workflows/retail-sync-engine.yml`](file:///c:/Max%20Display/price-checker/.github/workflows/retail-sync-engine.yml).

@@ -70,7 +70,7 @@ jobs:
       - name: 🔥 [KATEGORI 1A - SCRAB MDS BISA] Brutal Scraper MDS BISA (16 Workers • SKU & Barcode Sweep)
         if: ${{ github.event.inputs.action == 'scrab' || github.event.inputs.action == 'mds-bisa' || github.event.inputs.action == 'all' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-mds-bisa' || github.event.action == 'trigger-sync-engine' || (github.event_name == 'workflow_dispatch' && github.event.inputs.action == '') }}
         run: |
-          python python-engine/morning_full_sweep.py --brutal
+          python python-engine/morning_full_sweep.py --brutal --upc-first --workers=24
         env:
           MDS_SESSION_COOKIE: ${{ github.event.inputs.session_cookie || secrets.MDS_SESSION_COOKIE }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}

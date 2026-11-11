@@ -84,17 +84,18 @@ REPORT_PATH = os.path.join(os.path.dirname(__file__), "LAPORAN_SCRAP_PAGI.md")
 MAPPED_PATHS_FILE = os.path.join(os.path.dirname(__file__), "mapped_sku_paths.json.gz")
 BASELINE_INITIAL_COUNT = 9703  # Baseline sebelum brutal sweep dimulai
 
-# Thread-safe HTTP Session dengan Connection Pooling
+# Thread-safe HTTP Session dengan Connection Pooling besar untuk Turbo Sweep
 http_session = requests.Session()
 adapter = HTTPAdapter(
-    pool_connections=32,
-    pool_maxsize=32,
+    pool_connections=64,
+    pool_maxsize=64,
     max_retries=Retry(total=1, backoff_factor=0.2, status_forcelist=[502, 503])
 )
 http_session.mount("https://", adapter)
 http_session.mount("http://", adapter)
 
 action_lock = threading.Lock()
+cookie_lock = threading.Lock()
 
 
 def log_sync_history(sync_type: str, file_name: str, total_records: int, status: str = "SUCCESS"):
@@ -138,52 +139,104 @@ def resolve_action_detail(default_action: str = ACTION_DETAIL) -> str:
     return default_action
 
 
+def resolve_action_login(default_action: str = ACTION_LOGIN) -> str:
+    """Mendeteksi action ID login secara dinamis dari Next.js bundle /login jika berubah."""
+    try:
+        r = http_session.get(LOGIN_URL, timeout=8)
+        scripts = set(re.findall(r'src="(/_next/static/[^"]+\.js)"', r.text))
+        for s in scripts:
+            js_url = f"{STOREHUB_BASE}{s}"
+            js_r = http_session.get(js_url, timeout=8)
+            match = re.search(r'createServerReference\)\("([a-f0-9]{40,44})"[^)]*"login"', js_r.text)
+            if match:
+                return match.group(1)
+    except Exception as e:
+        print(f"⚠️ Gagal resolve action login hash: {e}")
+    return default_action
+
+
+def save_valid_cookie(cookie_str: str) -> None:
+    """Menyimpan cookie valid (WAJIB berisi mso_session=) ke Supabase Storage dan .mds_cookie lokal."""
+    if not cookie_str or "mso_session=" not in cookie_str:
+        return
+    try:
+        sb.storage.from_("excel-uploads").upload(
+            "secrets/mds_cookie.txt",
+            cookie_str.encode("utf-8"),
+            {"content-type": "text/plain", "upsert": "true"},
+        )
+    except Exception:
+        pass
+    try:
+        local_cookie_path = os.path.join(os.path.dirname(__file__), "..", ".mds_cookie")
+        with open(local_cookie_path, "w", encoding="utf-8") as f:
+            f.write(cookie_str)
+    except Exception:
+        pass
+
+
 def auto_login_storehub() -> str:
-    """Auto-login ke StoreHub MDS BISA jika cookie kedaluwarsa dan simpan ke Supabase Storage."""
+    """Auto-login ke StoreHub MDS BISA jika cookie kedaluwarsa (HANYA menerima cookie dengan mso_session=)."""
+    global ACTION_LOGIN
     print("🔑 [AUTH] Mencoba auto-login ke StoreHub MDS BISA...")
     try:
+        ACTION_LOGIN = resolve_action_login(ACTION_LOGIN)
         headers = {
             "Accept": "text/x-component",
-            "Content-Type": "application/x-www-form-urlencoded",
             "Next-Action": ACTION_LOGIN,
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15",
             "Referer": LOGIN_URL,
+            "Origin": STOREHUB_BASE,
         }
-        res = http_session.post(LOGIN_URL, headers=headers, data=CREDENTIALS, allow_redirects=False, timeout=12)
+        files = [
+            ("0", (None, '[{},"$K1"]')),
+            ("_1_next", (None, "/")),
+            ("_1_username", (None, CREDENTIALS["username"])),
+            ("_1_password", (None, CREDENTIALS["password"])),
+            ("_1_tz", (None, CREDENTIALS["tz"])),
+        ]
+        res = http_session.post(LOGIN_URL, headers=headers, files=files, allow_redirects=False, timeout=12)
         cookies_dict = res.cookies.get_dict()
         if not cookies_dict and "set-cookie" in res.headers:
             raw_sc = res.headers.get("set-cookie", "")
-            parts = [p.split(";")[0].strip() for p in raw_sc.split(",") if "=" in p.split(";")[0]]
+            parts = [p.split(";")[0].strip() for p in re.split(r",(?=\s*[A-Za-z0-9_-]+=)", raw_sc) if "=" in p.split(";")[0]]
             cookie_str = "; ".join(parts)
         else:
             cookie_str = "; ".join(f"{k}={v}" for k, v in cookies_dict.items())
 
-        if cookie_str and ("mso_session" in cookie_str or "db76d" in cookie_str):
+        # PENTING: HAProxy selalu mengirim cookie db76d... bahkan saat login gagal!
+        # JANGAN PERNAH menganggap db76d... sebagai login sukses tanpa mso_session=!
+        if cookie_str and "mso_session=" in cookie_str:
             print("✅ [AUTH] Auto-login StoreHub berhasil! Memperbarui cookie di Supabase Storage...")
-            try:
-                sb.storage.from_("excel-uploads").upload(
-                    "secrets/mds_cookie.txt",
-                    cookie_str.encode("utf-8"),
-                    {"content-type": "text/plain", "upsert": "true"},
-                )
-            except Exception:
-                pass
+            save_valid_cookie(cookie_str)
             return cookie_str
+        print("⚠️ [AUTH] Auto-login HTTP tidak mengembalikan mso_session (menjaga cookie Storage/lokal tetap utuh).")
     except Exception as e:
         print(f"⚠️ [AUTH] Auto-login gagal: {e}")
+
+    # Fallback aman ke .mds_cookie lokal jika masih valid
+    local_cookie_path = os.path.join(os.path.dirname(__file__), "..", ".mds_cookie")
+    if os.path.exists(local_cookie_path):
+        try:
+            with open(local_cookie_path, "r", encoding="utf-8") as f:
+                c = f.read().strip()
+                if "mso_session=" in c:
+                    return c
+        except Exception:
+            pass
     return ""
 
 
 def get_active_cookie() -> str:
-    """Mengambil session cookie aktif dari Env, Supabase Storage, File Lokal, atau Auto-Login."""
+    """Mengambil session cookie aktif (wajib berisi mso_session=) dari Env, Storage, atau Lokal."""
     env_cookie = (os.getenv("MDS_SESSION_COOKIE") or "").strip()
-    if len(env_cookie) > 20:
+    if "mso_session=" in env_cookie:
         return env_cookie
 
     try:
         data = sb.storage.from_("excel-uploads").download("secrets/mds_cookie.txt")
         cookie = data.decode("utf-8").strip()
-        if len(cookie) > 20:
+        if "mso_session=" in cookie:
             return cookie
     except Exception as e:
         print(f"⚠️ Gagal membaca cookie dari Storage: {e}")
@@ -193,7 +246,8 @@ def get_active_cookie() -> str:
         try:
             with open(local_cookie_path, "r", encoding="utf-8") as f:
                 cookie = f.read().strip()
-                if len(cookie) > 20:
+                if "mso_session=" in cookie:
+                    save_valid_cookie(cookie)
                     return cookie
         except Exception:
             pass
@@ -230,9 +284,10 @@ def normalize_brand_and_dept(item: Dict[str, Any]) -> Tuple[str, str]:
     """Menormalisasi nama Brand dan Departemen dari payload StoreHub."""
     raw_group = str(item.get("Brand") or item.get("GroupName") or "").strip()
     raw_dept = str(item.get("DeptName") or item.get("Department") or raw_group or "MDS RETAIL").strip()
+    raw_sub = str(item.get("SubclassName") or item.get("ClassName") or "").strip()
     raw_style = str(item.get("StyleCode") or "").strip().upper()
     raw_desc = str(item.get("Description") or item.get("ItemDescription") or "").strip().upper()
-    combined_upper = f"{raw_group} {raw_dept} {raw_desc}".upper()
+    combined_upper = f"{raw_group} {raw_dept} {raw_sub} {raw_desc}".upper()
 
     if "MUKU" in combined_upper or raw_style.startswith("MK-") or "-MK" in raw_style:
         brand = "MUKU"
@@ -244,6 +299,8 @@ def normalize_brand_and_dept(item: Dict[str, Any]) -> Tuple[str, str]:
         brand = "BYRCH & CO"
     elif "NEVADA" in combined_upper:
         brand = "NEVADA"
+    elif "STANLEY ADAMS" in combined_upper:
+        brand = "STANLEY ADAMS"
     elif "COLE" in combined_upper:
         brand = "COLE"
     elif "CONNEXION" in combined_upper:
@@ -260,8 +317,20 @@ def normalize_brand_and_dept(item: Dict[str, Any]) -> Tuple[str, str]:
         brand = "SUPER T"
     elif "DETAILS" in combined_upper:
         brand = "DETAILS"
+    elif "PHENOMENAL" in combined_upper:
+        brand = "PHENOMENAL"
+    elif "AMERICAN JEANS" in combined_upper:
+        brand = "AMERICAN JEANS"
+    elif "TRISSE" in combined_upper:
+        brand = "TRISSE"
+    elif "FLADEO" in combined_upper:
+        brand = "FLADEO"
+    elif "YONGKI" in combined_upper:
+        brand = "YONGKI KOMALADI"
+    elif raw_sub and raw_dept.upper().startswith("AOS"):
+        brand = raw_sub
     else:
-        brand = raw_group if raw_group else raw_dept
+        brand = raw_dept if (raw_dept and raw_dept != "MDS RETAIL") else raw_group
 
     return brand, raw_dept
 
@@ -284,7 +353,7 @@ def query_storehub_multi(category: str, identifier: str, cookie: str) -> List[Di
 
     payload = json.dumps([category, str(identifier).strip()])
     try:
-        res = http_session.post(ITEM_CHECKER_URL, headers=headers, data=payload, timeout=8)
+        res = http_session.post(ITEM_CHECKER_URL, headers=headers, data=payload, allow_redirects=False, timeout=12)
     except Exception:
         return []
 
@@ -293,17 +362,31 @@ def query_storehub_multi(category: str, identifier: str, cookie: str) -> List[Di
             ACTION_DETAIL = resolve_action_detail()
             headers["Next-Action"] = ACTION_DETAIL
         try:
-            res = http_session.post(ITEM_CHECKER_URL, headers=headers, data=payload, timeout=8)
+            res = http_session.post(ITEM_CHECKER_URL, headers=headers, data=payload, allow_redirects=False, timeout=12)
         except Exception:
             return []
 
-    if res.status_code == 401:
+    redirect_loc = (res.headers.get("location") or res.headers.get("x-action-redirect") or "").lower()
+    if res.status_code == 401 or (res.status_code in (301, 302, 303, 307, 308) and "login" in redirect_loc) or "login" in redirect_loc:
         return [{"_unauthorized": True}]
 
     if res.status_code != 200:
         return []
 
+    # Simpan jika server StoreHub melakukan rotasi cookie mso_session
+    raw_sc = res.headers.get("set-cookie", "")
+    if "mso_session=" in raw_sc:
+        with cookie_lock:
+            parts = [p.split(";")[0].strip() for p in re.split(r",(?=\s*[A-Za-z0-9_-]+=)", raw_sc) if "=" in p.split(";")[0]]
+            mso_pair = next((p for p in parts if p.startswith("mso_session=")), "")
+            if mso_pair:
+                other_parts = [p.strip() for p in cookie.split(";") if p.strip() and not p.strip().startswith("mso_session=")]
+                other_parts.append(mso_pair)
+                save_valid_cookie("; ".join(other_parts))
+
     text = res.text
+    if "NEXT_REDIRECT" in text and "/login" in text:
+        return [{"_unauthorized": True}]
     if "no route to host" in text or "504 Gateway" in text:
         return [{"_offline": True}]
 
@@ -562,7 +645,7 @@ def build_candidate_queues(existing_skus: Set[str], existing_barcodes: Set[str])
     seen_bc_bodies = set(bc_bodies)
     candidate_bc_bodies: List[int] = []
 
-    # a) Prioritas 1: Celah sangat rapat (diff <= 120) di seluruh rentang 035000..336000
+    # a) Prioritas 1: Celah sangat rapat (diff <= 120) di seluruh rentang (langsung isi size/warna yang bolong)
     for i in range(len(bc_bodies) - 1):
         diff = bc_bodies[i + 1] - bc_bodies[i]
         if 1 < diff <= 120:
@@ -571,20 +654,18 @@ def build_candidate_queues(existing_skus: Set[str], existing_barcodes: Set[str])
                     seen_bc_bodies.add(b6)
                     candidate_bc_bodies.append(b6)
 
-    # b) Prioritas 2: Celah menengah (120 < diff <= 500) di seluruh rentang
-    for i in range(len(bc_bodies) - 1):
-        diff = bc_bodies[i + 1] - bc_bodies[i]
-        if 120 < diff <= 500:
-            for b6 in range(bc_bodies[i] + 1, bc_bodies[i + 1]):
-                if b6 not in seen_bc_bodies:
-                    seen_bc_bodies.add(b6)
-                    candidate_bc_bodies.append(b6)
-
-    # c) Prioritas 3: Blok ekspansi padat (SUKO, MUKU, ZES, COLE, NEVADA, SHOES, KIDS)
+    # b) Prioritas 2: BLOK EKSPANSI BESAR YANG SEBELUMNYA TERLEWAT (SEGA/AOS 244500..283000, Koleksi Baru 316000..365000, Stanley Adams 120000..149000, dll)
     priority_blocks = [
-        (235900, 238500),
-        (231000, 234800),
-        (238501, 244500),
+        (244501, 282999),  # Hotspot besar 25xxxx-27xxxx (AOS MENS, SEGA 254086, MUKU/SUKO baru)
+        (316001, 360000),  # Koleksi terbaru 32xxxx-35xxxx (SUKO/EDIT/ZES 2026)
+        (215001, 235899),  # Lubang 22xxxx-23xxxx
+        (120000, 148999),  # Stanley Adams 126434 & mens/ladies formal
+        (152501, 166999),  # Area tengah bawah yang belum terjamah
+        (174501, 183999),
+        (195001, 202999),
+        (290001, 291999),
+        (302001, 302999),
+        (235900, 244500),
         (283000, 290000),
         (292000, 302000),
         (303000, 316000),
@@ -594,6 +675,21 @@ def build_candidate_queues(existing_skus: Set[str], existing_barcodes: Set[str])
         (149000, 152500),
     ]
     for start_b, end_b in priority_blocks:
+        for b6 in range(start_b, end_b + 1):
+            if b6 not in seen_bc_bodies:
+                seen_bc_bodies.add(b6)
+                candidate_bc_bodies.append(b6)
+
+    # c) Prioritas 3: Celah menengah (120 < diff <= 800) & Rentang Awal (025000..119999) + Ekspansi Atas (360001..390000)
+    for i in range(len(bc_bodies) - 1):
+        diff = bc_bodies[i + 1] - bc_bodies[i]
+        if 120 < diff <= 800:
+            for b6 in range(bc_bodies[i] + 1, bc_bodies[i + 1]):
+                if b6 not in seen_bc_bodies:
+                    seen_bc_bodies.add(b6)
+                    candidate_bc_bodies.append(b6)
+
+    for start_b, end_b in [(25000, 119999), (360001, 390000)]:
         for b6 in range(start_b, end_b + 1):
             if b6 not in seen_bc_bodies:
                 seen_bc_bodies.add(b6)
@@ -983,8 +1079,14 @@ def execute_live_stock_sync(max_minutes: int = 45):
 # =============================================================================
 # MODE 2: BRUTAL SCRAPER MDS BISA ALL DATA + GAP SWEEP (`--brutal`)
 # =============================================================================
-def execute_morning_sweep(run_once_cloud: bool = True, max_minutes: int = 50):
-    """Eksekusi penuh pemindaian brutal multi-threaded (16 Workers)."""
+def execute_morning_sweep(
+    run_once_cloud: bool = True,
+    max_minutes: int = 50,
+    upc_first: bool = False,
+    custom_range: Optional[Tuple[int, int]] = None,
+    workers: int = 28,
+):
+    """Eksekusi penuh pemindaian brutal multi-threaded (Turbo 28 Workers)."""
     cookie = get_active_cookie()
     if not cookie:
         print("❌ Cookie login StoreHub tidak ditemukan.")
@@ -1003,7 +1105,7 @@ def execute_morning_sweep(run_once_cloud: bool = True, max_minutes: int = 50):
 
     start_time = datetime.now()
     print("=" * 80)
-    print("🚀 [TURBO PYTHON ENGINE] MEMULAI BRUTAL SCRAPING MULTI-THREADED (16 WORKERS)")
+    print(f"🚀 [TURBO PYTHON ENGINE] MEMULAI BRUTAL SCRAPING MULTI-THREADED ({workers} WORKERS)")
     print("=" * 80)
     print(f"Waktu Mulai: {start_time.strftime('%Y-%m-%d %H:%M:%S')} WIB")
 
@@ -1021,153 +1123,131 @@ def execute_morning_sweep(run_once_cloud: bool = True, max_minutes: int = 50):
         if r.get("_from_registry_only") or not r.get("barcode")
     ]
 
-    sku_queue, bc_queue = build_candidate_queues(set(catalog_by_sku.keys()), existing_barcodes)
-    full_sku_queue = missing_bc_skus + sku_queue
-
-    print(f"🎯 Antrean Cerdas Terbentuk (Tanpa Membuang Mapping Lama):")
-    print(f"   👉 [JALUR 0 - Lengkapi Mapping/Barcode] : {len(missing_bc_skus):,} SKU")
-    print(f"   👉 [JALUR 1 - Celah SKU Modulo-10]      : {len(sku_queue):,} kandidat SKU")
-    print(f"   👉 [JALUR 2 - Celah Barcode EAN-13]     : {len(bc_queue):,} kandidat Barcode")
+    if custom_range:
+        r_start, r_end = custom_range
+        bc_queue = [
+            generate_ean13_barcode(b6)
+            for b6 in range(r_start, r_end + 1)
+        ]
+        bc_queue = [b for b in bc_queue if b and b not in existing_barcodes]
+        full_sku_queue: List[str] = []
+        print(f"🎯 Mode Rentang Khusus: 234000{r_start:06d} .. 234000{r_end:06d} ({len(bc_queue):,} kandidat belum terindeks)")
+    else:
+        sku_queue, bc_queue = build_candidate_queues(set(catalog_by_sku.keys()), existing_barcodes)
+        full_sku_queue = missing_bc_skus + sku_queue
+        print("🎯 Antrean Cerdas Terbentuk (Tanpa Membuang Mapping Lama):")
+        print(f"   👉 [JALUR 0 - Lengkapi Mapping/Barcode] : {len(missing_bc_skus):,} SKU")
+        print(f"   👉 [JALUR 1 - Celah SKU Modulo-10]      : {len(sku_queue):,} kandidat SKU")
+        print(f"   👉 [JALUR 2 - Celah Barcode EAN-13]     : {len(bc_queue):,} kandidat Barcode")
 
     new_discovered = 0
     updated_count = 0
     buffer_by_sku: Dict[str, Dict[str, Any]] = {}
-    chunk_size = 160
+    neighbor_sku_queue: List[str] = []
+    seen_neighbor_skus: Set[str] = set(existing_skus) | set(catalog_by_sku.keys())
+    chunk_size = max(160, workers * 10)
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # JALUR 0 & 1: MULTI-THREADED SKU SWEEP (16 WORKERS)
-    # ─────────────────────────────────────────────────────────────────────────
-    print(f"\n⚡ [JALUR 1] Menyapu {len(full_sku_queue):,} jalur & celah SKU dengan 16 Worker Threads...")
-    for c_start in range(0, len(full_sku_queue), chunk_size):
-        elapsed_min = (datetime.now() - start_time).total_seconds() / 60.0
-        if elapsed_min >= max_minutes:
-            print(f"⏱️ Batas waktu aman runner ({max_minutes} menit) tercapai. Menyimpan hasil...")
-            break
-
-        chunk = full_sku_queue[c_start:c_start + chunk_size]
-        offline_hits = 0
-        with ThreadPoolExecutor(max_workers=16) as executor:
-            future_map = {
-                executor.submit(query_storehub_multi, "sku", sku_cand, cookie): sku_cand
-                for sku_cand in chunk
-            }
-            for fut in as_completed(future_map):
-                items = fut.result()
-                if not items:
-                    continue
-                if items[0].get("_offline"):
-                    offline_hits += 1
-                    continue
-                if items[0].get("_unauthorized"):
-                    fresh = auto_login_storehub()
-                    if fresh:
-                        cookie = fresh
-                    continue
-
-                for item in items:
-                    sku_raw = str(item.get("SKU") or "").strip()
-                    ex_row = catalog_by_sku.get(sku_raw)
-                    rec = item_to_record(item, existing_row=ex_row)
-                    if not rec:
-                        continue
-                    sku_val = rec["sku"]
-                    bc_val = rec.get("barcode")
-                    is_new = sku_val not in existing_skus
-                    existing_skus.add(sku_val)
-                    catalog_by_sku[sku_val] = rec
-                    if bc_val:
-                        existing_barcodes.add(bc_val)
-
-                    buffer_by_sku[sku_val] = rec
-                    if is_new:
-                        new_discovered += 1
-                    else:
-                        updated_count += 1
-
-                    dept_key = f"{rec['brand']} ({rec['dept']})" if rec["brand"] != rec["dept"] else rec["brand"]
-                    brands_counter[dept_key] = brands_counter.get(dept_key, 0) + 1
-                    print(f"   ✨ [SKU-SWEEP] [{dept_key}] SKU: {sku_val} | BC: {bc_val} | {rec['article']} ({rec['color']}/{rec['size']}) | Rp {rec['hargaNormal']:,} | Stok: {rec['stok']} pcs")
-
-        if offline_hits > len(chunk) // 2:
-            if run_once_cloud:
-                print("⚠️ Server toko 719 offline di tengah jalan. Menyimpan hasil yang sudah didapat...")
+    def run_sweep_phase(category: str, queue: List[str], label: str) -> None:
+        nonlocal cookie, new_discovered, updated_count
+        if not queue:
+            return
+        print(f"\n⚡ [{label}] Menyapu {len(queue):,} kandidat dengan {workers} Worker Threads...")
+        probed = 0
+        phase_t0 = time.time()
+        for c_start in range(0, len(queue), chunk_size):
+            elapsed_min = (datetime.now() - start_time).total_seconds() / 60.0
+            if elapsed_min >= max_minutes:
+                print(f"⏱️ Batas waktu aman runner ({max_minutes} menit) tercapai. Menyimpan hasil...")
                 break
-            ensure_store_online(cookie, run_once_cloud=False, check_interval_sec=30)
 
-        if len(buffer_by_sku) >= 100:
+            chunk = queue[c_start:c_start + chunk_size]
+            offline_hits = 0
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                future_map = {
+                    executor.submit(query_storehub_multi, category, cand, cookie): cand
+                    for cand in chunk
+                }
+                for fut in as_completed(future_map):
+                    cand = future_map[fut]
+                    probed += 1
+                    items = fut.result()
+                    if not items:
+                        continue
+                    if items[0].get("_offline"):
+                        offline_hits += 1
+                        continue
+                    if items[0].get("_unauthorized"):
+                        fresh = auto_login_storehub()
+                        if fresh:
+                            cookie = fresh
+                        continue
+
+                    for item in items:
+                        sku_raw = str(item.get("SKU") or "").strip()
+                        ex_row = catalog_by_sku.get(sku_raw)
+                        rec = item_to_record(
+                            item,
+                            fallback_bc=(cand if category == "upc" else None),
+                            existing_row=ex_row,
+                        )
+                        if not rec:
+                            continue
+                        sku_val = rec["sku"]
+                        bc_val = rec.get("barcode")
+                        is_new = sku_val not in existing_skus
+                        existing_skus.add(sku_val)
+                        catalog_by_sku[sku_val] = rec
+                        if bc_val:
+                            existing_barcodes.add(bc_val)
+
+                        # Saat menemukan produk baru dari barcode, antrekan tetangga SKU Modulo-10 (±12) agar seluruh size/warna ikut terserap
+                        if is_new and category == "upc" and len(sku_val) == 8 and sku_val.isdigit():
+                            base7 = int(sku_val[:7])
+                            for nb7 in range(max(1000000, base7 - 12), base7 + 13):
+                                nb_sku = generate_mds_sku8(nb7)
+                                if nb_sku and nb_sku not in seen_neighbor_skus:
+                                    seen_neighbor_skus.add(nb_sku)
+                                    neighbor_sku_queue.append(nb_sku)
+
+                        buffer_by_sku[sku_val] = rec
+                        if is_new:
+                            new_discovered += 1
+                        else:
+                            updated_count += 1
+
+                        dept_key = f"{rec['brand']} ({rec['dept']})" if rec["brand"] != rec["dept"] else rec["brand"]
+                        brands_counter[dept_key] = brands_counter.get(dept_key, 0) + 1
+                        print(f"   ✨ [{label}] [{dept_key}] BC: {bc_val} | SKU: {sku_val} | {rec['article']} ({rec['color']}/{rec['size']}) | Rp {rec['hargaNormal']:,} | Stok: {rec['stok']} pcs")
+
+            if offline_hits > len(chunk) // 2:
+                if run_once_cloud:
+                    print("⚠️ Server toko 719 offline di tengah jalan. Menyimpan hasil yang sudah didapat...")
+                    break
+                ensure_store_online(cookie, run_once_cloud=False, check_interval_sec=30)
+
+            if len(buffer_by_sku) >= 60:
+                flush_buffer(buffer_by_sku, start_time, initial_count, new_discovered, updated_count, brands_counter)
+
+            dt = max(0.1, time.time() - phase_t0)
+            if (c_start // chunk_size) % 5 == 0:
+                print(f"   📡 [{label} PROGRES] {probed:,}/{len(queue):,} ({probed/dt:.1f} req/s) | Ditemukan Baru: +{new_discovered:,} SKU")
+
+        if buffer_by_sku:
             flush_buffer(buffer_by_sku, start_time, initial_count, new_discovered, updated_count, brands_counter)
 
-    if buffer_by_sku:
-        flush_buffer(buffer_by_sku, start_time, initial_count, new_discovered, updated_count, brands_counter)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # JALUR 2: MULTI-THREADED BARCODE GAP & EXPANSION SWEEP (16 WORKERS)
-    # ─────────────────────────────────────────────────────────────────────────
-    bc_queue = [b for b in bc_queue if b not in existing_barcodes]
-    print(f"\n⚡ [JALUR 2] Menyapu {len(bc_queue):,} celah Barcode EAN-13 dengan 16 Worker Threads...")
-
-    for c_start in range(0, len(bc_queue), chunk_size):
-        elapsed_min = (datetime.now() - start_time).total_seconds() / 60.0
-        if elapsed_min >= max_minutes:
-            print(f"⏱️ Batas waktu aman runner ({max_minutes} menit) tercapai. Menyimpan hasil...")
-            break
-
-        chunk = bc_queue[c_start:c_start + chunk_size]
-        offline_hits = 0
-        with ThreadPoolExecutor(max_workers=16) as executor:
-            future_map = {
-                executor.submit(query_storehub_multi, "upc", bc_cand, cookie): bc_cand
-                for bc_cand in chunk
-            }
-            for fut in as_completed(future_map):
-                bc_cand = future_map[fut]
-                items = fut.result()
-                if not items:
-                    continue
-                if items[0].get("_offline"):
-                    offline_hits += 1
-                    continue
-                if items[0].get("_unauthorized"):
-                    fresh = auto_login_storehub()
-                    if fresh:
-                        cookie = fresh
-                    continue
-
-                for item in items:
-                    sku_raw = str(item.get("SKU") or "").strip()
-                    ex_row = catalog_by_sku.get(sku_raw)
-                    rec = item_to_record(item, fallback_bc=bc_cand, existing_row=ex_row)
-                    if not rec:
-                        continue
-                    sku_val = rec["sku"]
-                    bc_val = rec.get("barcode")
-                    is_new = sku_val not in existing_skus
-                    existing_skus.add(sku_val)
-                    catalog_by_sku[sku_val] = rec
-                    if bc_val:
-                        existing_barcodes.add(bc_val)
-
-                    buffer_by_sku[sku_val] = rec
-                    if is_new:
-                        new_discovered += 1
-                    else:
-                        updated_count += 1
-
-                    dept_key = f"{rec['brand']} ({rec['dept']})" if rec["brand"] != rec["dept"] else rec["brand"]
-                    brands_counter[dept_key] = brands_counter.get(dept_key, 0) + 1
-                    print(f"   ✨ [UPC-SWEEP] [{dept_key}] BC: {bc_val} | SKU: {sku_val} | {rec['article']} ({rec['color']}/{rec['size']}) | Rp {rec['hargaNormal']:,} | Stok: {rec['stok']} pcs")
-
-        if offline_hits > len(chunk) // 2:
-            if run_once_cloud:
-                print("⚠️ Server toko 719 offline di tengah jalan. Menyimpan hasil yang sudah didapat...")
-                break
-            ensure_store_online(cookie, run_once_cloud=False, check_interval_sec=30)
-
-        if len(buffer_by_sku) >= 100:
-            flush_buffer(buffer_by_sku, start_time, initial_count, new_discovered, updated_count, brands_counter)
-
-    if buffer_by_sku:
-        flush_buffer(buffer_by_sku, start_time, initial_count, new_discovered, updated_count, brands_counter)
+    if upc_first or custom_range:
+        run_sweep_phase("upc", [b for b in bc_queue if b not in existing_barcodes], "UPC-SWEEP")
+        pending_siblings = [s for s in neighbor_sku_queue if s not in existing_skus]
+        if pending_siblings:
+            run_sweep_phase("sku", pending_siblings, "SIBLING-SKU-SWEEP")
+        if not custom_range:
+            run_sweep_phase("sku", [s for s in full_sku_queue if s not in existing_skus], "SKU-SWEEP")
+    else:
+        run_sweep_phase("sku", full_sku_queue, "SKU-SWEEP")
+        run_sweep_phase("upc", [b for b in bc_queue if b not in existing_barcodes], "UPC-SWEEP")
+        pending_siblings = [s for s in neighbor_sku_queue if s not in existing_skus]
+        if pending_siblings:
+            run_sweep_phase("sku", pending_siblings, "SIBLING-SKU-SWEEP")
 
     save_mapped_paths_registry(catalog_by_sku)
     save_report(start_time, initial_count, new_discovered, updated_count, brands_counter)
@@ -1183,16 +1263,40 @@ def execute_morning_sweep(run_once_cloud: bool = True, max_minutes: int = 50):
 
 
 if __name__ == "__main__":
-    args = set(sys.argv[1:])
+    argv = sys.argv[1:]
+    args = set(argv)
     is_gh_actions = os.getenv("GITHUB_ACTIONS") == "true"
+
+    custom_range_arg: Optional[Tuple[int, int]] = None
+    workers_arg = 28
+    max_min_arg: Optional[int] = None
+    for a in argv:
+        if a.startswith("--range="):
+            parts = a.split("=", 1)[1].split("-")
+            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                custom_range_arg = (int(parts[0]), int(parts[1]))
+        elif a.startswith("--workers="):
+            w_val = a.split("=", 1)[1]
+            if w_val.isdigit():
+                workers_arg = max(4, min(48, int(w_val)))
+        elif a.startswith("--minutes="):
+            m_val = a.split("=", 1)[1]
+            if m_val.isdigit():
+                max_min_arg = max(1, int(m_val))
 
     if "--export-paths" in args:
         print("🗺️ Mengekspor seluruh jalur mapping 84.763+ SKU dari Supabase ke mapped_sku_paths.json.gz...")
         cat, _, _ = load_existing_catalog_full()
         save_mapped_paths_registry(cat)
     elif "--stock-only" in args:
-        execute_live_stock_sync(max_minutes=45)
-    elif "--brutal" in args or "--run-once" in args or "--force" in args or is_gh_actions:
-        execute_morning_sweep(run_once_cloud=True, max_minutes=50)
+        execute_live_stock_sync(max_minutes=max_min_arg or 45)
+    elif "--brutal" in args or "--run-once" in args or "--force" in args or "--upc-first" in args or custom_range_arg or is_gh_actions:
+        execute_morning_sweep(
+            run_once_cloud=True,
+            max_minutes=max_min_arg or 50,
+            upc_first=("--upc-first" in args),
+            custom_range=custom_range_arg,
+            workers=workers_arg,
+        )
     else:
-        execute_morning_sweep(run_once_cloud=False, max_minutes=180)
+        execute_morning_sweep(run_once_cloud=False, max_minutes=max_min_arg or 180, workers=workers_arg)

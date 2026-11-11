@@ -21,7 +21,7 @@ const CREDENTIALS = {
 // In-memory cookie cache (session StoreHub bertahan ~20 menit)
 let cachedCookie: string | null = null;
 let cookieCachedAt: number = 0;
-const COOKIE_TTL_MS = 15 * 60 * 1000; // 15 menit
+const COOKIE_TTL_MS = 10 * 60 * 1000; // 10 menit (pendek agar selalu sinkron dengan Storage)
 
 export function isStoreOpen(): boolean {
   const now = new Date();
@@ -33,26 +33,110 @@ export function isStoreOpen(): boolean {
   return totalMinutes >= 540 && totalMinutes <= 1290;
 }
 
-export async function getStoreHubCookie(): Promise<string> {
+/** Hitung GS1 EAN-13 check digit yang valid (digunakan saat koreksi salah ketik 1 digit terakhir barcode 234000*) */
+export function calculateEan13CheckDigit(digits12: string): string {
+  if (!/^\d{12}$/.test(digits12)) return '';
+  let total = 0;
+  for (let i = 0; i < 12; i++) {
+    total += parseInt(digits12[i], 10) * (i % 2 === 0 ? 1 : 3);
+  }
+  return String((10 - (total % 10)) % 10);
+}
+
+/** Normalisasi Brand & Departemen agar konsisten dengan master python-engine (bukan hardcode SUKO) */
+function normalizeBrandAndDept(itemData: Record<string, any>): { brand: string; dept: string } {
+  const rawGroup = String(itemData.GroupName || itemData.Brand || '').trim();
+  const rawDept = String(itemData.DeptName || itemData.Department || rawGroup || 'MDS RETAIL').trim();
+  const rawSub = String(itemData.SubclassName || itemData.ClassName || '').trim();
+  const rawStyle = String(itemData.StyleCode || itemData.styleCode || '').trim().toUpperCase();
+  const rawDesc = String(itemData.Description || itemData.ItemDescription || '').trim().toUpperCase();
+  const combined = `${rawGroup} ${rawDept} ${rawSub} ${rawDesc}`.toUpperCase();
+
+  let brand = rawGroup || rawDept || 'MDS RETAIL';
+  if (combined.includes('MUKU') || rawStyle.startsWith('MK-') || rawStyle.includes('-MK')) brand = 'MUKU';
+  else if (combined.includes('ZES')) brand = 'ZES';
+  else if (combined.includes('SUKO')) brand = 'SUKO';
+  else if (combined.includes('BYRCH')) brand = 'BYRCH & CO';
+  else if (combined.includes('NEVADA')) brand = 'NEVADA';
+  else if (combined.includes('STANLEY ADAMS')) brand = 'STANLEY ADAMS';
+  else if (combined.includes('COLE')) brand = 'COLE';
+  else if (combined.includes('CONNEXION')) brand = 'CONNEXION';
+  else if (combined.includes('ST YVES') || combined.includes('ST. YVES')) brand = 'ST YVES';
+  else if (combined.includes('VOLO')) brand = 'VOLO';
+  else if (combined.includes('LITTLE M')) brand = 'LITTLE M';
+  else if (combined.includes('PIPA')) brand = 'PIPA';
+  else if (combined.includes('SUPER T')) brand = 'SUPER T';
+  else if (combined.includes('DETAILS')) brand = 'DETAILS';
+  else if (combined.includes('PHENOMENAL')) brand = 'PHENOMENAL';
+  else if (combined.includes('AMERICAN JEANS')) brand = 'AMERICAN JEANS';
+  else if (combined.includes('TRISSE')) brand = 'TRISSE';
+  else if (combined.includes('FLADEO')) brand = 'FLADEO';
+  else if (combined.includes('YONGKI')) brand = 'YONGKI KOMALADI';
+  else if (rawSub && rawDept.startsWith('AOS')) brand = rawSub;
+  else if (rawDept && rawDept !== 'MDS RETAIL') brand = rawDept;
+
+  return { brand, dept: rawDept };
+}
+
+/** Gabungkan pembaruan Set-Cookie dari response StoreHub jika ada rotasi mso_session */
+async function persistRefreshedSessionIfAny(res: Response, currentCookie: string): Promise<string> {
+  try {
+    const getSetCookie = (res.headers as any).getSetCookie;
+    const rawCookies: string[] = typeof getSetCookie === 'function'
+      ? getSetCookie.call(res.headers)
+      : (res.headers.get('set-cookie') ? [res.headers.get('set-cookie')!] : []);
+
+    let updated = currentCookie;
+    let changed = false;
+    for (const sc of rawCookies) {
+      if (sc && sc.includes('mso_session=')) {
+        const msoPair = sc.split(';')[0].trim();
+        const others = updated
+          .split(';')
+          .map(p => p.trim())
+          .filter(p => p && !p.startsWith('mso_session='));
+        others.push(msoPair);
+        updated = others.join('; ');
+        changed = true;
+      }
+    }
+
+    if (changed && updated.includes('mso_session=')) {
+      cachedCookie = updated;
+      cookieCachedAt = Date.now();
+      const { supabase } = await import('@/lib/supabaseClient');
+      await supabase.storage.from('excel-uploads').upload(
+        'secrets/mds_cookie.txt',
+        Buffer.from(updated, 'utf-8'),
+        { contentType: 'text/plain', upsert: true }
+      );
+    }
+    return updated;
+  } catch {
+    return currentCookie;
+  }
+}
+
+export async function getStoreHubCookie(forceRefresh: boolean = false): Promise<string> {
   const now = Date.now();
-  if (cachedCookie && (now - cookieCachedAt) < COOKIE_TTL_MS) {
+  if (!forceRefresh && cachedCookie && cachedCookie.includes('mso_session') && (now - cookieCachedAt) < COOKIE_TTL_MS) {
     return cachedCookie;
   }
 
-  // 1. Jika ada env MDS_SESSION_COOKIE, gunakan itu
-  if (process.env.MDS_SESSION_COOKIE) {
-    cachedCookie = process.env.MDS_SESSION_COOKIE;
+  // 1. Jika ada env MDS_SESSION_COOKIE yang memiliki mso_session, gunakan itu
+  if (!forceRefresh && process.env.MDS_SESSION_COOKIE && process.env.MDS_SESSION_COOKIE.includes('mso_session')) {
+    cachedCookie = process.env.MDS_SESSION_COOKIE.trim();
     cookieCachedAt = now;
     return cachedCookie;
   }
 
-  // 2. Ambil dari Supabase Storage (secrets/mds_cookie.txt)
+  // 2. Ambil dari Supabase Storage (secrets/mds_cookie.txt) — WAJIB berisi mso_session!
   try {
     const { supabase } = await import('@/lib/supabaseClient');
     const { data, error } = await supabase.storage.from('excel-uploads').download('secrets/mds_cookie.txt');
     if (data && !error) {
       const cookie = (await data.text()).trim();
-      if (cookie && cookie.length > 10) {
+      if (cookie && cookie.includes('mso_session')) {
         cachedCookie = cookie;
         cookieCachedAt = now;
         return cachedCookie;
@@ -62,32 +146,51 @@ export async function getStoreHubCookie(): Promise<string> {
     console.warn('[MDS-CLIENT] Gagal membaca cookie dari Storage:', e);
   }
 
-  // 3. Fallback Auto-login ke StoreHub
+  // 3. Fallback Auto-login ke StoreHub (resolving ACTION_LOGIN hash dinamis + multipart Next 15/16)
   try {
-    const formData = new URLSearchParams();
-    formData.append('next', '/');
-    formData.append('username', CREDENTIALS.username);
-    formData.append('password', CREDENTIALS.password);
-    formData.append('tz', CREDENTIALS.tz);
+    let loginActionHash = ACTION_LOGIN;
+    try {
+      const loginHtmlRes = await fetch(LOGIN_URL, { method: 'GET' });
+      const loginHtml = await loginHtmlRes.text();
+      const scriptMatches = [...loginHtml.matchAll(/src="(\/_next\/static\/chunks\/[^"]+\.js)"/g)];
+      for (const m of scriptMatches.slice(0, 12)) {
+        const jsText = await fetch(`${STOREHUB_BASE}${m[1]}`).then(r => r.text()).catch(() => '');
+        const actMatch = jsText.match(/createServerReference\)\("([a-f0-9]{40,44})"[^)]*"login"/);
+        if (actMatch?.[1]) {
+          loginActionHash = actMatch[1];
+          break;
+        }
+      }
+    } catch {}
+
+    const fd = new FormData();
+    fd.append('0', '[{},"$K1"]');
+    fd.append('_1_next', '/');
+    fd.append('_1_username', CREDENTIALS.username);
+    fd.append('_1_password', CREDENTIALS.password);
+    fd.append('_1_tz', CREDENTIALS.tz);
 
     const res = await fetch(LOGIN_URL, {
       method: 'POST',
       headers: {
         'Accept': 'text/x-component',
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Next-Action': ACTION_LOGIN,
+        'Next-Action': loginActionHash,
         'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15',
         'Referer': LOGIN_URL,
+        'Origin': STOREHUB_BASE,
       },
-      body: formData.toString(),
+      body: fd,
       redirect: 'manual',
     });
 
-    const setCookieHeader = res.headers.get('set-cookie') || '';
-    const cookiesList = setCookieHeader.split(',').map(c => c.split(';')[0].trim());
-    const sessionCookie = cookiesList.join('; ');
+    const getSetCookie = (res.headers as any).getSetCookie;
+    const rawList: string[] = typeof getSetCookie === 'function'
+      ? getSetCookie.call(res.headers)
+      : (res.headers.get('set-cookie') || '').split(/,(?=\s*[A-Za-z0-9_-]+=)/);
+    const sessionCookie = rawList.map(c => c.split(';')[0].trim()).filter(Boolean).join('; ');
 
-    if (sessionCookie && (sessionCookie.includes('mso_session') || sessionCookie.includes('db76d'))) {
+    // HANYA terima cookie yang benar-benar memiliki mso_session (JANGAN pernah simpan db76d-only!)
+    if (sessionCookie && sessionCookie.includes('mso_session=')) {
       cachedCookie = sessionCookie;
       cookieCachedAt = now;
       return sessionCookie;
@@ -96,7 +199,7 @@ export async function getStoreHubCookie(): Promise<string> {
     console.warn('[MDS-CLIENT] Auto-login error:', e);
   }
 
-  throw new Error('Gagal mendapatkan session login StoreHub');
+  throw new Error('Gagal mendapatkan session login StoreHub (mso_session tidak ditemukan)');
 }
 
 export async function checkSingleItemStock(sku: string): Promise<{
@@ -113,15 +216,23 @@ export async function checkSingleItemStock(sku: string): Promise<{
 }> {
   const cleanSku = String(sku).trim();
 
-  // Helper untuk fallback anggun ke database Supabase
+  // Helper untuk fallback anggun ke database Supabase (HANYA success jika benar-benar ada di DB!)
   const fallbackToDb = async (msg: string) => {
     try {
-      const dbProduct = await prisma.product.findUnique({
-        where: { sku: cleanSku },
+      const dbProduct = await prisma.product.findFirst({
+        where: { OR: [{ sku: cleanSku }, { barcode: cleanSku }] },
         select: { sku: true, stok: true, barcode: true, article: true, hargaNormal: true }
       });
+      if (!dbProduct) {
+        return {
+          success: false,
+          sku: cleanSku,
+          storeOffline: true,
+          message: msg,
+        };
+      }
       let variants: Array<{ sku: string; color?: string | null; size?: string | null; stok: number }> = [];
-      if (dbProduct?.article) {
+      if (dbProduct.article) {
         const siblings = await prisma.product.findMany({
           where: { article: dbProduct.article },
           select: { sku: true, color: true, size: true, stok: true }
@@ -130,11 +241,11 @@ export async function checkSingleItemStock(sku: string): Promise<{
       }
       return {
         success: true,
-        sku: cleanSku,
-        stok: dbProduct?.stok ?? 0,
-        barcode: dbProduct?.barcode,
-        article: dbProduct?.article,
-        hargaNormal: dbProduct?.hargaNormal,
+        sku: dbProduct.sku,
+        stok: dbProduct.stok ?? 0,
+        barcode: dbProduct.barcode,
+        article: dbProduct.article,
+        hargaNormal: dbProduct.hargaNormal,
         variants,
         storeOffline: true,
         message: msg,
@@ -148,19 +259,14 @@ export async function checkSingleItemStock(sku: string): Promise<{
     }
   };
 
-  try {
-    let cookie = await getStoreHubCookie().catch(() => null);
-    if (!cookie) {
-      return await fallbackToDb('Server MDS BISA belum ada session aktif. Menampilkan stok tersimpan.');
-    }
-
-    const isUpc = /^\d{12,14}$/.test(cleanSku);
-    const args = [isUpc ? 'upc' : 'sku', cleanSku];
-
-    // Beri batas timeout 6 detik agar tidak membuat kasir menunggu lama saat toko tutup
+  /** Helper tunggal pemanggilan checkItemDetail StoreHub + parser Next.js RSC */
+  const queryStoreHubDetail = async (
+    kind: 'upc' | 'sku',
+    code: string,
+    activeCookie: string
+  ): Promise<{ itemData: any; authFailed: boolean; offline: boolean; actionExpired: boolean; cookie: string }> => {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
-
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
     let res: Response;
     try {
       res = await fetch(ITEM_CHECKER_URL, {
@@ -168,73 +274,59 @@ export async function checkSingleItemStock(sku: string): Promise<{
         headers: {
           'Accept': 'text/x-component',
           'Content-Type': 'text/plain;charset=UTF-8',
-          'Cookie': cookie,
+          'Cookie': activeCookie,
           'Next-Action': ACTION_DETAIL,
           'Referer': ITEM_CHECKER_URL,
           'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15',
           'Next-Router-State-Tree': '%5B%22%22%2C%7B%22children%22%3A%5B%22(app)%22%2C%7B%22children%22%3A%5B%22item-checker%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C4%5D%7D%2Cnull%2C%22refetch%22%2C24%5D',
         },
-        body: JSON.stringify(args),
+        body: JSON.stringify([kind, code]),
+        redirect: 'manual',
         signal: controller.signal,
       });
     } catch {
       clearTimeout(timeoutId);
-      return await fallbackToDb('Server MDS BISA sedang istirahat (malam hari). Menampilkan stok tersimpan.');
+      return { itemData: null, authFailed: false, offline: true, actionExpired: false, cookie: activeCookie };
     } finally {
       clearTimeout(timeoutId);
     }
 
-    // Jika 401 Unauthorized, re-login sekali
-    if (res.status === 401) {
-      cachedCookie = null;
-      cookie = await getStoreHubCookie().catch(() => null);
-      if (!cookie) return await fallbackToDb('Sesi login kedaluwarsa. Menampilkan stok tersimpan.');
-      
-      try {
-        res = await fetch(ITEM_CHECKER_URL, {
-          method: 'POST',
-          headers: {
-            'Accept': 'text/x-component',
-            'Content-Type': 'text/plain;charset=UTF-8',
-            'Cookie': cookie,
-            'Next-Action': ACTION_DETAIL,
-            'Referer': ITEM_CHECKER_URL,
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15',
-            'Next-Router-State-Tree': '%5B%22%22%2C%7B%22children%22%3A%5B%22(app)%22%2C%7B%22children%22%3A%5B%22item-checker%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C4%5D%7D%2Cnull%2C%22refetch%22%2C24%5D',
-          },
-          body: JSON.stringify(args),
-        });
-      } catch {
-        return await fallbackToDb('Server MDS BISA sedang istirahat (malam hari). Menampilkan stok tersimpan.');
-      }
+    const updatedCookie = await persistRefreshedSessionIfAny(res, activeCookie);
+
+    if (res.status === 404) {
+      return { itemData: null, authFailed: false, offline: false, actionExpired: true, cookie: updatedCookie };
+    }
+
+    const redirectTarget = res.headers.get('location') || res.headers.get('x-action-redirect') || '';
+    if (res.status === 401 || (res.status >= 300 && res.status < 400 && redirectTarget.includes('/login')) || redirectTarget.includes('/login')) {
+      return { itemData: null, authFailed: true, offline: false, actionExpired: false, cookie: updatedCookie };
     }
 
     const text = await res.text();
-
     if (text.includes('504 Gateway') || text.includes('Gateway Time-out') || text.includes('no route to host') || res.status === 504) {
-      return await fallbackToDb('Server toko fisik sedang istirahat (malam hari). Menampilkan stok tersimpan.');
+      return { itemData: null, authFailed: false, offline: true, actionExpired: false, cookie: updatedCookie };
+    }
+    if (text.includes('NEXT_REDIRECT') && text.includes('/login')) {
+      return { itemData: null, authFailed: true, offline: false, actionExpired: false, cookie: updatedCookie };
     }
 
-    // Parse Server Action Response (Unpack Next.js 15 chunk)
-    let itemData: any = null;
-    const lines = text.split('\n');
-    for (const line of lines) {
+    let parsedItem: any = null;
+    for (const line of text.split('\n')) {
       const colonIdx = line.indexOf(':');
       if (colonIdx > 0 && colonIdx <= 3) {
         try {
           const parsed = JSON.parse(line.substring(colonIdx + 1));
-          if (parsed?.result?.data?.[cleanSku]) {
-            itemData = parsed.result.data[cleanSku][0];
+          if (parsed?.result?.data?.[code] && Array.isArray(parsed.result.data[code])) {
+            parsedItem = parsed.result.data[code][0];
             break;
           }
           if (parsed?.result?.data) {
             const first = Object.values(parsed.result.data)[0];
             if (Array.isArray(first)) {
-              // Jika query adalah UPC / barcode, prioritaskan item yang memiliki VendorBarcode cocok
-              const matchUpc = isUpc ? first.find((x: any) => String(x.VendorBarcode).trim() === cleanSku) : null;
-              itemData = matchUpc || first[0];
+              const matchUpc = kind === 'upc' ? first.find((x: any) => String(x.VendorBarcode).trim() === code) : null;
+              parsedItem = matchUpc || first[0];
             } else {
-              itemData = first;
+              parsedItem = first;
             }
             break;
           }
@@ -243,12 +335,70 @@ export async function checkSingleItemStock(sku: string): Promise<{
         }
       }
     }
+    return { itemData: parsedItem, authFailed: false, offline: false, actionExpired: false, cookie: updatedCookie };
+  };
 
-    if (!itemData || itemData.error) {
-      return await fallbackToDb('Menampilkan stok tersimpan di sistem.');
+  try {
+    let cookie = await getStoreHubCookie().catch(() => null);
+    if (!cookie) {
+      return await fallbackToDb('Server MDS BISA belum ada session aktif. Menampilkan stok tersimpan.');
     }
 
-    // 1. Ekstraksi nilai stok untuk SKU saat ini
+    const isUpc = /^\d{12,14}$/.test(cleanSku);
+    const kind: 'upc' | 'sku' = isUpc ? 'upc' : 'sku';
+
+    let queryRes = await queryStoreHubDetail(kind, cleanSku, cookie);
+
+    // Jika Next-Action hash berubah di StoreHub, resolve dinamis lalu retry 1x
+    if (queryRes.actionExpired) {
+      try {
+        const html = await fetch(ITEM_CHECKER_URL, { headers: { Cookie: cookie } }).then(r => r.text());
+        const matches = [...html.matchAll(/src="(\/_next\/static\/chunks\/[^"]+\.js)"/g)];
+        for (const m of matches.slice(0, 12)) {
+          const jsText = await fetch(`${STOREHUB_BASE}${m[1]}`).then(r => r.text()).catch(() => '');
+          const actMatch = jsText.match(/createServerReference\)\("([a-f0-9]{40,44})"[^)]*"checkItemDetail"/);
+          if (actMatch?.[1]) {
+            ACTION_DETAIL = actMatch[1];
+            queryRes = await queryStoreHubDetail(kind, cleanSku, cookie);
+            break;
+          }
+        }
+      } catch {}
+    }
+
+    // Jika cookie expired (401 / redirect / empty), paksa muat ulang dari Supabase Storage / auto-login dan retry 1x
+    if (queryRes.authFailed || (!queryRes.itemData && !queryRes.offline)) {
+      const freshCookie = await getStoreHubCookie(true).catch(() => null);
+      if (freshCookie && freshCookie !== cookie) {
+        cookie = freshCookie;
+        queryRes = await queryStoreHubDetail(kind, cleanSku, cookie);
+      }
+    }
+
+    if (queryRes.offline) {
+      return await fallbackToDb('Server toko fisik sedang istirahat (malam hari). Menampilkan stok tersimpan.');
+    }
+
+    let queriedCode = cleanSku;
+    // Smart Fallback: Jika user mengetik manual barcode 13 digit 234000* dengan 1 salah ketik check digit (contoh 2340001264343 -> 2340001264345)
+    if (!queryRes.itemData && /^234000\d{7}$/.test(cleanSku)) {
+      const validCd = calculateEan13CheckDigit(cleanSku.slice(0, 12));
+      const correctedBarcode = cleanSku.slice(0, 12) + validCd;
+      if (correctedBarcode !== cleanSku) {
+        const correctedRes = await queryStoreHubDetail('upc', correctedBarcode, queryRes.cookie || cookie);
+        if (correctedRes.itemData) {
+          queryRes = correctedRes;
+          queriedCode = correctedBarcode;
+        }
+      }
+    }
+
+    const itemData = queryRes.itemData;
+    if (!itemData || itemData.error) {
+      return await fallbackToDb('Produk tidak ditemukan di server MDS BISA maupun sistem.');
+    }
+
+    // 1. Ekstraksi nilai stok, barcode, artikel, warna, ukuran, brand, dan dept yang akurat
     let currentSkuStok = 0;
     const directStok = itemData.StockOnHand ?? itemData.stockOnHand ?? itemData.stock_on_hand ?? itemData.soh;
     if (directStok !== undefined && directStok !== null) {
@@ -257,9 +407,12 @@ export async function checkSingleItemStock(sku: string): Promise<{
 
     const barcode = itemData.VendorBarcode ?? itemData.vendorBarcode ?? itemData.barcode ?? null;
     const article = itemData.StyleCode ?? itemData.styleCode ?? itemData.article ?? null;
-    
+    const itemColor = itemData.COLOR ?? itemData.Color ?? itemData.color ?? null;
+    const itemSize = itemData.Size ?? itemData.SIZE ?? itemData.size ?? null;
+    const { brand: normalizedBrand, dept: normalizedDept } = normalizeBrandAndDept(itemData);
+
     // Parse harga normal ritel
-    let rawPrice = itemData.RetailPrice ?? itemData.retailPrice ?? itemData.price;
+    const rawPrice = itemData.RetailPrice ?? itemData.retailPrice ?? itemData.price;
     let hargaNormal: number | null = null;
     if (rawPrice) {
       let str = String(rawPrice).trim();
@@ -267,29 +420,33 @@ export async function checkSingleItemStock(sku: string): Promise<{
         str = str.split('.')[0];
       }
       const cleaned = str.replace(/[^0-9]/g, '');
-      hargaNormal = cleaned ? parseInt(cleaned) : null;
+      hargaNormal = cleaned ? parseInt(cleaned, 10) : null;
     }
 
+    const itemSku = String(itemData.SKU ?? itemData.sku ?? cleanSku).trim();
+
     // 2. Cari seluruh varian produk dari ARTIKEL ini di database Supabase
-    let articleToSearch = article;
+    let articleToSearch = article ? String(article).trim() : null;
     if (!articleToSearch) {
-      const existing = await prisma.product.findUnique({ where: { sku: cleanSku }, select: { article: true } });
+      const existing = await prisma.product.findUnique({ where: { sku: itemSku }, select: { article: true } });
       articleToSearch = existing?.article || null;
     }
 
     const updatedVariants: Array<{ sku: string; color?: string | null; size?: string | null; stok: number }> = [];
+    const resolvedBarcode = barcode ? String(barcode).trim() : (isUpc ? queriedCode : null);
 
-    const itemSku = String(itemData.SKU ?? itemData.sku ?? cleanSku).trim();
-
-    // Update atau insert produk baru jika belum terdaftar di database Supabase
+    // Update atau insert produk baru secara instan ke Supabase
     try {
-      const resolvedBarcode = isUpc ? cleanSku : (barcode ? String(barcode).trim() : null);
       const updateData: any = {
         stok: currentSkuStok,
         updatedAt: new Date(),
       };
       if (resolvedBarcode) updateData.barcode = resolvedBarcode;
-      if (article) updateData.article = String(article).trim();
+      if (articleToSearch) updateData.article = articleToSearch;
+      if (itemColor) updateData.color = String(itemColor).trim();
+      if (itemSize) updateData.size = String(itemSize).trim();
+      if (normalizedBrand) updateData.brand = normalizedBrand;
+      if (normalizedDept) updateData.dept = normalizedDept;
       if (hargaNormal && hargaNormal > 0) updateData.hargaNormal = hargaNormal;
 
       await prisma.product.upsert({
@@ -298,18 +455,18 @@ export async function checkSingleItemStock(sku: string): Promise<{
         create: {
           sku: itemSku,
           barcode: resolvedBarcode,
-          article: article || 'PRODUK BARU',
-          description: String(itemData.Description || itemData.ItemDescription || article || 'PRODUK BARU').trim(),
-          brand: String(itemData.Brand || 'SUKO').trim(),
-          dept: String(itemData.Department || itemData.DeptName || 'SUKO').trim(),
-          color: itemData.Color || null,
-          size: itemData.Size || null,
+          article: articleToSearch || 'PRODUK BARU',
+          description: String(itemData.Description || itemData.ItemDescription || articleToSearch || 'PRODUK BARU').trim(),
+          brand: normalizedBrand,
+          dept: normalizedDept,
+          color: itemColor ? String(itemColor).trim() : null,
+          size: itemSize ? String(itemSize).trim() : null,
           hargaNormal: hargaNormal || 0,
           stok: currentSkuStok,
           updatedAt: new Date(),
         }
       });
-      updatedVariants.push({ sku: itemSku, stok: currentSkuStok });
+      updatedVariants.push({ sku: itemSku, color: itemColor, size: itemSize, stok: currentSkuStok });
     } catch (e) {
       console.warn('Gagal upsert main SKU:', e);
     }
@@ -325,17 +482,15 @@ export async function checkSingleItemStock(sku: string): Promise<{
         const normalize = (s: any) => String(s || '').trim().toUpperCase();
 
         for (const sib of siblings) {
-          if (sib.sku === cleanSku) continue; // sudah diupdate di atas
+          if (sib.sku === itemSku) continue;
 
           const sibColor = normalize(sib.color);
           const sibSize = normalize(sib.size);
 
-          // Cari di relatedStock
           let foundQty: number | null = null;
 
           for (const [relColorKey, sizesObj] of Object.entries(itemData.relatedStock)) {
             const relColor = normalize(relColorKey);
-            // Cocokkan warna (exact atau mengandung)
             if (relColor === sibColor || relColor.includes(sibColor) || sibColor.includes(relColor)) {
               if (sizesObj && typeof sizesObj === 'object') {
                 for (const [relSizeKey, qtyVal] of Object.entries(sizesObj as Record<string, any>)) {
@@ -363,12 +518,13 @@ export async function checkSingleItemStock(sku: string): Promise<{
       }
     }
 
+    // Penting: Kembalikan itemSku (SKU 8-digit asli di DB), bukan cleanSku (yang bisa berupa barcode 13-digit)
     return {
       success: true,
-      sku: cleanSku,
+      sku: itemSku,
       article: articleToSearch,
       stok: currentSkuStok,
-      barcode,
+      barcode: resolvedBarcode,
       hargaNormal,
       totalVariantsUpdated: updatedVariants.length,
       variants: updatedVariants,

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma as db } from "@/lib/prisma";
-import { checkSingleItemStock } from "@/lib/mdsBisaClient";
+import { checkSingleItemStock, isStoreOpen, calculateEan13CheckDigit } from "@/lib/mdsBisaClient";
 import {
   expandRetailQuery,
   computeProductRelevanceScore,
@@ -93,6 +93,14 @@ export async function GET(
           where: { OR: [{ barcode: stripped }, { sku: stripped }] }
         });
       }
+      // Fallback cerdas: koreksi 1 digit check-digit GS1 EAN-13 jika user mengetik manual barcode 234000* (mis. 2340001264343 -> 2340001264345)
+      if (!directProduct && /^234000\d{7}$/.test(rawInput)) {
+        const validCd = calculateEan13CheckDigit(rawInput.slice(0, 12));
+        const fixedBarcode = rawInput.slice(0, 12) + validCd;
+        if (fixedBarcode !== rawInput) {
+          directProduct = await db.product.findFirst({ where: { barcode: fixedBarcode } });
+        }
+      }
     }
 
     if (directProduct) {
@@ -128,14 +136,23 @@ export async function GET(
         });
       }
 
-      // Coba live MDS BISA StoreHub dengan batas waktu ketat 1.8 detik agar tidak lemot saat server toko tutup
+      // Coba live MDS BISA StoreHub: 5.5 detik saat toko buka agar scan/cari barang baru 100% tembus di percobaan pertama!
       try {
+        const liveTimeoutMs = isStoreOpen() ? 5500 : 1500;
         const liveRes: any = await Promise.race([
           checkSingleItemStock(rawInput),
-          new Promise((resolve) => setTimeout(() => resolve({ success: false, timeout: true }), 1800))
+          new Promise((resolve) => setTimeout(() => resolve({ success: false, timeout: true }), liveTimeoutMs))
         ]);
         if (liveRes?.success && liveRes?.sku) {
-          let fetched = await db.product.findUnique({ where: { sku: liveRes.sku } });
+          let fetched = await db.product.findFirst({
+            where: {
+              OR: [
+                { sku: liveRes.sku },
+                ...(liveRes.barcode ? [{ barcode: liveRes.barcode }] : []),
+                { barcode: rawInput }
+              ]
+            }
+          });
           if (fetched) {
             fetched = checkAndCleanPromo(fetched);
             const siblings = await getProductSiblings(fetched);
