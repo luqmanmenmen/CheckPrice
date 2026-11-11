@@ -1071,6 +1071,19 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   1. Menghapus limit kecil `420` pada [`GET /api/catalog`](file:///c:/Max%20Display/price-checker/src/app/api/catalog/route.ts) untuk `SUKO`/`ZES`/`MUKU` (`take: 12000`, `ALL`/`OTHER`: `1800`) dan memperpanjang TTL cache ke 120 detik agar server mengembalikan seluruh **1.309 model SUKO** dan **1.178 model ZES** tanpa terpotong.
   2. Menambahkan [`getLocalTaxonomyOverview`](file:///c:/Max%20Display/price-checker/src/lib/offlineDb.ts#L646) + [`clearListToIdle`](file:///c:/Max%20Display/price-checker/src/app/page.tsx) agar angka model asli per brand (`Semua 19.881 | SUKO 1.309 | Mu+Ku 19 | ZES 1.178 | Lainnya 17.375`) langsung tampil transparan sejak layar beranda dibuka.
 
+---
+
+## 69. Arsitektur 3 Toko Asli: Monostore `SUKO` & `ZES` vs Multibrand `Mu+Ku` (Hapus Bucket "Lainnya")
+
+- **Klarifikasi Bisnis Pengguna:**
+  - *"sucko itu identik zes juga karna 2 toko ini brandnya 1 aja ya suko ya zes karna monostore. kalau muku banyak brand. jangan dimasukkan lainnya."*
+  - **Penjelasan SKU vs Model (`97.546 SKU` vs `~19.881 Model`):** Setiap 1 Model Artikel rata-rata memiliki ~5 SKU warna/ukuran (`S, M, L, XL`), sehingga **~19.881 Model = 97.546 SKU** utuh di cache lokal (~34 MB).
+- **Perbaikan Menyeluruh ([`productTaxonomy.ts`](file:///c:/Max%20Display/price-checker/src/lib/productTaxonomy.ts), [`offlineDb.ts`](file:///c:/Max%20Display/price-checker/src/lib/offlineDb.ts), [`api/catalog`](file:///c:/Max%20Display/price-checker/src/app/api/catalog/route.ts), [`page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx)):**
+  1. **Hapus Filter `"Lainnya"`:** Hanya ada 3 konsep toko: **`SUKO`** (*Monostore*, `1.309 Model` / `10.322 SKU`), **`ZES`** (*Monostore*, `1.178 Model` / `6.210 SKU`), dan **`Mu+Ku`** (*Multibrand Store*, menampung seluruh merk reguler `NEVADA`, `LITTLE M`, `CONNEXION`, `COLE`, `MAXMURAH`, `ST YVES`, `VOLO`, `BYRCH & CO`, `MUKU`, dll. = **`~17.394 Model`** / **`~81.014 SKU`**).
+  2. **Sub-Brand Strip Khusus `Mu+Ku`:** Ketika user memilih **`Mu+Ku`**, muncul bar quick-filter merk populer (`NEVADA`, `LITTLE M`, `CONNEXION`, `COLE`, `MAXMURAH`, `ST YVES`, `VOLO`, `BYRCH & CO`, `MUKU`, dll.), dan setiap kartu `Mu+Ku` menampilkan badge toko **`Mu+Ku`** bersama badge merk produknya masing-masing.
+  3. **Auto-Upgrade Index Tanpa Re-Download (`v13_smz_monostore`):** Menambahkan versi taxonomy lokal `suko_models_taxonomy_ver` di `ensureModelsIndexReady()` agar `db.models` dibangun ulang otomatis dalam ~450ms langsung dari `db.products` (tanpa unduh ulang 97.546 SKU).
+
+
 
 
 

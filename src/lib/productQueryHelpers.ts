@@ -115,7 +115,6 @@ export function summarizeTaxonomyCounts(groupedArticles: any[]) {
     SUKO: 0,
     MUKU: 0,
     ZES: 0,
-    OTHER: 0,
   };
   const categoryCounts: Record<CategoryKey, number> = {
     ALL: groupedArticles.length,

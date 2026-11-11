@@ -38,7 +38,7 @@ const searchListCache = new Map<
   }
 >();
 
-const VALID_BRANDS = new Set<BrandGroupKey>(["ALL", "SUKO", "MUKU", "ZES", "OTHER"]);
+const VALID_BRANDS = new Set<BrandGroupKey>(["ALL", "SUKO", "MUKU", "ZES"]);
 const VALID_CATEGORIES = new Set<CategoryKey>([
   "ALL",
   "JAKET",

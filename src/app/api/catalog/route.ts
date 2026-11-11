@@ -16,7 +16,7 @@ import {
 
 export const dynamic = "force-dynamic";
 
-const VALID_BRANDS = new Set<BrandGroupKey>(["ALL", "SUKO", "MUKU", "ZES", "OTHER"]);
+const VALID_BRANDS = new Set<BrandGroupKey>(["ALL", "SUKO", "MUKU", "ZES"]);
 const VALID_CATEGORIES = new Set<CategoryKey>([
   "ALL",
   "JAKET",
@@ -47,6 +47,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const rawBrand = (searchParams.get("brandGroup") || "ALL").toUpperCase() as BrandGroupKey;
     const rawCategory = (searchParams.get("category") || "ALL").toUpperCase() as CategoryKey;
+    const subBrand = (searchParams.get("subBrand") || "").trim().toUpperCase();
     const brandGroup: BrandGroupKey = VALID_BRANDS.has(rawBrand) ? rawBrand : "ALL";
     const category: CategoryKey = VALID_CATEGORIES.has(rawCategory) ? rawCategory : "ALL";
 
@@ -54,7 +55,7 @@ export async function GET(request: NextRequest) {
     const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "20", 10)));
     const skip = (page - 1) * limit;
 
-    const cacheKey = `b=${brandGroup}::c=${category}`;
+    const cacheKey = `b=${brandGroup}::c=${category}::s=${subBrand}`;
     const cached = catalogCache.get(cacheKey);
     if (cached && Date.now() <= cached.expiresAt) {
       const total = cached.groupedArticles.length;
@@ -68,6 +69,7 @@ export async function GET(request: NextRequest) {
           totalPages: Math.max(1, Math.ceil(total / limit)),
           brandGroup,
           category,
+          subBrand,
           brandCounts: cached.brandCounts,
           categoryCounts: cached.categoryCounts,
           cached: true,
@@ -83,6 +85,15 @@ export async function GET(request: NextRequest) {
     const brandWhere = buildBrandPrismaWhere(brandGroup);
     if (brandWhere) andClauses.push(brandWhere);
 
+    if (subBrand) {
+      andClauses.push({
+        OR: [
+          { brand: { contains: subBrand, mode: "insensitive" } },
+          { dept: { contains: subBrand, mode: "insensitive" } },
+        ],
+      });
+    }
+
     const categoryWhere = buildCategoryPrismaWhere(category);
     if (categoryWhere) andClauses.push(categoryWhere);
 
@@ -90,7 +101,7 @@ export async function GET(request: NextRequest) {
       where: { AND: andClauses },
       select: PRODUCT_LIST_SELECT,
       orderBy: [{ stok: "desc" }, { id: "desc" }],
-      take: brandGroup === "SUKO" || brandGroup === "ZES" || brandGroup === "MUKU" ? 12000 : 1800,
+      take: brandGroup === "SUKO" || brandGroup === "ZES" ? 12000 : subBrand ? 5000 : 2200,
     });
 
     const cleaned = cleanPromoList(rows);

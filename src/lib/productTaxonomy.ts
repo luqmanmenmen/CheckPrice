@@ -8,7 +8,7 @@
  * =============================================================================
  */
 
-export type BrandGroupKey = "ALL" | "SUKO" | "MUKU" | "ZES" | "OTHER";
+export type BrandGroupKey = "ALL" | "SUKO" | "MUKU" | "ZES";
 export type ResolvedBrandGroup = Exclude<BrandGroupKey, "ALL">;
 
 export type CategoryKey =
@@ -59,7 +59,7 @@ export const BRAND_GROUP_OPTIONS: BrandGroupOption[] = [
   },
   {
     key: "MUKU",
-    label: "Mu+Ku",
+    label: "Mu+Ku (Multibrand)",
     shortLabel: "Mu+Ku",
     activeClass: "bg-emerald-600 text-white border-emerald-700 shadow-xs",
     idleClass: "bg-emerald-50/70 text-emerald-700 border-emerald-200 hover:bg-emerald-100",
@@ -73,14 +73,22 @@ export const BRAND_GROUP_OPTIONS: BrandGroupOption[] = [
     idleClass: "bg-violet-50/70 text-violet-700 border-violet-200 hover:bg-violet-100",
     badgeClass: "bg-violet-600 text-white border-violet-700",
   },
-  {
-    key: "OTHER",
-    label: "Brand Lainnya",
-    shortLabel: "Lainnya",
-    activeClass: "bg-amber-600 text-white border-amber-700 shadow-xs",
-    idleClass: "bg-amber-50/60 text-amber-800 border-amber-200 hover:bg-amber-100",
-    badgeClass: "bg-slate-100 text-slate-600 border-slate-200",
-  },
+];
+
+// Sub-brand populer yang berada di dalam toko Multibrand Mu+Ku
+export const MUKU_SUB_BRANDS: string[] = [
+  "NEVADA",
+  "LITTLE M",
+  "CONNEXION",
+  "COLE",
+  "MAXMURAH",
+  "ST YVES",
+  "VOLO",
+  "BYRCH & CO",
+  "MUKU",
+  "DISNEY",
+  "SIRA",
+  "DETAILS",
 ];
 
 export const CATEGORY_OPTIONS: CategoryOption[] = [
@@ -261,37 +269,24 @@ type TaxonomyInput = {
 };
 
 /**
- * Mengklasifikasikan konsep/brand toko: SUKO, MUKU (Mu+Ku), ZES, atau OTHER
+ * Mengklasifikasikan konsep/toko:
+ * - SUKO (Monostore: brand/dept SUKO)
+ * - ZES  (Monostore: brand/dept ZES)
+ * - MUKU (Multibrand Mu+Ku: seluruh brand reguler & fashion non-SUKO dan non-ZES)
  */
 export function classifyBrandGroup(p: TaxonomyInput): ResolvedBrandGroup {
   const brand = (p.brand || "").toUpperCase();
   const dept = (p.dept || "").toUpperCase();
-  const article = (p.article || "").toUpperCase();
-  const desc = (p.description || p.name || "").toUpperCase();
 
-  // Cek MUKU / Mu+Ku (hindari mencampur Mickey "MK2417" / Little M "MKG*")
-  if (
-    brand.includes("MUKU") ||
-    brand.includes("MU+KU") ||
-    dept.includes("MUKU") ||
-    dept.includes("MU+KU") ||
-    article.startsWith("MK-") ||
-    article.includes("-MK") ||
-    desc.includes("MUKU") ||
-    desc.includes("MU+KU")
-  ) {
-    return "MUKU";
+  if (brand.includes("SUKO") || dept.includes("SUKO")) {
+    return "SUKO";
   }
 
   if (brand.includes("ZES") || dept.includes("ZES")) {
     return "ZES";
   }
 
-  if (brand.includes("SUKO") || dept.includes("SUKO")) {
-    return "SUKO";
-  }
-
-  return "OTHER";
+  return "MUKU";
 }
 
 function hasAnyKeyword(haystack: string, keywords: string[]): boolean {
@@ -389,31 +384,13 @@ export function buildBrandPrismaWhere(brandGroup: BrandGroupKey): any | undefine
     };
   }
 
-  if (brandGroup === "MUKU") {
-    return {
-      OR: [
-        { brand: { contains: "MUKU", mode: "insensitive" } },
-        { dept: { contains: "MUKU", mode: "insensitive" } },
-        { article: { startsWith: "MK-", mode: "insensitive" } },
-        { article: { contains: "-MK", mode: "insensitive" } },
-        { description: { contains: "MUKU", mode: "insensitive" } },
-        { description: { contains: "MU+KU", mode: "insensitive" } },
-      ],
-    };
-  }
-
-  // OTHER: di luar SUKO, ZES, dan MUKU
+  // MUKU: toko multibrand (seluruh produk di luar Monostore SUKO & ZES)
   return {
     AND: [
       { NOT: { brand: { contains: "SUKO", mode: "insensitive" } } },
       { NOT: { dept: { contains: "SUKO", mode: "insensitive" } } },
       { NOT: { brand: { contains: "ZES", mode: "insensitive" } } },
       { NOT: { dept: { contains: "ZES", mode: "insensitive" } } },
-      { NOT: { brand: { contains: "MUKU", mode: "insensitive" } } },
-      { NOT: { dept: { contains: "MUKU", mode: "insensitive" } } },
-      { NOT: { article: { startsWith: "MK-", mode: "insensitive" } } },
-      { NOT: { article: { contains: "-MK", mode: "insensitive" } } },
-      { NOT: { description: { contains: "MU+KU", mode: "insensitive" } } },
     ],
   };
 }

@@ -20,6 +20,7 @@ import {
   ResolvedBrandGroup,
   ResolvedCategoryKey,
   BRAND_GROUP_OPTIONS,
+  MUKU_SUB_BRANDS,
   CATEGORY_OPTIONS,
   CATEGORY_LABELS,
   CATEGORY_DISPLAY_ORDER,
@@ -230,6 +231,7 @@ export default function Home() {
   const [productsList, setProductsList] = useState<ProductData[]>([]);
   const [resultFilter, setResultFilter] = useState<"ALL" | "STOCK" | "PROMO">("ALL");
   const [selectedBrandGroup, setSelectedBrandGroup] = useState<BrandGroupKey>("ALL");
+  const [selectedSubBrand, setSelectedSubBrand] = useState<string>("");
   const [selectedCategory, setSelectedCategory] = useState<CategoryKey>("ALL");
   const [groupByCategory, setGroupByCategory] = useState<boolean>(true);
   const [taxonomyBrandCounts, setTaxonomyBrandCounts] = useState<Record<string, number> | null>(null);
@@ -884,14 +886,22 @@ export default function Home() {
     trimmedQuery: string,
     targetPage: number,
     brandGroup: BrandGroupKey,
-    category: CategoryKey
+    category: CategoryKey,
+    subBrand: string = ""
   ) => {
     if (!trimmedQuery) {
-      return `/api/catalog?brandGroup=${encodeURIComponent(brandGroup)}&category=${encodeURIComponent(category)}&page=${targetPage}`;
+      const params = new URLSearchParams({
+        brandGroup,
+        category,
+        page: String(targetPage),
+      });
+      if (subBrand) params.set("subBrand", subBrand);
+      return `/api/catalog?${params.toString()}`;
     }
     const params = new URLSearchParams({ page: String(targetPage) });
     if (brandGroup !== "ALL") params.set("brandGroup", brandGroup);
     if (category !== "ALL") params.set("category", category);
+    if (subBrand) params.set("subBrand", subBrand);
     return `/api/product/${encodeURIComponent(trimmedQuery)}?${params.toString()}`;
   };
 
@@ -916,12 +926,21 @@ export default function Home() {
 
   const handleBrandFilterChange = (nextBrand: BrandGroupKey) => {
     const resolvedBrand: BrandGroupKey = selectedBrandGroup === nextBrand && nextBrand !== "ALL" ? "ALL" : nextBrand;
+    const nextSub = resolvedBrand === "MUKU" ? selectedSubBrand : "";
     setSelectedBrandGroup(resolvedBrand);
+    setSelectedSubBrand(nextSub);
     if (!manualInput.trim() && resolvedBrand === "ALL" && selectedCategory === "ALL") {
       clearListToIdle();
       return;
     }
-    searchProduct(manualInput, 1, false, resolvedBrand, selectedCategory);
+    searchProduct(manualInput, 1, false, resolvedBrand, selectedCategory, nextSub);
+  };
+
+  const handleSubBrandFilterChange = (nextSubBrand: string) => {
+    const resolvedSub = selectedSubBrand === nextSubBrand ? "" : nextSubBrand;
+    setSelectedBrandGroup("MUKU");
+    setSelectedSubBrand(resolvedSub);
+    searchProduct(manualInput, 1, false, "MUKU", selectedCategory, resolvedSub);
   };
 
   const handleCategoryFilterChange = (nextCategory: CategoryKey) => {
@@ -931,17 +950,18 @@ export default function Home() {
       clearListToIdle();
       return;
     }
-    searchProduct(manualInput, 1, false, selectedBrandGroup, resolvedCat);
+    searchProduct(manualInput, 1, false, selectedBrandGroup, resolvedCat, selectedSubBrand);
   };
 
   const handleResetTaxonomyFilters = () => {
     setSelectedBrandGroup("ALL");
+    setSelectedSubBrand("");
     setSelectedCategory("ALL");
     if (!manualInput.trim()) {
       clearListToIdle();
       return;
     }
-    searchProduct(manualInput, 1, false, "ALL", "ALL");
+    searchProduct(manualInput, 1, false, "ALL", "ALL", "");
   };
 
   const searchProduct = async (
@@ -949,12 +969,14 @@ export default function Home() {
     page: number = 1,
     shouldScrollTop: boolean = false,
     overrideBrandGroup?: BrandGroupKey,
-    overrideCategory?: CategoryKey
+    overrideCategory?: CategoryKey,
+    overrideSubBrand?: string
   ) => {
     const trimmed = identifier.trim();
     const activeBrand = overrideBrandGroup ?? selectedBrandGroup;
     const activeCategory = overrideCategory ?? selectedCategory;
-    const hasTaxonomyFilter = activeBrand !== "ALL" || activeCategory !== "ALL";
+    const activeSubBrand = overrideSubBrand ?? (activeBrand === "MUKU" ? selectedSubBrand : "");
+    const hasTaxonomyFilter = activeBrand !== "ALL" || activeCategory !== "ALL" || Boolean(activeSubBrand);
 
     if (!trimmed && !hasTaxonomyFilter) return;
 
@@ -995,7 +1017,7 @@ export default function Home() {
       return;
     }
 
-    const listCacheKey = `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::c=${activeCategory}::p${page}`;
+    const listCacheKey = `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::s=${activeSubBrand}::c=${activeCategory}::p${page}`;
 
     const prefetchNextPage = (
       currentPageNum: number,
@@ -1006,9 +1028,9 @@ export default function Home() {
       fallbackCats?: Record<string, number> | null
     ) => {
       const nextPageNum = currentPageNum + 1;
-      const nextCacheKey = `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::c=${activeCategory}::p${nextPageNum}`;
+      const nextCacheKey = `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::s=${activeSubBrand}::c=${activeCategory}::p${nextPageNum}`;
       if (currentPageNum < maxPages && !listCacheRef.current.has(nextCacheKey)) {
-        fetch(buildSearchEndpointUrl(trimmed, nextPageNum, activeBrand, activeCategory), { cache: 'no-store' })
+        fetch(buildSearchEndpointUrl(trimmed, nextPageNum, activeBrand, activeCategory, activeSubBrand), { cache: 'no-store' })
           .then((r) => (r.ok ? r.json() : null))
           .then((nextJson) => {
             if (nextJson && Array.isArray(nextJson.data) && nextJson.data.length > 0) {
@@ -1068,11 +1090,12 @@ export default function Home() {
           query: trimmed,
           brandGroup: activeBrand,
           category: activeCategory,
+          subBrand: activeSubBrand,
           page,
           limit: 20,
         });
         if (searchCounterRef.current !== currentSearch) return;
-        if (localRes && !localRes.singleMatch && localRes.total > 0) {
+        if (localRes && !localRes.singleMatch && (localRes.total > 0 || !trimmed)) {
           setProduct(null);
           setSiblings([]);
           setProductsList(localRes.data as unknown as ProductData[]);
@@ -1081,7 +1104,7 @@ export default function Home() {
           setTotalSkusCount(localRes.totalSkus);
           setTaxonomyBrandCounts(localRes.brandCounts);
           setTaxonomyCategoryCounts(localRes.categoryCounts);
-          if (trimmed) recordRecentSearch(trimmed);
+          if (trimmed && localRes.total > 0) recordRecentSearch(trimmed);
           preloadProductImages(localRes.data.map((item) => item.imageUrl), 400);
           setCurrentPage(localRes.page);
           setTotalPages(localRes.totalPages);
@@ -1188,7 +1211,7 @@ export default function Home() {
 
       // 2. Minta data terbaru/live ke server (di background jika localData sudah tampil)
       let res: Response | null = null;
-      const endpointUrl = buildSearchEndpointUrl(trimmed, page, activeBrand, activeCategory);
+      const endpointUrl = buildSearchEndpointUrl(trimmed, page, activeBrand, activeCategory, activeSubBrand);
       try {
         res = await fetch(endpointUrl, {
           cache: 'no-store'
@@ -1243,7 +1266,7 @@ export default function Home() {
           setCurrentPage(resolvedPage);
           setTotalPages(resolvedTotalPages);
           listCacheRef.current.set(
-            `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::c=${activeCategory}::p${resolvedPage}`,
+            `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::s=${activeSubBrand}::c=${activeCategory}::p${resolvedPage}`,
             {
               list: data.data,
               total: resolvedTotal,
@@ -1540,6 +1563,7 @@ export default function Home() {
     setManualInput("");
     setResultFilter("ALL");
     setSelectedBrandGroup("ALL");
+    setSelectedSubBrand("");
     setSelectedCategory("ALL");
     clearListToIdle();
     setMultiVariantQty({});
@@ -2047,13 +2071,13 @@ export default function Home() {
               </button>
             </div>
 
-            {/* Bar Filter Pemisah Brand (SUKO, Mu+Ku, ZES) & Pengelompokan Kategori */}
+            {/* Bar Filter Pemisah Toko (SUKO, Mu+Ku Multibrand, ZES) & Pengelompokan Kategori */}
             {!product && (
               <div className="bg-white rounded-xl border border-slate-200/80 p-2.5 shadow-2xs flex flex-col gap-2">
-                {/* Bar 1: Pemisah Produk Brand Toko */}
+                {/* Bar 1: Pemisah 3 Toko Konsep + Info Model vs Total SKU */}
                 <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
                   <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider shrink-0 mr-0.5">
-                    Brand:
+                    Toko:
                   </span>
                   {BRAND_GROUP_OPTIONS.map((opt) => {
                     const isActive = selectedBrandGroup === opt.key;
@@ -2070,13 +2094,18 @@ export default function Home() {
                         <span>{opt.shortLabel}</span>
                         {typeof countVal === "number" && (selectedBrandGroup === "ALL" || isActive) && (
                           <span className={`text-[9px] px-1 rounded ${isActive ? "bg-white/20 text-white" : "bg-black/5 text-slate-500"}`}>
-                            {countVal}
+                            {countVal.toLocaleString('id-ID')} Model
                           </span>
                         )}
                       </button>
                     );
                   })}
-                  {(selectedBrandGroup !== "ALL" || selectedCategory !== "ALL") && (
+                  {localCacheStats?.skuCount ? (
+                    <span className="hidden md:inline-flex items-center text-[10px] font-semibold text-slate-400 ml-1 whitespace-nowrap shrink-0">
+                      ({localCacheStats.skuCount.toLocaleString('id-ID')} SKU total ukuran/warna)
+                    </span>
+                  ) : null}
+                  {(selectedBrandGroup !== "ALL" || selectedCategory !== "ALL" || selectedSubBrand) && (
                     <button
                       type="button"
                       onClick={handleResetTaxonomyFilters}
@@ -2086,6 +2115,43 @@ export default function Home() {
                     </button>
                   )}
                 </div>
+
+                {/* Bar Sub-Brand Khusus Mu+Ku (karena Mu+Ku adalah Toko Multibrand) */}
+                {selectedBrandGroup === "MUKU" && (
+                  <div className="flex items-center gap-1.5 overflow-x-auto pt-1 border-t border-emerald-100 bg-emerald-50/40 -mx-2.5 px-2.5 pb-1">
+                    <span className="text-[10px] font-extrabold text-emerald-700 uppercase tracking-wider shrink-0 mr-0.5">
+                      Merk Mu+Ku:
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleSubBrandFilterChange("")}
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-md border transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+                        !selectedSubBrand
+                          ? "bg-emerald-600 text-white border-emerald-700"
+                          : "bg-white text-emerald-700 border-emerald-200 hover:bg-emerald-100"
+                      }`}
+                    >
+                      Semua Merk
+                    </button>
+                    {MUKU_SUB_BRANDS.map((sb) => {
+                      const isSubActive = selectedSubBrand === sb;
+                      return (
+                        <button
+                          key={sb}
+                          type="button"
+                          onClick={() => handleSubBrandFilterChange(sb)}
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-md border transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+                            isSubActive
+                              ? "bg-emerald-700 text-white border-emerald-800 shadow-2xs"
+                              : "bg-white text-slate-700 border-slate-200 hover:bg-emerald-100 hover:text-emerald-800"
+                          }`}
+                        >
+                          {sb}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
 
                 {/* Bar 2: Pengelompokan Kategori Produk */}
                 <div className="flex items-center gap-1.5 overflow-x-auto pt-1 border-t border-slate-100">
@@ -2298,7 +2364,7 @@ export default function Home() {
                 setProductsList([]);
                 setManualInput(p.sku);
                 scrollPageToTop();
-                searchProduct(p.sku, 1, false, "ALL", "ALL");
+                searchProduct(p.sku, 1, false, "ALL", "ALL", "");
               }}
               className="group text-left bg-white border border-slate-200 hover:border-blue-400 hover:shadow-md rounded-xl overflow-hidden transition-all flex flex-col h-full cursor-pointer"
             >
@@ -2321,23 +2387,20 @@ export default function Home() {
                 )}
               </div>
 
-              {/* Card Body (Brand SUKO/Mu+Ku/ZES, Artikel, Kategori, Promo Tag, & Harga di Samping/Bawah) */}
+              {/* Card Body (Toko SUKO/Mu+Ku/ZES, Sub-Brand, Artikel, Kategori, Promo Tag, & Harga di Samping/Bawah) */}
               <div className="flex-1 p-2 sm:p-2.5 flex flex-col justify-between min-w-0">
                 <div>
                   <div className="flex items-center gap-1 flex-wrap">
                     <span className="text-[9px] sm:text-[10px] font-mono font-bold bg-slate-900 text-white px-1.5 py-0.5 rounded">
                       {cleanArticle || p.sku}
                     </span>
-                    {brandGroup !== "OTHER" ? (
-                      <span className={`text-[9px] font-black px-1.5 py-0.5 rounded border ${brandMeta.badgeClass}`}>
-                        {brandMeta.shortLabel}
+                    <span className={`text-[9px] font-black px-1.5 py-0.5 rounded border ${brandMeta.badgeClass}`}>
+                      {brandMeta.shortLabel}
+                    </span>
+                    {brandGroup === "MUKU" && p.brand && p.brand.toUpperCase() !== "MUKU" && (
+                      <span className="text-[9px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100 px-1.5 py-0.5 rounded truncate max-w-[85px]">
+                        {p.brand}
                       </span>
-                    ) : (
-                      p.brand && (
-                        <span className="text-[9px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100 px-1.5 py-0.5 rounded truncate max-w-[85px]">
-                          {p.brand}
-                        </span>
-                      )
                     )}
                     {variantCount > 1 && (
                       <span className="text-[9px] font-bold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">
@@ -2408,11 +2471,16 @@ export default function Home() {
               <div>
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <h2 className="text-xs sm:text-sm font-black text-slate-800 uppercase tracking-wide">
-                    {headerPrefix}: <span className="text-blue-600">{modelCount} Model</span>
+                    {headerPrefix}: <span className="text-blue-600">{modelCount.toLocaleString('id-ID')} Model</span>
                   </h2>
                   {activeBrandLabel && (
                     <span className="text-[10px] font-black bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
                       {activeBrandLabel}
+                    </span>
+                  )}
+                  {selectedSubBrand && (
+                    <span className="text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full">
+                      {selectedSubBrand}
                     </span>
                   )}
                   {activeCatLabel && (
@@ -2422,7 +2490,7 @@ export default function Home() {
                   )}
                   {totalSkusCount > modelCount && (
                     <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full border border-slate-200">
-                      {totalSkusCount} SKU varian
+                      {totalSkusCount.toLocaleString('id-ID')} SKU varian
                     </span>
                   )}
                 </div>
@@ -3164,7 +3232,8 @@ export default function Home() {
               </p>
               <p className="text-xs text-slate-500 mt-0.5">
                 {[
-                  selectedBrandGroup !== "ALL" ? `Brand: ${getBrandGroupMeta(selectedBrandGroup).shortLabel}` : null,
+                  selectedBrandGroup !== "ALL" ? `Toko: ${getBrandGroupMeta(selectedBrandGroup).shortLabel}` : null,
+                  selectedSubBrand ? `Merk: ${selectedSubBrand}` : null,
                   selectedCategory !== "ALL" ? `Kategori: ${CATEGORY_LABELS[selectedCategory]}` : null,
                 ].filter(Boolean).join(" • ")}
               </p>
@@ -3174,7 +3243,7 @@ export default function Home() {
               onClick={handleResetTaxonomyFilters}
               className="text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl transition-colors cursor-pointer"
             >
-              Reset Filter Brand &amp; Kategori
+              Reset Filter
             </button>
           </div>
         ) : (
@@ -3183,8 +3252,14 @@ export default function Home() {
               <Search className="w-6 h-6" />
             </div>
             <div className="text-center">
-              <p className="text-xs sm:text-sm font-bold text-slate-600">Siap mencari produk, memilih brand (SUKO / Mu+Ku / ZES), atau scan barcode</p>
-              <p className="text-[11px] text-slate-400 mt-0.5">Contoh: ketik kode artikel, SKU <span className="font-mono">13463728</span>, atau pilih filter Brand &amp; Kategori di atas</p>
+              <p className="text-xs sm:text-sm font-bold text-slate-600">
+                Siap mencari produk, jelajah toko (SUKO • Mu+Ku • ZES), atau scan barcode
+              </p>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                {localCacheStats?.ready
+                  ? `${localCacheStats.modelCount.toLocaleString('id-ID')} Model Artikel = ${localCacheStats.skuCount.toLocaleString('id-ID')} SKU (total ukuran/warna) tersimpan instan di HP (~${localCacheStats.sizeMB} MB)`
+                  : `Contoh: ketik kode artikel, SKU 13463728, atau pilih filter Toko & Kategori di atas`}
+              </p>
             </div>
             <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
               <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/70">

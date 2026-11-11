@@ -213,6 +213,8 @@ export async function rebuildModelsIndexFromProducts(): Promise<CachedArticleMod
   }
 }
 
+const MODELS_TAXONOMY_VERSION = "v13_smz_monostore";
+
 export async function ensureModelsIndexReady(): Promise<CachedArticleModel[] | null> {
   if (memoryModelsCache && memoryModelsCache.length >= 1000) {
     return memoryModelsCache;
@@ -222,16 +224,24 @@ export async function ensureModelsIndexReady(): Promise<CachedArticleModel[] | n
   modelsBuildPromise = (async () => {
     try {
       await ensureDbOpenSafe();
+      const taxVer = typeof window !== "undefined" ? localStorage.getItem("suko_models_taxonomy_ver") : null;
       const modelCount = await db.models.count().catch(() => 0);
-      if (modelCount >= 1000) {
+      if (modelCount >= 1000 && taxVer === MODELS_TAXONOMY_VERSION) {
         const stored = await db.models.toArray();
-        memoryModelsCache = stored.map(sanitizeAndIndexModel);
-        return memoryModelsCache;
+        const hasLegacyOther = stored.some((m) => (m.brandGroup as string) === "OTHER");
+        if (!hasLegacyOther) {
+          memoryModelsCache = stored.map(sanitizeAndIndexModel);
+          return memoryModelsCache;
+        }
       }
 
       const prodCount = await db.products.count().catch(() => 0);
       if (prodCount >= 1000) {
-        return await rebuildModelsIndexFromProducts();
+        const rebuilt = await rebuildModelsIndexFromProducts();
+        if (rebuilt && typeof window !== "undefined") {
+          localStorage.setItem("suko_models_taxonomy_ver", MODELS_TAXONOMY_VERSION);
+        }
+        return rebuilt;
       }
       return null;
     } catch {
@@ -455,12 +465,14 @@ export async function queryLocalModelsInstant({
   query = "",
   brandGroup = "ALL",
   category = "ALL",
+  subBrand = "",
   page = 1,
   limit = 20,
 }: {
   query?: string;
   brandGroup?: BrandGroupKey;
   category?: CategoryKey;
+  subBrand?: string;
   page?: number;
   limit?: number;
 }): Promise<LocalQueryResponse | null> {
@@ -469,13 +481,14 @@ export async function queryLocalModelsInstant({
 
   const trimmed = query.trim();
   const upper = trimmed.toUpperCase();
+  const subBrandUpper = subBrand.trim().toUpperCase();
   const isDummy = trimmed.toLowerCase().includes("dummy");
 
   let baseMatched: CachedArticleModel[] = [];
 
   if (trimmed) {
     // 1. Cek exact article / sku match jika tidak sedang memfilter taxonomy
-    if (brandGroup === "ALL" && category === "ALL" && page === 1 && !/\s/.test(upper)) {
+    if (brandGroup === "ALL" && category === "ALL" && !subBrandUpper && page === 1 && !/\s/.test(upper)) {
       const exactArts = models.filter(
         (m) =>
           (m.article && m.article.toUpperCase() === upper) ||
@@ -490,7 +503,7 @@ export async function queryLocalModelsInstant({
           totalSkus: exactArts[0].articleGroupCount || 1,
           page: 1,
           totalPages: 1,
-          brandCounts: { ALL: 1, SUKO: 0, MUKU: 0, ZES: 0, OTHER: 0, [exactArts[0].brandGroup]: 1 },
+          brandCounts: { ALL: 1, SUKO: 0, MUKU: 0, ZES: 0, [exactArts[0].brandGroup]: 1 },
           categoryCounts: {
             ALL: 1,
             JAKET: 0,
@@ -555,7 +568,7 @@ export async function queryLocalModelsInstant({
   }
 
   // Hitung brandCounts lintas semua brand (terfilter oleh kategori jika aktif)
-  const brandCounts: Record<BrandGroupKey, number> = { ALL: 0, SUKO: 0, MUKU: 0, ZES: 0, OTHER: 0 };
+  const brandCounts: Record<BrandGroupKey, number> = { ALL: 0, SUKO: 0, MUKU: 0, ZES: 0 };
   const categoryCounts: Record<CategoryKey, number> = {
     ALL: 0,
     JAKET: 0,
@@ -575,16 +588,20 @@ export async function queryLocalModelsInstant({
     const m = baseMatched[i];
     const matchBrand = brandGroup === "ALL" || m.brandGroup === brandGroup;
     const matchCat = category === "ALL" || m.categoryKey === category;
+    const matchSubBrand =
+      !subBrandUpper ||
+      (m.brand || "").toUpperCase().includes(subBrandUpper) ||
+      (m.dept || "").toUpperCase().includes(subBrandUpper);
 
     if (matchCat) {
       brandCounts.ALL += 1;
       brandCounts[m.brandGroup] += 1;
     }
-    if (matchBrand) {
+    if (matchBrand && matchSubBrand) {
       categoryCounts.ALL += 1;
       categoryCounts[m.categoryKey] += 1;
     }
-    if (matchBrand && matchCat) {
+    if (matchBrand && matchCat && matchSubBrand) {
       finalMatched.push(m);
       totalSkus += m.articleGroupCount || 1;
     }
