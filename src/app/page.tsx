@@ -2094,15 +2094,15 @@ export default function Home() {
                         <span>{opt.shortLabel}</span>
                         {typeof countVal === "number" && (selectedBrandGroup === "ALL" || isActive) && (
                           <span className={`text-[9px] px-1 rounded ${isActive ? "bg-white/20 text-white" : "bg-black/5 text-slate-500"}`}>
-                            {countVal.toLocaleString('id-ID')} Model
+                            {countVal.toLocaleString('id-ID')} Artikel
                           </span>
                         )}
                       </button>
                     );
                   })}
                   {localCacheStats?.skuCount ? (
-                    <span className="hidden md:inline-flex items-center text-[10px] font-semibold text-slate-400 ml-1 whitespace-nowrap shrink-0">
-                      ({localCacheStats.skuCount.toLocaleString('id-ID')} SKU total ukuran/warna)
+                    <span className="inline-flex items-center text-[10px] font-bold text-blue-700 bg-blue-50/70 border border-blue-100 px-2 py-0.5 rounded-md ml-0.5 whitespace-nowrap shrink-0">
+                      Filter per Artikel • {localCacheStats.skuCount.toLocaleString('id-ID')} Total SKU
                     </span>
                   ) : null}
                   {(selectedBrandGroup !== "ALL" || selectedCategory !== "ALL" || selectedSubBrand) && (
@@ -2176,7 +2176,7 @@ export default function Home() {
                         <span>{cat.shortLabel}</span>
                         {typeof countVal === "number" && (selectedCategory === "ALL" || isActive) && countVal > 0 && (
                           <span className={`text-[9px] px-1 rounded ${isActive ? "bg-white/20 text-white" : "bg-slate-200/70 text-slate-600"}`}>
-                            {countVal}
+                            {countVal.toLocaleString('id-ID')} Art
                           </span>
                         )}
                       </button>
@@ -2471,7 +2471,7 @@ export default function Home() {
               <div>
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <h2 className="text-xs sm:text-sm font-black text-slate-800 uppercase tracking-wide">
-                    {headerPrefix}: <span className="text-blue-600">{modelCount.toLocaleString('id-ID')} Model</span>
+                    {headerPrefix}: <span className="text-blue-600">{modelCount.toLocaleString('id-ID')} Artikel</span>
                   </h2>
                   {activeBrandLabel && (
                     <span className="text-[10px] font-black bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
@@ -2553,7 +2553,7 @@ export default function Home() {
             {/* Catalog Grid Cards (Dikelompokkan per Kategori atau Urut Relevansi) */}
             {filteredProducts.length === 0 ? (
               <div className="py-8 text-center flex flex-col items-center gap-2 text-slate-500">
-                <p className="text-xs sm:text-sm font-semibold">Tidak ada model di halaman ini untuk filter yang dipilih.</p>
+                <p className="text-xs sm:text-sm font-semibold">Tidak ada artikel di halaman ini untuk filter yang dipilih.</p>
                 <button
                   type="button"
                   onClick={() => setResultFilter("ALL")}
@@ -2573,7 +2573,7 @@ export default function Home() {
                           {section.label}
                         </h3>
                         <span className="text-[10px] font-bold bg-white text-slate-600 border border-slate-200 px-2 py-0.5 rounded-full shrink-0">
-                          {section.items.length} Model
+                          {section.items.length} Artikel
                         </span>
                       </div>
                       {section.catKey !== "OTHER" && (
@@ -3228,7 +3228,7 @@ export default function Home() {
             <Package2 className="w-10 h-10 text-slate-300" />
             <div>
               <p className="text-sm font-bold text-slate-700">
-                Tidak ada model untuk kombinasi filter ini
+                Tidak ada artikel untuk kombinasi filter ini
               </p>
               <p className="text-xs text-slate-500 mt-0.5">
                 {[
@@ -3257,7 +3257,7 @@ export default function Home() {
               </p>
               <p className="text-[11px] text-slate-400 mt-0.5">
                 {localCacheStats?.ready
-                  ? `${localCacheStats.modelCount.toLocaleString('id-ID')} Model Artikel = ${localCacheStats.skuCount.toLocaleString('id-ID')} SKU (total ukuran/warna) tersimpan instan di HP (~${localCacheStats.sizeMB} MB)`
+                  ? `${localCacheStats.modelCount.toLocaleString('id-ID')} Kode Artikel = ${localCacheStats.skuCount.toLocaleString('id-ID')} SKU (total ukuran/warna) tersimpan instan di HP (~${localCacheStats.sizeMB} MB)`
                   : `Contoh: ketik kode artikel, SKU 13463728, atau pilih filter Toko & Kategori di atas`}
               </p>
             </div>
