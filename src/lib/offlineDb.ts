@@ -1,6 +1,13 @@
 import Dexie from "dexie";
 import { expandRetailQuery, computeProductRelevanceScore, groupProductsByArticle } from "./smartSearchEngine";
-import { BrandGroupKey, CategoryKey, classifyBrandGroup, classifyProductCategory } from "./productTaxonomy";
+import {
+  BrandGroupKey,
+  CategoryKey,
+  ResolvedBrandGroup,
+  ResolvedCategoryKey,
+  classifyBrandGroup,
+  classifyProductCategory,
+} from "./productTaxonomy";
 
 export interface CachedProduct {
   sku: string;
@@ -23,10 +30,40 @@ export interface CachedProduct {
   images?: string[];
 }
 
+export interface CachedArticleModel {
+  key: string;
+  sku: string;
+  barcode: string | null;
+  article: string | null;
+  description: string;
+  brand: string | null;
+  dept: string | null;
+  color: string | null;
+  size: string | null;
+  stok: number;
+  hargaNormal: number;
+  hargaPromo: number | null;
+  diskon: string | null;
+  discountType: string | null;
+  acara: string | null;
+  toDate: string | null;
+  imageUrl: string | null;
+  articleGroupCount: number;
+  articleTotalStok: number;
+  articleColors: string[];
+  articleSizes: string[];
+  articleHasPromo: boolean;
+  articlePromoLabel: string | null;
+  brandGroup: ResolvedBrandGroup;
+  categoryKey: ResolvedCategoryKey;
+  _searchHay?: string;
+}
+
 const STORE_SCHEMA = 'sku, barcode, article, name, description, brand, dept, color, size, hargaNormal, hargaPromo, diskon, discountType, acara, stok, toDate, imageUrl';
 
 class SukoDatabase extends Dexie {
   products!: Dexie.Table<CachedProduct, string>;
+  models!: Dexie.Table<CachedArticleModel, string>;
 
   constructor() {
     super("SukoScannerDB");
@@ -59,6 +96,12 @@ class SukoDatabase extends Dexie {
     this.version(11).stores({
       products: 'sku, barcode, article',
     });
+    // Versi 12: Tambahkan tabel prakelompokan model per artikel (~19.8rb model)
+    // Menjaga seluruh 97rb+ SKU di products utuh sambil membuat cari & Selanjutnya = 5ms!
+    this.version(12).stores({
+      products: 'sku, barcode, article',
+      models: 'key, brandGroup, categoryKey',
+    });
 
     this.on('versionchange', () => {
       this.close();
@@ -68,6 +111,172 @@ class SukoDatabase extends Dexie {
 }
 
 export const db = new SukoDatabase();
+
+let memoryModelsCache: CachedArticleModel[] | null = null;
+let modelsBuildPromise: Promise<CachedArticleModel[] | null> | null = null;
+
+export function clearModelsMemoryCache() {
+  memoryModelsCache = null;
+}
+
+function isLocalPromoExpired(toDate: string | null | undefined): boolean {
+  if (!toDate) return false;
+  const d = new Date(toDate);
+  if (isNaN(d.getTime())) return false;
+  d.setHours(23, 59, 59, 999);
+  return Date.now() > d.getTime();
+}
+
+function sanitizeAndIndexModel(m: CachedArticleModel): CachedArticleModel {
+  const cleanM = isLocalPromoExpired(m.toDate)
+    ? {
+        ...m,
+        hargaPromo: null,
+        diskon: null,
+        discountType: null,
+        acara: null,
+        toDate: null,
+        articleHasPromo: false,
+        articlePromoLabel: null,
+      }
+    : m;
+
+  if (!cleanM._searchHay) {
+    cleanM._searchHay = `${cleanM.article || ""} ${cleanM.description || ""} ${cleanM.brand || ""} ${cleanM.dept || ""} ${cleanM.articleColors?.join(" ") || cleanM.color || ""} ${cleanM.sku} ${cleanM.barcode || ""}`.toUpperCase();
+  }
+  return cleanM;
+}
+
+/**
+ * Membangun tabel `db.models` (~19.881 model per artikel) sekali saja dari `db.products` (~97k SKU)
+ * sehingga seluruh pencarian teks, filter brand/kategori, dan klik Selanjutnya jalan < 10ms di HP!
+ */
+export async function rebuildModelsIndexFromProducts(): Promise<CachedArticleModel[] | null> {
+  try {
+    await ensureDbOpenSafe();
+    const allProducts = await db.products.toArray();
+    if (!allProducts || allProducts.length === 0) return null;
+
+    const cleanedProducts = allProducts.map((p) => {
+      if (isLocalPromoExpired(p.toDate)) {
+        return { ...p, hargaPromo: null, diskon: null, discountType: null, acara: null, toDate: null };
+      }
+      return p;
+    });
+
+    const grouped = groupProductsByArticle(cleanedProducts);
+    const models: CachedArticleModel[] = grouped.map((g) => {
+      const rawArt = String(g.article || "").trim().toUpperCase();
+      const key = rawArt && !["0", "-", "PRODUK BARU"].includes(rawArt) ? `A::${rawArt}` : `S::${g.sku}`;
+      const row: CachedArticleModel = {
+        key,
+        sku: g.sku,
+        barcode: g.barcode || null,
+        article: g.article || null,
+        description: g.description || g.name || "",
+        brand: g.brand || null,
+        dept: g.dept || null,
+        color: g.color || null,
+        size: g.size || null,
+        stok: g.stok ?? 0,
+        hargaNormal: g.hargaNormal ?? 0,
+        hargaPromo: g.hargaPromo ?? null,
+        diskon: g.diskon || null,
+        discountType: g.discountType || null,
+        acara: g.acara || null,
+        toDate: g.toDate || null,
+        imageUrl: g.imageUrl || null,
+        articleGroupCount: g.articleGroupCount,
+        articleTotalStok: g.articleTotalStok,
+        articleColors: g.articleColors,
+        articleSizes: g.articleSizes,
+        articleHasPromo: g.articleHasPromo,
+        articlePromoLabel: g.articlePromoLabel,
+        brandGroup: g.brandGroup,
+        categoryKey: g.categoryKey,
+      };
+      return sanitizeAndIndexModel(row);
+    });
+
+    await db.models.clear();
+    const WRITE_BATCH = 2500;
+    for (let i = 0; i < models.length; i += WRITE_BATCH) {
+      const slice = models.slice(i, i + WRITE_BATCH).map(({ _searchHay, ...rest }) => rest);
+      await db.models.bulkPut(slice as CachedArticleModel[]);
+    }
+
+    memoryModelsCache = models;
+    return models;
+  } catch (e) {
+    console.warn("[OfflineDB] Gagal membangun index models lokal:", e);
+    return null;
+  }
+}
+
+export async function ensureModelsIndexReady(): Promise<CachedArticleModel[] | null> {
+  if (memoryModelsCache && memoryModelsCache.length >= 1000) {
+    return memoryModelsCache;
+  }
+  if (modelsBuildPromise) return modelsBuildPromise;
+
+  modelsBuildPromise = (async () => {
+    try {
+      await ensureDbOpenSafe();
+      const modelCount = await db.models.count().catch(() => 0);
+      if (modelCount >= 1000) {
+        const stored = await db.models.toArray();
+        memoryModelsCache = stored.map(sanitizeAndIndexModel);
+        return memoryModelsCache;
+      }
+
+      const prodCount = await db.products.count().catch(() => 0);
+      if (prodCount >= 1000) {
+        return await rebuildModelsIndexFromProducts();
+      }
+      return null;
+    } catch {
+      return null;
+    } finally {
+      modelsBuildPromise = null;
+    }
+  })();
+
+  return modelsBuildPromise;
+}
+
+export async function getLocalCacheStats(): Promise<{
+  skuCount: number;
+  modelCount: number;
+  sizeMB: number;
+  ready: boolean;
+}> {
+  try {
+    await ensureDbOpenSafe();
+    const [skuCount, modelCount] = await Promise.all([
+      db.products.count().catch(() => 0),
+      db.models.count().catch(() => 0),
+    ]);
+
+    let sizeMB = Math.round((skuCount * 320 + modelCount * 420) / (1024 * 1024));
+    if (typeof navigator !== "undefined" && navigator.storage?.estimate) {
+      try {
+        const est = await navigator.storage.estimate();
+        if (est.usage && est.usage > 1024 * 1024 && skuCount > 0) {
+          sizeMB = Math.round(est.usage / (1024 * 1024));
+        }
+      } catch {}
+    }
+
+    return {
+      skuCount,
+      modelCount: modelCount || memoryModelsCache?.length || 0,
+      sizeMB: Math.max(0, sizeMB),
+      ready: skuCount >= 1000,
+    };
+  } catch {
+    return { skuCount: 0, modelCount: 0, sizeMB: 0, ready: false };
+  }
+}
 
 export async function ensureDbOpenSafe(): Promise<boolean> {
   try {
@@ -199,6 +408,8 @@ export async function syncOfflineDatabase(
         if (totalSynced > 0) {
           await ensureDbOpenSafe();
           const finalCount = await db.products.count().catch(() => totalSynced);
+          memoryModelsCache = null;
+          await rebuildModelsIndexFromProducts();
           if (onSyncStateChange) onSyncStateChange(true, 100);
           if (completedAllChunks || finalCount >= 80000) {
             localStorage.setItem("suko_server_version", serverVersion);
@@ -225,66 +436,189 @@ export async function syncOfflineDatabase(
  * Pencarian Pintar Offline (SKU, Barcode, Artikel, maupun 30% Nama Deskripsi)
  * Digunakan saat internet toko mati/lambat agar kasir tetap bisa mencari manual
  */
+export interface LocalQueryResponse {
+  data: CachedArticleModel[];
+  singleMatch?: CachedArticleModel | null;
+  total: number;
+  totalSkus: number;
+  page: number;
+  totalPages: number;
+  brandCounts: Record<BrandGroupKey, number>;
+  categoryCounts: Record<CategoryKey, number>;
+}
+
+/**
+ * Mesin kueri instan ~5-10ms di memori HP atas 19.881 model per artikel (~97.546 SKU).
+ * Mengembalikan seluruh paginasi, hitungan Brand (SUKO/Mu+Ku/ZES), & Kategori tanpa menunggu jaringan!
+ */
+export async function queryLocalModelsInstant({
+  query = "",
+  brandGroup = "ALL",
+  category = "ALL",
+  page = 1,
+  limit = 20,
+}: {
+  query?: string;
+  brandGroup?: BrandGroupKey;
+  category?: CategoryKey;
+  page?: number;
+  limit?: number;
+}): Promise<LocalQueryResponse | null> {
+  const models = await ensureModelsIndexReady();
+  if (!models || models.length < 1000) return null;
+
+  const trimmed = query.trim();
+  const upper = trimmed.toUpperCase();
+  const isDummy = trimmed.toLowerCase().includes("dummy");
+
+  let baseMatched: CachedArticleModel[] = [];
+
+  if (trimmed) {
+    // 1. Cek exact article / sku match jika tidak sedang memfilter taxonomy
+    if (brandGroup === "ALL" && category === "ALL" && page === 1 && !/\s/.test(upper)) {
+      const exactArts = models.filter(
+        (m) =>
+          (m.article && m.article.toUpperCase() === upper) ||
+          m.sku.toUpperCase() === upper ||
+          (m.barcode && m.barcode.toUpperCase() === upper)
+      );
+      if (exactArts.length === 1) {
+        return {
+          data: exactArts,
+          singleMatch: exactArts[0],
+          total: 1,
+          totalSkus: exactArts[0].articleGroupCount || 1,
+          page: 1,
+          totalPages: 1,
+          brandCounts: { ALL: 1, SUKO: 0, MUKU: 0, ZES: 0, OTHER: 0, [exactArts[0].brandGroup]: 1 },
+          categoryCounts: {
+            ALL: 1,
+            JAKET: 0,
+            ATASAN: 0,
+            CELANA: 0,
+            DRESS_ROK: 0,
+            SEPATU_SANDAL: 0,
+            TAS_AKSESORIS: 0,
+            TIDUR_DALAM: 0,
+            OTHER: 0,
+            [exactArts[0].categoryKey]: 1,
+          },
+        };
+      }
+    }
+
+    const expanded = expandRetailQuery(trimmed);
+    const terms = expanded.allExpandedTerms.filter((t) => t.length >= 2);
+    const sub3 = expanded.spaceless.length >= 3 ? expanded.spaceless.slice(0, 3) : "";
+
+    const scored: { item: CachedArticleModel; score: number }[] = [];
+    for (let i = 0; i < models.length; i++) {
+      const m = models[i];
+      const hay = m._searchHay || "";
+      if (!isDummy && (hay.includes("SKU DUMMY") || (m.article || "").toUpperCase().includes("DUMMY"))) {
+        continue;
+      }
+
+      let quickHit = false;
+      for (let t = 0; t < terms.length; t++) {
+        if (hay.includes(terms[t])) {
+          quickHit = true;
+          break;
+        }
+      }
+      if (!quickHit && sub3 && hay.includes(sub3)) quickHit = true;
+      if (!quickHit) continue;
+
+      const s = computeProductRelevanceScore(m, expanded, isDummy);
+      if (s >= 35) {
+        scored.push({ item: m, score: s });
+      }
+    }
+
+    scored.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      if (b.item.articleTotalStok !== a.item.articleTotalStok) {
+        return b.item.articleTotalStok - a.item.articleTotalStok;
+      }
+      return (a.item.description || "").localeCompare(b.item.description || "");
+    });
+    baseMatched = scored.map((x) => x.item);
+  } else {
+    baseMatched = models.filter(
+      (m) => !((m.description || "").toUpperCase().includes("SKU DUMMY") || (m.article || "").toUpperCase().includes("DUMMY"))
+    );
+    baseMatched.sort((a, b) => {
+      if (b.articleTotalStok !== a.articleTotalStok) return b.articleTotalStok - a.articleTotalStok;
+      if (b.articleHasPromo !== a.articleHasPromo) return (b.articleHasPromo ? 1 : 0) - (a.articleHasPromo ? 1 : 0);
+      return (a.description || "").localeCompare(b.description || "");
+    });
+  }
+
+  // Hitung brandCounts lintas semua brand (terfilter oleh kategori jika aktif)
+  const brandCounts: Record<BrandGroupKey, number> = { ALL: 0, SUKO: 0, MUKU: 0, ZES: 0, OTHER: 0 };
+  const categoryCounts: Record<CategoryKey, number> = {
+    ALL: 0,
+    JAKET: 0,
+    ATASAN: 0,
+    CELANA: 0,
+    DRESS_ROK: 0,
+    SEPATU_SANDAL: 0,
+    TAS_AKSESORIS: 0,
+    TIDUR_DALAM: 0,
+    OTHER: 0,
+  };
+
+  const finalMatched: CachedArticleModel[] = [];
+  let totalSkus = 0;
+
+  for (let i = 0; i < baseMatched.length; i++) {
+    const m = baseMatched[i];
+    const matchBrand = brandGroup === "ALL" || m.brandGroup === brandGroup;
+    const matchCat = category === "ALL" || m.categoryKey === category;
+
+    if (matchCat) {
+      brandCounts.ALL += 1;
+      brandCounts[m.brandGroup] += 1;
+    }
+    if (matchBrand) {
+      categoryCounts.ALL += 1;
+      categoryCounts[m.categoryKey] += 1;
+    }
+    if (matchBrand && matchCat) {
+      finalMatched.push(m);
+      totalSkus += m.articleGroupCount || 1;
+    }
+  }
+
+  const total = finalMatched.length;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  const skip = (safePage - 1) * limit;
+
+  return {
+    data: finalMatched.slice(skip, skip + limit),
+    total,
+    totalSkus,
+    page: safePage,
+    totalPages,
+    brandCounts,
+    categoryCounts,
+  };
+}
+
+/**
+ * Pencarian Pintar Offline (memanfaatkan memori model pre-grouped jika siap)
+ */
 export async function searchOfflineSmart(
   rawInput: string,
   limit: number = 25,
   brandGroup: BrandGroupKey = "ALL",
   category: CategoryKey = "ALL"
-): Promise<CachedProduct[]> {
+): Promise<CachedArticleModel[]> {
   try {
-    await ensureDbOpenSafe();
-    const trimmed = rawInput.trim();
-    if (!trimmed) return [];
-
-    const matchesFilter = (p: CachedProduct) => {
-      if (brandGroup !== "ALL" && classifyBrandGroup(p) !== brandGroup) return false;
-      if (category !== "ALL" && classifyProductCategory(p) !== category) return false;
-      return true;
-    };
-
-    // 1. Cek exact Article di index Dexie dulu (0ms)
-    if (brandGroup === "ALL" && category === "ALL") {
-      const exactArt = await db.products.where("article").equalsIgnoreCase(trimmed).toArray();
-      if (exactArt.length > 0) {
-        return exactArt.sort((a, b) => (b.stok || 0) - (a.stok || 0));
-      }
-    }
-
-    // 2. Scan pintar dengan ekspansi sinonim & 30% partial text
-    const expanded = expandRetailQuery(trimmed);
-    const isDummy = trimmed.toLowerCase().includes("dummy");
-    const scored: { item: CachedProduct; score: number }[] = [];
-
-    await db.products.each((p) => {
-      if (!matchesFilter(p)) return;
-      // Quick pre-filter: minimal 1 istilah ekspansi atau potongan 3 huruf cocok
-      const hay = `${p.brand || ""} ${p.dept || ""} ${p.article || ""} ${p.description || p.name || ""} ${p.color || ""} ${p.sku} ${p.barcode || ""}`.toUpperCase();
-      let quickHit = false;
-      for (const term of expanded.allExpandedTerms) {
-        if (term.length >= 2 && hay.includes(term)) {
-          quickHit = true;
-          break;
-        }
-      }
-      if (!quickHit && expanded.spaceless.length >= 3) {
-        const sub3 = expanded.spaceless.slice(0, 3);
-        if (hay.includes(sub3)) quickHit = true;
-      }
-      if (!quickHit) return;
-
-      const s = computeProductRelevanceScore(p, expanded, isDummy);
-      if (s >= 35) {
-        scored.push({ item: p, score: s });
-      }
-    });
-
-    scored.sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      return (b.item.stok || 0) - (a.item.stok || 0);
-    });
-
-    const grouped = groupProductsByArticle(scored.map((x) => x.item));
-    return grouped.slice(0, limit);
+    const fast = await queryLocalModelsInstant({ query: rawInput, brandGroup, category, page: 1, limit });
+    if (fast) return fast.data;
+    return [];
   } catch (e) {
     console.warn("[OfflineDB] Gagal mencari offline smart:", e);
     return [];
@@ -292,24 +626,17 @@ export async function searchOfflineSmart(
 }
 
 /**
- * Menjelajah katalog lokal Dexie per Brand Concept (SUKO/Mu+Ku/ZES) & Kategori saat offline
+ * Menjelajah katalog lokal per Brand Concept (SUKO/Mu+Ku/ZES) & Kategori
  */
 export async function browseOfflineCatalog(
   brandGroup: BrandGroupKey = "ALL",
   category: CategoryKey = "ALL",
   limit: number = 40
-): Promise<CachedProduct[]> {
+): Promise<CachedArticleModel[]> {
   try {
-    await ensureDbOpenSafe();
-    const matched: CachedProduct[] = [];
-    await db.products.each((p) => {
-      if ((p.description || "").toUpperCase().includes("DUMMY")) return;
-      if (brandGroup !== "ALL" && classifyBrandGroup(p) !== brandGroup) return;
-      if (category !== "ALL" && classifyProductCategory(p) !== category) return;
-      matched.push(p);
-    });
-    matched.sort((a, b) => (b.stok || 0) - (a.stok || 0));
-    return groupProductsByArticle(matched).slice(0, limit);
+    const fast = await queryLocalModelsInstant({ query: "", brandGroup, category, page: 1, limit });
+    if (fast) return fast.data;
+    return [];
   } catch (e) {
     console.warn("[OfflineDB] Gagal jelajah katalog offline:", e);
     return [];

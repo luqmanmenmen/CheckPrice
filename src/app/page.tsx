@@ -240,6 +240,12 @@ export default function Home() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [error, setError] = useState("");
+  const [localCacheStats, setLocalCacheStats] = useState<{
+    skuCount: number;
+    modelCount: number;
+    sizeMB: number;
+    ready: boolean;
+  } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -404,12 +410,18 @@ export default function Home() {
     )
   );
 
-  // Download awal otomatis jika database lokal belum lengkap (< 80.000 SKU dari total 84.763 SKU)
+  // Download awal otomatis jika database lokal belum lengkap & panaskan index model lokal di RAM (~7 MB)
   useEffect(() => {
     let isMounted = true;
     const initialSyncIfEmpty = async () => {
       try {
-        const { syncOfflineDatabase, db, ensureDbOpenSafe } = await import('@/lib/offlineDb');
+        const {
+          syncOfflineDatabase,
+          db,
+          ensureDbOpenSafe,
+          ensureModelsIndexReady,
+          getLocalCacheStats,
+        } = await import('@/lib/offlineDb');
         await ensureDbOpenSafe();
         const count = await db.products.count().catch(() => 0);
         const schemaVer = localStorage.getItem("suko_db_schema_version");
@@ -422,6 +434,7 @@ export default function Home() {
             }
           }, true);
           sessionCacheRef.current.clear();
+          listCacheRef.current.clear();
           await ensureDbOpenSafe();
           if (serverVersion) {
             localStorage.setItem("suko_server_version", serverVersion);
@@ -431,7 +444,11 @@ export default function Home() {
             setIsSyncing(false);
             setSyncProgress(undefined);
           }
+        } else {
+          await ensureModelsIndexReady();
         }
+        const stats = await getLocalCacheStats();
+        if (isMounted) setLocalCacheStats(stats);
       } catch (e) {
         if (isMounted) setIsSyncing(false);
       }
@@ -454,7 +471,13 @@ export default function Home() {
     setSyncProgress(0);
     showToast("Memperbarui data & sistem...", "success");
     try {
-      const { syncOfflineDatabase, ensureDbOpenSafe, db } = await import('@/lib/offlineDb');
+      const {
+        syncOfflineDatabase,
+        ensureDbOpenSafe,
+        db,
+        clearModelsMemoryCache,
+        getLocalCacheStats,
+      } = await import('@/lib/offlineDb');
       await syncOfflineDatabase((syncing, prog) => {
         setIsSyncing(syncing);
         if (prog !== undefined) setSyncProgress(prog);
@@ -462,8 +485,12 @@ export default function Home() {
 
       // Reset penuh RAM cache & segarkan koneksi Dexie agar langsung siap di-scan tanpa refresh manual!
       sessionCacheRef.current.clear();
+      listCacheRef.current.clear();
+      clearModelsMemoryCache();
       await ensureDbOpenSafe();
       const totalOffline = await db.products.count().catch(() => 0);
+      const stats = await getLocalCacheStats();
+      setLocalCacheStats(stats);
 
       // Bersihkan Cache Storage & Service Worker lama di background
       if (typeof window !== "undefined") {
@@ -960,8 +987,41 @@ export default function Home() {
       return;
     }
 
-    // 0C. Cek Cache Halaman Katalog (0ms instant untuk Selanjutnya / Sebelumnya / Filter!)
     const listCacheKey = `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::c=${activeCategory}::p${page}`;
+
+    const prefetchNextPage = (
+      currentPageNum: number,
+      maxPages: number,
+      fallbackTotal: number,
+      fallbackTotalSkus: number,
+      fallbackBrands?: Record<string, number> | null,
+      fallbackCats?: Record<string, number> | null
+    ) => {
+      const nextPageNum = currentPageNum + 1;
+      const nextCacheKey = `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::c=${activeCategory}::p${nextPageNum}`;
+      if (currentPageNum < maxPages && !listCacheRef.current.has(nextCacheKey)) {
+        fetch(buildSearchEndpointUrl(trimmed, nextPageNum, activeBrand, activeCategory), { cache: 'no-store' })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((nextJson) => {
+            if (nextJson && Array.isArray(nextJson.data) && nextJson.data.length > 0) {
+              listCacheRef.current.set(nextCacheKey, {
+                list: nextJson.data,
+                total: nextJson.meta?.total ?? fallbackTotal,
+                totalSkus: nextJson.meta?.totalSkus ?? fallbackTotalSkus,
+                page: nextJson.meta?.page || nextPageNum,
+                totalPages: nextJson.meta?.totalPages || maxPages,
+                brandCounts: nextJson.meta?.brandCounts || fallbackBrands || null,
+                categoryCounts: nextJson.meta?.categoryCounts || fallbackCats || null,
+                cachedAt: Date.now(),
+              });
+              preloadProductImages(nextJson.data.map((item: any) => item.imageUrl), 400);
+            }
+          })
+          .catch(() => {});
+      }
+    };
+
+    // 0C. Cek Cache Halaman Katalog (0ms instant untuk Selanjutnya / Sebelumnya / Filter!)
     const cachedPage = listCacheRef.current.get(listCacheKey);
     if (cachedPage && Date.now() - cachedPage.cachedAt < 60_000) {
       setProduct(null);
@@ -977,10 +1037,54 @@ export default function Home() {
       setLoading(false);
       if (isScanning) setIsScanning(false);
       preloadProductImages(cachedPage.list.map((item) => item.imageUrl), 400);
+      prefetchNextPage(
+        cachedPage.page,
+        cachedPage.totalPages,
+        cachedPage.total,
+        cachedPage.totalSkus,
+        cachedPage.brandCounts,
+        cachedPage.categoryCounts
+      );
       if (shouldScrollTop && typeof window !== "undefined") {
         requestAnimationFrame(() => scrollPageToTop());
       }
       return;
+    }
+
+    // 0D. INSTAN DATA LOKAL HP (~5-10ms): Untuk cari teks ("jaket"), filter SUKO/Mu+Ku/ZES, & klik Selanjutnya!
+    const isCodeSearch = Boolean(trimmed && !hasTaxonomyFilter && /\d/.test(trimmed) && !/\s/.test(trimmed));
+    if (!isCodeSearch) {
+      try {
+        const { queryLocalModelsInstant } = await import('@/lib/offlineDb');
+        const localRes = await queryLocalModelsInstant({
+          query: trimmed,
+          brandGroup: activeBrand,
+          category: activeCategory,
+          page,
+          limit: 20,
+        });
+        if (searchCounterRef.current !== currentSearch) return;
+        if (localRes && !localRes.singleMatch && localRes.total > 0) {
+          setProduct(null);
+          setSiblings([]);
+          setProductsList(localRes.data as unknown as ProductData[]);
+          setResultFilter("ALL");
+          setTotalModelsCount(localRes.total);
+          setTotalSkusCount(localRes.totalSkus);
+          setTaxonomyBrandCounts(localRes.brandCounts);
+          setTaxonomyCategoryCounts(localRes.categoryCounts);
+          if (trimmed) recordRecentSearch(trimmed);
+          preloadProductImages(localRes.data.map((item) => item.imageUrl), 400);
+          setCurrentPage(localRes.page);
+          setTotalPages(localRes.totalPages);
+          setLoading(false);
+          if (isScanning) setIsScanning(false);
+          if (shouldScrollTop && typeof window !== "undefined") {
+            requestAnimationFrame(() => scrollPageToTop());
+          }
+          return;
+        }
+      } catch {}
     }
 
     setLoading(true);
@@ -1149,28 +1253,14 @@ export default function Home() {
           }
 
           // Prefetch diam-diam halaman berikutnya + thumbnail 400px agar tombol Selanjutnya 0ms!
-          const nextPageNum = resolvedPage + 1;
-          const nextCacheKey = `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::c=${activeCategory}::p${nextPageNum}`;
-          if (resolvedPage < resolvedTotalPages && !listCacheRef.current.has(nextCacheKey)) {
-            fetch(buildSearchEndpointUrl(trimmed, nextPageNum, activeBrand, activeCategory), { cache: 'no-store' })
-              .then((r) => (r.ok ? r.json() : null))
-              .then((nextJson) => {
-                if (nextJson && Array.isArray(nextJson.data) && nextJson.data.length > 0) {
-                  listCacheRef.current.set(nextCacheKey, {
-                    list: nextJson.data,
-                    total: nextJson.meta?.total ?? resolvedTotal,
-                    totalSkus: nextJson.meta?.totalSkus ?? resolvedTotalSkus,
-                    page: nextJson.meta?.page || nextPageNum,
-                    totalPages: nextJson.meta?.totalPages || resolvedTotalPages,
-                    brandCounts: nextJson.meta?.brandCounts || resolvedBrandCounts,
-                    categoryCounts: nextJson.meta?.categoryCounts || resolvedCategoryCounts,
-                    cachedAt: Date.now(),
-                  });
-                  preloadProductImages(nextJson.data.map((item: any) => item.imageUrl), 400);
-                }
-              })
-              .catch(() => {});
-          }
+          prefetchNextPage(
+            resolvedPage,
+            resolvedTotalPages,
+            resolvedTotal,
+            resolvedTotalSkus,
+            resolvedBrandCounts,
+            resolvedCategoryCounts
+          );
         } else {
           setProduct(data.data);
           recordRecentSearch(data.data?.article && !["0", "-", "PRODUK BARU"].includes(String(data.data.article).toUpperCase()) ? data.data.article : trimmed);
@@ -1633,20 +1723,27 @@ export default function Home() {
               </button>
             </div>
 
-            {/* Row 3: Slim System Status Strip */}
+            {/* Row 3: Slim System Status Strip + Info Ukuran Cache HP */}
             <div className="mt-2.5 flex items-center justify-between gap-2 bg-white/10 border border-white/10 rounded-xl px-2.5 py-1.5 text-[10px]">
-              <div className="flex items-center gap-2 min-w-0 flex-wrap">
+              <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
                 <span className="inline-flex items-center gap-1.5 text-slate-200 font-semibold shrink-0">
                   <span className={`w-2 h-2 rounded-full ${lastUpdateDate === 'Memuat...' ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400 shadow-[0_0_6px_#34d399]'}`} />
-                  <span className="truncate max-w-[155px] sm:max-w-none">{lastUpdateDate}</span>
+                  <span className="truncate max-w-[140px] sm:max-w-none">{lastUpdateDate}</span>
                 </span>
-                {updateData?.pillars?.mdsBisa && (
+                {localCacheStats?.ready ? (
+                  <span
+                    title={`Seluruh ${localCacheStats.skuCount.toLocaleString('id-ID')} SKU (${localCacheStats.modelCount.toLocaleString('id-ID')} model) sudah tersimpan lokal di HP (~${localCacheStats.sizeMB} MB)`}
+                    className="inline-flex items-center gap-1 bg-emerald-400/20 text-emerald-100 px-2 py-0.5 rounded-md border border-emerald-300/25 font-bold"
+                  >
+                    ⚡ HP Siap (~{localCacheStats.sizeMB || 32} MB • {localCacheStats.skuCount.toLocaleString('id-ID')} SKU)
+                  </span>
+                ) : updateData?.pillars?.mdsBisa ? (
                   <span className="hidden sm:inline-flex items-center gap-1 bg-cyan-400/15 text-cyan-200 px-2 py-0.5 rounded-md border border-cyan-300/20 font-semibold">
                     by luqman org: {updateData.pillars.mdsBisa.records.toLocaleString('id-ID')}
                   </span>
-                )}
+                ) : null}
                 {updateData?.pillars?.promo && (
-                  <span className="inline-flex items-center gap-1 bg-indigo-400/20 text-indigo-100 px-1.5 py-0.5 rounded-md border border-indigo-300/20 font-semibold">
+                  <span className="hidden md:inline-flex items-center gap-1 bg-indigo-400/20 text-indigo-100 px-1.5 py-0.5 rounded-md border border-indigo-300/20 font-semibold">
                     Promo: {updateData.pillars.promo.records.toLocaleString('id-ID')}
                   </span>
                 )}
@@ -1656,11 +1753,11 @@ export default function Home() {
                   type="button"
                   onClick={() => handleManualSync()}
                   disabled={isSyncing}
-                  title="Sinkronkan database offline lokal"
+                  title="Unduh / sinkronkan seluruh 97rb+ SKU (~32 MB) ke memori HP agar pencarian & paginasi 0ms"
                   className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white/15 hover:bg-white/25 text-white font-bold transition-colors shrink-0 cursor-pointer ${isSyncing ? 'opacity-50' : ''}`}
                 >
                   <CloudDownload className={`w-3.5 h-3.5 ${isSyncing ? 'animate-bounce text-cyan-300' : ''}`} />
-                  <span className="hidden sm:inline">Sync</span>
+                  <span className="hidden sm:inline">{localCacheStats?.ready ? "Sync" : "Unduh (~32 MB)"}</span>
                 </button>
               )}
             </div>
