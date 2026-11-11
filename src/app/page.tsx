@@ -1320,7 +1320,7 @@ export default function Home() {
               sku: m.sku,
               barcode: m.barcode || null,
               article: m.article || null,
-              description: m.description || m.name,
+              description: m.description || "",
               acara: m.acara || null,
               fromDate: null,
               toDate: m.toDate || null,
@@ -1335,7 +1335,15 @@ export default function Home() {
               stok: m.stok ?? 0,
               promoFileName: null,
               imageUrl: m.imageUrl || null,
-              images: m.images && m.images.length > 0 ? m.images : (m.imageUrl ? [m.imageUrl] : []),
+              images: m.imageUrl ? [m.imageUrl] : [],
+              articleGroupCount: m.articleGroupCount,
+              articleTotalStok: m.articleTotalStok,
+              articleColors: m.articleColors,
+              articleSizes: m.articleSizes,
+              articleHasPromo: m.articleHasPromo,
+              articlePromoLabel: m.articlePromoLabel,
+              brandGroup: m.brandGroup,
+              categoryKey: m.categoryKey,
             }));
             if (mappedList.length === 1 && !hasTaxonomyFilter) {
               setProduct(mappedList[0]);
