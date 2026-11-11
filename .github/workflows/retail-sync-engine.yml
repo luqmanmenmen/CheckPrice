@@ -67,7 +67,7 @@ jobs:
         run: |
           pip install -r python-engine/requirements.txt
 
-      - name: 🔥 [KATEGORI 1A - SCRAB MDS BISA] Brutal Scraper MDS BISA (16 Workers • SKU & Barcode Sweep)
+      - name: 🔥 [KATEGORI 1A - SCRAB BY LUQMAN ORG] Brutal Scraper by luqman org (Turbo Workers • SKU & Barcode Sweep)
         if: ${{ github.event.inputs.action == 'scrab' || github.event.inputs.action == 'mds-bisa' || github.event.inputs.action == 'all' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-mds-bisa' || github.event.action == 'trigger-sync-engine' || (github.event_name == 'workflow_dispatch' && github.event.inputs.action == '') }}
         run: |
           python python-engine/morning_full_sweep.py --brutal --upc-first --workers=24

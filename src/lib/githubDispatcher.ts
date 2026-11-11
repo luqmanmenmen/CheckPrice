@@ -112,8 +112,8 @@ export async function dispatchToGitHubRunner(params: {
   };
 
   const labelMap: Record<SyncActionType, string> = {
-    'scrab': 'KATEGORI 1: Brutal Scrab (MDS BISA + Foto Matahari.com)',
-    'mds-bisa': 'KATEGORI 1A: Brutal Scrab MDS BISA (16-Worker Python)',
+    'scrab': 'KATEGORI 1: Brutal Scrab (by luqman org + Foto Matahari.com)',
+    'mds-bisa': 'KATEGORI 1A: Brutal Scrab by luqman org (16-Worker Python)',
     'photos': 'KATEGORI 1B: Brutal Scrab Foto Produk Matahari.com',
     'stock-only': 'KATEGORI 2: Update Stock Live (Jalur Mapping 84.763 SKU)',
     'promo': 'KATEGORI 3: Update Promo Email (Python Promo Engine)',

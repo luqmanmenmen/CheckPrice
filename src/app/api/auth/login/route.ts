@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
             name: user.name,
             role: user.role,
             shift: parsedShift,
-            jobTitle: jobTitle ? `${jobTitle} (Redirect MDS BISA)` : "Redirect MDS BISA",
+            jobTitle: jobTitle ? `${jobTitle} (Redirect by luqman org)` : "Redirect by luqman org",
             toko: user.toko,
             ipAddress,
             userAgent
@@ -91,7 +91,7 @@ export async function POST(req: NextRequest) {
           success: true,
           redirectMds: true,
           redirectUrl: "https://storehub.mdsretailing.id/login?next=%2F",
-          message: "Mengarahkan ke Portal Login MDS BISA..."
+          message: "Mengarahkan ke Portal Login by luqman org..."
         });
       }
       

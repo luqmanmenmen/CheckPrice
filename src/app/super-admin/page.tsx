@@ -176,7 +176,7 @@ export default function SuperAdminDashboard() {
                     All-in-One
                   </span>
                 </div>
-                <p className="text-[11px] text-slate-500 mt-0.5">MDS BISA (Barcode & Stok) • Foto Katalog • Promo Cloud</p>
+                <p className="text-[11px] text-slate-500 mt-0.5">by luqman org (Barcode & Stok) • Foto Katalog • Promo Cloud</p>
               </div>
             </div>
             <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-indigo-600 group-hover:translate-x-0.5 transition-all" />

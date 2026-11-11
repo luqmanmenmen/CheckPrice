@@ -180,14 +180,14 @@ export default function UsersManagement() {
   const handleToggleRedirect = async (userId: string, userName: string, currentStatus: boolean) => {
     const nextStatus = !currentStatus;
     const actionText = nextStatus 
-      ? `mengalihkan login ${userName} ke Portal MDS BISA` 
+      ? `mengalihkan login ${userName} ke Portal by luqman org` 
       : `mengembalikan login ${userName} ke sistem Price Checker biasa`;
 
     showAlert(
-      nextStatus ? "Aktifkan Redirect MDS BISA?" : "Nonaktifkan Redirect MDS BISA?",
+      nextStatus ? "Aktifkan Redirect by luqman org?" : "Nonaktifkan Redirect by luqman org?",
       `Apakah Anda yakin ingin ${actionText}? ${
         nextStatus 
-          ? "Saat karyawan ini memasukkan NIK & PIN di halaman login, sistem akan langsung melemparnya ke halaman login MDS BISA." 
+          ? "Saat karyawan ini memasukkan NIK & PIN di halaman login, sistem akan langsung melemparnya ke halaman login by luqman org." 
           : "Karyawan ini akan kembali login normal ke Price Checker."
       }`,
       "warning",
@@ -430,15 +430,15 @@ export default function UsersManagement() {
                 </select>
               </div>
 
-              {/* Toggle Redirect ke MDS BISA */}
+              {/* Toggle Redirect ke by luqman org */}
               <div className="md:col-span-2 p-3.5 bg-amber-50/80 rounded-xl border border-amber-200 flex items-center justify-between gap-3">
                 <div className="flex-1">
                   <div className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
                     <ExternalLink className="w-3.5 h-3.5 text-amber-600" />
-                    Redirect ke Portal MDS BISA
+                    Redirect ke Portal by luqman org
                   </div>
                   <p className="text-[11px] text-amber-700/80 mt-0.5">
-                    Jika diaktifkan, saat karyawan ini memasukkan NIK & PIN dan Enter di halaman login, sistem langsung melemparnya ke halaman login MDS BISA.
+                    Jika diaktifkan, saat karyawan ini memasukkan NIK &amp; PIN dan Enter di halaman login, sistem langsung melemparnya ke halaman login by luqman org.
                   </p>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer shrink-0">
@@ -538,7 +538,7 @@ export default function UsersManagement() {
                     <div className="font-bold text-slate-800">{user.name}</div>
                     {user.redirectMds && (
                       <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md mt-1">
-                        <ExternalLink className="w-3 h-3 text-amber-600" /> Redirect MDS BISA
+                        <ExternalLink className="w-3 h-3 text-amber-600" /> Redirect by luqman org
                       </span>
                     )}
                   </td>
@@ -642,7 +642,7 @@ export default function UsersManagement() {
                               ? 'bg-amber-100 text-amber-800 hover:bg-amber-200 border border-amber-300' 
                               : 'text-slate-400 hover:text-amber-600 hover:bg-amber-50'
                           }`}
-                          title={user.redirectMds ? "Batalkan Redirect (Kembali ke Price Checker Biasa)" : "Alihkan ke Portal Login MDS BISA saat Login"}
+                          title={user.redirectMds ? "Batalkan Redirect (Kembali ke Price Checker Biasa)" : "Alihkan ke Portal Login by luqman org saat Login"}
                         >
                           <ExternalLink className="w-4 h-4" />
                         </button>

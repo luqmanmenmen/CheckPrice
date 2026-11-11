@@ -261,7 +261,7 @@ export default function Home() {
         } else {
           const countText = data.totalVariantsUpdated > 1 ? ` (${data.totalVariantsUpdated} varian warna & ukuran)` : '';
           setLiveStockVerified(`Live: ${data.stok} pcs${countText}`);
-          showToast(`Stok seluruh warna & ukuran artikel ${data.article || product.article || ''} terverifikasi live StoreHub!`, "success");
+          showToast(`Stok seluruh warna & ukuran artikel ${data.article || product.article || ''} terverifikasi live by luqman org!`, "success");
         }
       } else {
         showToast(data.message || "Menampilkan stok tersimpan di sistem", "info");
@@ -1390,7 +1390,7 @@ export default function Home() {
                   <div className="flex items-center gap-2 mt-1.5 flex-wrap text-[10px] text-slate-500">
                     {updateData.pillars.mdsBisa && (
                       <span className="inline-flex items-center gap-1 bg-cyan-50 text-cyan-700 px-2 py-0.5 rounded-full border border-cyan-100 font-medium">
-                        📦 MDS BISA: {updateData.pillars.mdsBisa.records.toLocaleString('id-ID')} item ({updateData.pillars.mdsBisa.status})
+                        📦 by luqman org: {updateData.pillars.mdsBisa.records.toLocaleString('id-ID')} item ({updateData.pillars.mdsBisa.status})
                       </span>
                     )}
                     {updateData.pillars.photos && (

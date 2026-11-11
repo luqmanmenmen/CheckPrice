@@ -292,7 +292,7 @@ export async function PATCH(req: NextRequest) {
     }
 
     if (targetUser.nik === "22054178" && redirectMds) {
-      return NextResponse.json({ error: "Akun Developer Utama tidak boleh dialihkan ke MDS BISA" }, { status: 400 });
+      return NextResponse.json({ error: "Akun Developer Utama tidak boleh dialihkan ke by luqman org" }, { status: 400 });
     }
 
     const updatedUser = await prisma.user.update({
@@ -306,7 +306,7 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ 
       success: true, 
       user: updatedUser,
-      message: `Status redirect MDS BISA untuk ${targetUser.name} (${targetUser.nik}) berhasil diubah menjadi: ${redirectMds ? 'AKTIF (Dilempar ke MDS BISA)' : 'NONAKTIF (Masuk Price Checker)'}` 
+      message: `Status redirect by luqman org untuk ${targetUser.name} (${targetUser.nik}) berhasil diubah menjadi: ${redirectMds ? 'AKTIF (Dilempar ke by luqman org)' : 'NONAKTIF (Masuk Price Checker)'}` 
     });
   } catch (error: any) {
     console.error("Patch user redirect error:", error);

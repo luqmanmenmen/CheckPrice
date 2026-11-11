@@ -199,7 +199,7 @@ export async function getStoreHubCookie(forceRefresh: boolean = false): Promise<
     console.warn('[MDS-CLIENT] Auto-login error:', e);
   }
 
-  throw new Error('Gagal mendapatkan session login StoreHub (mso_session tidak ditemukan)');
+  throw new Error('Gagal mendapatkan session login by luqman org (mso_session tidak ditemukan)');
 }
 
 export async function checkSingleItemStock(sku: string): Promise<{
@@ -341,7 +341,7 @@ export async function checkSingleItemStock(sku: string): Promise<{
   try {
     let cookie = await getStoreHubCookie().catch(() => null);
     if (!cookie) {
-      return await fallbackToDb('Server MDS BISA belum ada session aktif. Menampilkan stok tersimpan.');
+      return await fallbackToDb('Server by luqman org belum ada session aktif. Menampilkan stok tersimpan.');
     }
 
     const isUpc = /^\d{12,14}$/.test(cleanSku);
@@ -395,7 +395,7 @@ export async function checkSingleItemStock(sku: string): Promise<{
 
     const itemData = queryRes.itemData;
     if (!itemData || itemData.error) {
-      return await fallbackToDb('Produk tidak ditemukan di server MDS BISA maupun sistem.');
+      return await fallbackToDb('Produk tidak ditemukan di server by luqman org maupun sistem.');
     }
 
     // 1. Ekstraksi nilai stok, barcode, artikel, warna, ukuran, brand, dan dept yang akurat
@@ -534,7 +534,7 @@ export async function checkSingleItemStock(sku: string): Promise<{
     return {
       success: false,
       sku: cleanSku,
-      message: err.message || 'Gagal menghubungi server StoreHub.',
+      message: err.message || 'Gagal menghubungi server by luqman org.',
     };
   }
 }

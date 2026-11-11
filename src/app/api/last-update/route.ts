@@ -32,14 +32,23 @@ export async function GET() {
     const lastPhoto = recentHistories.find(h => h.type === 'PHOTO_SYNC');
     const lastPromo = recentHistories.find(h => h.type === 'UPDATE_PROMO' || h.type === 'PROMO_MINGGUAN');
 
+    const sanitizeLabel = (val?: string | null) =>
+      val ? val.replace(/MDS\s*BISA/gi, 'by luqman org').replace(/StoreHub/gi, 'by luqman org') : val;
+
+    const cleanHistories = recentHistories.map(h => ({
+      ...h,
+      type: h.type === 'MDS_BISA_SYNC' ? 'BY_LUQMAN_ORG_SYNC' : h.type,
+      fileName: sanitizeLabel(h.fileName),
+    }));
+
     return NextResponse.json({
       success: true,
       lastUpdate: lastUpdatedProduct ? lastUpdatedProduct.updatedAt : null,
-      histories: recentHistories,
+      histories: cleanHistories,
       pillars: {
         mdsBisa: lastMds ? {
-          type: lastMds.type,
-          fileName: lastMds.fileName,
+          type: 'BY_LUQMAN_ORG_SYNC',
+          fileName: sanitizeLabel(lastMds.fileName),
           status: lastMds.status,
           records: lastMds.records,
           createdAt: lastMds.createdAt

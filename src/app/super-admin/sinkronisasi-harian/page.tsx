@@ -270,11 +270,11 @@ export default function UpdateProdukPage() {
                     KATEGORI 1 • SCRAB
                   </span>
                   <p className="font-bold text-indigo-950 text-sm flex items-center gap-1.5">
-                    🔥 Mesin Brutal Scrab (MDS BISA & Gambar Produk Matahari.com)
+                    🔥 Mesin Brutal Scrab (by luqman org &amp; Gambar Produk Matahari.com)
                   </p>
                 </div>
                 <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                  Menjalankan mesin Python 16-Worker (<code className="text-[11px] bg-white px-1 py-0.5 rounded border border-indigo-100">morning_full_sweep.py --brutal</code>) untuk menyerap produk baru, Barcode UPC EAN-13, Artikel, Harga & Stok, serta mesin 4-Jalur Foto Studio Produk Asli (<code className="text-[11px] bg-white px-1 py-0.5 rounded border border-purple-100">brutal_image_scraper.py</code> — bebas logo/banner).
+                  Menjalankan mesin Python Multi-Worker (<code className="text-[11px] bg-white px-1 py-0.5 rounded border border-indigo-100">morning_full_sweep.py --brutal</code>) untuk menyerap produk baru, Barcode UPC EAN-13, Artikel, Harga &amp; Stok, serta mesin 4-Jalur Foto Studio Produk Asli (<code className="text-[11px] bg-white px-1 py-0.5 rounded border border-purple-100">brutal_image_scraper.py</code> — bebas logo/banner).
                 </p>
               </div>
               <button
@@ -287,7 +287,7 @@ export default function UpdateProdukPage() {
                 ) : (
                   <Flame className="w-4 h-4" />
                 )}
-                {isGhDispatching && activeAction === "scrab" ? "Menyalakan..." : "Scrab Komplit (MDS + Foto)"}
+                {isGhDispatching && activeAction === "scrab" ? "Menyalakan..." : "Scrab Komplit (by luqman org + Foto)"}
               </button>
             </div>
 
@@ -303,7 +303,7 @@ export default function UpdateProdukPage() {
                 ) : (
                   <Database className="w-3.5 h-3.5 text-indigo-600" />
                 )}
-                🏪 Scrab Data MDS BISA Saja (16 Workers)
+                🏪 Scrab Data by luqman org Saja (Turbo Workers)
               </button>
 
               <button
@@ -750,8 +750,8 @@ export default function UpdateProdukPage() {
                   AKTIF
                 </span>
               </div>
-              <p className="text-xs font-bold text-slate-800">84.763 SKU • 35.293 Foto</p>
-              <p className="text-[11px] text-slate-500 mt-0.5">MDS BISA + Studio Matahari.com</p>
+              <p className="text-xs font-bold text-slate-800">97.546+ SKU • Studio Foto</p>
+              <p className="text-[11px] text-slate-500 mt-0.5">by luqman org + Studio Matahari.com</p>
             </div>
 
             {/* Kategori 2: Update Stock Live */}
@@ -837,15 +837,15 @@ export default function UpdateProdukPage() {
                           className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] ${
                             item.type.includes("STOCK")
                               ? "bg-cyan-50 text-cyan-700 border border-cyan-200"
-                              : item.type.includes("MDS") || item.type.includes("SCRAB") || item.type.includes("PHOTO")
+                              : item.type.includes("MDS") || item.type.includes("LUQMAN") || item.type.includes("SCRAB") || item.type.includes("PHOTO")
                               ? "bg-indigo-50 text-indigo-700 border border-indigo-200"
                               : "bg-sky-50 text-sky-700 border border-sky-200"
                           }`}
                         >
-                          {item.type}
+                          {item.type.replace(/MDS_BISA/gi, "BY_LUQMAN_ORG")}
                         </span>
                       </td>
-                      <td className="px-3.5 py-2.5 text-slate-600 truncate max-w-xs">{item.fileName}</td>
+                      <td className="px-3.5 py-2.5 text-slate-600 truncate max-w-xs">{item.fileName?.replace(/MDS\s*BISA/gi, "by luqman org")}</td>
                       <td className="px-3.5 py-2.5 text-right font-mono font-bold text-slate-700 whitespace-nowrap">
                         {item.records.toLocaleString("id-ID")} item
                       </td>

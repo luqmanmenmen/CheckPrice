@@ -1262,7 +1262,7 @@ def execute_morning_sweep(
     save_report(start_time, initial_count, new_discovered, updated_count, brands_counter)
     log_sync_history(
         "MDS_BISA_SYNC",
-        f"Brutal Scrap MDS BISA (Total: {len(existing_skus):,} SKU, Baru: +{new_discovered:,})",
+        f"Brutal Scrap by luqman org (Total: {len(existing_skus):,} SKU, Baru: +{new_discovered:,})",
         len(existing_skus),
         "SUCCESS",
     )

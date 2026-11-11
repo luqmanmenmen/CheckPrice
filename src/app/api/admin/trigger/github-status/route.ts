@@ -126,14 +126,15 @@ export async function GET(req: Request) {
               duration = diffMs < 1000 ? '<1s' : `${Math.round(diffMs / 1000)}s`;
             }
 
+            const cleanStepName = String(s.name || '').replace(/MDS\s*BISA/gi, 'by luqman org');
             if (isFailed) {
               hasError = true;
-              errorStepName = s.name;
+              errorStepName = cleanStepName;
             }
 
             return {
               number: s.number,
-              name: s.name,
+              name: cleanStepName,
               status: s.status,
               conclusion: s.conclusion,
               duration,
@@ -241,13 +242,18 @@ export async function GET(req: Request) {
       console.warn('[GITHUB-STATUS] Gagal query SyncHistory DB:', dbErr);
     }
 
+    const cleanSyncHistory = dbSyncHistory.map((h) => ({
+      ...h,
+      fileName: h.fileName ? String(h.fileName).replace(/MDS\s*BISA/gi, 'by luqman org').replace(/StoreHub/gi, 'by luqman org') : h.fileName,
+    }));
+
     return NextResponse.json({
       success: true,
       hasRuns: true,
       activeRun: formattedActiveRun,
       steps,
       recentRuns,
-      syncHistory: dbSyncHistory,
+      syncHistory: cleanSyncHistory,
     });
 
   } catch (err: any) {
