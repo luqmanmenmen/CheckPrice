@@ -421,6 +421,7 @@ export default function Home() {
           ensureDbOpenSafe,
           ensureModelsIndexReady,
           getLocalCacheStats,
+          getLocalTaxonomyOverview,
         } = await import('@/lib/offlineDb');
         await ensureDbOpenSafe();
         const count = await db.products.count().catch(() => 0);
@@ -447,8 +448,17 @@ export default function Home() {
         } else {
           await ensureModelsIndexReady();
         }
-        const stats = await getLocalCacheStats();
-        if (isMounted) setLocalCacheStats(stats);
+        const [stats, overview] = await Promise.all([
+          getLocalCacheStats(),
+          getLocalTaxonomyOverview(),
+        ]);
+        if (isMounted) {
+          setLocalCacheStats(stats);
+          if (overview) {
+            setTaxonomyBrandCounts(overview.brandCounts);
+            setTaxonomyCategoryCounts(overview.categoryCounts);
+          }
+        }
       } catch (e) {
         if (isMounted) setIsSyncing(false);
       }
@@ -885,18 +895,30 @@ export default function Home() {
     return `/api/product/${encodeURIComponent(trimmedQuery)}?${params.toString()}`;
   };
 
+  const clearListToIdle = () => {
+    setProductsList([]);
+    setProduct(null);
+    setSiblings([]);
+    setTotalModelsCount(0);
+    setTotalSkusCount(0);
+    setError("");
+    import('@/lib/offlineDb')
+      .then(({ getLocalTaxonomyOverview }) => getLocalTaxonomyOverview())
+      .then((overview) => {
+        setTaxonomyBrandCounts(overview?.brandCounts || null);
+        setTaxonomyCategoryCounts(overview?.categoryCounts || null);
+      })
+      .catch(() => {
+        setTaxonomyBrandCounts(null);
+        setTaxonomyCategoryCounts(null);
+      });
+  };
+
   const handleBrandFilterChange = (nextBrand: BrandGroupKey) => {
     const resolvedBrand: BrandGroupKey = selectedBrandGroup === nextBrand && nextBrand !== "ALL" ? "ALL" : nextBrand;
     setSelectedBrandGroup(resolvedBrand);
     if (!manualInput.trim() && resolvedBrand === "ALL" && selectedCategory === "ALL") {
-      setProductsList([]);
-      setProduct(null);
-      setSiblings([]);
-      setTotalModelsCount(0);
-      setTotalSkusCount(0);
-      setTaxonomyBrandCounts(null);
-      setTaxonomyCategoryCounts(null);
-      setError("");
+      clearListToIdle();
       return;
     }
     searchProduct(manualInput, 1, false, resolvedBrand, selectedCategory);
@@ -906,14 +928,7 @@ export default function Home() {
     const resolvedCat: CategoryKey = selectedCategory === nextCategory && nextCategory !== "ALL" ? "ALL" : nextCategory;
     setSelectedCategory(resolvedCat);
     if (!manualInput.trim() && selectedBrandGroup === "ALL" && resolvedCat === "ALL") {
-      setProductsList([]);
-      setProduct(null);
-      setSiblings([]);
-      setTotalModelsCount(0);
-      setTotalSkusCount(0);
-      setTaxonomyBrandCounts(null);
-      setTaxonomyCategoryCounts(null);
-      setError("");
+      clearListToIdle();
       return;
     }
     searchProduct(manualInput, 1, false, selectedBrandGroup, resolvedCat);
@@ -923,14 +938,7 @@ export default function Home() {
     setSelectedBrandGroup("ALL");
     setSelectedCategory("ALL");
     if (!manualInput.trim()) {
-      setProductsList([]);
-      setProduct(null);
-      setSiblings([]);
-      setTotalModelsCount(0);
-      setTotalSkusCount(0);
-      setTaxonomyBrandCounts(null);
-      setTaxonomyCategoryCounts(null);
-      setError("");
+      clearListToIdle();
       return;
     }
     searchProduct(manualInput, 1, false, "ALL", "ALL");
@@ -1530,18 +1538,11 @@ export default function Home() {
 
   const handleClear = () => {
     setManualInput("");
-    setProduct(null);
-    setSiblings([]);
-    setProductsList([]);
     setResultFilter("ALL");
     setSelectedBrandGroup("ALL");
     setSelectedCategory("ALL");
-    setTaxonomyBrandCounts(null);
-    setTaxonomyCategoryCounts(null);
-    setTotalModelsCount(0);
-    setTotalSkusCount(0);
+    clearListToIdle();
     setMultiVariantQty({});
-    setError("");
     setQty(1);
     inputRef.current?.focus();
   };

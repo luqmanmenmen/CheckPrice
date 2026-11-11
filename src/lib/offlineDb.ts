@@ -642,3 +642,16 @@ export async function browseOfflineCatalog(
     return [];
   }
 }
+
+export async function getLocalTaxonomyOverview(): Promise<{
+  brandCounts: Record<BrandGroupKey, number>;
+  categoryCounts: Record<CategoryKey, number>;
+} | null> {
+  try {
+    const res = await queryLocalModelsInstant({ query: "", brandGroup: "ALL", category: "ALL", page: 1, limit: 1 });
+    if (!res) return null;
+    return { brandCounts: res.brandCounts, categoryCounts: res.categoryCounts };
+  } catch {
+    return null;
+  }
+}

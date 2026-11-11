@@ -29,7 +29,7 @@ const VALID_CATEGORIES = new Set<CategoryKey>([
   "OTHER",
 ]);
 
-const CATALOG_CACHE_TTL_MS = 60_000;
+const CATALOG_CACHE_TTL_MS = 120_000;
 const CATALOG_CACHE_MAX = 40;
 const catalogCache = new Map<
   string,
@@ -90,7 +90,7 @@ export async function GET(request: NextRequest) {
       where: { AND: andClauses },
       select: PRODUCT_LIST_SELECT,
       orderBy: [{ stok: "desc" }, { id: "desc" }],
-      take: brandGroup === "MUKU" ? 300 : 420,
+      take: brandGroup === "SUKO" || brandGroup === "ZES" || brandGroup === "MUKU" ? 12000 : 1800,
     });
 
     const cleaned = cleanPromoList(rows);

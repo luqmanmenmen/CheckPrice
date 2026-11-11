@@ -1058,6 +1058,20 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   2. **Kueri Lokal `< 10ms` (`queryLocalModelsInstant`):** Pencarian teks (`"jaket"`), jelajah Brand/Kategori, dan seluruh perpindahan halaman (**Selanjutnya** / **Sebelumnya**) langsung dieksekusi di memori perangkat dalam ~5–10ms tanpa menunggu roundtrip server. Jika kata kunci kalimat unik tidak cocok lokal atau cache belum selesai terunduh, sistem otomatis jatuh mulus ke `/api/product/[identifier]` & `/api/catalog` (`sin1`) + prefetch halaman berikutnya yang sudah diperbaiki untuk `Hal 2 -> Hal 3+`.
   3. **Indikator Kapasitas Nyata (`getLocalCacheStats`):** Menampilkan lencana status **`⚡ HP Siap (~XX MB • 97.546 SKU)`** di status bar header saat penuh, atau tombol **`Unduh (~32 MB)`** bila perangkat baru belum sinkron.
 
+---
+
+## 68. Audit Fakta Database 97.546 SKU & Perbaikan Batas `take: 420` SUKO/ZES di `/api/catalog`
+
+- **Temuan Pemeriksaan Langsung Postgres (`97.546 SKU` / `19.881` Model Unik):**
+  - `SUKO`: **10.322 SKU** (**1.309 model**) — termasuk `5.600+` SKU berstok fisik Toko 719 (`stok > 0`). Sebelumnya terpotong di screenshot pengguna (`157` model) karena `/api/catalog` memiliki batas `take: 420` baris SKU.
+  - `ZES`: **6.210 SKU** (**1.178 model**) — sebelumnya ikut terpotong oleh `take: 420` dan mayoritas bersaldo `stok: 0` karena baru masuk dari katalog master CDN/MDS sebelum update stok fisik toko.
+  - `MUKU` (`Mu+Ku`): **88 SKU** (**19 model** bertag `MUKU`/`MU+KU`/`MK-`/`-MK`).
+  - `Lainnya` (**~80.926 SKU** / **~17.375 model**): merupakan merk reguler Matahari MDS hasil sapuan katalog/brutal sweep (`NEVADA` 21.720 SKU, `LITTLE M` 16.110 SKU, `CONNEXION` 4.680 SKU, `COLE` 4.325 SKU, `MAXMURAH` 4.500+ SKU, `ST YVES` 3.380 SKU, `VOLO` 2.118 SKU, dll.).
+- **Perbaikan yang Diterapkan:**
+  1. Menghapus limit kecil `420` pada [`GET /api/catalog`](file:///c:/Max%20Display/price-checker/src/app/api/catalog/route.ts) untuk `SUKO`/`ZES`/`MUKU` (`take: 12000`, `ALL`/`OTHER`: `1800`) dan memperpanjang TTL cache ke 120 detik agar server mengembalikan seluruh **1.309 model SUKO** dan **1.178 model ZES** tanpa terpotong.
+  2. Menambahkan [`getLocalTaxonomyOverview`](file:///c:/Max%20Display/price-checker/src/lib/offlineDb.ts#L646) + [`clearListToIdle`](file:///c:/Max%20Display/price-checker/src/app/page.tsx) agar angka model asli per brand (`Semua 19.881 | SUKO 1.309 | Mu+Ku 19 | ZES 1.178 | Lainnya 17.375`) langsung tampil transparan sejak layar beranda dibuka.
+
+
 
 
 
