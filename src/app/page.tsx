@@ -796,7 +796,19 @@ export default function Home() {
     searchProduct(targetSku);
   };
 
-  const searchProduct = async (identifier: string, page: number = 1) => {
+  const scrollPageToTop = () => {
+    if (typeof window !== "undefined") {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
+
+  const handlePageChange = (nextPage: number) => {
+    if (nextPage < 1 || nextPage > totalPages || loading) return;
+    scrollPageToTop();
+    searchProduct(manualInput, nextPage, true);
+  };
+
+  const searchProduct = async (identifier: string, page: number = 1, shouldScrollTop: boolean = false) => {
     const trimmed = identifier.trim();
     if (!trimmed) return;
 
@@ -968,6 +980,9 @@ export default function Home() {
           preloadProductImages(data.data.map((item: any) => item.imageUrl), 400);
           setCurrentPage(data.meta?.page || 1);
           setTotalPages(data.meta?.totalPages || 1);
+          if (shouldScrollTop && typeof window !== "undefined") {
+            requestAnimationFrame(() => scrollPageToTop());
+          }
         } else {
           setProduct(data.data);
           recordRecentSearch(data.data?.article && !["0", "-", "PRODUK BARU"].includes(String(data.data.article).toUpperCase()) ? data.data.article : trimmed);
@@ -1946,6 +1961,7 @@ export default function Home() {
                         setSiblings([p]);
                         setProductsList([]);
                         setManualInput(p.sku);
+                        scrollPageToTop();
                         searchProduct(p.sku);
                       }}
                       className="group text-left bg-white border border-slate-200 hover:border-blue-400 hover:shadow-md rounded-xl overflow-hidden transition-all flex flex-row sm:flex-col cursor-pointer"
@@ -2049,7 +2065,7 @@ export default function Home() {
               <div className="flex justify-between items-center mt-4 pt-3.5 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => searchProduct(manualInput, currentPage - 1)}
+                  onClick={() => handlePageChange(currentPage - 1)}
                   disabled={currentPage <= 1 || loading}
                   className="px-4 py-2 bg-slate-100 text-slate-600 font-bold text-xs rounded-lg disabled:opacity-50 hover:bg-slate-200 transition-colors cursor-pointer"
                 >
@@ -2060,7 +2076,7 @@ export default function Home() {
                 </span>
                 <button
                   type="button"
-                  onClick={() => searchProduct(manualInput, currentPage + 1)}
+                  onClick={() => handlePageChange(currentPage + 1)}
                   disabled={currentPage >= totalPages || loading}
                   className="px-4 py-2 bg-blue-100 text-blue-700 font-bold text-xs rounded-lg disabled:opacity-50 hover:bg-blue-200 transition-colors cursor-pointer"
                 >
