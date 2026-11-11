@@ -24,9 +24,12 @@ import {
   CATEGORY_OPTIONS,
   CATEGORY_LABELS,
   CATEGORY_DISPLAY_ORDER,
+  SubBrandCount,
+  BrandShowcaseSection,
   classifyBrandGroup,
   classifyProductCategory,
   getBrandGroupMeta,
+  getNormalizedSubBrand,
 } from "@/lib/productTaxonomy";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
@@ -236,6 +239,8 @@ export default function Home() {
   const [groupByCategory, setGroupByCategory] = useState<boolean>(true);
   const [taxonomyBrandCounts, setTaxonomyBrandCounts] = useState<Record<string, number> | null>(null);
   const [taxonomyCategoryCounts, setTaxonomyCategoryCounts] = useState<Record<string, number> | null>(null);
+  const [taxonomySubBrandCounts, setTaxonomySubBrandCounts] = useState<SubBrandCount[] | null>(null);
+  const [brandShowcaseSections, setBrandShowcaseSections] = useState<BrandShowcaseSection<ProductData>[] | null>(null);
   const [totalModelsCount, setTotalModelsCount] = useState(0);
   const [totalSkusCount, setTotalSkusCount] = useState(0);
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
@@ -459,6 +464,7 @@ export default function Home() {
           if (overview) {
             setTaxonomyBrandCounts(overview.brandCounts);
             setTaxonomyCategoryCounts(overview.categoryCounts);
+            if (overview.subBrandCounts?.length) setTaxonomySubBrandCounts(overview.subBrandCounts);
           }
         }
       } catch (e) {
@@ -849,6 +855,8 @@ export default function Home() {
         totalPages: number;
         brandCounts?: Record<string, number> | null;
         categoryCounts?: Record<string, number> | null;
+        subBrandCounts?: SubBrandCount[] | null;
+        brandShowcaseSections?: BrandShowcaseSection<ProductData>[] | null;
         cachedAt: number;
       }
     >
@@ -907,6 +915,7 @@ export default function Home() {
 
   const clearListToIdle = () => {
     setProductsList([]);
+    setBrandShowcaseSections(null);
     setProduct(null);
     setSiblings([]);
     setTotalModelsCount(0);
@@ -917,6 +926,7 @@ export default function Home() {
       .then((overview) => {
         setTaxonomyBrandCounts(overview?.brandCounts || null);
         setTaxonomyCategoryCounts(overview?.categoryCounts || null);
+        if (overview?.subBrandCounts?.length) setTaxonomySubBrandCounts(overview.subBrandCounts);
       })
       .catch(() => {
         setTaxonomyBrandCounts(null);
@@ -929,18 +939,20 @@ export default function Home() {
     const nextSub = resolvedBrand === "MUKU" ? selectedSubBrand : "";
     setSelectedBrandGroup(resolvedBrand);
     setSelectedSubBrand(nextSub);
+    if (resolvedBrand !== "MUKU" || nextSub) setBrandShowcaseSections(null);
     if (!manualInput.trim() && resolvedBrand === "ALL" && selectedCategory === "ALL") {
       clearListToIdle();
       return;
     }
-    searchProduct(manualInput, 1, false, resolvedBrand, selectedCategory, nextSub);
+    searchProduct(manualInput, 1, true, resolvedBrand, selectedCategory, nextSub);
   };
 
   const handleSubBrandFilterChange = (nextSubBrand: string) => {
     const resolvedSub = selectedSubBrand === nextSubBrand ? "" : nextSubBrand;
     setSelectedBrandGroup("MUKU");
     setSelectedSubBrand(resolvedSub);
-    searchProduct(manualInput, 1, false, "MUKU", selectedCategory, resolvedSub);
+    if (resolvedSub) setBrandShowcaseSections(null);
+    searchProduct(manualInput, 1, true, "MUKU", selectedCategory, resolvedSub);
   };
 
   const handleCategoryFilterChange = (nextCategory: CategoryKey) => {
@@ -950,18 +962,19 @@ export default function Home() {
       clearListToIdle();
       return;
     }
-    searchProduct(manualInput, 1, false, selectedBrandGroup, resolvedCat, selectedSubBrand);
+    searchProduct(manualInput, 1, true, selectedBrandGroup, resolvedCat, selectedSubBrand);
   };
 
   const handleResetTaxonomyFilters = () => {
     setSelectedBrandGroup("ALL");
     setSelectedSubBrand("");
     setSelectedCategory("ALL");
+    setBrandShowcaseSections(null);
     if (!manualInput.trim()) {
       clearListToIdle();
       return;
     }
-    searchProduct(manualInput, 1, false, "ALL", "ALL", "");
+    searchProduct(manualInput, 1, true, "ALL", "ALL", "");
   };
 
   const searchProduct = async (
@@ -1062,11 +1075,21 @@ export default function Home() {
       setTotalSkusCount(cachedPage.totalSkus);
       if (cachedPage.brandCounts !== undefined) setTaxonomyBrandCounts(cachedPage.brandCounts || null);
       if (cachedPage.categoryCounts !== undefined) setTaxonomyCategoryCounts(cachedPage.categoryCounts || null);
+      if (cachedPage.subBrandCounts !== undefined && (!activeSubBrand || (cachedPage.subBrandCounts?.length || 0) > 1)) {
+        setTaxonomySubBrandCounts(cachedPage.subBrandCounts || null);
+      }
+      setBrandShowcaseSections(cachedPage.brandShowcaseSections || null);
       setCurrentPage(cachedPage.page);
       setTotalPages(cachedPage.totalPages);
       setLoading(false);
       if (isScanning) setIsScanning(false);
-      preloadProductImages(cachedPage.list.map((item) => item.imageUrl), 400);
+      preloadProductImages(
+        [
+          ...cachedPage.list.map((item) => item.imageUrl),
+          ...(cachedPage.brandShowcaseSections || []).flatMap((sec) => sec.items.map((i) => i.imageUrl)),
+        ],
+        400
+      );
       prefetchNextPage(
         cachedPage.page,
         cachedPage.totalPages,
@@ -1104,8 +1127,17 @@ export default function Home() {
           setTotalSkusCount(localRes.totalSkus);
           setTaxonomyBrandCounts(localRes.brandCounts);
           setTaxonomyCategoryCounts(localRes.categoryCounts);
+          if (localRes.subBrandCounts?.length) setTaxonomySubBrandCounts(localRes.subBrandCounts);
+          const nextShowcase = (localRes.brandShowcaseSections as unknown as BrandShowcaseSection<ProductData>[]) || null;
+          setBrandShowcaseSections(nextShowcase);
           if (trimmed && localRes.total > 0) recordRecentSearch(trimmed);
-          preloadProductImages(localRes.data.map((item) => item.imageUrl), 400);
+          preloadProductImages(
+            [
+              ...localRes.data.map((item) => item.imageUrl),
+              ...(nextShowcase || []).flatMap((sec) => sec.items.map((i) => i.imageUrl)),
+            ],
+            400
+          );
           setCurrentPage(localRes.page);
           setTotalPages(localRes.totalPages);
           setLoading(false);
@@ -1230,6 +1262,7 @@ export default function Home() {
         if (Array.isArray(data.data)) {
           if (data.data.length === 0) {
             setProductsList([]);
+            setBrandShowcaseSections(null);
             setProduct(null);
             setSiblings([]);
             setTotalModelsCount(0);
@@ -1252,6 +1285,8 @@ export default function Home() {
           const resolvedTotalSkus = data.meta?.totalSkus ?? data.data.length;
           const resolvedBrandCounts = data.meta?.brandCounts || null;
           const resolvedCategoryCounts = data.meta?.categoryCounts || null;
+          const resolvedSubBrandCounts = (data.meta?.subBrandCounts as SubBrandCount[] | undefined) || null;
+          const resolvedShowcase = (data.meta?.brandShowcaseSections as BrandShowcaseSection<ProductData>[] | undefined) || null;
 
           setProduct(null);
           setSiblings([]);
@@ -1261,8 +1296,18 @@ export default function Home() {
           setTotalSkusCount(resolvedTotalSkus);
           setTaxonomyBrandCounts(resolvedBrandCounts);
           setTaxonomyCategoryCounts(resolvedCategoryCounts);
+          if (resolvedSubBrandCounts?.length && (!activeSubBrand || resolvedSubBrandCounts.length > 1)) {
+            setTaxonomySubBrandCounts(resolvedSubBrandCounts);
+          }
+          setBrandShowcaseSections(resolvedShowcase);
           if (trimmed) recordRecentSearch(trimmed);
-          preloadProductImages(data.data.map((item: any) => item.imageUrl), 400);
+          preloadProductImages(
+            [
+              ...data.data.map((item: any) => item.imageUrl),
+              ...(resolvedShowcase || []).flatMap((sec) => sec.items.map((i) => i.imageUrl)),
+            ],
+            400
+          );
           setCurrentPage(resolvedPage);
           setTotalPages(resolvedTotalPages);
           listCacheRef.current.set(
@@ -1275,6 +1320,8 @@ export default function Home() {
               totalPages: resolvedTotalPages,
               brandCounts: resolvedBrandCounts,
               categoryCounts: resolvedCategoryCounts,
+              subBrandCounts: resolvedSubBrandCounts,
+              brandShowcaseSections: resolvedShowcase,
               cachedAt: Date.now(),
             }
           );
@@ -2125,28 +2172,42 @@ export default function Home() {
                     <button
                       type="button"
                       onClick={() => handleSubBrandFilterChange("")}
-                      className={`text-[10px] font-bold px-2 py-0.5 rounded-md border transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-md border transition-all whitespace-nowrap shrink-0 cursor-pointer inline-flex items-center gap-1 ${
                         !selectedSubBrand
                           ? "bg-emerald-600 text-white border-emerald-700"
                           : "bg-white text-emerald-700 border-emerald-200 hover:bg-emerald-100"
                       }`}
                     >
-                      Semua Merk
+                      <span>Semua Merk</span>
+                      {taxonomyBrandCounts?.MUKU !== undefined && (
+                        <span className={`text-[9px] tabular-nums ${!selectedSubBrand ? "text-emerald-100" : "text-emerald-600/80"}`}>
+                          ({taxonomyBrandCounts.MUKU.toLocaleString("id-ID")})
+                        </span>
+                      )}
                     </button>
-                    {MUKU_SUB_BRANDS.map((sb) => {
+                    {(taxonomySubBrandCounts && taxonomySubBrandCounts.length > 0
+                      ? taxonomySubBrandCounts.slice(0, 22)
+                      : MUKU_SUB_BRANDS.map((name) => ({ name, count: 0, photoCount: 0 }))
+                    ).map((sbItem) => {
+                      const sb = sbItem.name;
                       const isSubActive = selectedSubBrand === sb;
                       return (
                         <button
                           key={sb}
                           type="button"
                           onClick={() => handleSubBrandFilterChange(sb)}
-                          className={`text-[10px] font-bold px-2 py-0.5 rounded-md border transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-md border transition-all whitespace-nowrap shrink-0 cursor-pointer inline-flex items-center gap-1 ${
                             isSubActive
                               ? "bg-emerald-700 text-white border-emerald-800 shadow-2xs"
                               : "bg-white text-slate-700 border-slate-200 hover:bg-emerald-100 hover:text-emerald-800"
                           }`}
                         >
-                          {sb}
+                          <span>{sb}</span>
+                          {sbItem.count > 0 && (
+                            <span className={`text-[9px] tabular-nums ${isSubActive ? "text-emerald-100" : "text-slate-400"}`}>
+                              {sbItem.count.toLocaleString("id-ID")}
+                            </span>
+                          )}
                         </button>
                       );
                     })}
@@ -2307,9 +2368,46 @@ export default function Home() {
         const getItemBrandGroup = (item: ProductData): ResolvedBrandGroup =>
           item.brandGroup || classifyBrandGroup(item);
 
-        // Kelompokkan per kategori jika mode Kelompok Kategori aktif & kategori filter masih "ALL"
+        // Untuk toko Multibrand Mu+Ku (ketika belum memilih brand spesifik): kelompokkan BY BRAND dulu!
+        const isMukuBrandFirstMode = selectedBrandGroup === "MUKU" && !selectedSubBrand;
+        const useMukuShowcase =
+          isMukuBrandFirstMode &&
+          groupByCategory &&
+          Boolean(brandShowcaseSections && brandShowcaseSections.length > 0) &&
+          !manualInput.trim() &&
+          resultFilter === "ALL";
+        const useMukuPageBrandGrouping =
+          isMukuBrandFirstMode && !useMukuShowcase && groupByCategory && filteredProducts.length > 0;
+
+        const mukuRenderedBrandSections: BrandShowcaseSection<ProductData>[] = useMukuShowcase
+          ? (brandShowcaseSections || [])
+          : useMukuPageBrandGrouping
+          ? Array.from(
+              filteredProducts.reduce((map, item) => {
+                const sb = (item as any).subBrand || getNormalizedSubBrand(item);
+                const arr = map.get(sb) || [];
+                arr.push(item);
+                map.set(sb, arr);
+                return map;
+              }, new Map<string, ProductData[]>())
+            )
+              .map(([subBrand, items]) => {
+                const knownTotal = taxonomySubBrandCounts?.find((c) => c.name === subBrand)?.count;
+                return {
+                  subBrand,
+                  count: knownTotal || items.length,
+                  totalSkus: items.reduce((sum, x) => sum + (x.articleGroupCount || 1), 0),
+                  items,
+                };
+              })
+              .sort((a, b) => b.items.length - a.items.length || b.count - a.count)
+          : [];
+
+        const shouldRenderBrandSections = mukuRenderedBrandSections.length > 0 && groupByCategory;
+
+        // Kelompokkan per kategori jika mode Kelompok Kategori aktif (SUKO, ZES, Semua, atau merk Mu+Ku spesifik)
         const groupedSections =
-          groupByCategory && selectedCategory === "ALL"
+          !isMukuBrandFirstMode && groupByCategory && selectedCategory === "ALL"
             ? CATEGORY_DISPLAY_ORDER.map((catKey) => ({
                 catKey,
                 label: CATEGORY_LABELS[catKey],
@@ -2318,7 +2416,8 @@ export default function Home() {
               })).filter((sec) => sec.items.length > 0)
             : [];
 
-        const shouldRenderCategorySections = groupedSections.length > 0 && groupByCategory && selectedCategory === "ALL";
+        const shouldRenderCategorySections =
+          !shouldRenderBrandSections && groupedSections.length > 0 && groupByCategory && selectedCategory === "ALL";
 
         const activeBrandLabel = selectedBrandGroup !== "ALL" ? getBrandGroupMeta(selectedBrandGroup).shortLabel : null;
         const activeCatLabel = selectedCategory !== "ALL" ? CATEGORY_LABELS[selectedCategory] : null;
@@ -2344,6 +2443,7 @@ export default function Home() {
           const brandGroup = getItemBrandGroup(p);
           const brandMeta = getBrandGroupMeta(brandGroup);
           const catKey = getItemCategory(p);
+          const subBrandLabel = (p as any).subBrand || getNormalizedSubBrand(p);
           const colorsSummary =
             p.articleColors && p.articleColors.length > 0
               ? p.articleColors.slice(0, 2).join(", ") +
@@ -2380,9 +2480,14 @@ export default function Home() {
                     className="w-full h-full object-cover object-top group-hover:scale-105 transition-transform duration-300"
                   />
                 ) : (
-                  <div className="w-full h-full flex flex-col items-center justify-center text-slate-300 gap-1">
-                    <Package2 className="w-7 h-7" />
-                    <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">No Foto</span>
+                  <div className="w-full h-full bg-gradient-to-br from-slate-50 via-slate-100/80 to-slate-200/60 flex flex-col items-center justify-center text-slate-300 gap-1.5 px-2 text-center">
+                    <Package2 className="w-7 h-7 text-slate-300" />
+                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 line-clamp-1">
+                      {subBrandLabel}
+                    </span>
+                    <span className="text-[8px] font-semibold uppercase tracking-wide text-slate-400/80">
+                      Belum Ada Foto
+                    </span>
                   </div>
                 )}
               </div>
@@ -2397,9 +2502,9 @@ export default function Home() {
                     <span className={`text-[9px] font-black px-1.5 py-0.5 rounded border ${brandMeta.badgeClass}`}>
                       {brandMeta.shortLabel}
                     </span>
-                    {brandGroup === "MUKU" && p.brand && p.brand.toUpperCase() !== "MUKU" && (
-                      <span className="text-[9px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100 px-1.5 py-0.5 rounded truncate max-w-[85px]">
-                        {p.brand}
+                    {brandGroup === "MUKU" && subBrandLabel && subBrandLabel !== "MUKU" && (
+                      <span className="text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded truncate max-w-[95px]">
+                        {subBrandLabel}
                       </span>
                     )}
                     {variantCount > 1 && (
@@ -2533,24 +2638,26 @@ export default function Home() {
                 >
                   Sedang Promo ({promoCount})
                 </button>
-                {selectedCategory === "ALL" && (
+                {(selectedCategory === "ALL" || isMukuBrandFirstMode) && (
                   <button
                     type="button"
                     onClick={() => setGroupByCategory((prev) => !prev)}
                     className={`text-[11px] font-bold px-2.5 py-1.5 rounded-lg border transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1 ${
                       groupByCategory
-                        ? "bg-indigo-600 text-white border-indigo-700 shadow-xs"
+                        ? isMukuBrandFirstMode
+                          ? "bg-emerald-600 text-white border-emerald-700 shadow-xs"
+                          : "bg-indigo-600 text-white border-indigo-700 shadow-xs"
                         : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-indigo-50"
                     }`}
                   >
-                    <Layers className="w-3 h-3" />
-                    <span>Kelompok Kategori</span>
+                    {isMukuBrandFirstMode ? <Tag className="w-3 h-3" /> : <Layers className="w-3 h-3" />}
+                    <span>{isMukuBrandFirstMode ? "Kelompok Brand" : "Kelompok Kategori"}</span>
                   </button>
                 )}
               </div>
             </div>
 
-            {/* Catalog Grid Cards (Dikelompokkan per Kategori atau Urut Relevansi) */}
+            {/* Catalog Grid Cards (Kelompok Brand Mu+Ku, Kelompok Kategori, atau Urut Relevansi) */}
             {filteredProducts.length === 0 ? (
               <div className="py-8 text-center flex flex-col items-center gap-2 text-slate-500">
                 <p className="text-xs sm:text-sm font-semibold">Tidak ada artikel di halaman ini untuk filter yang dipilih.</p>
@@ -2561,6 +2668,43 @@ export default function Home() {
                 >
                   Tampilkan Semua
                 </button>
+              </div>
+            ) : shouldRenderBrandSections ? (
+              <div className="flex flex-col gap-5">
+                {mukuRenderedBrandSections.map((sec) => (
+                  <div key={sec.subBrand} className="flex flex-col gap-2.5">
+                    <div className="flex items-center justify-between gap-2 bg-emerald-50/70 border border-emerald-200/80 rounded-xl px-3 py-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-sm leading-none">🏷️</span>
+                        <h3 className="text-xs sm:text-sm font-black text-slate-800 uppercase tracking-wide truncate">
+                          {sec.subBrand}
+                        </h3>
+                        <span className="text-[10px] font-bold bg-white text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full shrink-0 tabular-nums">
+                          {sec.count.toLocaleString("id-ID")} Artikel
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleSubBrandFilterChange(sec.subBrand)}
+                        className="text-[10px] sm:text-[11px] font-bold text-emerald-700 hover:text-emerald-800 bg-white hover:bg-emerald-100 border border-emerald-300 px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        {useMukuShowcase ? `Lihat semua ${sec.subBrand} →` : `Fokus ${sec.subBrand} →`}
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2.5 sm:gap-3">
+                      {sec.items.map(renderProductCard)}
+                    </div>
+                  </div>
+                ))}
+
+                {useMukuShowcase && (
+                  <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl px-3.5 py-2.5 text-[11px] text-emerald-800 font-semibold flex flex-wrap items-center justify-between gap-2">
+                    <span>
+                      Menampilkan ringkasan brand utama di Mu+Ku (5 artikel unggulan per brand). Ketuk <strong>Lihat semua</strong> pada brand untuk melihat kategori lengkapnya.
+                    </span>
+                  </div>
+                )}
               </div>
             ) : shouldRenderCategorySections ? (
               <div className="flex flex-col gap-5">

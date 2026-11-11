@@ -5,8 +5,15 @@ import {
   CategoryKey,
   ResolvedBrandGroup,
   ResolvedCategoryKey,
+  SubBrandCount,
+  BrandShowcaseSection,
   classifyBrandGroup,
   classifyProductCategory,
+  getNormalizedSubBrand,
+  createEmptyCategoryCounts,
+  sortSubBrandStats,
+  buildBrandShowcaseSections,
+  compareBrowseItems,
 } from "./productTaxonomy";
 
 export interface CachedProduct {
@@ -56,6 +63,7 @@ export interface CachedArticleModel {
   articlePromoLabel: string | null;
   brandGroup: ResolvedBrandGroup;
   categoryKey: ResolvedCategoryKey;
+  subBrand?: string;
   _searchHay?: string;
 }
 
@@ -141,10 +149,14 @@ function sanitizeAndIndexModel(m: CachedArticleModel): CachedArticleModel {
       }
     : m;
 
-  if (!cleanM._searchHay) {
-    cleanM._searchHay = `${cleanM.article || ""} ${cleanM.description || ""} ${cleanM.brand || ""} ${cleanM.dept || ""} ${cleanM.articleColors?.join(" ") || cleanM.color || ""} ${cleanM.sku} ${cleanM.barcode || ""}`.toUpperCase();
+  const withSubBrand = cleanM.subBrand
+    ? cleanM
+    : { ...cleanM, subBrand: getNormalizedSubBrand(cleanM) };
+
+  if (!withSubBrand._searchHay) {
+    withSubBrand._searchHay = `${withSubBrand.article || ""} ${withSubBrand.description || ""} ${withSubBrand.brand || ""} ${withSubBrand.subBrand || ""} ${withSubBrand.dept || ""} ${withSubBrand.articleColors?.join(" ") || withSubBrand.color || ""} ${withSubBrand.sku} ${withSubBrand.barcode || ""}`.toUpperCase();
   }
-  return cleanM;
+  return withSubBrand;
 }
 
 /**
@@ -194,6 +206,7 @@ export async function rebuildModelsIndexFromProducts(): Promise<CachedArticleMod
         articlePromoLabel: g.articlePromoLabel,
         brandGroup: g.brandGroup,
         categoryKey: g.categoryKey,
+        subBrand: getNormalizedSubBrand(g),
       };
       return sanitizeAndIndexModel(row);
     });
@@ -213,7 +226,7 @@ export async function rebuildModelsIndexFromProducts(): Promise<CachedArticleMod
   }
 }
 
-const MODELS_TAXONOMY_VERSION = "v13_smz_monostore";
+const MODELS_TAXONOMY_VERSION = "v14_muku_brand_sections";
 
 export async function ensureModelsIndexReady(): Promise<CachedArticleModel[] | null> {
   if (memoryModelsCache && memoryModelsCache.length >= 1000) {
@@ -446,6 +459,9 @@ export async function syncOfflineDatabase(
  * Pencarian Pintar Offline (SKU, Barcode, Artikel, maupun 30% Nama Deskripsi)
  * Digunakan saat internet toko mati/lambat agar kasir tetap bisa mencari manual
  */
+export type LocalSubBrandCount = SubBrandCount;
+export type LocalBrandShowcaseSection = BrandShowcaseSection<CachedArticleModel>;
+
 export interface LocalQueryResponse {
   data: CachedArticleModel[];
   singleMatch?: CachedArticleModel | null;
@@ -455,6 +471,8 @@ export interface LocalQueryResponse {
   totalPages: number;
   brandCounts: Record<BrandGroupKey, number>;
   categoryCounts: Record<CategoryKey, number>;
+  subBrandCounts?: LocalSubBrandCount[];
+  brandShowcaseSections?: LocalBrandShowcaseSection[];
 }
 
 /**
@@ -496,6 +514,7 @@ export async function queryLocalModelsInstant({
           (m.barcode && m.barcode.toUpperCase() === upper)
       );
       if (exactArts.length === 1) {
+        const hitSubBrand = exactArts[0].subBrand || getNormalizedSubBrand(exactArts[0]);
         return {
           data: exactArts,
           singleMatch: exactArts[0],
@@ -505,17 +524,14 @@ export async function queryLocalModelsInstant({
           totalPages: 1,
           brandCounts: { ALL: 1, SUKO: 0, MUKU: 0, ZES: 0, [exactArts[0].brandGroup]: 1 },
           categoryCounts: {
+            ...createEmptyCategoryCounts(),
             ALL: 1,
-            JAKET: 0,
-            ATASAN: 0,
-            CELANA: 0,
-            DRESS_ROK: 0,
-            SEPATU_SANDAL: 0,
-            TAS_AKSESORIS: 0,
-            TIDUR_DALAM: 0,
-            OTHER: 0,
             [exactArts[0].categoryKey]: 1,
           },
+          subBrandCounts:
+            exactArts[0].brandGroup === "MUKU"
+              ? [{ name: hitSubBrand, count: 1, photoCount: exactArts[0].imageUrl ? 1 : 0 }]
+              : [],
         };
       }
     }
@@ -560,36 +576,25 @@ export async function queryLocalModelsInstant({
     baseMatched = models.filter(
       (m) => !((m.description || "").toUpperCase().includes("SKU DUMMY") || (m.article || "").toUpperCase().includes("DUMMY"))
     );
-    baseMatched.sort((a, b) => {
-      if (b.articleTotalStok !== a.articleTotalStok) return b.articleTotalStok - a.articleTotalStok;
-      if (b.articleHasPromo !== a.articleHasPromo) return (b.articleHasPromo ? 1 : 0) - (a.articleHasPromo ? 1 : 0);
-      return (a.description || "").localeCompare(b.description || "");
-    });
+    baseMatched.sort(compareBrowseItems);
   }
 
   // Hitung brandCounts lintas semua brand (terfilter oleh kategori jika aktif)
   const brandCounts: Record<BrandGroupKey, number> = { ALL: 0, SUKO: 0, MUKU: 0, ZES: 0 };
-  const categoryCounts: Record<CategoryKey, number> = {
-    ALL: 0,
-    JAKET: 0,
-    ATASAN: 0,
-    CELANA: 0,
-    DRESS_ROK: 0,
-    SEPATU_SANDAL: 0,
-    TAS_AKSESORIS: 0,
-    TIDUR_DALAM: 0,
-    OTHER: 0,
-  };
+  const categoryCounts: Record<CategoryKey, number> = createEmptyCategoryCounts();
+  const mukuSubBrandTotals = new Map<string, LocalSubBrandCount>();
 
   const finalMatched: CachedArticleModel[] = [];
   let totalSkus = 0;
 
   for (let i = 0; i < baseMatched.length; i++) {
     const m = baseMatched[i];
+    const itemSubBrand = m.subBrand || getNormalizedSubBrand(m);
     const matchBrand = brandGroup === "ALL" || m.brandGroup === brandGroup;
     const matchCat = category === "ALL" || m.categoryKey === category;
     const matchSubBrand =
       !subBrandUpper ||
+      itemSubBrand === subBrandUpper ||
       (m.brand || "").toUpperCase().includes(subBrandUpper) ||
       (m.dept || "").toUpperCase().includes(subBrandUpper);
 
@@ -601,16 +606,35 @@ export async function queryLocalModelsInstant({
       categoryCounts.ALL += 1;
       categoryCounts[m.categoryKey] += 1;
     }
+    if (m.brandGroup === "MUKU" && matchCat) {
+      const prev = mukuSubBrandTotals.get(itemSubBrand) || {
+        name: itemSubBrand,
+        count: 0,
+        photoCount: 0,
+      };
+      prev.count += 1;
+      if (m.imageUrl) prev.photoCount += 1;
+      mukuSubBrandTotals.set(itemSubBrand, prev);
+    }
     if (matchBrand && matchCat && matchSubBrand) {
       finalMatched.push(m);
       totalSkus += m.articleGroupCount || 1;
     }
   }
 
+  const subBrandCounts = sortSubBrandStats(Array.from(mukuSubBrandTotals.values()), (x) => x.name);
+
   const total = finalMatched.length;
   const totalPages = Math.max(1, Math.ceil(total / limit));
   const safePage = Math.min(Math.max(1, page), totalPages);
   const skip = (safePage - 1) * limit;
+
+  // Untuk toko Multibrand Mu+Ku di halaman utama (tanpa filter merk spesifik):
+  // Tampilkan 1 baris showcase (5 artikel terbaik) per Brand dulu agar kasir tidak bingung!
+  const brandShowcaseSections =
+    brandGroup === "MUKU" && !subBrandUpper && !trimmed && safePage === 1 && finalMatched.length > 0
+      ? buildBrandShowcaseSections(finalMatched, 20, 5)
+      : undefined;
 
   return {
     data: finalMatched.slice(skip, skip + limit),
@@ -620,6 +644,8 @@ export async function queryLocalModelsInstant({
     totalPages,
     brandCounts,
     categoryCounts,
+    subBrandCounts,
+    brandShowcaseSections,
   };
 }
 
@@ -663,11 +689,16 @@ export async function browseOfflineCatalog(
 export async function getLocalTaxonomyOverview(): Promise<{
   brandCounts: Record<BrandGroupKey, number>;
   categoryCounts: Record<CategoryKey, number>;
+  subBrandCounts?: LocalSubBrandCount[];
 } | null> {
   try {
     const res = await queryLocalModelsInstant({ query: "", brandGroup: "ALL", category: "ALL", page: 1, limit: 1 });
     if (!res) return null;
-    return { brandCounts: res.brandCounts, categoryCounts: res.categoryCounts };
+    return {
+      brandCounts: res.brandCounts,
+      categoryCounts: res.categoryCounts,
+      subBrandCounts: res.subBrandCounts,
+    };
   } catch {
     return null;
   }

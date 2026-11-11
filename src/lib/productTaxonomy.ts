@@ -19,6 +19,7 @@ export type CategoryKey =
   | "DRESS_ROK"
   | "SEPATU_SANDAL"
   | "TAS_AKSESORIS"
+  | "BEAUTY"
   | "TIDUR_DALAM"
   | "OTHER";
 
@@ -86,6 +87,7 @@ export const MUKU_SUB_BRANDS: string[] = [
   "VOLO",
   "BYRCH & CO",
   "MUKU",
+  "NAYOUNG",
   "DISNEY",
   "SIRA",
   "DETAILS",
@@ -99,6 +101,7 @@ export const CATEGORY_OPTIONS: CategoryOption[] = [
   { key: "DRESS_ROK", label: "Dress & Rok", shortLabel: "Dress/Rok", icon: "👗" },
   { key: "SEPATU_SANDAL", label: "Sepatu & Sandal", shortLabel: "Sepatu", icon: "👟" },
   { key: "TAS_AKSESORIS", label: "Tas & Aksesoris", shortLabel: "Tas/Accs", icon: "👜" },
+  { key: "BEAUTY", label: "Beauty & Skincare", shortLabel: "Beauty", icon: "💄" },
   { key: "TIDUR_DALAM", label: "Tidur & Dalam", shortLabel: "Tidur/Dalam", icon: "🛏️" },
 ];
 
@@ -110,6 +113,7 @@ export const CATEGORY_LABELS: Record<CategoryKey, string> = {
   DRESS_ROK: "Dress & Rok",
   SEPATU_SANDAL: "Sepatu & Sandal",
   TAS_AKSESORIS: "Tas & Aksesoris",
+  BEAUTY: "Beauty & Skincare",
   TIDUR_DALAM: "Tidur & Dalam",
   OTHER: "Lainnya",
 };
@@ -121,6 +125,7 @@ export const CATEGORY_DISPLAY_ORDER: ResolvedCategoryKey[] = [
   "DRESS_ROK",
   "SEPATU_SANDAL",
   "TAS_AKSESORIS",
+  "BEAUTY",
   "TIDUR_DALAM",
   "OTHER",
 ];
@@ -131,11 +136,13 @@ export const CATEGORY_KEYWORDS: Record<Exclude<CategoryKey, "ALL" | "OTHER">, st
     "JAKET",
     "JACKET",
     "HOODIE",
+    "HOODY",
     "SWEATER",
     "SWEATSHIRT",
     "CARDIGAN",
     "BLAZER",
     "OUTER",
+    "OUTERWEAR",
     "BOMBER",
     "PARKA",
     "WINDBREAKER",
@@ -156,10 +163,12 @@ export const CATEGORY_KEYWORDS: Record<Exclude<CategoryKey, "ALL" | "OTHER">, st
     "KARGO",
     "CARGO",
     "TROUSER",
+    "TROUSERS",
     "CULOTTE",
     "KULOT",
     "LEGGING",
     "SHORT PANT",
+    "SHORT PANTS",
     "SHORTS",
     "DENIM LONG",
     "WIDE LEG",
@@ -194,7 +203,7 @@ export const CATEGORY_KEYWORDS: Record<Exclude<CategoryKey, "ALL" | "OTHER">, st
     "TURTLE NECK",
     "KNIT TOP",
     "WOVEN TOP",
-    "TOP ",
+    "TOP",
   ],
   SEPATU_SANDAL: [
     "SHOES",
@@ -203,17 +212,22 @@ export const CATEGORY_KEYWORDS: Record<Exclude<CategoryKey, "ALL" | "OTHER">, st
     "SANDALS",
     "SLIPPER",
     "FLIP FLOP",
+    "FLIP FLOPS",
     "SLIDE",
     "BALLERINA",
     "MOCCASIN",
     "SNEAKER",
+    "SNEAKERS",
     "BOOTS",
     "LOAFER",
+    "LOAFERS",
     "WEDGE",
+    "WEDGES",
     "HEELS",
     "MULES",
     "SLINGBACK",
     "SOCK",
+    "SOCKS",
     "KAOS KAKI",
   ],
   TAS_AKSESORIS: [
@@ -222,6 +236,7 @@ export const CATEGORY_KEYWORDS: Record<Exclude<CategoryKey, "ALL" | "OTHER">, st
     "HANDBAG",
     "BACKPACK",
     "TOTE",
+    "TOTEBAG",
     "RANSEL",
     "WALLET",
     "DOMPET",
@@ -235,16 +250,41 @@ export const CATEGORY_KEYWORDS: Record<Exclude<CategoryKey, "ALL" | "OTHER">, st
     "HIJAB",
     "CIPUT",
     "MUG",
+    "TUMBLER",
     "CUSHION",
     "DOLL",
     "PLUSH",
     "PAPERBAG",
     "CANVAS BAG",
+    "STICKER",
+    "STICKERS",
+  ],
+  BEAUTY: [
+    "BLUSH",
+    "LIP",
+    "LIPSTICK",
+    "LIPTINT",
+    "SERUM",
+    "TONER",
+    "CONCEALER",
+    "MOISTURIZER",
+    "SUNSCREEN",
+    "POWDER",
+    "BROW",
+    "EYE CARE",
+    "ACNE",
+    "PEEL OFF MASK",
+    "FACIAL",
+    "SKINCARE",
+    "PERFUME",
+    "RETINOL",
   ],
   TIDUR_DALAM: [
     "SLEEPWEAR",
     "PAJAMA",
+    "PAJAMAS",
     "PYJAMA",
+    "PYJAMAS",
     "PIYAMA",
     "UNDERWEAR",
     "BOXER",
@@ -289,74 +329,126 @@ export function classifyBrandGroup(p: TaxonomyInput): ResolvedBrandGroup {
   return "MUKU";
 }
 
-function hasAnyKeyword(haystack: string, keywords: string[]): boolean {
-  for (const kw of keywords) {
-    if (haystack.includes(kw)) return true;
-  }
-  return false;
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// Kompilasi regex batas kata sekali di awal agar "BLUSH" tidak pernah cocok sebagai "BLUS"
+const CATEGORY_REGEX_MAP: Record<Exclude<CategoryKey, "ALL" | "OTHER">, RegExp> = Object.fromEntries(
+  Object.entries(CATEGORY_KEYWORDS).map(([k, list]) => [
+    k,
+    new RegExp(`(?<![A-Z0-9])(?:${list.map(escapeRegExp).join("|")})(?![A-Z0-9])`, "i"),
+  ])
+) as Record<Exclude<CategoryKey, "ALL" | "OTHER">, RegExp>;
+
 /**
- * Mengklasifikasikan kategori produk (presedensi dipilih agar item gabungan seperti
- * "ROK PANJANG JEANS" masuk DRESS_ROK dan "JACKET OVERSHIRT" tetap masuk JAKET).
+ * Mengklasifikasikan kategori produk (presedensi dipilih agar Kosmetik seperti BLUSH VEIL LIQUID
+ * tidak masuk ATASAN, "ROK PANJANG JEANS" masuk DRESS_ROK, dan "JACKET OVERSHIRT" masuk JAKET).
  */
 export function classifyProductCategory(p: TaxonomyInput): ResolvedCategoryKey {
   const title = (p.description || p.name || "").split(":")[0].toUpperCase();
   const dept = (p.dept || "").toUpperCase();
+  const brand = (p.brand || "").toUpperCase();
   const combined = `${title} ${dept}`;
 
-  // 1. Tidur & Dalam (termasuk Boxer & Sleepwear dept)
+  // 1. Kosmetik & Skincare (mencegah "BLUSH" / "TOP COAT" nyasar ke pakaian)
+  if (
+    dept.includes("NAYOUNG") ||
+    brand.includes("ELFORMULA") ||
+    CATEGORY_REGEX_MAP.BEAUTY.test(combined)
+  ) {
+    return "BEAUTY";
+  }
+
+  // 2. Tidur & Dalam (termasuk Boxer & Sleepwear dept)
   if (
     dept.includes("SLEEPWEAR") ||
     dept.includes("UNDERWEAR") ||
     dept.includes("INTIMATE") ||
-    hasAnyKeyword(combined, CATEGORY_KEYWORDS.TIDUR_DALAM)
+    CATEGORY_REGEX_MAP.TIDUR_DALAM.test(combined)
   ) {
     return "TIDUR_DALAM";
   }
 
-  // 2. Sepatu, Sandal & Kaos Kaki
+  // 3. Sepatu, Sandal & Kaos Kaki
   if (
     dept.includes("SHOES") ||
     dept.includes("FW") ||
-    hasAnyKeyword(title, CATEGORY_KEYWORDS.SEPATU_SANDAL)
+    CATEGORY_REGEX_MAP.SEPATU_SANDAL.test(title)
   ) {
     return "SEPATU_SANDAL";
   }
 
-  // 3. Tas, Topi & Aksesoris / Home / Toys
+  // 4. Tas, Topi & Aksesoris / Home / Toys
   if (
     dept.includes("BAG") ||
     dept.includes("ACCS") ||
     dept.includes("ACCESSOR") ||
     dept.includes("TOYS") ||
     dept.includes("HOME") ||
-    hasAnyKeyword(title, CATEGORY_KEYWORDS.TAS_AKSESORIS)
+    CATEGORY_REGEX_MAP.TAS_AKSESORIS.test(title)
   ) {
     return "TAS_AKSESORIS";
   }
 
-  // 4. Dress, Rok & Skort (sebelum Celana & Atasan agar "ROK JEANS" tidak nyasar ke Celana)
-  if (hasAnyKeyword(title, CATEGORY_KEYWORDS.DRESS_ROK)) {
+  // 5. Dress, Rok & Skort (sebelum Celana & Atasan agar "ROK JEANS" tidak nyasar ke Celana)
+  if (CATEGORY_REGEX_MAP.DRESS_ROK.test(title)) {
     return "DRESS_ROK";
   }
 
-  // 5. Jaket, Hoodie, Sweater, Blazer, Vest (sebelum Atasan agar "JACKET OVERSHIRT" masuk Jaket)
-  if (hasAnyKeyword(title, CATEGORY_KEYWORDS.JAKET)) {
+  // 6. Jaket, Hoodie, Sweater, Blazer, Vest (sebelum Atasan agar "JACKET OVERSHIRT" masuk Jaket)
+  if (CATEGORY_REGEX_MAP.JAKET.test(title)) {
     return "JAKET";
   }
 
-  // 6. Celana & Jeans
-  if (hasAnyKeyword(title, CATEGORY_KEYWORDS.CELANA)) {
+  // 7. Celana & Jeans
+  if (CATEGORY_REGEX_MAP.CELANA.test(title)) {
     return "CELANA";
   }
 
-  // 7. Atasan (Kaos, Kemeja, Blouse, Polo, Tank Top)
-  if (hasAnyKeyword(title, CATEGORY_KEYWORDS.ATASAN)) {
+  // 8. Atasan (Kaos, Kemeja, Blouse, Polo, Tank Top)
+  if (CATEGORY_REGEX_MAP.ATASAN.test(title)) {
     return "ATASAN";
   }
 
   return "OTHER";
+}
+
+/**
+ * Mengembalikan nama merk/sub-brand yang bersih untuk pengelompokan di dalam Multibrand Mu+Ku
+ */
+export function getNormalizedSubBrand(p: TaxonomyInput): string {
+  const brand = (p.brand || "").trim().toUpperCase();
+  const dept = (p.dept || "").trim().toUpperCase();
+  const article = (p.article || "").trim().toUpperCase();
+  const desc = (p.description || p.name || "").trim().toUpperCase();
+
+  if (brand.includes("MAXMURAH") || dept.includes("MAXMURAH")) return "MAXMURAH";
+  if (dept.includes("NAYOUNG") || desc.includes("NA-YOUNG") || brand === "ELFORMULA") return "NAYOUNG";
+  if (brand.includes("BYRCH") || dept.includes("BYRCH")) return "BYRCH & CO";
+  if (brand.includes("ST YVES") || brand.includes("SAINT YVES") || dept.includes("ST YVES") || dept.includes("SAINT YVES")) {
+    return "ST YVES";
+  }
+  if (brand.includes("LITTLE M") || dept.includes("LITTLE M")) return "LITTLE M";
+  if (
+    brand.includes("MUKU") ||
+    dept.includes("MUKU") ||
+    article.startsWith("MK-") ||
+    article.includes("-MK") ||
+    desc.includes("MUKU") ||
+    desc.includes("MU+KU")
+  ) {
+    return "MUKU";
+  }
+  if (brand === "LOCAL BRAND" || brand === "STORE OPERATION" || brand === "CUSTOMER SERVICE") {
+    return dept || brand || "LAINNYA";
+  }
+  if (
+    ["LADIES SHOES", "MEN SHOES", "CHILDREN SHOES", "ACTIVE SHOES"].includes(brand)
+  ) {
+    return dept && !["MDS RETAIL", "DEFAULT"].includes(dept) ? dept : brand;
+  }
+  return brand || dept || "LAINNYA";
 }
 
 export function getBrandGroupMeta(group: BrandGroupKey): BrandGroupOption {
@@ -424,5 +516,115 @@ export function buildCategoryPrismaWhere(category: CategoryKey): any | undefined
   }
 
   return { OR: branches };
+}
+
+export interface SubBrandCount {
+  name: string;
+  count: number;
+  photoCount: number;
+}
+
+export interface BrandShowcaseSection<T = any> {
+  subBrand: string;
+  count: number;
+  totalSkus: number;
+  items: T[];
+}
+
+export function createEmptyCategoryCounts(): Record<CategoryKey, number> {
+  return {
+    ALL: 0,
+    JAKET: 0,
+    ATASAN: 0,
+    CELANA: 0,
+    DRESS_ROK: 0,
+    SEPATU_SANDAL: 0,
+    TAS_AKSESORIS: 0,
+    BEAUTY: 0,
+    TIDUR_DALAM: 0,
+    OTHER: 0,
+  };
+}
+
+const LOW_PRIORITY_SUBBRANDS = new Set([
+  "LAINNYA",
+  "DEFAULT",
+  "MDS RETAIL",
+  "STORE OPERATION",
+  "CUSTOMER SERVICE",
+  "PROMO MERCHANDISE DP",
+  "GENERAL TOYS",
+]);
+
+/** Mengurutkan daftar sub-brand Mu+Ku dengan brand fashion berfoto dan terbanyak terlebih dahulu */
+export function sortSubBrandStats<T extends { count: number; photoCount: number }>(
+  list: T[],
+  getName: (item: T) => string
+): T[] {
+  return list.sort((a, b) => {
+    const aLow = LOW_PRIORITY_SUBBRANDS.has(getName(a)) ? 1 : 0;
+    const bLow = LOW_PRIORITY_SUBBRANDS.has(getName(b)) ? 1 : 0;
+    if (aLow !== bLow) return aLow - bLow;
+    const aPhoto = a.photoCount > 0 ? 1 : 0;
+    const bPhoto = b.photoCount > 0 ? 1 : 0;
+    if (bPhoto !== aPhoto) return bPhoto - aPhoto;
+    if (b.count !== a.count) return b.count - a.count;
+    return getName(a).localeCompare(getName(b));
+  });
+}
+
+/** Mengelompokkan katalog menjadi section showcase per brand (maks N kartu per brand) */
+export function buildBrandShowcaseSections<
+  T extends TaxonomyInput & {
+    subBrand?: string | null;
+    imageUrl?: string | null;
+    articleGroupCount?: number;
+  }
+>(items: T[], maxSections: number = 20, itemsPerSection: number = 5): BrandShowcaseSection<T>[] {
+  const secMap = new Map<string, BrandShowcaseSection<T> & { photoCount: number }>();
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const sb = item.subBrand || getNormalizedSubBrand(item);
+    let sec = secMap.get(sb);
+    if (!sec) {
+      sec = { subBrand: sb, count: 0, totalSkus: 0, photoCount: 0, items: [] };
+      secMap.set(sb, sec);
+    }
+    sec.count += 1;
+    sec.totalSkus += item.articleGroupCount || 1;
+    if (item.imageUrl) sec.photoCount += 1;
+    if (sec.items.length < itemsPerSection) {
+      sec.items.push(item);
+    }
+  }
+  const sorted = sortSubBrandStats(Array.from(secMap.values()), (x) => x.subBrand);
+  return sorted.slice(0, maxSections).map(({ photoCount: _p, ...rest }) => rest);
+}
+
+/** Mengurutkan item agar produk berfoto & berstok tampil paling depan saat menjelajah katalog */
+export function compareBrowseItems<
+  T extends {
+    imageUrl?: string | null;
+    articleTotalStok?: number;
+    stok?: number;
+    articleHasPromo?: boolean;
+    hargaPromo?: number | null;
+    description?: string | null;
+    name?: string | null;
+  }
+>(a: T, b: T): number {
+  const aPhoto = a.imageUrl ? 1 : 0;
+  const bPhoto = b.imageUrl ? 1 : 0;
+  if (bPhoto !== aPhoto) return bPhoto - aPhoto;
+  const aStok = a.articleTotalStok ?? a.stok ?? 0;
+  const bStok = b.articleTotalStok ?? b.stok ?? 0;
+  const aHasStok = aStok > 0 ? 1 : 0;
+  const bHasStok = bStok > 0 ? 1 : 0;
+  if (bHasStok !== aHasStok) return bHasStok - aHasStok;
+  if (bStok !== aStok) return bStok - aStok;
+  const aPromo = a.articleHasPromo || Boolean(a.hargaPromo) ? 1 : 0;
+  const bPromo = b.articleHasPromo || Boolean(b.hargaPromo) ? 1 : 0;
+  if (bPromo !== aPromo) return bPromo - aPromo;
+  return (a.description || a.name || "").localeCompare(b.description || b.name || "");
 }
 

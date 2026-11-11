@@ -47,6 +47,7 @@ const VALID_CATEGORIES = new Set<CategoryKey>([
   "DRESS_ROK",
   "SEPATU_SANDAL",
   "TAS_AKSESORIS",
+  "BEAUTY",
   "TIDUR_DALAM",
   "OTHER",
 ]);

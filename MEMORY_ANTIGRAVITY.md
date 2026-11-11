@@ -1083,6 +1083,18 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   2. **Sub-Brand Strip Khusus `Mu+Ku`:** Ketika user memilih **`Mu+Ku`**, muncul bar quick-filter merk populer (`NEVADA`, `LITTLE M`, `CONNEXION`, `COLE`, `MAXMURAH`, `ST YVES`, `VOLO`, `BYRCH & CO`, `MUKU`, dll.), dan setiap kartu `Mu+Ku` menampilkan badge toko **`Mu+Ku`** bersama badge merk produknya masing-masing.
   3. **Auto-Upgrade Index Tanpa Re-Download (`v13_smz_monostore`):** Menambahkan versi taxonomy lokal `suko_models_taxonomy_ver` di `ensureModelsIndexReady()` agar `db.models` dibangun ulang otomatis dalam ~450ms langsung dari `db.products` (tanpa unduh ulang 97.546 SKU).
 
+### 70. Label Eksplisit "Artikel" + Grouping Brand-First `Mu+Ku` & Kategori `Beauty` (`v14_muku_brand_sections`)
+- **Konteks Masalah User:**
+  1. Membedakan jumlah model unik vs total varian SKU agar kasir tidak mengira hasil pencarian/filter `"cuma 19 barang"`: seluruh label UI diubah eksplisit dari **`Model`** menjadi **`Artikel`** + pill **`Total SKU varian`**.
+  2. Saat membuka **`Mu+Ku`** (*Multibrand*), halaman 1 sebelumnya dipenuhi kosmetik `NAYOUNG` (`BLUSH VEIL LIQUID` salah masuk `👕 Atasan` karena substring `"BLUS"`), stiker `GENERAL TOYS` & tumbler tanpa foto karena sortir stok murni (`stok DESC`), serta pecahan kategori 1–2 kartu alih-alih dikelompokkan berdasarkan **Brand** lebih dulu.
+- **Perbaikan Menyeluruh ([`productTaxonomy.ts`](file:///c:/Max%20Display/price-checker/src/lib/productTaxonomy.ts), [`productQueryHelpers.ts`](file:///c:/Max%20Display/price-checker/src/lib/productQueryHelpers.ts), [`offlineDb.ts`](file:///c:/Max%20Display/price-checker/src/lib/offlineDb.ts), [`api/catalog`](file:///c:/Max%20Display/price-checker/src/app/api/catalog/route.ts), [`api/product/[identifier]`](file:///c:/Max%20Display/price-checker/src/app/api/product/%5Bidentifier%5D/route.ts), [`page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx)):**
+  1. **Word-Boundary Category & Kategori `💄 BEAUTY`:** Mengganti `.includes()` dengan compiled word-boundary RegExp (`CATEGORY_REGEX_MAP`) sehingga `BLUSH` -> `Beauty & Skincare` (bukan `BLUS`/`ATASAN`), `BAGGY` != `BAG`, `CAPYBARA` != `CAP`, `STOPPER` != `TOP`.
+  2. **Photo-First Browse Ordering & Normalized Sub-Brands:** Shared helper `compareBrowseItems`, `getNormalizedSubBrand`, `sortSubBrandStats`, dan `buildBrandShowcaseSections` memastikan produk **berfoto** tampil lebih dulu di galeri *Facing Out* sebelum item `"Belum Ada Foto"`, serta menyatukan label merk `NAYOUNG`, `ST YVES`, `MAXMURAH`, `BYRCH & CO`, `MUKU`, `LITTLE M`, `NEVADA`, `CONNEXION`, `COLE`, `VOLO`.
+  3. **Grouping `Mu+Ku` By Brand First (`Kelompok Brand`):**
+     - Saat berada di **`Mu+Ku`** tanpa filter merk spesifik: chip **`Merk Mu+Ku:`** menampilkan jumlah artikel live per brand (`NEVADA`, `LITTLE M`, `MAXMURAH`, `COLE`, `CONNEXION`, `ST YVES`, `VOLO`, dst.), dan area hasil menampilkan **Showcase 1 baris (5 artikel unggulan) per Brand** (`brandShowcaseSections`) atau pengelompokan hasil per Brand saat mengetik query/pindah halaman, lengkap dengan tombol **`Lihat semua [Brand] →`** sebelum masuk ke rincian kategori brand tersebut.
+  4. **Auto-Upgrade Index Lokal (`v14_muku_brand_sections`):** `db.models` terbangun ulang otomatis ~450ms di HP langsung dari `db.products` yang sudah tersimpan tanpa perlu download ulang data master.
+
+
 
 
 

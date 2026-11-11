@@ -2,8 +2,12 @@ import { prisma as db } from "@/lib/prisma";
 import {
   BrandGroupKey,
   CategoryKey,
+  SubBrandCount,
   classifyBrandGroup,
   classifyProductCategory,
+  getNormalizedSubBrand,
+  createEmptyCategoryCounts,
+  sortSubBrandStats,
 } from "@/lib/productTaxonomy";
 
 export const PRODUCT_LIST_SELECT = {
@@ -117,35 +121,40 @@ export function summarizeTaxonomyCounts(groupedArticles: any[]) {
     ZES: 0,
   };
   const categoryCounts: Record<CategoryKey, number> = {
+    ...createEmptyCategoryCounts(),
     ALL: groupedArticles.length,
-    JAKET: 0,
-    ATASAN: 0,
-    CELANA: 0,
-    DRESS_ROK: 0,
-    SEPATU_SANDAL: 0,
-    TAS_AKSESORIS: 0,
-    TIDUR_DALAM: 0,
-    OTHER: 0,
   };
+  const mukuSubBrandTotals = new Map<string, SubBrandCount>();
 
   for (const item of groupedArticles) {
     const bg: BrandGroupKey = (item.brandGroup as BrandGroupKey) || classifyBrandGroup(item);
     brandCounts[bg] = (brandCounts[bg] || 0) + 1;
     const cat: CategoryKey = (item.categoryKey as CategoryKey) || classifyProductCategory(item);
     categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
+
+    if (bg === "MUKU") {
+      const sb = item.subBrand || getNormalizedSubBrand(item);
+      const prev = mukuSubBrandTotals.get(sb) || { name: sb, count: 0, photoCount: 0 };
+      prev.count += 1;
+      if (item.imageUrl) prev.photoCount += 1;
+      mukuSubBrandTotals.set(sb, prev);
+    }
   }
 
-  return { brandCounts, categoryCounts };
+  const subBrandCounts = sortSubBrandStats(Array.from(mukuSubBrandTotals.values()), (x) => x.name);
+  return { brandCounts, categoryCounts, subBrandCounts };
 }
 
 /**
- * Memastikan hasil sesuai presedensi Brand & Kategori (menghindari edge case SQL LIKE)
+ * Memastikan hasil sesuai presedensi Brand, Kategori, & Sub-Brand (menghindari edge case SQL LIKE)
  */
 export function filterByTaxonomy<T extends Record<string, any>>(
   items: T[],
   brandGroup: BrandGroupKey,
-  category: CategoryKey
+  category: CategoryKey,
+  subBrand: string = ""
 ): T[] {
+  const subUpper = subBrand.trim().toUpperCase();
   return items.filter((item) => {
     if (brandGroup !== "ALL") {
       const g = item.brandGroup || classifyBrandGroup(item);
@@ -154,6 +163,14 @@ export function filterByTaxonomy<T extends Record<string, any>>(
     if (category !== "ALL") {
       const c = item.categoryKey || classifyProductCategory(item);
       if (c !== category) return false;
+    }
+    if (subUpper) {
+      const sb = item.subBrand || getNormalizedSubBrand(item);
+      const match =
+        sb === subUpper ||
+        String(item.brand || "").toUpperCase().includes(subUpper) ||
+        String(item.dept || "").toUpperCase().includes(subUpper);
+      if (!match) return false;
     }
     return true;
   });
