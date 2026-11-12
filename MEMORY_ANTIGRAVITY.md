@@ -1184,3 +1184,24 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
      - Berdasarkan foto hang-tag toko fisik user (`COLE`, `BD4-3 PSNYC01`, `NAVY`, `XL`, `Rp 149.900`), SKU `19543756` telah ditautkan resmi ke barcode `2340001284343` dan `16.000` baris alias duplikat dibersihkan.
      - Status akhir vault & DB: **`275,639` SKU** (`97,379` ber-barcode utama, **`10` `BarcodeAlias`** multi-barcode aktif, **`217,962`** foto, ukuran DB **`396 MB`**).
 - **Verifikasi:** `npx tsc --noEmit`, `npm run build` (`53/53` halaman), `python -m py_compile`, dan `raw_vault_collector.py --audit` (`14.8s`) lulus dengan exit code `0`.
+
+---
+
+### 77. Mode Kode Merah, Sensus Vendor StoreHub 24/7, & Checkpoint Jeda Pagi (13 November 2026, 04:34 WIB)
+
+- **Upgrade Mesin Scraper Kode Merah (`commit 2477e13` -> `origin/main`):**
+  1. [`python-engine/raw_vault_collector.py`](file:///c:/Max%20Display/price-checker/python-engine/raw_vault_collector.py):
+     - `--collect-vendors`: Menyapu endpoint cloud StoreHub `/cv-stock` (`listVendors`, aktif 24/7) ke tabel `raw_vendor_registry` (mengantongi **`276` vendor konsinyasi & ribuan sub-brand**, termasuk vendor `953332` `KROTO NATIONAL TRADING CV.-` -> `TOME AME` dan vendor `999999` `MDS VENDOR` dengan 432+ brand).
+     - `--code-red`: Memperluas jangkauan `matahari.com` hingga **seluruh `5.121` koleksi (`4.858` koleksi aktif)** & halaman global tanpa filter kaku, menyimpan seluruh varian anomali/tanpa-SKU (`SHP-*`) secara eksklusif di SQLite lokal `raw_vault.db` (tidak mencemari `"Product"` Supabase), dengan auto-flush per `100` koleksi dan fitur **Auto-Resume `< 6 jam`**.
+  2. [`python-engine/matahari_catalog_expander.py`](file:///c:/Max%20Display/price-checker/python-engine/matahari_catalog_expander.py): Ekstraksi mode longgar (`strict=False`) menyimpan seluruh metadata Shopify ke `extra_json`.
+  3. [`python-engine/morning_full_sweep.py`](file:///c:/Max%20Display/price-checker/python-engine/morning_full_sweep.py): Mengarsipkan payload JSON StoreHub utuh ke `extra_json` vault + menambahkan sparse census probe untuk klaster SKU 8-digit (`71xxxx`).
+  4. [`.github/workflows/retail-sync-engine.yml`](file:///c:/Max%20Display/price-checker/.github/workflows/retail-sync-engine.yml): Jalur `KATEGORI 1B` menjalankan `raw_vault_collector.py --collect-vendors --collect-web --audit`.
+- **Snapshot Aman Sebelum Jeda (`raw_vault.db` Verified `PRAGMA quick_check: ok`, WAL Truncated):**
+  - Ukuran `python-engine/raw_vault.db`: **`346,73 MB`** (nol lock, siap matikan PC).
+  - Isi `raw_items`: **`467.065` baris** (**`191.426`** `MATAHARI_SHOPIFY` + **`275.639`** `POSTGRES_PRODUCT`), **`801`** koleksi tercatat (`651` terisi -> `32.953` artikel unik Shopify), **`276`** vendor konsinyasi StoreHub.
+  - Kuota Supabase tetap terjaga di **`396,03 MB` / `500 MB`**.
+- **Rencana Lanjut Nanti Pagi (`>= 09:00 WIB`, Saat StoreHub Toko 719 `172.24.12.41:1433` Aktif):**
+  1. Jalankan StoreHub Brutal Sweep + full JSON archival untuk menyerap `71885502` (`3 VANCE`), `TP090-10-02` (`TOME AME`), dan stok/promo riil:
+     `python-engine\.venv\Scripts\python.exe -u python-engine/morning_full_sweep.py --brutal --upc-first --workers=24`
+  2. Lanjutkan sisa koleksi Kode Merah `matahari.com` (`801 -> 4.858`) lalu audit & masak ke Supabase (`< 440 MB`):
+     `python-engine\.venv\Scripts\python.exe -u python-engine/raw_vault_collector.py --collect-web --code-red --audit`
