@@ -32,7 +32,7 @@ import re
 import sqlite3
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -138,6 +138,13 @@ def init_vault_db(db_path: str = VAULT_DB_PATH) -> sqlite3.Connection:
             products_count INTEGER DEFAULT 0,
             fetched_count INTEGER DEFAULT 0,
             last_fetched_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS raw_vendor_registry (
+            vendor_id INTEGER PRIMARY KEY,
+            vendor_name TEXT NOT NULL,
+            brand_names_json TEXT NOT NULL,
+            collected_at TEXT NOT NULL
         );
         """
     )
@@ -443,10 +450,74 @@ def collect_local_sources(
     return stats
 
 
-def collect_matahari_deep(max_collections: int = 360) -> int:
+def collect_storehub_vendors(db_path: str = VAULT_DB_PATH) -> int:
+    """
+    Tarik daftar seluruh Vendor Konsinyasi & Brand dari StoreHub `/cv-stock` (`listVendors`)
+    yang aktif 24/7 di cloud StoreHub tanpa menunggu jam toko buka.
+    """
+    import requests
+    from dotenv import load_dotenv
+
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    load_dotenv(os.path.join(base_dir, ".env"))
+    load_dotenv(os.path.join(base_dir, ".env.local"))
+    cookie_path = os.path.join(base_dir, ".mds_cookie")
+    cookie_val = ""
+    if os.path.exists(cookie_path):
+        with open(cookie_path, "r", encoding="utf-8", errors="ignore") as f:
+            cookie_val = f.read().strip()
+    if not cookie_val:
+        cookie_val = (os.getenv("MDS_SESSION_COOKIE") or "").strip()
+    if not cookie_val:
+        print("⚠️ [STOREHUB VENDORS] Cookie .mds_cookie tidak tersedia, melewati sedot vendor CV.")
+        return 0
+
+    sess = requests.Session()
+    sess.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "text/x-component",
+        "Content-Type": "text/plain;charset=UTF-8",
+        "Next-Action": "40d31bb5a83dc72259c9c08b7bae7eff3c4fd7eebf",
+        "Referer": "https://storehub.mdsretailing.id/cv-stock",
+        "Cookie": cookie_val,
+    })
+
+    vendors_map: Dict[int, Tuple[str, List[str]]] = {}
+    prefixes = [""] + list("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+    for q in prefixes:
+        try:
+            r = sess.post("https://storehub.mdsretailing.id/cv-stock", data=json.dumps([q]), timeout=12)
+            for line in r.text.splitlines():
+                if '"vendors":' in line:
+                    obj = json.loads(line[line.find("{"):])
+                    for v in (obj.get("vendors") or []):
+                        vid = v.get("vendor_id")
+                        if vid is not None:
+                            vendors_map[int(vid)] = (str(v.get("vendor_name") or ""), list(v.get("brand_names") or []))
+        except Exception:
+            continue
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    conn_v = init_vault_db(db_path)
+    cur_v = conn_v.cursor()
+    cur_v.executemany(
+        """
+        INSERT OR REPLACE INTO raw_vendor_registry (vendor_id, vendor_name, brand_names_json, collected_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        [(vid, vname, json.dumps(brands), now_iso) for vid, (vname, brands) in vendors_map.items()],
+    )
+    conn_v.commit()
+    conn_v.close()
+    print(f"🏷️ [STOREHUB VENDORS] {len(vendors_map):,} vendor konsinyasi & ribuan sub-brand tersimpan di raw_vault.db")
+    return len(vendors_map)
+
+
+def collect_matahari_deep(max_collections: int = 360, code_red: bool = False) -> int:
     """
     Kumpulkan katalog Matahari.com seluas-luasnya langsung ke Raw Vault SQLite
-    (tidak memakan kuota Supabase!) agar tidak ada artikel/varian yang terlewat.
+    (tidak memakan kuota Supabase!) agar tidak ada artikel/varian/anomali yang terlewat.
+    Mode `--code-red` menyapu SEMUA koleksi tanpa batas + checkpoint per 200 koleksi.
     """
     from matahari_catalog_expander import (
         CORE_BRAND_KEYWORDS,
@@ -456,7 +527,9 @@ def collect_matahari_deep(max_collections: int = 360) -> int:
     )
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    print(f"🌐 [VAULT COLLECT] Mengumpulkan katalog global + hingga {max_collections} koleksi Matahari.com ke Raw Vault...")
+    target_limit = 10000 if (code_red or max_collections <= 0) else max_collections
+    mode_label = "KODE MERAH (ALL COLLECTIONS + ANOMALI)" if (code_red or max_collections <= 0) else f"DEEP ({max_collections} koleksi)"
+    print(f"🌐 [VAULT COLLECT - {mode_label}] Mengumpulkan katalog global Matahari.com ke Raw Vault...")
     t0 = time.time()
     products_by_id: Dict[int, Dict[str, Any]] = {}
 
@@ -464,15 +537,16 @@ def collect_matahari_deep(max_collections: int = 360) -> int:
         data = shopify_get_json(f"https://matahari.com/products.json?limit=250&page={page}")
         return (data.get("products") or []) if data else []
 
+    max_global_pages = 150 if code_red else 101
     with ThreadPoolExecutor(max_workers=10) as ex:
-        for items in ex.map(fetch_global_page, range(1, 101)):
+        for items in ex.map(fetch_global_page, range(1, max_global_pages)):
             for p in items:
                 pid = p.get("id")
                 if pid:
                     products_by_id[pid] = p
 
     discovered: List[Tuple[str, int]] = []
-    for page in range(1, 35):
+    for page in range(1, 80):
         data = shopify_get_json(f"https://matahari.com/collections.json?limit=250&page={page}", timeout=15)
         cols = (data.get("collections") or []) if data else []
         if not cols:
@@ -481,7 +555,9 @@ def collect_matahari_deep(max_collections: int = 360) -> int:
             h = str(c.get("handle") or "")
             if h:
                 discovered.append((h, int(c.get("products_count") or 0)))
-        time.sleep(0.08)
+        if len(cols) < 250:
+            break
+        time.sleep(0.05)
 
     selected: List[Tuple[str, int]] = []
     seen_h: Set[str] = set()
@@ -493,22 +569,24 @@ def collect_matahari_deep(max_collections: int = 360) -> int:
             if any(kw in h.lower() for kw in kw_group):
                 seen_h.add(h)
                 selected.append((h, cnt))
-            if len(selected) >= max_collections:
+            if len(selected) >= target_limit:
                 break
-        if len(selected) >= max_collections:
+        if len(selected) >= target_limit:
             break
 
-    if len(selected) < max_collections:
+    if len(selected) < target_limit:
         for h, cnt in discovered:
             if h not in seen_h and cnt > 0:
                 seen_h.add(h)
                 selected.append((h, cnt))
-            if len(selected) >= max_collections:
+            if len(selected) >= target_limit:
                 break
+
+    print(f"   🔎 Terdeteksi {len(discovered):,} koleksi total -> dipilih {len(selected):,} koleksi aktif untuk disedot.")
 
     def fetch_col(col: str) -> Tuple[str, List[Dict[str, Any]]]:
         out: List[Dict[str, Any]] = []
-        for page in range(1, 45):
+        for page in range(1, 50):
             data = shopify_get_json(f"https://matahari.com/collections/{col}/products.json?limit=250&page={page}")
             if not data:
                 break
@@ -524,6 +602,35 @@ def collect_matahari_deep(max_collections: int = 360) -> int:
     cur_v = conn_vault.cursor()
     now_iso = datetime.now(timezone.utc).isoformat()
 
+    if code_red:
+        cutoff_6h = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+        recent_rows = cur_v.execute(
+            "SELECT handle FROM raw_collections_state WHERE fetched_count > 0 AND last_fetched_at >= ?",
+            (cutoff_6h,),
+        ).fetchall()
+        recent_handles = {r[0] for r in recent_rows}
+        if recent_handles:
+            before_cnt = len(selected)
+            selected = [(h, cnt) for h, cnt in selected if h not in recent_handles]
+            print(f"   ⏭️ Resume Code-Red: lewati {before_cnt - len(selected):,} koleksi yang baru disedot <6 jam lalu (sisa {len(selected):,}).")
+
+    total_stored = 0
+    seen_bcs: Set[str] = set()
+    flushed_pids: Set[int] = set()
+
+    def flush_new_products_to_vault():
+        nonlocal total_stored
+        pending_rows: List[Dict[str, Any]] = []
+        for pid, prod in products_by_id.items():
+            if pid in flushed_pids:
+                continue
+            flushed_pids.add(pid)
+            pending_rows.extend(extract_product_variants(prod, seen_bcs, strict=False))
+        if pending_rows:
+            total_stored += record_raw_items_batch(pending_rows, source="MATAHARI_SHOPIFY")
+
+    flush_new_products_to_vault()
+
     with ThreadPoolExecutor(max_workers=8) as ex:
         futures = [ex.submit(fetch_col, h) for h, _ in selected]
         for idx, fut in enumerate(as_completed(futures), 1):
@@ -536,19 +643,14 @@ def collect_matahari_deep(max_collections: int = 360) -> int:
                 pid = p.get("id")
                 if pid and pid not in products_by_id:
                     products_by_id[pid] = p
-            if idx % 40 == 0 or idx == len(selected):
-                print(f"   📦 Koleksi terkumpul: {idx}/{len(selected)} -> {len(products_by_id):,} artikel unik Shopify")
-    conn_vault.commit()
+            if idx % 100 == 0 or idx == len(selected):
+                conn_vault.commit()
+                flush_new_products_to_vault()
+                print(f"   📦 Koleksi terkumpul: {idx}/{len(selected)} -> {len(products_by_id):,} artikel unik | {total_stored:,} varian di vault")
     conn_vault.close()
 
-    extracted_rows: List[Dict[str, Any]] = []
-    seen_bcs: Set[str] = set()
-    for p in products_by_id.values():
-        extracted_rows.extend(extract_product_variants(p, seen_bcs, strict=False))
-
-    stored = record_raw_items_batch(extracted_rows, source="MATAHARI_SHOPIFY")
-    print(f"   ✅ [VAULT COLLECT] {stored:,} varian SKU mentah dari {len(products_by_id):,} artikel Shopify tersimpan di raw_vault.db ({time.time() - t0:.1f}s)")
-    return stored
+    print(f"   ✅ [VAULT COLLECT] {total_stored:,} varian SKU mentah dari {len(products_by_id):,} artikel Shopify tersimpan di raw_vault.db ({time.time() - t0:.1f}s)")
+    return total_stored
 
 
 def audit_and_cook(
@@ -646,7 +748,7 @@ def audit_and_cook(
 
     for row in cur_v.fetchall():
         sku, bc, art, desc, brand, dept, color, size, hn, imgs_j, stok, src = row
-        if sku in pg_sku_info or is_ignored_product(desc or "", art):
+        if sku.startswith("SHP-") or sku in pg_sku_info or is_ignored_product(desc or "", art):
             continue
         imgs = json.loads(imgs_j or "[]")
         img_url = imgs[0] if imgs else None
@@ -785,17 +887,22 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Raw Vault Collector & Audit/Cook Engine")
     parser.add_argument("--collect-web", action="store_true", help="Sedot katalog luas Matahari.com ke raw_vault.db")
-    parser.add_argument("--max-collections", type=int, default=360, help="Jumlah koleksi Matahari.com yang disedot ke vault")
+    parser.add_argument("--code-red", action="store_true", help="Mode KODE MERAH: sedot SEMUA koleksi Matahari.com + StoreHub vendor tanpa batas ke raw_vault.db")
+    parser.add_argument("--collect-vendors", action="store_true", help="Sedot daftar vendor konsinyasi & brand dari StoreHub ke raw_vault.db")
+    parser.add_argument("--max-collections", type=int, default=360, help="Jumlah koleksi Matahari.com (0 = tak terbatas)")
     parser.add_argument("--audit", action="store_true", help="Audit & masak seluruh raw_vault.db lalu sinkron ke Supabase")
     parser.add_argument("--dry-run", action="store_true", help="Audit tanpa menulis ke Supabase")
     parser.add_argument("--include-csv", action="store_true", help="Ikut mem-parse temp_*.csv Power Query lokal")
     parser.add_argument("--full-pg", action="store_true", help="Paksa tarik ulang penuh 275k+ baris Product dari Supabase")
     args = parser.parse_args()
 
-    if args.collect_web:
-        collect_matahari_deep(max_collections=args.max_collections)
+    if args.collect_vendors or args.code_red:
+        collect_storehub_vendors()
 
-    if args.audit or not args.collect_web:
+    if args.collect_web or args.code_red:
+        collect_matahari_deep(max_collections=args.max_collections, code_red=args.code_red)
+
+    if args.audit or (not args.collect_web and not args.code_red and not args.collect_vendors):
         audit_and_cook(push_to_supabase=(not args.dry_run), include_csv=args.include_csv, full_pg=args.full_pg)
     else:
         conn_v = init_vault_db()

@@ -711,6 +711,11 @@ def build_candidate_queues(existing_skus: Set[str], existing_barcodes: Set[str])
             cand_s = str(n_sku + d)
             if cand_s not in existing_skus:
                 sku_queue.append(cand_s)
+    # Sparse census probe di klaster SKU 71xxxx-72xxxx (brand baru / ZES / 3 VANCE dsb.)
+    for b7 in range(710000, 725000, 25):
+        cand_s = generate_mds_sku8(b7)
+        if cand_s not in existing_skus:
+            sku_queue.append(cand_s)
     sku_queue = [s for s in dict.fromkeys(sku_queue) if s and s not in existing_skus]
 
     # --- 2. KANDIDAT BARCODE: FLEKSIBEL PENUH (000001..999999 + KLASTER DINAMIS NON-234000) ---
@@ -856,6 +861,7 @@ def item_to_record(
     p_clean = int(re.sub(r"[^0-9]", "", str(raw_p).split(".")[0]) or 0)
 
     now_iso = datetime.now(timezone.utc).isoformat()
+    raw_payload = {k: v for k, v in item.items() if k != "_all_barcodes"}
 
     if existing_row and not existing_row.get("_from_registry_only"):
         merged = dict(existing_row)
@@ -864,6 +870,7 @@ def item_to_record(
             merged["barcode"] = bc_val
         if all_bcs:
             merged["_all_barcodes"] = all_bcs
+        merged["_raw_extra"] = raw_payload
         if art_val and art_val != "PRODUK BARU":
             merged["article"] = art_val
         if desc_val and desc_val != "PRODUK BARU":
@@ -886,6 +893,7 @@ def item_to_record(
         "sku": sku_val,
         "barcode": bc_val,
         "_all_barcodes": all_bcs,
+        "_raw_extra": raw_payload,
         "article": art_val,
         "description": desc_val,
         "brand": brand_val,
@@ -1001,6 +1009,7 @@ def flush_buffer(
             "size": r.get("size"),
             "hargaNormal": r.get("hargaNormal"),
             "stok": r.get("stok"),
+            "extra": r.get("_raw_extra"),
         })
         for bc_cand in all_bcs:
             bc_s = normalize_barcode_token(bc_cand)

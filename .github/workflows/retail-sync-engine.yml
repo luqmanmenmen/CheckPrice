@@ -82,13 +82,14 @@ jobs:
         if: ${{ github.event.inputs.action == 'scrab' || github.event.inputs.action == 'photos' || github.event.inputs.action == 'all' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-photos' || github.event.action == 'trigger-sync-engine' }}
         run: |
           if [ -n "$DATABASE_URL" ]; then
+            python python-engine/raw_vault_collector.py --collect-vendors --collect-web --audit
             python python-engine/matahari_catalog_expander.py
-            python python-engine/raw_vault_collector.py --audit
           else
             echo "DATABASE_URL belum dikonfigurasi, lewati ekspansi artikel online."
           fi
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MDS_SESSION_COOKIE: ${{ github.event.inputs.session_cookie || secrets.MDS_SESSION_COOKIE }}
 
       - name: 📸 [KATEGORI 1C - SCRAB GAMBAR] Brutal Image Scraper Matahari.com (4-Jalur Pure Product Photos)
         if: ${{ github.event.inputs.action == 'scrab' || github.event.inputs.action == 'photos' || github.event.inputs.action == 'all' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-photos' || github.event.action == 'trigger-sync-engine' }}

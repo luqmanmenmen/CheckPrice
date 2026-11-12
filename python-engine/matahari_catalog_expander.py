@@ -170,11 +170,19 @@ def extract_product_variants(
         for m in re.findall(r"(?<!\d)(\d{7,10})(?!\d)", fn):
             filename_sku_to_imgs.setdefault(m, []).append(cu)
 
+    tags_raw = prod.get("tags")
+    tags_list = [str(t).strip() for t in (tags_raw if isinstance(tags_raw, list) else str(tags_raw or "").split(",")) if str(t).strip()]
+
     results: List[Dict[str, Any]] = []
     for v in (prod.get("variants") or []):
         sku_raw = normalize_sku_token(v.get("sku"))
+        raw_bc = normalize_barcode_token(v.get("barcode"))
         if not sku_raw:
-            continue
+            if strict:
+                continue
+            sku_raw = raw_bc or (f"SHP-{v.get('id')}" if v.get("id") else None)
+            if not sku_raw:
+                continue
 
         opt1 = str(v.get("option1") or "").strip()
         opt2 = str(v.get("option2") or "").strip()
@@ -192,12 +200,12 @@ def extract_product_variants(
         compare_val = parse_rupiah_int(v.get("compare_at_price"))
         harga_normal = compare_val if compare_val > price_val else (price_val or compare_val)
 
-        # Terima SEMUA format barcode valid (6-20 digit, alfanumerik, dll.) tanpa dibuang
-        raw_bc = normalize_barcode_token(v.get("barcode"))
+        # Terima SEMUA format barcode valid (4-32 char, angka maupun alfanumerik) tanpa dibuang
         bc_val: Optional[str] = None
-        if raw_bc and raw_bc != sku_raw and raw_bc not in existing_barcodes:
-            bc_val = raw_bc
-            existing_barcodes.add(raw_bc)
+        if raw_bc and raw_bc != sku_raw:
+            if not strict or raw_bc not in existing_barcodes:
+                bc_val = raw_bc
+                existing_barcodes.add(raw_bc)
 
         # Pilih galeri gambar terbaik untuk varian/warna ini
         v_imgs: List[str] = []
@@ -234,8 +242,18 @@ def extract_product_variants(
             "color": color_val,
             "size": size_val,
             "hargaNormal": float(harga_normal),
+            "hargaPromo": float(price_val) if (compare_val > price_val > 0) else None,
             "imageUrl": v_imgs[0] if v_imgs else None,
             "images": v_imgs,
+            "extra": {
+                "handle": prod.get("handle"),
+                "product_type": prod.get("product_type"),
+                "tags": tags_list[:20],
+                "variant_id": v.get("id"),
+                "product_id": prod.get("id"),
+                "option3": v.get("option3"),
+                "grams": v.get("grams"),
+            },
         })
 
     return results
