@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
 import * as xlsx from "xlsx";
 import { verifyToken } from "@/lib/auth";
-
-const prisma = new PrismaClient();
 
 export const maxDuration = 60;
 

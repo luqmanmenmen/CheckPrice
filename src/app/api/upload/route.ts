@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
 import * as xlsx from "xlsx";
 import * as path from "path";
 import * as fs from "fs";
 import { verifyToken } from "@/lib/auth";
-
-const prisma = new PrismaClient();
 
 export const maxDuration = 60; // Izinkan proses upload hingga 60 detik (Mencegah Vercel 10s Timeout)
 

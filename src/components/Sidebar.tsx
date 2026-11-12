@@ -23,7 +23,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import AnimatedLogoutButton from "./AnimatedLogoutButton";
-import ShiftLoader from "./ShiftLoader";
+import ShiftLoader, { SyncProgressModal } from "./ShiftLoader";
+import type { SyncProgressDetails } from "@/lib/offlineDb";
 import { APP_VERSION, forceAppUpdate } from "@/lib/version";
 
 export default function Sidebar({ user: propUser }: { user?: any }) {
@@ -32,6 +33,7 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [isClearingCache, setIsClearingCache] = useState(false);
   const [syncProgress, setSyncProgress] = useState<number | undefined>(undefined);
+  const [syncDetails, setSyncDetails] = useState<SyncProgressDetails | null>(null);
   const [showUpToDateModal, setShowUpToDateModal] = useState(false);
   const [cachedUser, setCachedUser] = useState<any>(null);
   const [lastSyncDate, setLastSyncDate] = useState<string | null>(null);
@@ -80,12 +82,21 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
   const handleManualSync = async () => {
     setIsSyncing(true);
     setSyncProgress(0);
+    setSyncDetails({
+      percent: 0,
+      downloadedSkus: 0,
+      totalSkus: 0,
+      etaSeconds: null,
+      statusText: "Menghubungi server katalog...",
+      stage: "checking",
+    });
     setIsOpen(false);
     try {
       const { syncOfflineDatabase } = await import('@/lib/offlineDb');
-      const success = await syncOfflineDatabase((syncing, prog) => {
+      const success = await syncOfflineDatabase((syncing, prog, details) => {
         setIsSyncing(syncing);
         if (prog !== undefined) setSyncProgress(prog);
+        if (details) setSyncDetails(details);
       }, true);
 
       if (success) {
@@ -107,7 +118,9 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
       console.error(e);
       setIsSyncing(false);
     } finally {
+      setIsSyncing(false);
       setSyncProgress(undefined);
+      setSyncDetails(null);
     }
   };
 
@@ -408,19 +421,7 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
 
           {/* Full Screen Download Overlay if Syncing */}
           {isSyncing && (
-            <div className="fixed inset-0 z-[99999] bg-slate-950/75 backdrop-blur-md flex flex-col items-center justify-center p-4 animate-in fade-in duration-300 select-none">
-              <div className="bg-white/95 backdrop-blur-xl border border-white/50 rounded-3xl p-8 sm:p-10 shadow-2xl flex flex-col items-center max-w-xs w-full text-center">
-                <ShiftLoader progress={syncProgress} />
-                <div className="mt-8 flex flex-col items-center gap-1.5">
-                  <h3 className="text-base sm:text-lg font-black text-slate-800 tracking-wider">
-                    MENYINKRONKAN DATA
-                  </h3>
-                  <p className="text-xs text-slate-500 font-medium leading-relaxed">
-                    Mengunduh data harga, promo & gambar terbaru...
-                  </p>
-                </div>
-              </div>
-            </div>
+            <SyncProgressModal progress={syncProgress} details={syncDetails} />
           )}
         </>,
         document.body

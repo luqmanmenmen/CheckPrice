@@ -52,6 +52,8 @@ model Product {
 
   @@index([article])
   @@index([stok(sort: Desc)])
+  @@index([stok(sort: Desc), sku(sort: Asc)])
+  @@index([updatedAt(sort: Desc)])
   @@index([description(ops: raw("gin_trgm_ops"))], type: Gin, map: "Product_description_trgm_idx")
   @@index([article(ops: raw("gin_trgm_ops"))], type: Gin, map: "Product_article_trgm_idx")
   @@index([brand(ops: raw("gin_trgm_ops"))], type: Gin, map: "Product_brand_trgm_idx")
@@ -192,6 +194,8 @@ model Ticket {
   
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@index([status, createdAt(sort: Desc)])
 }
 
 enum TicketType {
@@ -221,6 +225,8 @@ model PoSuggestion {
   status      PoStatus @default(OPEN)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@index([status, createdAt(sort: Desc)])
 }
 
 enum PoStatus {

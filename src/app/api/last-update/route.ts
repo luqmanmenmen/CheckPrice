@@ -4,28 +4,41 @@ import { prisma } from '@/lib/prisma';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
+let cachedPayload: any = null;
+let cachedTimestamp = 0;
+const LAST_UPDATE_CACHE_TTL_MS = 15000;
+
 export async function GET() {
   try {
-    // 1. Ambil waktu update produk terakhir dari tabel Product
-    const lastUpdatedProduct = await prisma.product.findFirst({
-      orderBy: { updatedAt: 'desc' },
-      select: { updatedAt: true }
-    });
+    const now = Date.now();
+    if (cachedPayload && now - cachedTimestamp < LAST_UPDATE_CACHE_TTL_MS) {
+      return NextResponse.json(cachedPayload, {
+        headers: {
+          'Cache-Control': 'public, max-age=10, s-maxage=15, stale-while-revalidate=30',
+        }
+      });
+    }
 
-    // 2. Ambil 10 riwayat sinkronisasi terakhir dari tabel SyncHistory
-    const recentHistories = await prisma.syncHistory.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 10,
-      include: {
-        user: {
-          select: {
-            name: true,
-            nik: true,
-            role: true
+    // 1. Ambil waktu update produk terakhir dari tabel Product + 10 riwayat paralel
+    const [lastUpdatedProduct, recentHistories] = await Promise.all([
+      prisma.product.findFirst({
+        orderBy: { updatedAt: 'desc' },
+        select: { updatedAt: true }
+      }),
+      prisma.syncHistory.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+        include: {
+          user: {
+            select: {
+              name: true,
+              nik: true,
+              role: true
+            }
           }
         }
-      }
-    });
+      })
+    ]);
 
     // 3. Ambil riwayat terakhir masing-masing pilar
     const lastMds = recentHistories.find(h => h.type === 'MDS_BISA_SYNC' || h.type === 'STOCK_SYNC');
@@ -41,7 +54,7 @@ export async function GET() {
       fileName: sanitizeLabel(h.fileName),
     }));
 
-    return NextResponse.json({
+    const payload = {
       success: true,
       lastUpdate: lastUpdatedProduct ? lastUpdatedProduct.updatedAt : null,
       histories: cleanHistories,
@@ -68,15 +81,21 @@ export async function GET() {
           createdAt: lastPromo.createdAt
         } : null,
       }
-    }, {
+    };
+
+    cachedPayload = payload;
+    cachedTimestamp = now;
+
+    return NextResponse.json(payload, {
       headers: {
-        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
-        'Pragma': 'no-cache',
-        'Expires': '0',
+        'Cache-Control': 'public, max-age=10, s-maxage=15, stale-while-revalidate=30',
       }
     });
   } catch (error) {
     console.error('Error fetching last update & history:', error);
+    if (cachedPayload) {
+      return NextResponse.json(cachedPayload);
+    }
     return NextResponse.json({ 
       success: false, 
       lastUpdate: null, 

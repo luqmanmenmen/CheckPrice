@@ -1,8 +1,6 @@
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '@/lib/prisma';
 import { Package, CalendarDays, ArrowRight, Sparkles } from 'lucide-react';
 import Link from 'next/link';
-
-const prisma = new PrismaClient();
 
 function formatRupiah(angka: number) {
   return new Intl.NumberFormat("id-ID", {

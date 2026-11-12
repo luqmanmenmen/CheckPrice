@@ -359,6 +359,25 @@ export async function ensureDbOpenSafe(): Promise<boolean> {
   }
 }
 
+export interface SyncProgressDetails {
+  percent: number;
+  downloadedSkus: number;
+  totalSkus: number;
+  etaSeconds: number | null;
+  statusText: string;
+  stage: "checking" | "downloading" | "indexing" | "done" | "error";
+}
+
+export type SyncProgressCallback = (
+  isSyncing: boolean,
+  progress?: number,
+  details?: SyncProgressDetails
+) => void;
+
+const SYNC_BACKOFF_STORAGE_KEY = "suko_sync_backoff_until";
+let activeSyncPromise: Promise<boolean> | null = null;
+const activeSyncListeners = new Set<SyncProgressCallback>();
+
 export async function checkIfUpdateAvailable(): Promise<boolean> {
   try {
     await ensureDbOpenSafe();
@@ -383,114 +402,260 @@ export async function checkIfUpdateAvailable(): Promise<boolean> {
 }
 
 /**
- * Sinkronisasi Offline Database Berbasis Chunk (Aman untuk 84.763+ SKU!)
- * - Mengunduh per 10.000 SKU (~1.9 MB JSON per chunk) agar bebas limit 4.5MB Vercel.
- * - Chunk 0 berisi seluruh 5.895 produk yang memiliki stok fisik toko (`stok > 0`),
- *   sehingga dalam 1 detik pertama HP kasir langsung siap pakai!
- * - Dilengkapi auto-retry 3x per chunk & verifikasi seluruh chunk selesai (84.763 SKU)
- *   sehingga langsung siap di-scan instan tanpa perlu refresh web.
+ * Sinkronisasi Offline Database Berbasis Keyset Cursor & Chunk (Anti-Looping + Estimasi ETA Real-Time)
+ * - Memakai single-flight lock (`activeSyncPromise`) agar tidak pernah terjadi download ganda / looping paralel.
+ * - Menggunakan keyset cursor (`cursorStok`, `cursorSku`) sehingga chunk akhir (90.000+) tetap instan O(1).
+ * - Mengirimkan persentase monotonik (0% -> 100%) & estimasi sisa waktu nyata per batch penulisan.
  */
 export async function syncOfflineDatabase(
-  onSyncStateChange?: (isSyncing: boolean, progress?: number) => void,
+  onSyncStateChange?: SyncProgressCallback,
   forceSync: boolean = false
 ): Promise<boolean> {
-  try {
-    await ensureDbOpenSafe();
-    const count = await db.products.count().catch(() => 0);
-    const localVersion = localStorage.getItem("suko_server_version");
-    const localDbSchema = localStorage.getItem("suko_db_schema_version");
+  if (onSyncStateChange) {
+    activeSyncListeners.add(onSyncStateChange);
+  }
 
-    const checkRes = await fetch(`/api/check-update?t=${Date.now()}`, { cache: "no-store" });
-    const checkData = await checkRes.json();
+  if (activeSyncPromise) {
+    return activeSyncPromise;
+  }
 
-    if (checkData.success) {
-      const serverVersion = checkData.lastUpdate.toString();
+  const notifyAll = (
+    isSyncing: boolean,
+    progress?: number,
+    details?: SyncProgressDetails
+  ) => {
+    for (const cb of activeSyncListeners) {
+      try {
+        cb(isSyncing, progress, details);
+      } catch {}
+    }
+  };
 
-      if (forceSync || localDbSchema !== "v12" || localVersion !== serverVersion || count < 80000) {
-        if (onSyncStateChange) onSyncStateChange(true, 5);
+  activeSyncPromise = (async () => {
+    let highestPercent = 0;
+    let smoothedEta: number | null = null;
 
-        const CHUNK_LIMIT = 10000;
-        const MAX_CHUNKS = 12; // Mendukung hingga 120.000 SKU
-        let totalSynced = 0;
-        let completedAllChunks = false;
-
-        for (let chunkIdx = 0; chunkIdx < MAX_CHUNKS; chunkIdx++) {
-          let result: any = null;
-          let lastErr: any = null;
-
-          // Auto-retry hingga 3x per chunk jika jaringan Wi-Fi toko sempat kedip
-          for (let attempt = 0; attempt < 3; attempt++) {
-            try {
-              const res = await fetch(
-                `/api/export-products?chunk=${chunkIdx}&limit=${CHUNK_LIMIT}&t=${Date.now()}`,
-                { cache: "no-store" }
-              );
-              if (res.ok) {
-                result = await res.json();
-                break;
-              }
-              lastErr = new Error(`HTTP ${res.status}`);
-            } catch (err) {
-              lastErr = err;
-            }
-            await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
-          }
-
-          if (!result) {
-            if (chunkIdx === 0) throw lastErr || new Error("Gagal unduh chunk 0");
-            break;
-          }
-
-          if (!result.success || !Array.isArray(result.data) || result.data.length === 0) {
-            completedAllChunks = true;
-            break;
-          }
-
-          await ensureDbOpenSafe();
-          const items = result.data;
-          const WRITE_BATCH = 2500;
-          for (let i = 0; i < items.length; i += WRITE_BATCH) {
-            const sub = items.slice(i, i + WRITE_BATCH);
-            await db.products.bulkPut(sub);
-          }
-
-          totalSynced += items.length;
-          if (onSyncStateChange) {
-            const estProgress = Math.min(98, Math.round(((chunkIdx + 1) / 9) * 95));
-            onSyncStateChange(true, estProgress);
-          }
-
-          if (!result.hasMore || items.length < CHUNK_LIMIT) {
-            completedAllChunks = true;
-            break;
-          }
-        }
-
-        if (totalSynced > 0) {
-          await ensureDbOpenSafe();
-          const finalCount = await db.products.count().catch(() => totalSynced);
-          memoryModelsCache = null;
-          await rebuildModelsIndexFromProducts();
-          if (onSyncStateChange) onSyncStateChange(true, 100);
-          if (completedAllChunks || finalCount >= 80000) {
-            localStorage.setItem("suko_server_version", serverVersion);
-            localStorage.setItem("suko_dismissed_update", serverVersion);
-            localStorage.setItem("suko_db_schema_version", "v12");
-          }
-          console.log(`[OfflineDB] Berhasil sync ${totalSynced.toLocaleString()} produk (Total DB: ${finalCount.toLocaleString()} SKU, versi: ${serverVersion})`);
-          return true;
-        }
+    const emit = (
+      isSyncing: boolean,
+      rawPercent: number,
+      downloadedSkus: number,
+      totalSkus: number,
+      etaSeconds: number | null,
+      statusText: string,
+      stage: SyncProgressDetails["stage"]
+    ) => {
+      if (stage === "done") {
+        highestPercent = 100;
+      } else if (stage === "error") {
+        highestPercent = Math.max(0, highestPercent);
       } else {
+        highestPercent = Math.max(highestPercent, Math.min(99, Math.round(rawPercent)));
+      }
+
+      if (typeof etaSeconds === "number" && isFinite(etaSeconds) && etaSeconds > 0) {
+        smoothedEta =
+          smoothedEta === null
+            ? Math.ceil(etaSeconds)
+            : Math.max(1, Math.round(smoothedEta * 0.55 + etaSeconds * 0.45));
+      } else if (stage === "done") {
+        smoothedEta = 0;
+      }
+
+      const details: SyncProgressDetails = {
+        percent: stage === "error" ? highestPercent : highestPercent,
+        downloadedSkus,
+        totalSkus,
+        etaSeconds: stage === "checking" ? null : stage === "done" ? 0 : smoothedEta ?? etaSeconds,
+        statusText,
+        stage,
+      };
+      notifyAll(isSyncing, details.percent, details);
+    };
+
+    try {
+      // Cegah auto-looping terus-menerus jika baru saja gagal jaringan/server
+      if (!forceSync && typeof window !== "undefined") {
+        const backoffUntil = Number(sessionStorage.getItem(SYNC_BACKOFF_STORAGE_KEY) || "0");
+        if (backoffUntil > Date.now()) {
+          return false;
+        }
+      } else if (forceSync && typeof window !== "undefined") {
+        sessionStorage.removeItem(SYNC_BACKOFF_STORAGE_KEY);
+      }
+
+      emit(true, 2, 0, 0, null, "Memeriksa pembaruan katalog server...", "checking");
+
+      await ensureDbOpenSafe();
+      const count = await db.products.count().catch(() => 0);
+      const localVersion = localStorage.getItem("suko_server_version");
+      const localDbSchema = localStorage.getItem("suko_db_schema_version");
+
+      const checkRes = await fetch(`/api/check-update?t=${Date.now()}`, { cache: "no-store" });
+      if (!checkRes.ok) {
+        throw new Error(`HTTP ${checkRes.status} saat cek versi`);
+      }
+      const checkData = await checkRes.json();
+
+      if (!checkData?.success) {
+        throw new Error(checkData?.error || "Respon cek update tidak valid");
+      }
+
+      const serverVersion = checkData.lastUpdate.toString();
+      const needsDownload =
+        forceSync || localDbSchema !== "v12" || localVersion !== serverVersion || count < 80000;
+
+      if (!needsDownload) {
+        await ensureModelsIndexReady();
+        emit(false, 100, count, count, 0, "Data offline sudah mutakhir.", "done");
         return true;
       }
+
+      emit(true, 4, 0, Math.max(count, 97546), null, "Memulai unduhan data produk...", "downloading");
+
+      const CHUNK_LIMIT = 6000;
+      const MAX_CHUNKS = 24; // Mendukung hingga 144.000 SKU secara aman
+      const downloadStartedAt = Date.now();
+      let totalSynced = 0;
+      let expectedTotal = Math.max(count, 97546);
+      let completedAllChunks = false;
+      let cursorStok: number | null = null;
+      let cursorSku: string | null = null;
+
+      for (let chunkIdx = 0; chunkIdx < MAX_CHUNKS; chunkIdx++) {
+        let result: any = null;
+        let lastErr: any = null;
+
+        // Auto-retry hingga 3x dengan backoff bertahap jika jaringan toko kedip
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            const cursorQuery =
+              cursorStok !== null && cursorSku
+                ? `&cursorStok=${encodeURIComponent(String(cursorStok))}&cursorSku=${encodeURIComponent(cursorSku)}`
+                : "";
+            const res = await fetch(
+              `/api/export-products?chunk=${chunkIdx}&limit=${CHUNK_LIMIT}&v=${encodeURIComponent(serverVersion)}${cursorQuery}`,
+              { cache: "no-store" }
+            );
+            if (res.ok) {
+              result = await res.json();
+              break;
+            }
+            lastErr = new Error(`HTTP ${res.status}`);
+          } catch (err) {
+            lastErr = err;
+          }
+          if (attempt < 2) {
+            emit(
+              true,
+              Math.max(highestPercent, 5),
+              totalSynced,
+              expectedTotal,
+              smoothedEta,
+              `Koneksi agak lambat, mencoba ulang bagian ${chunkIdx + 1} (${attempt + 2}/3)...`,
+              "downloading"
+            );
+            await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
+          }
+        }
+
+        if (!result) {
+          throw lastErr || new Error(`Gagal unduh bagian ${chunkIdx + 1}`);
+        }
+
+        if (typeof result.totalCount === "number" && result.totalCount > 0) {
+          expectedTotal = Math.max(result.totalCount, totalSynced + (result.data?.length || 0));
+        }
+
+        if (!result.success || !Array.isArray(result.data) || result.data.length === 0) {
+          completedAllChunks = true;
+          break;
+        }
+
+        await ensureDbOpenSafe();
+        const items = result.data;
+        const WRITE_BATCH = 3000;
+        for (let i = 0; i < items.length; i += WRITE_BATCH) {
+          const sub = items.slice(i, i + WRITE_BATCH);
+          await db.products.bulkPut(sub);
+          totalSynced += sub.length;
+
+          const elapsedSec = Math.max(0.25, (Date.now() - downloadStartedAt) / 1000);
+          const ratio = Math.min(0.99, totalSynced / Math.max(expectedTotal, totalSynced, 1));
+          const progressVal = 5 + ratio * 84; // 5% .. 89%
+
+          // Mulai hitung ETA yang akurat setelah minimal 1 batch selesai ditulis
+          let etaSec: number | null = null;
+          if (totalSynced >= 3000 && elapsedSec >= 0.4 && ratio > 0.02) {
+            const remainingDownloadSec = (elapsedSec / ratio) - elapsedSec;
+            etaSec = Math.max(1, remainingDownloadSec + 2.5); // +2.5 detik estimasi rebuild indeks lokal
+          }
+
+          emit(
+            true,
+            progressVal,
+            totalSynced,
+            Math.max(expectedTotal, totalSynced),
+            etaSec,
+            `${totalSynced.toLocaleString("id-ID")} / ${Math.max(expectedTotal, totalSynced).toLocaleString("id-ID")} SKU tersimpan`,
+            "downloading"
+          );
+        }
+
+        if (result.nextCursor?.sku) {
+          cursorStok = result.nextCursor.stok ?? 0;
+          cursorSku = result.nextCursor.sku;
+        } else {
+          cursorStok = null;
+          cursorSku = null;
+        }
+
+        if (!result.hasMore || items.length < CHUNK_LIMIT) {
+          completedAllChunks = true;
+          break;
+        }
+      }
+
+      if (!completedAllChunks || totalSynced === 0) {
+        throw new Error("Sinkronisasi data belum tuntas");
+      }
+
+      emit(true, 91, totalSynced, expectedTotal, 2, "Menyusun index pencarian & katalog cepat...", "indexing");
+
+      await ensureDbOpenSafe();
+      const finalCount = await db.products.count().catch(() => totalSynced);
+      memoryModelsCache = null;
+      await rebuildModelsIndexFromProducts();
+
+      emit(true, 97, finalCount, finalCount, 1, "Menyegarkan model katalog...", "indexing");
+
+      localStorage.setItem("suko_server_version", serverVersion);
+      localStorage.setItem("suko_dismissed_update", serverVersion);
+      localStorage.setItem("suko_db_schema_version", "v12");
+      localStorage.setItem("suko_models_taxonomy_ver", MODELS_TAXONOMY_VERSION);
+      if (typeof window !== "undefined") {
+        sessionStorage.removeItem(SYNC_BACKOFF_STORAGE_KEY);
+      }
+
+      emit(false, 100, finalCount, finalCount, 0, "Selesai! Semua data siap digunakan.", "done");
+      console.log(`[OfflineDB] Berhasil sync ${totalSynced.toLocaleString()} produk (Total DB: ${finalCount.toLocaleString()} SKU, versi: ${serverVersion})`);
+      return true;
+    } catch (e) {
+      console.error("Failed to sync offline DB:", e);
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem(SYNC_BACKOFF_STORAGE_KEY, String(Date.now() + 90_000));
+      }
+      emit(false, highestPercent, 0, 0, null, "Sinkronisasi tertunda karena jaringan/server.", "error");
+      return false;
+    } finally {
+      activeSyncPromise = null;
+      if (onSyncStateChange) {
+        activeSyncListeners.delete(onSyncStateChange);
+      }
+      activeSyncListeners.clear();
     }
-    return false;
-  } catch (e) {
-    console.error("Failed to sync offline DB", e);
-    return false;
-  } finally {
-    if (onSyncStateChange) onSyncStateChange(false);
-  }
+  })();
+
+  return activeSyncPromise;
 }
 
 /**

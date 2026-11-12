@@ -11,7 +11,8 @@ import { Bell } from "lucide-react";
 import Link from "next/link";
 import { ChipLoader } from "@/components/ChipLoader";
 import ProductImageSlider, { optimizeRetailImageUrl, preloadProductImages } from "@/components/ProductImageSlider";
-import ShiftLoader from "@/components/ShiftLoader";
+import ShiftLoader, { SyncProgressModal } from "@/components/ShiftLoader";
+import type { SyncProgressDetails } from "@/lib/offlineDb";
 import ImageLightboxModal from "@/components/ImageLightboxModal";
 import { createPortal } from "react-dom";
 import {
@@ -420,6 +421,7 @@ export default function Home() {
   );
 
   // Download awal otomatis jika database lokal belum lengkap & panaskan index model lokal di RAM (~7 MB)
+  // Cukup dijalankan 1x saat mount agar tidak memicu download ganda saat `serverVersion` selesai dimuat!
   useEffect(() => {
     let isMounted = true;
     const initialSyncIfEmpty = async () => {
@@ -436,23 +438,36 @@ export default function Home() {
         const count = await db.products.count().catch(() => 0);
         const schemaVer = localStorage.getItem("suko_db_schema_version");
         if (count < 80000 || schemaVer !== "v12") {
-          if (isMounted) setIsSyncing(true);
-          await syncOfflineDatabase((syncing, prog) => {
+          if (isMounted) {
+            setSyncProgress(0);
+            setSyncDetails({
+              percent: 0,
+              downloadedSkus: count,
+              totalSkus: 0,
+              etaSeconds: null,
+              statusText: "Menghubungi server katalog...",
+              stage: "checking",
+            });
+            setIsSyncing(true);
+          }
+          const ok = await syncOfflineDatabase((syncing, prog, details) => {
             if (isMounted) {
               setIsSyncing(syncing);
               if (prog !== undefined) setSyncProgress(prog);
+              if (details) setSyncDetails(details);
             }
-          }, true);
+          }, false);
           sessionCacheRef.current.clear();
           listCacheRef.current.clear();
           await ensureDbOpenSafe();
-          if (serverVersion) {
-            localStorage.setItem("suko_server_version", serverVersion);
-            setLocalVersion(serverVersion);
+          const savedVer = localStorage.getItem("suko_server_version");
+          if (ok && savedVer && isMounted) {
+            setLocalVersion(savedVer);
           }
           if (isMounted) {
             setIsSyncing(false);
             setSyncProgress(undefined);
+            setSyncDetails(null);
           }
         } else {
           await ensureModelsIndexReady();
@@ -470,12 +485,16 @@ export default function Home() {
           }
         }
       } catch (e) {
-        if (isMounted) setIsSyncing(false);
+        if (isMounted) {
+          setIsSyncing(false);
+          setSyncProgress(undefined);
+          setSyncDetails(null);
+        }
       }
     };
     initialSyncIfEmpty();
     return () => { isMounted = false; };
-  }, [serverVersion]);
+  }, []);
 
   const lastUpdateDate = updateData?.lastUpdate 
     ? new Date(updateData.lastUpdate).toLocaleString('id-ID', {
@@ -485,10 +504,19 @@ export default function Home() {
     : 'Memuat...';
 
   const [syncProgress, setSyncProgress] = useState<number | undefined>(undefined);
+  const [syncDetails, setSyncDetails] = useState<SyncProgressDetails | null>(null);
 
   const handleManualSync = async () => {
-    setIsSyncing(true);
     setSyncProgress(0);
+    setSyncDetails({
+      percent: 0,
+      downloadedSkus: 0,
+      totalSkus: 0,
+      etaSeconds: null,
+      statusText: "Menghubungi server katalog...",
+      stage: "checking",
+    });
+    setIsSyncing(true);
     showToast("Memperbarui data & sistem...", "success");
     try {
       const {
@@ -498,10 +526,16 @@ export default function Home() {
         clearModelsMemoryCache,
         getLocalCacheStats,
       } = await import('@/lib/offlineDb');
-      await syncOfflineDatabase((syncing, prog) => {
+      const syncSuccess = await syncOfflineDatabase((syncing, prog, details) => {
         setIsSyncing(syncing);
         if (prog !== undefined) setSyncProgress(prog);
+        if (details) setSyncDetails(details);
       }, true);
+
+      if (!syncSuccess) {
+        showToast("Gagal sinkronisasi katalog (server sibuk), coba lagi sebentar.", "error");
+        return;
+      }
 
       // Reset penuh RAM cache & segarkan koneksi Dexie agar langsung siap di-scan tanpa refresh manual!
       sessionCacheRef.current.clear();
@@ -530,7 +564,7 @@ export default function Home() {
       const { checkAppVersion, forceAppUpdate, APP_VERSION } = await import('@/lib/version');
       const verCheck = await checkAppVersion();
 
-      const targetVersion = serverVersion || Date.now().toString();
+      const targetVersion = localStorage.getItem("suko_server_version") || serverVersion || Date.now().toString();
       localStorage.setItem("suko_server_version", targetVersion);
       localStorage.setItem("suko_dismissed_update", targetVersion);
       localStorage.setItem("suko_client_version", APP_VERSION);
@@ -555,6 +589,7 @@ export default function Home() {
     } finally {
       setIsSyncing(false);
       setSyncProgress(undefined);
+      setSyncDetails(null);
     }
   };
 
@@ -570,13 +605,14 @@ export default function Home() {
     const ONE_DAY_MS = 24 * 60 * 60 * 1000; // 24 Jam
     const now = Date.now();
     const detectedAt = localStorage.getItem("suko_update_detected_at");
+    const backoffUntil = Number(sessionStorage.getItem("suko_sync_backoff_until") || "0");
 
     if (!detectedAt) {
       // Catat pertama kali update terdeteksi
       localStorage.setItem("suko_update_detected_at", now.toString());
     } else {
       const elapsed = now - parseInt(detectedAt, 10);
-      if (elapsed >= ONE_DAY_MS && !isSyncing) {
+      if (elapsed >= ONE_DAY_MS && !isSyncing && backoffUntil <= now) {
         // SUDAH LEWAT 1 HARI! Paksa download dan sinkronisasi otomatis
         console.warn("[UPDATE] Melebihi 24 jam belum update versi, memaksa download otomatis...");
         handleManualSync();
@@ -2050,19 +2086,7 @@ export default function Home() {
 
       {/* Full Screen Download Overlay if Syncing Data Offline */}
       {mounted && isSyncing && createPortal(
-        <div className="fixed inset-0 z-[99999] bg-slate-950/75 backdrop-blur-md flex flex-col items-center justify-center p-4 animate-in fade-in duration-300 select-none">
-          <div className="bg-white/95 backdrop-blur-xl border border-white/50 rounded-3xl p-8 sm:p-10 shadow-2xl flex flex-col items-center max-w-xs w-full text-center">
-            <ShiftLoader progress={syncProgress} />
-            <div className="mt-8 flex flex-col items-center gap-1.5">
-              <h3 className="text-base sm:text-lg font-black text-slate-800 tracking-wider">
-                MENYINKRONKAN DATA
-              </h3>
-              <p className="text-xs text-slate-500 font-medium leading-relaxed">
-                Mengunduh data harga, promo & gambar terbaru...
-              </p>
-            </div>
-          </div>
-        </div>,
+        <SyncProgressModal progress={syncProgress} details={syncDetails} />,
         document.body
       )}
 

@@ -171,7 +171,7 @@ export default function CekHargaPage() {
           const hasUpdate = await checkIfUpdateAvailable();
           if (hasUpdate) {
             console.log("[CekHarga] Update database harga terdeteksi, sync di background...");
-            await syncOfflineDatabase(undefined, true);
+            await syncOfflineDatabase(undefined, false);
             sessionCache.current.clear();
           }
         }
@@ -192,7 +192,7 @@ export default function CekHargaPage() {
         const hasUpdate = await checkIfUpdateAvailable();
         if (hasUpdate) {
           console.log("[CekHarga] Background sync harga terbaru...");
-          await syncOfflineDatabase(undefined, true);
+          await syncOfflineDatabase(undefined, false);
           sessionCache.current.clear();
         }
       } catch (e) {
@@ -210,7 +210,7 @@ export default function CekHargaPage() {
           const { checkIfUpdateAvailable, syncOfflineDatabase } = await import("@/lib/offlineDb");
           const hasUpdate = await checkIfUpdateAvailable();
           if (hasUpdate) {
-            await syncOfflineDatabase(undefined, true);
+            await syncOfflineDatabase(undefined, false);
             sessionCache.current.clear();
           }
         } catch (e) {

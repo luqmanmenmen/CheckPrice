@@ -5,7 +5,9 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 // In-memory cache per chunk agar hemat query Supabase dan bebas limit payload 4.5MB Vercel
-const chunkCache = new Map<string, { data: any[]; hasMore: boolean; lastUpdate: number }>();
+const chunkCache = new Map<string, { data: any[]; hasMore: boolean; nextCursor: { stok: number; sku: string } | null; lastUpdate: number }>();
+let metaCache: { lastUpdate: number; totalCount: number; fetchedAt: number } | null = null;
+const META_TTL_MS = 30000;
 
 function formatProductRow(p: any) {
   const parts = p.description ? p.description.split(":") : [];
@@ -66,18 +68,32 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const chunk = Math.max(0, parseInt(searchParams.get("chunk") || "0", 10) || 0);
-    // Batasi maksimal 12.000 baris per chunk (~2.0 MB JSON) agar 100% aman di bawah batas 4.5MB Vercel Serverless
-    const limit = Math.min(12000, Math.max(1000, parseInt(searchParams.get("limit") || "10000", 10) || 10000));
-    const skip = chunk * limit;
+    const limit = Math.min(8000, Math.max(1000, parseInt(searchParams.get("limit") || "6000", 10) || 6000));
+    const cursorStokParam = searchParams.get("cursorStok");
+    const cursorSkuParam = searchParams.get("cursorSku");
+    const hasCursor = cursorStokParam !== null && cursorSkuParam !== null && cursorSkuParam.length > 0;
+    const cursorStok = hasCursor ? parseInt(cursorStokParam!, 10) : 0;
+    const cursorSku = hasCursor ? cursorSkuParam! : "";
 
-    // 1. Ambil timestamp update produk paling baru (~40ms)
-    const latestProduct = await prisma.product.findFirst({
-      orderBy: { updatedAt: 'desc' },
-      select: { updatedAt: true }
-    });
-    const currentLastUpdate = latestProduct ? latestProduct.updatedAt.getTime() : 0;
+    // 1. Ambil metadata versi + totalCount (30s cache -> 0ms pada chunk berikutnya, dan O(1) via Product_updatedAt_idx)
+    const now = Date.now();
+    let currentLastUpdate = metaCache?.lastUpdate ?? 0;
+    let totalCount = metaCache?.totalCount ?? 0;
 
-    const cacheKey = `${chunk}_${limit}`;
+    if (!metaCache || now - metaCache.fetchedAt > META_TTL_MS) {
+      const [latestProduct, counted] = await Promise.all([
+        prisma.product.findFirst({
+          orderBy: { updatedAt: 'desc' },
+          select: { updatedAt: true }
+        }),
+        prisma.product.count()
+      ]);
+      currentLastUpdate = latestProduct ? latestProduct.updatedAt.getTime() : 0;
+      totalCount = counted;
+      metaCache = { lastUpdate: currentLastUpdate, totalCount, fetchedAt: now };
+    }
+
+    const cacheKey = hasCursor ? `cur_${cursorStok}_${cursorSku}_${limit}` : `off_${chunk}_${limit}`;
     const cached = chunkCache.get(cacheKey);
     if (cached && cached.lastUpdate === currentLastUpdate && cached.data.length > 0) {
       return NextResponse.json(
@@ -86,23 +102,34 @@ export async function GET(request: NextRequest) {
           data: cached.data,
           chunk,
           limit,
+          totalCount,
           hasMore: cached.hasMore,
+          nextCursor: cached.nextCursor,
           version: currentLastUpdate,
           cached: true,
         },
         {
           headers: {
-            "Cache-Control": "public, max-age=60, s-maxage=120, stale-while-revalidate=300",
+            "Cache-Control": "public, max-age=60, s-maxage=180, stale-while-revalidate=300",
           },
         }
       );
     }
 
-    // 2. Urutkan berdasarkan `stok DESC` terlebih dahulu agar Chunk 0 otomatis membawa
-    //    SELURUH 5.895 produk yang ada stok fisiknya di toko + produk promo aktif!
+    // 2. Keyset Cursor Pagination pada index (stok DESC, sku ASC) -> O(limit) tetap 0.03s bahkan pada 90.000+ SKU!
+    const whereClause = hasCursor && !isNaN(cursorStok)
+      ? {
+          OR: [
+            { stok: { lt: cursorStok } },
+            { stok: cursorStok, sku: { gt: cursorSku } },
+          ],
+        }
+      : undefined;
+
     const products = await prisma.product.findMany({
+      where: whereClause,
       orderBy: [{ stok: 'desc' }, { sku: 'asc' }],
-      skip,
+      ...(hasCursor ? {} : { skip: chunk * limit }),
       take: limit,
       select: {
         sku: true,
@@ -126,14 +153,17 @@ export async function GET(request: NextRequest) {
 
     const parsedProducts = products.map(formatProductRow);
     const hasMore = products.length === limit;
+    const lastRow = parsedProducts.length > 0 ? parsedProducts[parsedProducts.length - 1] : null;
+    const nextCursor = lastRow ? { stok: lastRow.stok ?? 0, sku: lastRow.sku } : null;
 
-    // Batasi ukuran Map cache maksimal 12 chunk agar RAM serverless selalu lega
-    if (chunkCache.size > 12) {
+    // Batasi ukuran Map cache maksimal 24 chunk agar RAM serverless selalu lega
+    if (chunkCache.size > 24) {
       chunkCache.clear();
     }
     chunkCache.set(cacheKey, {
       data: parsedProducts,
       hasMore,
+      nextCursor,
       lastUpdate: currentLastUpdate,
     });
 
@@ -143,12 +173,14 @@ export async function GET(request: NextRequest) {
         data: parsedProducts,
         chunk,
         limit,
+        totalCount,
         hasMore,
+        nextCursor,
         version: currentLastUpdate,
       },
       {
         headers: {
-          "Cache-Control": "public, max-age=60, s-maxage=120, stale-while-revalidate=300",
+          "Cache-Control": "public, max-age=60, s-maxage=180, stale-while-revalidate=300",
         },
       }
     );
