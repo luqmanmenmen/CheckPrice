@@ -135,6 +135,33 @@ export function clearModelsMemoryCache() {
   memoryModelsCache = null;
 }
 
+/** Bentuk daftar kandidat kode SKU/barcode fleksibel untuk pencarian lokal (case-insensitive & tanpa pemisah). */
+export function buildCodeSearchCandidates(rawCode: string): string[] {
+  const trimmed = String(rawCode || "").trim();
+  if (!trimmed) return [];
+  const upper = trimmed.toUpperCase();
+  const noSep = upper.replace(/[\s\-_./]/g, "");
+  const out = new Set<string>([trimmed, upper, noSep]);
+  if (/^\d+$/.test(trimmed)) {
+    const stripped = trimmed.replace(/^0+/, "");
+    if (stripped) out.add(stripped);
+    if (trimmed.length === 12) out.add(`0${trimmed}`);
+    if (trimmed.length === 13 && trimmed.startsWith("0")) out.add(trimmed.slice(1));
+  }
+  return Array.from(out).filter(Boolean);
+}
+
+/** Cari 1 SKU/barcode di Dexie lokal dengan normalisasi huruf kapital, pemisah (-/_/./spasi), dan nol depan. */
+export async function findOfflineProductByCode(rawCode: string): Promise<CachedProduct | null> {
+  const candidates = buildCodeSearchCandidates(rawCode);
+  if (candidates.length === 0) return null;
+  await ensureDbOpenSafe();
+  const bySku = await db.products.where("sku").anyOf(candidates).first();
+  if (bySku) return bySku;
+  const byBarcode = await db.products.where("barcode").anyOf(candidates).first();
+  return byBarcode || null;
+}
+
 function isLocalPromoExpired(toDate: string | null | undefined): boolean {
   if (!toDate) return false;
   const d = new Date(toDate);

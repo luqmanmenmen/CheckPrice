@@ -111,12 +111,12 @@ export async function GET(
 
     // ─────────────────────────────────────────────────────────────
     //  TAHAP 1: EXACT & FLEXIBLE CODE MATCH (SKU / Barcode / BarcodeAlias)
-    //  Mendukung angka 5-20 digit, kode alfanumerik (PCL..., AN..., FC...), strip pemisah (-/_)
+    //  Mendukung angka 5-20 digit, kode alfanumerik (TP090-10-02, QH110.CAMEL.38, PCL...), strip pemisah (-/_/.//)
     // ─────────────────────────────────────────────────────────────
-    const mayBeCode = /\d/.test(rawInput) && !/\s/.test(rawInput);
+    const mayBeCode = (/\d/.test(rawInput) || /[\-._/]/.test(rawInput)) && !/\s/.test(rawInput);
     if (mayBeCode) {
       const upperInput = rawInput.toUpperCase();
-      const normNoSep = upperInput.replace(/[\s\-_]/g, "");
+      const normNoSep = upperInput.replace(/[\s\-_./]/g, "");
       const candidateCodes = Array.from(new Set([rawInput, upperInput, normNoSep].filter(Boolean)));
 
       if (/^\d+$/.test(rawInput)) {
@@ -164,7 +164,7 @@ export async function GET(
     // JALUR KILAT KODE NUMERIK MURNI (5-20 digit: SKU 7-9 digit, EAN-8, UPC-12, EAN-13, ITF-14+)
     // Serta fallback Live MDS untuk kode alfanumerik bila belum ditemukan di artikel DB
     const isPureDigitCode = /^\d{5,20}$/.test(rawInput);
-    const isAlphaVendorCode = !isPureDigitCode && /^(?=.*\d)[A-Za-z0-9._\-/]{6,28}$/.test(rawInput);
+    const isAlphaVendorCode = !isPureDigitCode && /^(?=.*[\d\-._/])[A-Za-z0-9._\-/]{4,32}$/.test(rawInput);
 
     if (isPureDigitCode) {
       const numericMatches = await db.product.findMany({

@@ -1205,7 +1205,7 @@ export default function Home() {
     }
 
     // 0D. INSTAN DATA LOKAL HP (~5-10ms): Untuk cari teks ("jaket"), filter SUKO/Mu+Ku/ZES, & klik Selanjutnya!
-    const isCodeSearch = Boolean(trimmed && !hasTaxonomyFilter && /\d/.test(trimmed) && !/\s/.test(trimmed));
+    const isCodeSearch = Boolean(trimmed && !hasTaxonomyFilter && (/\d/.test(trimmed) || /[\-._/]/.test(trimmed)) && !/\s/.test(trimmed));
     if (!isCodeSearch) {
       try {
         const { queryLocalModelsInstant } = await import('@/lib/offlineDb');
@@ -1259,21 +1259,12 @@ export default function Home() {
     setLoading(true);
 
     try {
-      // 1. OFFLINE-FIRST: Cek SKU/Barcode di Dexie hanya bila input berbentuk kode berangka
+      // 1. OFFLINE-FIRST: Cek SKU/Barcode di Dexie secara fleksibel (huruf besar, pemisah -/_/./spasi, nol depan)
       let localData = null;
-      if (trimmed && !hasTaxonomyFilter && page === 1 && /\d/.test(trimmed) && !/\s/.test(trimmed)) {
-        const { db, ensureDbOpenSafe } = await import('@/lib/offlineDb');
+      if (trimmed && !hasTaxonomyFilter && page === 1 && (/\d/.test(trimmed) || /[\-._/]/.test(trimmed)) && !/\s/.test(trimmed)) {
+        const { db, ensureDbOpenSafe, findOfflineProductByCode } = await import('@/lib/offlineDb');
         await ensureDbOpenSafe();
-        localData = await db.products.where('sku').equals(trimmed).first();
-        if (!localData) {
-          localData = await db.products.where('barcode').equals(trimmed).first();
-        }
-        if (!localData && /^\d+$/.test(trimmed)) {
-          const stripped = trimmed.replace(/^0+/, '');
-          if (stripped && stripped !== trimmed) {
-            localData = await db.products.where('barcode').equals(stripped).first();
-          }
-        }
+        localData = await findOfflineProductByCode(trimmed);
 
         // Jika data ditemukan di HP, langsung tampilkan (0ms instan & tanpa internet!)
         if (localData) {

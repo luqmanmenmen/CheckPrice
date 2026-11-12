@@ -88,8 +88,8 @@ def normalize_barcode_token(raw: Any) -> Optional[str]:
 
 
 def normalize_code_key(raw: str) -> str:
-    """Kunci pencocokan fleksibel: huruf besar tanpa spasi, strip, atau underscore."""
-    return re.sub(r"[\s\-_]+", "", raw.strip()).upper()
+    """Kunci pencocokan fleksibel: huruf besar tanpa spasi, strip, underscore, titik, atau garis miring."""
+    return re.sub(r"[\s\-_./]+", "", raw.strip()).upper()
 
 
 def init_vault_db(db_path: str = VAULT_DB_PATH) -> sqlite3.Connection:

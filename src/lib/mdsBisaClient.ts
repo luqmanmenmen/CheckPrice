@@ -216,7 +216,7 @@ export async function checkSingleItemStock(sku: string): Promise<{
 }> {
   const cleanSku = String(sku).trim();
 
-  const normalizeCodeKey = (val: string) => val.replace(/[\s\-_]/g, '').toUpperCase();
+  const normalizeCodeKey = (val: string) => val.replace(/[\s\-_./]/g, '').toUpperCase();
 
   const harvestBarcodes = (rows: any[], primaryItem?: any): string[] => {
     const out: string[] = [];

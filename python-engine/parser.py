@@ -95,7 +95,7 @@ def clean_barcode(val: Any) -> Optional[str]:
     s = str(val).strip()
     if s.endswith('.0') and s[:-2].isdigit():
         s = s[:-2]
-    if len(s) >= 6 and s.lower() not in ['nan', 'null', 'none', '-', '']:
+    if len(s) >= 4 and s.lower() not in ['nan', 'null', 'none', '-', '']:
         return s
     return None
 

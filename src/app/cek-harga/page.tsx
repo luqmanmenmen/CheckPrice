@@ -291,19 +291,10 @@ export default function CekHargaPage() {
       return;
     }
 
-    // 2. OFFLINE-FIRST: Cek database lokal di HP (Dexie IndexedDB) — Kecepatan 5ms!
+    // 2. OFFLINE-FIRST: Cek database lokal di HP secara fleksibel (SKU, barcode vendor, strip, nol depan)
     try {
-      const { db } = await import("@/lib/offlineDb");
-      let foundLocal = await db.products.where("sku").equals(trimmed).first();
-      if (!foundLocal) {
-        foundLocal = await db.products.where("barcode").equals(trimmed).first();
-      }
-      if (!foundLocal && /^\d+$/.test(trimmed)) {
-        const stripped = trimmed.replace(/^0+/, '');
-        if (stripped && stripped !== trimmed) {
-          foundLocal = await db.products.where("barcode").equals(stripped).first();
-        }
-      }
+      const { db, findOfflineProductByCode } = await import("@/lib/offlineDb");
+      const foundLocal = await findOfflineProductByCode(trimmed);
 
       if (foundLocal) {
         const prodData: ProductData = {

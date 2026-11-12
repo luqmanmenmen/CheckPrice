@@ -27,11 +27,17 @@ interface TextScannerProps {
   onScanResult: (result: string, detected?: DetectedSku, snapshot?: string) => void;
 }
 
-// FORMAT BARCODE RETAIL MURNI (EAN-13, CODE-128, UPC-A, QR)
+// FORMAT BARCODE RETAIL LENGKAP (EAN-13, EAN-8, CODE-128, CODE-39, CODE-93, UPC-A, UPC-E, ITF, CODABAR, QR)
 const SUPPORTED_FORMATS = [
   Html5QrcodeSupportedFormats.EAN_13,
+  Html5QrcodeSupportedFormats.EAN_8,
   Html5QrcodeSupportedFormats.CODE_128,
+  Html5QrcodeSupportedFormats.CODE_39,
+  Html5QrcodeSupportedFormats.CODE_93,
   Html5QrcodeSupportedFormats.UPC_A,
+  Html5QrcodeSupportedFormats.UPC_E,
+  Html5QrcodeSupportedFormats.ITF,
+  Html5QrcodeSupportedFormats.CODABAR,
   Html5QrcodeSupportedFormats.QR_CODE,
 ];
 
@@ -162,17 +168,25 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     [onScanResult, playBeep, triggerHaptic, stopHardwareStream]
   );
 
-  // Handler cerdas saat kamera mendeteksi kandidat barcode (Anti-Blurry Misread!)
+  // Handler cerdas saat kamera mendeteksi kandidat barcode (Anti-Blurry Misread, dukung barcode vendor/strip!)
   const handleBarcodeDetected = useCallback(
     async (decodedText: string) => {
       if (isHandlingResult.current) return;
       const cleanCode = decodedText.trim();
       if (!cleanCode) return;
 
-      // Tolak 12-13 digit yang gagal check-digit GS1 Modulo-10
-      if (/^\d{12,13}$/.test(cleanCode) && !isValidGs1CheckDigit(cleanCode)) {
-        return;
-      }
+      const isNumeric12Or13 = /^\d{12,13}$/.test(cleanCode);
+      const passesGs1 = !isNumeric12Or13 || isValidGs1CheckDigit(cleanCode);
+
+      // JALUR KILAT DEXIE: Cek kecocokan lokal lebih dulu (menangkap juga Code-128 non-GS1 & kode bertanda hubung)
+      try {
+        const { findOfflineProductByCode } = await import("@/lib/offlineDb");
+        const hit = await findOfflineProductByCode(cleanCode);
+        if (hit) {
+          commitValidBarcode(cleanCode);
+          return;
+        }
+      } catch {}
 
       const now = Date.now();
       if (
@@ -186,46 +200,12 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       }
 
       const currentCount = lastCandidateRef.current.count;
-
-      // JALUR KILAT 1: Barcode resmi hangtag Matahari (13 digit diawali 234000) atau 8-digit SKU Matahari valid
-      const isStandardMdsEan13 =
-        /^234000\d{7}$/.test(cleanCode) && isValidGs1CheckDigit(cleanCode);
+      const isStandardMdsEan13 = /^234000\d{7}$/.test(cleanCode) && passesGs1;
       const isStandardMdsSku = isValidMdsSku8(cleanCode);
 
-      if (isStandardMdsEan13 || isStandardMdsSku) {
-        if (currentCount >= 2) {
-          commitValidBarcode(cleanCode);
-          return;
-        }
-        try {
-          const { db, ensureDbOpenSafe } = await import("@/lib/offlineDb");
-          await ensureDbOpenSafe();
-          const hit =
-            (await db.products.where("barcode").equals(cleanCode).first()) ||
-            (await db.products.where("sku").equals(cleanCode).first());
-          if (hit) {
-            commitValidBarcode(cleanCode);
-            return;
-          }
-        } catch {}
-        return;
-      }
-
-      // JALUR KILAT 2: Cek apakah kode non-234000 ini terdaftar di Dexie lokal
-      try {
-        const { db, ensureDbOpenSafe } = await import("@/lib/offlineDb");
-        await ensureDbOpenSafe();
-        const hit =
-          (await db.products.where("barcode").equals(cleanCode).first()) ||
-          (await db.products.where("sku").equals(cleanCode).first());
-        if (hit) {
-          commitValidBarcode(cleanCode);
-          return;
-        }
-      } catch {}
-
-      // JALUR PROTEKSI BLUR: Wajib konsisten 3 frame berturut-turut jika bukan 234000 & belum ada di Dexie
-      if (currentCount < 3) {
+      // Kode 12-13 digit non-GS1 (bukan dari Dexie) tetap butuh 4 frame identik agar terhindar dari noise EAN blur
+      const requiredFrames = !passesGs1 ? 4 : (isStandardMdsEan13 || isStandardMdsSku ? 2 : 3);
+      if (currentCount < requiredFrames) {
         setStatus("Memfokuskan lensa ke garis barcode...");
         return;
       }
@@ -241,7 +221,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       if (typeof window !== "undefined" && "BarcodeDetector" in window) {
         const NativeBarcodeDetector = (window as any).BarcodeDetector;
         nativeDetectorRef.current = new NativeBarcodeDetector({
-          formats: ["ean_13", "code_128", "upc_a", "qr_code"],
+          formats: ["ean_13", "ean_8", "code_128", "code_39", "code_93", "upc_a", "upc_e", "itf", "codabar", "qr_code"],
         });
       }
     } catch {
