@@ -131,7 +131,7 @@ def resolve_action_detail(default_action: str = ACTION_DETAIL) -> str:
         for s in scripts:
             js_url = f"{STOREHUB_BASE}{s}"
             js_r = http_session.get(js_url, timeout=8)
-            match = re.search(r'createServerReference\("([a-f0-9]{40,44})"[^)]*"checkItemDetail"', js_r.text)
+            match = re.search(r'createServerReference\)?\("([a-f0-9]{40,44})"[^)]{0,140}"checkItemDetail"', js_r.text)
             if match:
                 return match.group(1)
     except Exception as e:
@@ -147,11 +147,11 @@ def resolve_action_login(default_action: str = ACTION_LOGIN) -> str:
         for s in scripts:
             js_url = f"{STOREHUB_BASE}{s}"
             js_r = http_session.get(js_url, timeout=8)
-            match = re.search(r'createServerReference\)\("([a-f0-9]{40,44})"[^)]*"login"', js_r.text)
+            match = re.search(r'createServerReference\)?\("([a-f0-9]{40,44})"[^)]{0,140}"login"', js_r.text)
             if match:
                 return match.group(1)
-    except Exception as e:
-        print(f"⚠️ Gagal resolve action login hash: {e}")
+    except Exception:
+        pass
     return default_action
 
 
@@ -596,12 +596,14 @@ def load_existing_catalog_full() -> Tuple[Dict[str, Dict[str, Any]], Set[str], D
     return catalog_by_sku, existing_barcodes, brand_counts
 
 
-def build_candidate_queues(existing_skus: Set[str], existing_barcodes: Set[str]) -> Tuple[List[str], List[str]]:
+def build_candidate_queues(existing_skus: Set[str], existing_barcodes: Set[str]) -> Tuple[List[str], List[str], List[str]]:
     """
-    Membangun antrean kandidat SKU 8-digit dan Barcode 13-digit secara cerdas & menyeluruh:
-    1. Seluruh celah (gaps) antar SKU yang berdekatan di toko (diff <= 150) + tepi klaster (+/- 10).
-    2. Seluruh celah (gaps) antar Barcode 234000* di toko (diff <= 500).
-    3. Blok ekspansi penuh untuk area MUKU, ZES, SUKO, COLE, NEVADA, VOLO, ST YVES, BYRCH & CO.
+    Membangun antrean kandidat berorientasi PENEMUAN ARTIKEL BARU ("Article-First Hunter"):
+    1. `hunter_bc_queue`: Interleaved Stride-4 Sweep lintas SEMUA zona barcode `234000*`
+       (sehingga dalam 1 sesi langsung menjaring artikel baru SUKO, ZES, & MUKU dari semua
+       rentang 120xxx, 152xxx, 215xxx, 244xxx, 316xxx tanpa stuck di satu blok).
+    2. `fill_bc_queue`: Sisa barcode di antara celah stride & celah rapat `diff <= 120`.
+    3. `sku_queue`: Celah SKU 8-digit Modulo-10 yang belum terindeks.
     """
     # --- 1. KANDIDAT SKU ---
     sku_bodies = sorted(set(
@@ -610,26 +612,25 @@ def build_candidate_queues(existing_skus: Set[str], existing_barcodes: Set[str])
     candidate_sku_bodies: List[int] = []
     seen_sku_bodies = set(sku_bodies)
 
-    # a) Isi seluruh celah rapat antar SKU (ukuran celah 1 s/d 150)
+    # a) Isi celah rapat antar SKU (1..80) + tepi klaster (+/- 6)
     for i in range(len(sku_bodies) - 1):
         diff = sku_bodies[i + 1] - sku_bodies[i]
-        if 1 < diff <= 150:
+        if 1 < diff <= 80:
             for b7 in range(sku_bodies[i] + 1, sku_bodies[i + 1]):
                 if b7 not in seen_sku_bodies:
                     seen_sku_bodies.add(b7)
                     candidate_sku_bodies.append(b7)
 
-    # b) Ekspansi tepi klaster SKU (+/- 10 di sekitar setiap batas klaster)
     for i in range(len(sku_bodies)):
-        is_left_edge = (i == 0) or (sku_bodies[i] - sku_bodies[i - 1] > 150)
-        is_right_edge = (i == len(sku_bodies) - 1) or (sku_bodies[i + 1] - sku_bodies[i] > 150)
+        is_left_edge = (i == 0) or (sku_bodies[i] - sku_bodies[i - 1] > 80)
+        is_right_edge = (i == len(sku_bodies) - 1) or (sku_bodies[i + 1] - sku_bodies[i] > 80)
         if is_left_edge:
-            for b7 in range(sku_bodies[i] - 10, sku_bodies[i]):
+            for b7 in range(sku_bodies[i] - 6, sku_bodies[i]):
                 if b7 > 1000000 and b7 not in seen_sku_bodies:
                     seen_sku_bodies.add(b7)
                     candidate_sku_bodies.append(b7)
         if is_right_edge:
-            for b7 in range(sku_bodies[i] + 1, sku_bodies[i] + 11):
+            for b7 in range(sku_bodies[i] + 1, sku_bodies[i] + 7):
                 if b7 not in seen_sku_bodies:
                     seen_sku_bodies.add(b7)
                     candidate_sku_bodies.append(b7)
@@ -637,68 +638,79 @@ def build_candidate_queues(existing_skus: Set[str], existing_barcodes: Set[str])
     sku_queue = [generate_mds_sku8(b7) for b7 in candidate_sku_bodies]
     sku_queue = [s for s in sku_queue if s and s not in existing_skus]
 
-    # --- 2. KANDIDAT BARCODE ---
+    # --- 2. KANDIDAT BARCODE: ARTICLE-FIRST HUNTER (INTERLEAVED STRIDE-4) ---
     bc_bodies = sorted(set(
         int(b[6:12]) for b in existing_barcodes
         if b.startswith("234000") and len(b) == 13 and b.isdigit()
     ))
     seen_bc_bodies = set(bc_bodies)
-    candidate_bc_bodies: List[int] = []
 
-    # a) Prioritas 1: Celah sangat rapat (diff <= 120) di seluruh rentang (langsung isi size/warna yang bolong)
+    hunter_zones = [
+        (316001, 365000),  # Koleksi terbaru 32xxxx-36xxxx (SUKO/ZES/EDIT 2026)
+        (120000, 148999),  # Zona 12xxxx-14xxxx (COLE 128434 / Stanley Adams / ZES / MUKU)
+        (259500, 282999),  # Lanjutan zona 2595xx-2829xx (AOS / MUKU / SUKO / SEGA)
+        (215001, 244500),  # Zona 21xxxx-24xxxx
+        (149000, 215000),  # Zona tengah 14xxxx-21xxxx
+        (283000, 316000),  # Zona 28xxxx-31xxxx
+        (244501, 259499),  # Sisa zona 244xxx-259xxx
+        (25000, 119999),   # Zona awal 02xxxx-11xxxx
+        (365001, 395000),  # Zona atas terbaru 365xxx-395xxx
+    ]
+
+    # Interleaved Round-Robin per potongan 400 nomor di tiap zona dengan step=4 (% 4 == 0, lalu % 4 == 2)
+    hunter_bc_bodies: List[int] = []
+    fill_bc_bodies: List[int] = []
+
+    for mod_target in (0, 2):
+        zone_slices: List[List[int]] = []
+        for z_start, z_end in hunter_zones:
+            # Pecah per window 1200 nomor -> tiap window ambil stride-4
+            z_cands = [
+                b6 for b6 in range(z_start, z_end + 1)
+                if (b6 % 4 == mod_target) and (b6 not in seen_bc_bodies)
+            ]
+            if z_cands:
+                zone_slices.append(z_cands)
+
+        # Round-robin ambil batch 120 kandidat per zona secara bergantian agar semua zona tersentuh merata
+        batch_w = 120
+        idx_map = [0] * len(zone_slices)
+        active = True
+        while active:
+            active = False
+            for zi, z_list in enumerate(zone_slices):
+                pos = idx_map[zi]
+                if pos < len(z_list):
+                    active = True
+                    chunk = z_list[pos:pos + batch_w]
+                    idx_map[zi] = pos + batch_w
+                    for b6 in chunk:
+                        if b6 not in seen_bc_bodies:
+                            seen_bc_bodies.add(b6)
+                            hunter_bc_bodies.append(b6)
+
+    # Sisa celah rapat & offset ganjil (% 4 in (1, 3)) masuk ke fill_bc_bodies
     for i in range(len(bc_bodies) - 1):
         diff = bc_bodies[i + 1] - bc_bodies[i]
         if 1 < diff <= 120:
             for b6 in range(bc_bodies[i] + 1, bc_bodies[i + 1]):
                 if b6 not in seen_bc_bodies:
                     seen_bc_bodies.add(b6)
-                    candidate_bc_bodies.append(b6)
+                    fill_bc_bodies.append(b6)
 
-    # b) Prioritas 2: BLOK EKSPANSI BESAR YANG SEBELUMNYA TERLEWAT (SEGA/AOS 244500..283000, Koleksi Baru 316000..365000, Stanley Adams 120000..149000, dll)
-    priority_blocks = [
-        (244501, 282999),  # Hotspot besar 25xxxx-27xxxx (AOS MENS, SEGA 254086, MUKU/SUKO baru)
-        (316001, 360000),  # Koleksi terbaru 32xxxx-35xxxx (SUKO/EDIT/ZES 2026)
-        (215001, 235899),  # Lubang 22xxxx-23xxxx
-        (120000, 148999),  # Stanley Adams 126434 & mens/ladies formal
-        (152501, 166999),  # Area tengah bawah yang belum terjamah
-        (174501, 183999),
-        (195001, 202999),
-        (290001, 291999),
-        (302001, 302999),
-        (235900, 244500),
-        (283000, 290000),
-        (292000, 302000),
-        (303000, 316000),
-        (184000, 195000),
-        (203000, 215000),
-        (167000, 174500),
-        (149000, 152500),
-    ]
-    for start_b, end_b in priority_blocks:
-        for b6 in range(start_b, end_b + 1):
+    for z_start, z_end in hunter_zones:
+        for b6 in range(z_start, z_end + 1):
             if b6 not in seen_bc_bodies:
                 seen_bc_bodies.add(b6)
-                candidate_bc_bodies.append(b6)
+                fill_bc_bodies.append(b6)
 
-    # c) Prioritas 3: Celah menengah (120 < diff <= 800) & Rentang Awal (025000..119999) + Ekspansi Atas (360001..390000)
-    for i in range(len(bc_bodies) - 1):
-        diff = bc_bodies[i + 1] - bc_bodies[i]
-        if 120 < diff <= 800:
-            for b6 in range(bc_bodies[i] + 1, bc_bodies[i + 1]):
-                if b6 not in seen_bc_bodies:
-                    seen_bc_bodies.add(b6)
-                    candidate_bc_bodies.append(b6)
+    hunter_bc_queue = [generate_ean13_barcode(b6) for b6 in hunter_bc_bodies]
+    hunter_bc_queue = [b for b in hunter_bc_queue if b and b not in existing_barcodes]
 
-    for start_b, end_b in [(25000, 119999), (360001, 390000)]:
-        for b6 in range(start_b, end_b + 1):
-            if b6 not in seen_bc_bodies:
-                seen_bc_bodies.add(b6)
-                candidate_bc_bodies.append(b6)
+    fill_bc_queue = [generate_ean13_barcode(b6) for b6 in fill_bc_bodies]
+    fill_bc_queue = [b for b in fill_bc_queue if b and b not in existing_barcodes]
 
-    bc_queue = [generate_ean13_barcode(b6) for b6 in candidate_bc_bodies]
-    bc_queue = [b for b in bc_queue if b and b not in existing_barcodes]
-
-    return sku_queue, bc_queue
+    return hunter_bc_queue, fill_bc_queue, sku_queue
 
 
 def item_to_record(
@@ -1123,41 +1135,71 @@ def execute_morning_sweep(
     existing_skus: Set[str] = {
         s for s, r in catalog_by_sku.items() if not r.get("_from_registry_only")
     }
+    INVALID_ARTICLES = {"", "0", "-", "PRODUK BARU", "N/A", "NONE"}
+    seen_articles: Set[str] = {
+        str(r.get("article") or "").strip().upper()
+        for r in catalog_by_sku.values()
+        if str(r.get("article") or "").strip().upper() not in INVALID_ARTICLES
+    }
     initial_count = len(existing_skus)
-    print(f"📊 Katalog Saat Ini: {initial_count:,} SKU di DB | {len(existing_barcodes):,} Barcode")
+    initial_articles_count = len(seen_articles)
+    print(f"📊 Katalog Saat Ini: {initial_articles_count:,} Artikel Unik | {initial_count:,} SKU di DB | {len(existing_barcodes):,} Barcode")
 
-    # Jalur 0: SKU yang ada di registry/DB tapi belum punya barcode atau belum masuk DB
-    missing_bc_skus = [
-        s for s, r in catalog_by_sku.items()
-        if r.get("_from_registry_only") or not r.get("barcode")
+    # Jalur 0: SKU yang ada di registry/DB (termasuk hasil ekspansi Matahari.com) tapi belum punya barcode
+    missing_bc_rows = [
+        (s, r) for s, r in catalog_by_sku.items()
+        if (r.get("_from_registry_only") or not r.get("barcode")) and len(s) == 8 and s.isdigit()
     ]
+    # Prioritaskan brand inti toko (SUKO, ZES, COLE, NEVADA, LITTLE M, CONNEXION, DISNEY, ST YVES) di depan
+    def missing_prio(item_pair: Tuple[str, Dict[str, Any]]) -> Tuple[int, str]:
+        s_code, r_obj = item_pair
+        b_up = f"{r_obj.get('brand') or ''} {r_obj.get('dept') or ''}".upper()
+        if "SUKO" in b_up or "ZES" in b_up:
+            return (0, s_code)
+        if any(k in b_up for k in ("COLE", "NEVADA", "LITTLE M", "CONNEXION", "MUKU", "ST YVES", "DISNEY", "AOS", "MAXMURAH")):
+            return (1, s_code)
+        return (2, s_code)
+
+    missing_bc_rows.sort(key=missing_prio)
+    missing_bc_skus = [s for s, _ in missing_bc_rows]
+
+    hunter_bc_queue: List[str] = []
+    fill_bc_queue: List[str] = []
+    sku_queue: List[str] = []
 
     if custom_range:
         r_start, r_end = custom_range
-        bc_queue = [
+        hunter_bc_queue = [
             generate_ean13_barcode(b6)
             for b6 in range(r_start, r_end + 1)
         ]
-        bc_queue = [b for b in bc_queue if b and b not in existing_barcodes]
-        full_sku_queue: List[str] = []
-        print(f"🎯 Mode Rentang Khusus: 234000{r_start:06d} .. 234000{r_end:06d} ({len(bc_queue):,} kandidat belum terindeks)")
+        hunter_bc_queue = [b for b in hunter_bc_queue if b and b not in existing_barcodes]
+        print(f"🎯 Mode Rentang Khusus: 234000{r_start:06d} .. 234000{r_end:06d} ({len(hunter_bc_queue):,} kandidat belum terindeks)")
     else:
-        sku_queue, bc_queue = build_candidate_queues(set(catalog_by_sku.keys()), existing_barcodes)
-        full_sku_queue = missing_bc_skus + sku_queue
-        print("🎯 Antrean Cerdas Terbentuk (Tanpa Membuang Mapping Lama):")
-        print(f"   👉 [JALUR 0 - Lengkapi Mapping/Barcode] : {len(missing_bc_skus):,} SKU")
-        print(f"   👉 [JALUR 1 - Celah SKU Modulo-10]      : {len(sku_queue):,} kandidat SKU")
-        print(f"   👉 [JALUR 2 - Celah Barcode EAN-13]     : {len(bc_queue):,} kandidat Barcode")
+        hunter_bc_queue, fill_bc_queue, sku_queue = build_candidate_queues(set(catalog_by_sku.keys()), existing_barcodes)
+        print("🎯 Strategi ARTICLE-FIRST HUNTER Aktif (Prioritas Artikel Baru + Lengkapi Barcode):")
+        print(f"   👉 [JALUR 0 - Tarik Barcode & Stok SKU Baru] : {len(missing_bc_skus):,} SKU")
+        print(f"   👉 [JALUR 1 - Hunter Stride-4 Lintas Zona]   : {len(hunter_bc_queue):,} kandidat Barcode")
+        print(f"   👉 [JALUR 2 - Isi Sisa Varian & Celah SKU]   : {len(fill_bc_queue):,} BC + {len(sku_queue):,} SKU")
 
     new_discovered = 0
+    new_articles_discovered = 0
     updated_count = 0
     buffer_by_sku: Dict[str, Dict[str, Any]] = {}
     neighbor_sku_queue: List[str] = []
+    neighbor_bc_queue: List[str] = []
     seen_neighbor_skus: Set[str] = set(existing_skus) | set(catalog_by_sku.keys())
+    seen_neighbor_bcs: Set[str] = set(existing_barcodes)
     chunk_size = max(160, workers * 10)
 
-    def run_sweep_phase(category: str, queue: List[str], label: str) -> None:
-        nonlocal cookie, new_discovered, updated_count
+    def run_sweep_phase(
+        category: str,
+        queue: List[str],
+        label: str,
+        expand_on_new_article: bool = True,
+        phase_max_minutes: Optional[float] = None,
+    ) -> None:
+        nonlocal cookie, new_discovered, new_articles_discovered, updated_count
         if not queue:
             return
         print(f"\n⚡ [{label}] Menyapu {len(queue):,} kandidat dengan {workers} Worker Threads...")
@@ -1167,6 +1209,9 @@ def execute_morning_sweep(
             elapsed_min = (datetime.now() - start_time).total_seconds() / 60.0
             if elapsed_min >= max_minutes:
                 print(f"⏱️ Batas waktu aman runner ({max_minutes} menit) tercapai. Menyimpan hasil...")
+                break
+            if phase_max_minutes is not None and ((time.time() - phase_t0) / 60.0) >= phase_max_minutes:
+                print(f"⏱️ Kuota waktu fase {label} ({phase_max_minutes:.0f} menit) tercapai, lanjut ke fase berikutnya...")
                 break
 
             chunk = queue[c_start:c_start + chunk_size]
@@ -1203,20 +1248,37 @@ def execute_morning_sweep(
                             continue
                         sku_val = rec["sku"]
                         bc_val = rec.get("barcode")
+                        art_val_up = str(rec.get("article") or "").strip().upper()
                         is_new = sku_val not in existing_skus
+                        is_new_article = bool(art_val_up and art_val_up not in INVALID_ARTICLES and art_val_up not in seen_articles)
+
                         existing_skus.add(sku_val)
                         catalog_by_sku[sku_val] = rec
                         if bc_val:
                             existing_barcodes.add(bc_val)
+                            seen_neighbor_bcs.add(bc_val)
+                        if is_new_article:
+                            seen_articles.add(art_val_up)
+                            new_articles_discovered += 1
 
-                        # Saat menemukan produk baru dari barcode, antrekan tetangga SKU Modulo-10 (±12) agar seluruh size/warna ikut terserap
-                        if is_new and category == "upc" and len(sku_val) == 8 and sku_val.isdigit():
-                            base7 = int(sku_val[:7])
-                            for nb7 in range(max(1000000, base7 - 12), base7 + 13):
-                                nb_sku = generate_mds_sku8(nb7)
-                                if nb_sku and nb_sku not in seen_neighbor_skus:
-                                    seen_neighbor_skus.add(nb_sku)
-                                    neighbor_sku_queue.append(nb_sku)
+                        # HANYA saat menemukan ARTIKEL BARU (atau SKU baru dari upc), antrekan tetangga terdekat agar seluruh warna/size ikut terserap!
+                        if expand_on_new_article and (is_new_article or (is_new and category == "upc")):
+                            if bc_val and bc_val.startswith("234000") and len(bc_val) == 13 and bc_val.isdigit():
+                                base6 = int(bc_val[6:12])
+                                span_bc = (-3, 12) if is_new_article else (-1, 5)
+                                for nb6 in range(max(25000, base6 + span_bc[0]), base6 + span_bc[1]):
+                                    nb_bc = generate_ean13_barcode(nb6)
+                                    if nb_bc and nb_bc not in seen_neighbor_bcs:
+                                        seen_neighbor_bcs.add(nb_bc)
+                                        neighbor_bc_queue.append(nb_bc)
+                            if len(sku_val) == 8 and sku_val.isdigit():
+                                base7 = int(sku_val[:7])
+                                span_sku = 12 if is_new_article else 6
+                                for nb7 in range(max(1000000, base7 - span_sku), base7 + span_sku + 1):
+                                    nb_sku = generate_mds_sku8(nb7)
+                                    if nb_sku and nb_sku not in seen_neighbor_skus:
+                                        seen_neighbor_skus.add(nb_sku)
+                                        neighbor_sku_queue.append(nb_sku)
 
                         buffer_by_sku[sku_val] = rec
                         if is_new:
@@ -1226,7 +1288,8 @@ def execute_morning_sweep(
 
                         dept_key = f"{rec['brand']} ({rec['dept']})" if rec["brand"] != rec["dept"] else rec["brand"]
                         brands_counter[dept_key] = brands_counter.get(dept_key, 0) + 1
-                        print(f"   ✨ [{label}] [{dept_key}] BC: {bc_val} | SKU: {sku_val} | {rec['article']} ({rec['color']}/{rec['size']}) | Rp {rec['hargaNormal']:,} | Stok: {rec['stok']} pcs")
+                        art_tag = "🆕ART" if is_new_article else "✨SKU"
+                        print(f"   {art_tag} [{label}] [{dept_key}] BC: {bc_val} | SKU: {sku_val} | {rec['article']} ({rec['color']}/{rec['size']}) | Rp {rec['hargaNormal']:,} | Stok: {rec['stok']} pcs")
 
             if offline_hits > len(chunk) // 2:
                 if run_once_cloud:
@@ -1239,35 +1302,56 @@ def execute_morning_sweep(
 
             dt = max(0.1, time.time() - phase_t0)
             if (c_start // chunk_size) % 5 == 0:
-                print(f"   📡 [{label} PROGRES] {probed:,}/{len(queue):,} ({probed/dt:.1f} req/s) | Ditemukan Baru: +{new_discovered:,} SKU")
+                print(
+                    f"   📡 [{label} PROGRES] {probed:,}/{len(queue):,} ({probed/dt:.1f} req/s) | "
+                    f"Artikel Baru: +{new_articles_discovered:,} | SKU Baru: +{new_discovered:,}"
+                )
 
         if buffer_by_sku:
             flush_buffer(buffer_by_sku, start_time, initial_count, new_discovered, updated_count, brands_counter)
 
-    if upc_first or custom_range:
-        run_sweep_phase("upc", [b for b in bc_queue if b not in existing_barcodes], "UPC-SWEEP")
-        pending_siblings = [s for s in neighbor_sku_queue if s not in existing_skus]
-        if pending_siblings:
-            run_sweep_phase("sku", pending_siblings, "SIBLING-SKU-SWEEP")
-        if not custom_range:
-            run_sweep_phase("sku", [s for s in full_sku_queue if s not in existing_skus], "SKU-SWEEP")
+    if custom_range:
+        run_sweep_phase("upc", hunter_bc_queue, "CUSTOM-UPC-SWEEP", expand_on_new_article=True)
+        if neighbor_bc_queue:
+            run_sweep_phase("upc", [b for b in neighbor_bc_queue if b not in existing_barcodes], "EXPAND-NEW-ART-BC", expand_on_new_article=False)
+        if neighbor_sku_queue:
+            run_sweep_phase("sku", [s for s in neighbor_sku_queue if s not in existing_skus], "EXPAND-NEW-ART-SKU", expand_on_new_article=False)
     else:
-        run_sweep_phase("sku", full_sku_queue, "SKU-SWEEP")
-        run_sweep_phase("upc", [b for b in bc_queue if b not in existing_barcodes], "UPC-SWEEP")
-        pending_siblings = [s for s in neighbor_sku_queue if s not in existing_skus]
-        if pending_siblings:
-            run_sweep_phase("sku", pending_siblings, "SIBLING-SKU-SWEEP")
+        # JALUR 0: Tarik Barcode & Stok untuk SKU baru tanpa barcode (maks 12 menit agar tetap menyisakan waktu hunter panjang)
+        if missing_bc_skus:
+            run_sweep_phase("sku", missing_bc_skus, "BARCODE-RECOVERY", expand_on_new_article=False, phase_max_minutes=12.0)
+
+        # JALUR 1: Sapuan Article-Hunter Stride-4 merata di seluruh zona 234000* (SUKO, ZES, MUKU)
+        run_sweep_phase("upc", [b for b in hunter_bc_queue if b not in existing_barcodes], "ARTICLE-HUNTER-UPC", expand_on_new_article=True, phase_max_minutes=22.0)
+
+        # JALUR 2: Langsung lengkapi varian (warna/ukuran) untuk ARTIKEL BARU yang baru tertangkap
+        if neighbor_bc_queue:
+            run_sweep_phase("upc", [b for b in neighbor_bc_queue if b not in existing_barcodes], "NEW-ART-VARIANTS-BC", expand_on_new_article=False, phase_max_minutes=8.0)
+        if neighbor_sku_queue:
+            run_sweep_phase("sku", [s for s in neighbor_sku_queue if s not in existing_skus], "NEW-ART-VARIANTS-SKU", expand_on_new_article=False, phase_max_minutes=6.0)
+
+        # JALUR 3: Jika masih ada sisa waktu, isi celah barcode & SKU Modulo-10
+        run_sweep_phase("upc", [b for b in fill_bc_queue if b not in existing_barcodes], "FILL-GAPS-UPC", expand_on_new_article=True)
+        run_sweep_phase("sku", [s for s in sku_queue if s not in existing_skus], "FILL-GAPS-SKU", expand_on_new_article=False)
 
     save_mapped_paths_registry(catalog_by_sku)
     save_report(start_time, initial_count, new_discovered, updated_count, brands_counter)
     log_sync_history(
         "MDS_BISA_SYNC",
-        f"Brutal Scrap by luqman org (Total: {len(existing_skus):,} SKU, Baru: +{new_discovered:,})",
+        f"Article-First Scrap by luqman org (Total: {len(seen_articles):,} Artikel / {len(existing_skus):,} SKU, Baru: +{new_articles_discovered:,} Artikel / +{new_discovered:,} SKU)",
         len(existing_skus),
         "SUCCESS",
     )
+
+    try:
+        from build_catalog_index import build_and_verify_catalog
+        build_and_verify_catalog()
+    except Exception as e:
+        print(f"⚠️ Lewati auto-rebuild CatalogArticle: {e}")
+
     print("\n" + "=" * 80)
-    print(f"🎉 SUKSES TOTAL! Laporan lengkap tersimpan di: {REPORT_PATH}")
+    print(f"🎉 SUKSES TOTAL! Artikel Unik: {len(seen_articles):,} (+{new_articles_discovered:,} baru) | Total SKU: {len(existing_skus):,} (+{new_discovered:,} baru)")
+    print(f"📄 Laporan lengkap tersimpan di: {REPORT_PATH}")
     print("=" * 80 + "\n")
 
 

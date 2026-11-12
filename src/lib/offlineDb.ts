@@ -255,10 +255,10 @@ export async function ensureModelsIndexReady(): Promise<CachedArticleModel[] | n
         }
       }
 
-      // 1. Prioritaskan ambil index pre-computed langsung dari Python (`CatalogArticle` via /api/catalog-models) ~0.8 detik
+      // 1. Prioritaskan ambil index pre-computed langsung dari Python (`CatalogArticle` via /api/catalog-models) ~1 detik
       try {
         const fetchedModels: CachedArticleModel[] = [];
-        for (let chunk = 0; chunk < 4; chunk++) {
+        for (let chunk = 0; chunk < 12; chunk++) {
           const res = await fetch(`/api/catalog-models?chunk=${chunk}&limit=9000&t=${Date.now()}`, {
             cache: "no-store",
           });
@@ -513,7 +513,7 @@ export async function syncOfflineDatabase(
       emit(true, 4, 0, Math.max(count, 97546), null, "Memulai unduhan data produk...", "downloading");
 
       const CHUNK_LIMIT = 6000;
-      const MAX_CHUNKS = 24; // Mendukung hingga 144.000 SKU secara aman
+      const MAX_CHUNKS = 60; // Mendukung hingga 360.000 SKU secara aman
       const downloadStartedAt = Date.now();
       let totalSynced = 0;
       let expectedTotal = Math.max(count, 97546);

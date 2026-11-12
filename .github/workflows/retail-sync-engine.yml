@@ -77,7 +77,18 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
 
-      - name: 📸 [KATEGORI 1B - SCRAB GAMBAR] Brutal Image Scraper Matahari.com (4-Jalur Pure Product Photos)
+      - name: 📦 [KATEGORI 1B - EKSPANSI ARTIKEL] Tambah Artikel & Varian Baru Matahari.com (SUKO, Mu+Ku, ZES)
+        if: ${{ github.event.inputs.action == 'scrab' || github.event.inputs.action == 'photos' || github.event.inputs.action == 'all' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-photos' || github.event.action == 'trigger-sync-engine' }}
+        run: |
+          if [ -n "$DATABASE_URL" ]; then
+            python python-engine/matahari_catalog_expander.py
+          else
+            echo "DATABASE_URL belum dikonfigurasi, lewati ekspansi artikel online."
+          fi
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: 📸 [KATEGORI 1C - SCRAB GAMBAR] Brutal Image Scraper Matahari.com (4-Jalur Pure Product Photos)
         if: ${{ github.event.inputs.action == 'scrab' || github.event.inputs.action == 'photos' || github.event.inputs.action == 'all' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-photos' || github.event.action == 'trigger-sync-engine' }}
         run: |
           python python-engine/brutal_image_scraper.py

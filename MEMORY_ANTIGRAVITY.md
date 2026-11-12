@@ -1145,3 +1145,22 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
 
 
 
+
+
+---
+
+### 75. Ekspansi Artikel Katalog Produk (SUKO, Mu+Ku, ZES) & Article-First MDS Hunter (13 November 2026)
+
+- **Klarifikasi Artikel Produk vs SKU Varian:**
+  - Sebelum ekspansi: DB berisi `97,551` baris SKU (`17,366` artikel unik di `CatalogArticle`: `Mu+Ku` `15,270` artikel / `80,713` SKU, `SUKO` `1,182` artikel / `10,145` SKU, `ZES` `914` artikel / `6,160` SKU).
+  - Setelah ekspansi katalog 2-tahap (`global 25k` + `160 koleksi prioritas`): DB kini menyimpan **`275,639` SKU varian** (`26,752` kode artikel resmi unik, `97,378` ber-barcode EAN-13, `217,962` berfoto studio HD) yang dikelompokkan menjadi **`47,752` artikel unik `CatalogArticle`**:
+    - **Mu+Ku:** **`45,652` artikel** (`258,749` SKU varian, `372` sub-brand — mis. `NEVADA` `9,689` artikel, `LITTLE M` `6,479`, `COLE` `2,607`, `CARDINAL` `2,484`, `DISNEY` `2,182`, `CONNEXION` `1,608`, `ST YVES` `1,302`, `MAXMURAH` `1,177`)
+    - **SUKO:** **`1,186` artikel** (`10,197` SKU varian, `6` sub-brand)
+    - **ZES:** **`914` artikel** (`6,160` SKU varian, `2` sub-brand)
+  - Total ukuran database Supabase PostgreSQL: **`393 MB`** (aman di bawah kuota `500 MB`).
+- **Perbaikan Kasus Scan `19543756` / `PSNYC01` & `2340001284343`:**
+  - `python-engine/matahari_catalog_expander.py`: Menambahkan `shopify_get_json` (retry/backoff HTTP 429), menurunkan concurrency koleksi menjadi `8 workers` + `--collections-only`, prioritas `CORE_BRAND_KEYWORDS`, serta safety cap `< 440 MB` Supabase. Artikel `PSNYC01` (Cole) kini lengkap dari `20` menjadi **`40` SKU (`10` warna termasuk `NAVY BLUE` SKU `19543756`)**.
+  - `python-engine/morning_full_sweep.py`: Refactor ke **Article-First Hunter Mode** — Jalur 0 `BARCODE-RECOVERY` (prioritaskan `178,261` SKU tanpa barcode termasuk `19543756`, maks 12 menit) lalu Jalur 1 `ARTICLE-HUNTER-UPC` (interleaved stride-4 lintas seluruh zona barcode `120xxx..395xxx` untuk menangkap artikel baru **ZES** & **SUKO** yang tidak dipublikasikan online, maks 22 menit), perbaikan regex `createServerReference` (`\)?`), dan auto-rebuild `CatalogArticle`. Catatan: StoreHub MDS BISA Toko 719 (`172.24.12.41:1433`) hanya aktif pada jam operasional toko (`09:00–21:30 WIB`).
+  - `src/lib/offlineDb.ts`: Batas download katalog lokal diperluas menjadi `chunk < 12` (maks 108rb model) dan `MAX_CHUNKS = 60` (maks 360rb SKU).
+  - `.github/workflows/retail-sync-engine.yml`: Menjalankan `python python-engine/matahari_catalog_expander.py` sebelum `brutal_image_scraper.py`.
+- **Verifikasi:** `npx tsc --noEmit`, `npm run build` (`53/53` halaman), `python -m py_compile`, dan `ANALYZE "Product" / "CatalogArticle"` lulus tanpa error.
