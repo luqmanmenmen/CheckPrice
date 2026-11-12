@@ -715,7 +715,7 @@ export default function Home() {
         if (data.user) {
           setUser(data.user);
           localStorage.setItem("suko_user", JSON.stringify(data.user));
-        } else {
+        } else if (data.reason === "unauthenticated" || data.reason === "device_switched") {
           // Sesi sudah pindah ke tab/HP lain atau habis -> langsung lempar ke login
           // (Keranjang suko_facing_out_cart di localStorage tetap aman 100%!)
           localStorage.removeItem("suko_user");

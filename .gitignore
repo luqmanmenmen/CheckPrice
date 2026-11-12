@@ -50,4 +50,9 @@ __pycache__/
 temp_*
 *.csv
 scratch/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+raw_vault/
 

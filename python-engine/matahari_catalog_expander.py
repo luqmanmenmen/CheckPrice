@@ -42,6 +42,11 @@ from build_catalog_index import (
     is_ignored_product,
     resolve_db_url,
 )
+from raw_vault_collector import (
+    normalize_barcode_token,
+    normalize_sku_token,
+    record_raw_items_batch,
+)
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
@@ -123,8 +128,9 @@ def normalize_vendor(raw_vendor: str) -> str:
 def extract_product_variants(
     prod: Dict[str, Any],
     existing_barcodes: Set[str],
+    strict: bool = True,
 ) -> List[Dict[str, Any]]:
-    """Mengekstrak 1 produk Shopify menjadi daftar record SKU siap masuk tabel Product."""
+    """Mengekstrak 1 produk Shopify menjadi daftar record SKU siap masuk tabel Product / Raw Vault."""
     title_raw = re.sub(r"\s+", " ", str(prod.get("title") or "").strip())
     if not title_raw:
         return []
@@ -141,7 +147,7 @@ def extract_product_variants(
     if article_val in ("", "0", "-", "N/A", "NONE"):
         article_val = None
 
-    if is_ignored_product(title_upper, article_val):
+    if strict and is_ignored_product(title_upper, article_val):
         return []
 
     images = prod.get("images") or []
@@ -161,16 +167,13 @@ def extract_product_variants(
         for vid in (img.get("variant_ids") or []):
             variant_id_to_imgs.setdefault(vid, []).append(cu)
         fn = cu.split("?")[0].split("/")[-1]
-        for m in re.findall(r"(?<!\d)(\d{8})(?!\d)", fn):
+        for m in re.findall(r"(?<!\d)(\d{7,10})(?!\d)", fn):
             filename_sku_to_imgs.setdefault(m, []).append(cu)
 
     results: List[Dict[str, Any]] = []
     for v in (prod.get("variants") or []):
-        sku_raw = str(v.get("sku") or "").strip()
-        if not sku_raw or len(sku_raw) > 24 or " " in sku_raw:
-            continue
-        # Utamakan SKU numerik Matahari (7-10 digit) atau SKU bersih alfanumerik
-        if not re.match(r"^[A-Za-z0-9_-]{5,24}$", sku_raw):
+        sku_raw = normalize_sku_token(v.get("sku"))
+        if not sku_raw:
             continue
 
         opt1 = str(v.get("option1") or "").strip()
@@ -189,10 +192,10 @@ def extract_product_variants(
         compare_val = parse_rupiah_int(v.get("compare_at_price"))
         harga_normal = compare_val if compare_val > price_val else (price_val or compare_val)
 
-        # Barcode valid hanya jika 12-13 digit dan belum dipakai SKU lain
-        raw_bc = re.sub(r"[^0-9]", "", str(v.get("barcode") or "").strip())
+        # Terima SEMUA format barcode valid (6-20 digit, alfanumerik, dll.) tanpa dibuang
+        raw_bc = normalize_barcode_token(v.get("barcode"))
         bc_val: Optional[str] = None
-        if len(raw_bc) in (12, 13) and raw_bc not in existing_barcodes:
+        if raw_bc and raw_bc != sku_raw and raw_bc not in existing_barcodes:
             bc_val = raw_bc
             existing_barcodes.add(raw_bc)
 
@@ -421,16 +424,19 @@ def execute_catalog_expansion(collections_only: bool = False, max_collections: i
     products_by_id: Dict[int, Dict[str, Any]] = {} if collections_only else fetch_global_products_25k()
     fetch_target_collections(products_by_id, max_collections=max_collections)
 
-    print("\n⚙️ [TAHAP 3] Mengekstrak artikel baru & varian warna/size yang hilang...")
+    print("\n⚙️ [TAHAP 3] Mengekstrak artikel baru & varian warna/size yang hilang (Collect All ke Raw Vault)...")
     to_insert: Dict[str, Dict[str, Any]] = {}
     to_patch_img: Dict[str, Dict[str, Any]] = {}
+    raw_vault_batch: Dict[str, Dict[str, Any]] = {}
     new_articles_found: Set[str] = set()
     brand_new_skus: Dict[str, int] = {}
 
     for prod in products_by_id.values():
-        variants = extract_product_variants(prod, existing_barcodes)
+        variants = extract_product_variants(prod, existing_barcodes, strict=True)
         for rec in variants:
             sku = rec["sku"]
+            if sku not in raw_vault_batch:
+                raw_vault_batch[sku] = rec
             if sku not in existing_skus:
                 if sku not in to_insert:
                     to_insert[sku] = rec
@@ -442,6 +448,10 @@ def execute_catalog_expansion(collections_only: bool = False, max_collections: i
             elif sku not in existing_skus_with_img and rec.get("imageUrl"):
                 if sku not in to_patch_img:
                     to_patch_img[sku] = rec
+
+    if raw_vault_batch:
+        saved_raw = record_raw_items_batch(list(raw_vault_batch.values()), source="MATAHARI_SHOPIFY")
+        print(f"   🗄️ [RAW VAULT] {saved_raw:,} varian mentah tersimpan utuh di python-engine/raw_vault.db")
 
     print(
         f"🎯 Hasil Ekstraksi Siap Simpan:\n"
@@ -455,14 +465,20 @@ def execute_catalog_expansion(collections_only: bool = False, max_collections: i
 
     now_dt = datetime.now(timezone.utc)
 
-    # 1. Batch Insert SKU Baru dengan proteksi ON CONFLICT DO NOTHING & prioritas brand inti toko
+    # 1. Batch Insert SKU Baru dengan prioritas: lengkapi varian artikel eksisting -> brand inti toko
     insert_list = list(to_insert.values())
     priority_brands = {
         "SUKO", "ZES", "MUKU", "COLE", "NEVADA", "LITTLE M", "CONNEXION",
         "ST YVES", "DISNEY", "VOLO", "AOS", "BYRCH & CO", "MAXMURAH",
         "T-ZONE", "AMERICAN JEANS", "CARDINAL", "LOGO JEANS", "NAYOUNG",
     }
-    insert_list.sort(key=lambda r: (0 if r["brand"] in priority_brands else 1, r["brand"]))
+    insert_list.sort(
+        key=lambda r: (
+            0 if ((r.get("article") or "").upper() in existing_articles) else 1,
+            0 if r["brand"] in priority_brands else 1,
+            r["brand"],
+        )
+    )
     max_safe_insert = max(0, int((440.0 - db_mb) * 900))
     if len(insert_list) > max_safe_insert:
         print(

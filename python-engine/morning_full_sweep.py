@@ -43,6 +43,15 @@ from urllib3.util.retry import Retry
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from raw_vault_collector import (
+    connect_pg,
+    normalize_barcode_token,
+    normalize_code_key,
+    normalize_sku_token,
+    record_raw_items_batch,
+)
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
 
@@ -405,22 +414,29 @@ def query_storehub_multi(category: str, identifier: str, cookie: str) -> List[Di
                     return []
                 data = parsed.get("result", {}).get("data")
                 if isinstance(data, dict) and data:
+                    bc_fields = ("VendorBarcode", "vendorBarcode", "Barcode", "barcode", "UPC", "upc", "EAN", "ean", "ItemLookupCode", "AlternateCode")
                     for sku_key, rows in data.items():
-                        if isinstance(rows, list) and rows:
-                            chosen = rows[-1]
-                            if category == "upc":
-                                for r in rows:
-                                    if isinstance(r, dict) and str(r.get("VendorBarcode") or "").strip() == identifier:
-                                        chosen = r
-                                        break
-                            if isinstance(chosen, dict) and (chosen.get("SKU") or sku_key):
-                                if not chosen.get("SKU"):
-                                    chosen["SKU"] = str(sku_key)
-                                results.append(chosen)
-                        elif isinstance(rows, dict) and (rows.get("SKU") or sku_key):
-                            if not rows.get("SKU"):
-                                rows["SKU"] = str(sku_key)
-                            results.append(rows)
+                        row_list = rows if isinstance(rows, list) else ([rows] if isinstance(rows, dict) else [])
+                        if not row_list:
+                            continue
+                        harvested_bcs: List[str] = []
+                        chosen = row_list[-1]
+                        for r in row_list:
+                            if not isinstance(r, dict):
+                                continue
+                            for bf in bc_fields:
+                                nbc = normalize_barcode_token(r.get(bf))
+                                if nbc and nbc not in harvested_bcs:
+                                    harvested_bcs.append(nbc)
+                            if category == "upc" and str(r.get("VendorBarcode") or "").strip() == identifier:
+                                chosen = r
+                        if isinstance(chosen, dict) and (chosen.get("SKU") or sku_key):
+                            chosen_copy = dict(chosen)
+                            if not chosen_copy.get("SKU"):
+                                chosen_copy["SKU"] = str(sku_key)
+                            if harvested_bcs:
+                                chosen_copy["_all_barcodes"] = harvested_bcs
+                            results.append(chosen_copy)
             except Exception:
                 continue
 
@@ -532,50 +548,103 @@ def load_mapped_paths_registry() -> List[Tuple[str, str, str]]:
 
 def load_existing_catalog_full() -> Tuple[Dict[str, Dict[str, Any]], Set[str], Dict[str, int]]:
     """
-    Memuat seluruh 84.763+ produk dari Supabase menggunakan 8 Worker Paralel (Wave Pagination)
-    dan menggabungkannya dengan `mapped_sku_paths.json.gz` agar jalur mapping SKU 100% utuh.
+    Memuat seluruh produk dari PostgreSQL (direct psycopg2 kilat <3 detik dengan fallback REST API)
+    + BarcodeAlias + mapped_sku_paths.json.gz agar 100% jalur SKU & multi-barcode terpetakan utuh.
     """
     catalog_by_sku: Dict[str, Dict[str, Any]] = {}
     existing_barcodes: Set[str] = set()
     brand_counts: Dict[str, int] = {}
 
-    def fetch_page(off: int) -> List[Dict[str, Any]]:
-        for _ in range(3):
-            try:
-                res = sb.table("Product").select("*").order("sku").range(off, off + 999).execute()
-                return res.data or []
-            except Exception:
-                time.sleep(0.4)
-        return []
+    loaded_pg = False
+    try:
+        pg_conn = connect_pg()
+        pg_cur = pg_conn.cursor()
+        pg_cur.execute(
+            '''
+            SELECT sku, barcode, article, description, brand, dept, color, size,
+                   "hargaNormal", stok, "imageUrl", "hargaPromo", "discountType", acara, "toDate"
+            FROM "Product"
+            '''
+        )
+        for row in pg_cur.fetchall():
+            sku, bc, art, desc, brand, dept, color, size, hn, stok, img, hp, dt, ac, td = row
+            s = str(sku or "").strip()
+            b = str(bc or "").strip()
+            if s:
+                catalog_by_sku[s] = {
+                    "sku": s,
+                    "barcode": b or None,
+                    "article": art,
+                    "description": desc,
+                    "brand": brand,
+                    "dept": dept,
+                    "color": color,
+                    "size": size,
+                    "hargaNormal": hn,
+                    "stok": stok,
+                    "imageUrl": img,
+                    "hargaPromo": hp,
+                    "discountType": dt,
+                    "acara": ac,
+                    "toDate": td,
+                }
+            if b:
+                existing_barcodes.add(b)
+            br = str(dept or brand or "MDS RETAIL").strip()
+            brand_counts[br] = brand_counts.get(br, 0) + 1
 
-    offset = 0
-    wave_size = 16
-    while True:
-        offsets = [offset + i * 1000 for i in range(wave_size)]
-        wave_rows = 0
-        reached_end = False
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            for chunk in executor.map(fetch_page, offsets):
-                if not chunk:
-                    reached_end = True
-                    continue
-                wave_rows += len(chunk)
-                for r in chunk:
-                    s = str(r.get("sku") or "").strip()
-                    b = str(r.get("barcode") or "").strip()
-                    if s:
-                        catalog_by_sku[s] = r
-                    if b:
-                        existing_barcodes.add(b)
-                    br = str(r.get("dept") or r.get("brand") or "MDS RETAIL").strip()
-                    brand_counts[br] = brand_counts.get(br, 0) + 1
-                if len(chunk) < 1000:
-                    reached_end = True
-        if reached_end or wave_rows == 0:
-            break
-        offset += wave_size * 1000
+        try:
+            pg_cur.execute('SELECT barcode FROM "BarcodeAlias"')
+            for (ab,) in pg_cur.fetchall():
+                if ab:
+                    existing_barcodes.add(str(ab).strip())
+        except Exception:
+            pg_conn.rollback()
 
-    # Gabungkan dengan file registry `mapped_sku_paths.json.gz` agar tidak ada jalur SKU yang hilang
+        pg_cur.close()
+        pg_conn.close()
+        loaded_pg = bool(catalog_by_sku)
+    except Exception as e:
+        print(f"⚠️ Fallback ke Supabase REST pagination (psycopg2 tidak tersedia: {e})")
+
+    if not loaded_pg:
+        def fetch_page(off: int) -> List[Dict[str, Any]]:
+            for _ in range(3):
+                try:
+                    res = sb.table("Product").select("*").order("sku").range(off, off + 999).execute()
+                    return res.data or []
+                except Exception:
+                    time.sleep(0.4)
+            return []
+
+        offset = 0
+        wave_size = 16
+        while True:
+            offsets = [offset + i * 1000 for i in range(wave_size)]
+            wave_rows = 0
+            reached_end = False
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                for chunk in executor.map(fetch_page, offsets):
+                    if not chunk:
+                        reached_end = True
+                        continue
+                    wave_rows += len(chunk)
+                    for r in chunk:
+                        s = str(r.get("sku") or "").strip()
+                        b = str(r.get("barcode") or "").strip()
+                        if s:
+                            catalog_by_sku[s] = r
+                        if b:
+                            existing_barcodes.add(b)
+                        br = str(r.get("dept") or r.get("brand") or "MDS RETAIL").strip()
+                        brand_counts[br] = brand_counts.get(br, 0) + 1
+                    if len(chunk) < 1000:
+                        reached_end = True
+            if reached_end or wave_rows == 0:
+                break
+            offset += wave_size * 1000
+
+    # Gabungkan dengan file registry `mapped_sku_paths.json.gz` agar tidak ada jalur SKU/barcode yang hilang
     saved_paths = load_mapped_paths_registry()
     for s_sku, s_bc, s_art in saved_paths:
         if s_bc:
@@ -598,21 +667,20 @@ def load_existing_catalog_full() -> Tuple[Dict[str, Dict[str, Any]], Set[str], D
 
 def build_candidate_queues(existing_skus: Set[str], existing_barcodes: Set[str]) -> Tuple[List[str], List[str], List[str]]:
     """
-    Membangun antrean kandidat berorientasi PENEMUAN ARTIKEL BARU ("Article-First Hunter"):
-    1. `hunter_bc_queue`: Interleaved Stride-4 Sweep lintas SEMUA zona barcode `234000*`
-       (sehingga dalam 1 sesi langsung menjaring artikel baru SUKO, ZES, & MUKU dari semua
-       rentang 120xxx, 152xxx, 215xxx, 244xxx, 316xxx tanpa stuck di satu blok).
-    2. `fill_bc_queue`: Sisa barcode di antara celah stride & celah rapat `diff <= 120`.
-    3. `sku_queue`: Celah SKU 8-digit Modulo-10 yang belum terindeks.
+    Membangun antrean kandidat FLEKSIBEL berorientasi PENEMUAN ARTIKEL & BARCODE TANPA KELEWAT:
+    1. `hunter_bc_queue`: Interleaved Stride-4 Sweep lintas SEMUA zona barcode `234000000001..234000999999`
+       (mencakup blok bawah 001xxx, blok tengah, dan blok atas 395xxx-999xxx tempat 2340009548454 berada!)
+       + klaster dinamis dari prefix non-234000 yang ada di DB (040000*, 899*, 888*, 695*, 118*).
+    2. `fill_bc_queue`: Celah rapat barcode (`diff <= 150`) lintas semua prefix EAN-13 + sisa offset ganjil.
+    3. `sku_queue`: Celah SKU 8-digit Modulo-10 + celah SKU 7/9-digit bila terdeteksi klaster rapat.
     """
-    # --- 1. KANDIDAT SKU ---
+    # --- 1. KANDIDAT SKU FLEKSIBEL (8-digit Mod10 + non-8-digit neighbor) ---
     sku_bodies = sorted(set(
         int(s[:7]) for s in existing_skus if len(s) == 8 and s.isdigit()
     ))
     candidate_sku_bodies: List[int] = []
     seen_sku_bodies = set(sku_bodies)
 
-    # a) Isi celah rapat antar SKU (1..80) + tepi klaster (+/- 6)
     for i in range(len(sku_bodies) - 1):
         diff = sku_bodies[i + 1] - sku_bodies[i]
         if 1 < diff <= 80:
@@ -626,7 +694,7 @@ def build_candidate_queues(existing_skus: Set[str], existing_barcodes: Set[str])
         is_right_edge = (i == len(sku_bodies) - 1) or (sku_bodies[i + 1] - sku_bodies[i] > 80)
         if is_left_edge:
             for b7 in range(sku_bodies[i] - 6, sku_bodies[i]):
-                if b7 > 1000000 and b7 not in seen_sku_bodies:
+                if b7 > 100000 and b7 not in seen_sku_bodies:
                     seen_sku_bodies.add(b7)
                     candidate_sku_bodies.append(b7)
         if is_right_edge:
@@ -636,35 +704,54 @@ def build_candidate_queues(existing_skus: Set[str], existing_barcodes: Set[str])
                     candidate_sku_bodies.append(b7)
 
     sku_queue = [generate_mds_sku8(b7) for b7 in candidate_sku_bodies]
-    sku_queue = [s for s in sku_queue if s and s not in existing_skus]
+    # Tambahkan tetangga langsung (+/-3) untuk SKU 7 atau 9 digit yang ada di DB
+    extra_len_skus = [int(s) for s in existing_skus if len(s) in (7, 9) and s.isdigit()]
+    for n_sku in extra_len_skus:
+        for d in range(-3, 4):
+            cand_s = str(n_sku + d)
+            if cand_s not in existing_skus:
+                sku_queue.append(cand_s)
+    sku_queue = [s for s in dict.fromkeys(sku_queue) if s and s not in existing_skus]
 
-    # --- 2. KANDIDAT BARCODE: ARTICLE-FIRST HUNTER (INTERLEAVED STRIDE-4) ---
+    # --- 2. KANDIDAT BARCODE: FLEKSIBEL PENUH (000001..999999 + KLASTER DINAMIS NON-234000) ---
     bc_bodies = sorted(set(
         int(b[6:12]) for b in existing_barcodes
         if b.startswith("234000") and len(b) == 13 and b.isdigit()
     ))
     seen_bc_bodies = set(bc_bodies)
 
-    hunter_zones = [
-        (316001, 365000),  # Koleksi terbaru 32xxxx-36xxxx (SUKO/ZES/EDIT 2026)
-        (120000, 148999),  # Zona 12xxxx-14xxxx (COLE 128434 / Stanley Adams / ZES / MUKU)
-        (259500, 282999),  # Lanjutan zona 2595xx-2829xx (AOS / MUKU / SUKO / SEGA)
+    # Zona statis utama + zona dinamis dari klaster atas (400xxx..999xxx) & bawah (001xxx..024xxx)
+    hunter_zones: List[Tuple[int, int]] = [
+        (316001, 395000),  # Koleksi baru 32xxxx-395xxx (SUKO/ZES/EDIT)
+        (120000, 148999),  # Zona 12xxxx-14xxxx (COLE / Stanley Adams / ZES / MUKU)
+        (259500, 282999),  # Zona 2595xx-2829xx (AOS / MUKU / SUKO / SEGA)
         (215001, 244500),  # Zona 21xxxx-24xxxx
         (149000, 215000),  # Zona tengah 14xxxx-21xxxx
         (283000, 316000),  # Zona 28xxxx-31xxxx
         (244501, 259499),  # Sisa zona 244xxx-259xxx
-        (25000, 119999),   # Zona awal 02xxxx-11xxxx
-        (365001, 395000),  # Zona atas terbaru 365xxx-395xxx
+        (1000, 119999),    # Diperluas mulai 001000 (tidak lagi skip < 25000!)
+        (395001, 460000),  # Zona lanjutan 395xxx-460xxx
     ]
 
-    # Interleaved Round-Robin per potongan 400 nomor di tiap zona dengan step=4 (% 4 == 0, lalu % 4 == 2)
+    # Deteksi otomatis klaster aktif > 460000 (mis. hingga 954845+) & buka window +/-12000 di sekitarnya
+    covered_hi_windows: List[Tuple[int, int]] = []
+    for b6 in bc_bodies:
+        if b6 > 460000:
+            w_s = max(460001, ((b6 // 10000) * 10000) - 2000)
+            w_e = min(999999, w_s + 14000)
+            if not covered_hi_windows or w_s > covered_hi_windows[-1][1]:
+                covered_hi_windows.append((w_s, w_e))
+            else:
+                covered_hi_windows[-1] = (covered_hi_windows[-1][0], max(covered_hi_windows[-1][1], w_e))
+    hunter_zones.extend(covered_hi_windows)
+
+    # Interleaved Round-Robin per potongan 120 nomor di tiap zona dengan step=4 (% 4 == 0, lalu % 4 == 2)
     hunter_bc_bodies: List[int] = []
     fill_bc_bodies: List[int] = []
 
     for mod_target in (0, 2):
         zone_slices: List[List[int]] = []
         for z_start, z_end in hunter_zones:
-            # Pecah per window 1200 nomor -> tiap window ambil stride-4
             z_cands = [
                 b6 for b6 in range(z_start, z_end + 1)
                 if (b6 % 4 == mod_target) and (b6 not in seen_bc_bodies)
@@ -672,7 +759,6 @@ def build_candidate_queues(existing_skus: Set[str], existing_barcodes: Set[str])
             if z_cands:
                 zone_slices.append(z_cands)
 
-        # Round-robin ambil batch 120 kandidat per zona secara bergantian agar semua zona tersentuh merata
         batch_w = 120
         idx_map = [0] * len(zone_slices)
         active = True
@@ -689,10 +775,27 @@ def build_candidate_queues(existing_skus: Set[str], existing_barcodes: Set[str])
                             seen_bc_bodies.add(b6)
                             hunter_bc_bodies.append(b6)
 
-    # Sisa celah rapat & offset ganjil (% 4 in (1, 3)) masuk ke fill_bc_bodies
+    # Celah rapat `234000*` & prefix EAN-13 lainnya (040000*, 899*, 888*, 695*, 118*)
+    extra_ean13_candidates: List[str] = []
+    prefix_groups: Dict[str, List[int]] = {}
+    for b in existing_barcodes:
+        if len(b) == 13 and b.isdigit() and not b.startswith("234000"):
+            prefix_groups.setdefault(b[:6], []).append(int(b[6:12]))
+
+    for pfx6, bodies_list in prefix_groups.items():
+        sb_list = sorted(set(bodies_list))
+        for i in range(len(sb_list) - 1):
+            diff = sb_list[i + 1] - sb_list[i]
+            if 1 < diff <= 120:
+                for val6 in range(sb_list[i] + 1, sb_list[i + 1]):
+                    d12 = f"{pfx6}{val6:06d}"
+                    bc13 = f"{d12}{calculate_ean13_check_digit(d12)}"
+                    if bc13 not in existing_barcodes:
+                        extra_ean13_candidates.append(bc13)
+
     for i in range(len(bc_bodies) - 1):
         diff = bc_bodies[i + 1] - bc_bodies[i]
-        if 1 < diff <= 120:
+        if 1 < diff <= 150:
             for b6 in range(bc_bodies[i] + 1, bc_bodies[i + 1]):
                 if b6 not in seen_bc_bodies:
                     seen_bc_bodies.add(b6)
@@ -705,9 +808,10 @@ def build_candidate_queues(existing_skus: Set[str], existing_barcodes: Set[str])
                 fill_bc_bodies.append(b6)
 
     hunter_bc_queue = [generate_ean13_barcode(b6) for b6 in hunter_bc_bodies]
-    hunter_bc_queue = [b for b in hunter_bc_queue if b and b not in existing_barcodes]
+    # Gabungkan klaster prefix vendor non-234000 ke fill_bc_queue agar ikut tersapu tanpa memperlambat hunter awal
+    fill_bc_queue = [generate_ean13_barcode(b6) for b6 in fill_bc_bodies] + extra_ean13_candidates
 
-    fill_bc_queue = [generate_ean13_barcode(b6) for b6 in fill_bc_bodies]
+    hunter_bc_queue = [b for b in hunter_bc_queue if b and b not in existing_barcodes]
     fill_bc_queue = [b for b in fill_bc_queue if b and b not in existing_barcodes]
 
     return hunter_bc_queue, fill_bc_queue, sku_queue
@@ -719,16 +823,23 @@ def item_to_record(
     existing_row: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    Mengonversi payload StoreHub menjadi record tabel Product Supabase yang bersih,
-    sambil MELINDUNGI 100% atribut foto (`imageUrl`, `images`) dan promo (`hargaPromo`, dll.)
-    jika produk sudah ada di database.
+    Mengonversi payload StoreHub menjadi record tabel Product + daftar `_all_barcodes`
+    secara fleksibel (terima semua panjang barcode >= 4 digit & alfanumerik, tanpa dibuang!)
+    serta MELINDUNGI foto (`imageUrl`, `images`) & promo eksisting.
     """
-    sku_val = str(item.get("SKU") or "").strip()
+    sku_val = normalize_sku_token(item.get("SKU"))
     if not sku_val:
         return None
 
-    vendor_bc = str(item.get("VendorBarcode") or "").strip()
-    bc_val = fallback_bc if (fallback_bc and len(fallback_bc) >= 12) else (vendor_bc if vendor_bc else None)
+    all_bcs: List[str] = []
+    for raw_cand in [fallback_bc, item.get("VendorBarcode"), item.get("vendorBarcode"), item.get("Barcode"), item.get("barcode")] + list(item.get("_all_barcodes") or []):
+        nbc = normalize_barcode_token(raw_cand)
+        if nbc and nbc != sku_val and nbc not in all_bcs:
+            all_bcs.append(nbc)
+
+    # Prioritaskan barcode eksisting di Product agar tidak menimpa barcode lain, sisanya masuk BarcodeAlias!
+    existing_primary_bc = normalize_barcode_token((existing_row or {}).get("barcode"))
+    bc_val = existing_primary_bc or (all_bcs[0] if all_bcs else None)
 
     brand_val, dept_val = normalize_brand_and_dept(item)
     art_val = str(item.get("StyleCode") or item.get("Description") or item.get("ItemDescription") or "PRODUK BARU").strip()
@@ -751,6 +862,8 @@ def item_to_record(
         merged["sku"] = sku_val
         if bc_val:
             merged["barcode"] = bc_val
+        if all_bcs:
+            merged["_all_barcodes"] = all_bcs
         if art_val and art_val != "PRODUK BARU":
             merged["article"] = art_val
         if desc_val and desc_val != "PRODUK BARU":
@@ -772,6 +885,7 @@ def item_to_record(
     return {
         "sku": sku_val,
         "barcode": bc_val,
+        "_all_barcodes": all_bcs,
         "article": art_val,
         "description": desc_val,
         "brand": brand_val,
@@ -855,15 +969,51 @@ def flush_buffer(
     brands_counter: Optional[Dict[str, int]] = None,
     write_md_report: bool = True,
 ):
-    """Menyimpan batch produk secara aman ke Supabase (deduplikasi SKU & penanganan konflik barcode)."""
+    """
+    Menyimpan batch produk secara aman ke Raw Vault lokal (`raw_vault.db`),
+    tabel `Product` Supabase, DAN tabel `BarcodeAlias` (seluruh multi-barcode).
+    """
     if not buffer_by_sku:
         return
     MDS_UPSERT_KEYS = (
         "sku", "barcode", "article", "description", "brand",
         "dept", "color", "size", "hargaNormal", "stok", "updatedAt",
     )
+    raw_vault_rows: List[Dict[str, Any]] = []
+    alias_records: List[Dict[str, Any]] = []
+    seen_alias_bcs: Set[str] = set()
     records = []
+    now_iso = datetime.now(timezone.utc).isoformat()
+
     for r in buffer_by_sku.values():
+        all_bcs = list(r.get("_all_barcodes") or [])
+        if r.get("barcode") and r["barcode"] not in all_bcs:
+            all_bcs.insert(0, r["barcode"])
+        raw_vault_rows.append({
+            "sku": r.get("sku"),
+            "barcode": r.get("barcode"),
+            "alt_barcodes": all_bcs,
+            "article": r.get("article"),
+            "description": r.get("description"),
+            "brand": r.get("brand"),
+            "dept": r.get("dept"),
+            "color": r.get("color"),
+            "size": r.get("size"),
+            "hargaNormal": r.get("hargaNormal"),
+            "stok": r.get("stok"),
+        })
+        for bc_cand in all_bcs:
+            bc_s = normalize_barcode_token(bc_cand)
+            if bc_s and bc_s != r.get("sku") and bc_s not in seen_alias_bcs:
+                seen_alias_bcs.add(bc_s)
+                alias_records.append({
+                    "barcode": bc_s,
+                    "barcodeNorm": normalize_code_key(bc_s),
+                    "sku": r.get("sku"),
+                    "source": "STOREHUB_MDS",
+                    "updatedAt": now_iso,
+                })
+
         clean_r = {k: r.get(k) for k in MDS_UPSERT_KEYS if k in r or k in ("sku", "description", "hargaNormal", "stok", "updatedAt")}
         if clean_r.get("barcode") is None:
             clean_r["barcode"] = None
@@ -874,6 +1024,13 @@ def flush_buffer(
         records.append(clean_r)
     buffer_by_sku.clear()
 
+    # 1. Simpan mentahan lengkap ke Raw Vault SQLite lokal (0 MB kuota Supabase)
+    try:
+        record_raw_items_batch(raw_vault_rows, source="STOREHUB_MDS")
+    except Exception:
+        pass
+
+    # 2. Simpan Product ke Supabase
     try:
         sb.table("Product").upsert(records, on_conflict="sku").execute()
         print(f"   💾 [DB TURBO] Berhasil menyimpan batch {len(records)} produk ke Supabase! (Baru: +{new_discovered:,} | Update: {updated_count:,})")
@@ -892,6 +1049,13 @@ def flush_buffer(
                 except Exception:
                     pass
         print(f"   💾 [DB SAFE] Berhasil menyimpan {saved_one}/{len(records)} produk ke Supabase! ({e})")
+
+    # 3. Simpan SEMUA multi-barcode ke BarcodeAlias agar tidak ada 1 barcode pun yang terbuang
+    if alias_records:
+        try:
+            sb.table("BarcodeAlias").upsert(alias_records, on_conflict="barcode").execute()
+        except Exception:
+            pass
 
     if write_md_report and start_time is not None and brands_counter is not None:
         save_report(start_time, initial_count, new_discovered, updated_count, brands_counter)
@@ -1145,10 +1309,10 @@ def execute_morning_sweep(
     initial_articles_count = len(seen_articles)
     print(f"📊 Katalog Saat Ini: {initial_articles_count:,} Artikel Unik | {initial_count:,} SKU di DB | {len(existing_barcodes):,} Barcode")
 
-    # Jalur 0: SKU yang ada di registry/DB (termasuk hasil ekspansi Matahari.com) tapi belum punya barcode
+    # Jalur 0: Semua SKU tanpa barcode (fleksibel: 7/8/9+ digit & alfanumerik, TIDAK terkunci hanya 8 digit!)
     missing_bc_rows = [
         (s, r) for s, r in catalog_by_sku.items()
-        if (r.get("_from_registry_only") or not r.get("barcode")) and len(s) == 8 and s.isdigit()
+        if (r.get("_from_registry_only") or not r.get("barcode")) and s
     ]
     # Prioritaskan brand inti toko (SUKO, ZES, COLE, NEVADA, LITTLE M, CONNEXION, DISNEY, ST YVES) di depan
     def missing_prio(item_pair: Tuple[str, Dict[str, Any]]) -> Tuple[int, str]:
@@ -1254,29 +1418,40 @@ def execute_morning_sweep(
 
                         existing_skus.add(sku_val)
                         catalog_by_sku[sku_val] = rec
-                        if bc_val:
-                            existing_barcodes.add(bc_val)
-                            seen_neighbor_bcs.add(bc_val)
+                        for extra_bc in ([bc_val] if bc_val else []) + list(rec.get("_all_barcodes") or []):
+                            if extra_bc:
+                                existing_barcodes.add(extra_bc)
+                                seen_neighbor_bcs.add(extra_bc)
                         if is_new_article:
                             seen_articles.add(art_val_up)
                             new_articles_discovered += 1
 
-                        # HANYA saat menemukan ARTIKEL BARU (atau SKU baru dari upc), antrekan tetangga terdekat agar seluruh warna/size ikut terserap!
+                        # HANYA saat menemukan ARTIKEL BARU (atau SKU baru dari upc), antrekan tetangga terdekat di PREFIX MANAPUN!
                         if expand_on_new_article and (is_new_article or (is_new and category == "upc")):
-                            if bc_val and bc_val.startswith("234000") and len(bc_val) == 13 and bc_val.isdigit():
+                            if bc_val and len(bc_val) == 13 and bc_val.isdigit():
+                                pfx6 = bc_val[:6]
                                 base6 = int(bc_val[6:12])
                                 span_bc = (-3, 12) if is_new_article else (-1, 5)
-                                for nb6 in range(max(25000, base6 + span_bc[0]), base6 + span_bc[1]):
-                                    nb_bc = generate_ean13_barcode(nb6)
+                                min_b = 1000 if pfx6 == "234000" else 0
+                                for nb6 in range(max(min_b, base6 + span_bc[0]), min(999999, base6 + span_bc[1])):
+                                    d12 = f"{pfx6}{nb6:06d}"
+                                    nb_bc = f"{d12}{calculate_ean13_check_digit(d12)}"
                                     if nb_bc and nb_bc not in seen_neighbor_bcs:
                                         seen_neighbor_bcs.add(nb_bc)
                                         neighbor_bc_queue.append(nb_bc)
                             if len(sku_val) == 8 and sku_val.isdigit():
                                 base7 = int(sku_val[:7])
                                 span_sku = 12 if is_new_article else 6
-                                for nb7 in range(max(1000000, base7 - span_sku), base7 + span_sku + 1):
+                                for nb7 in range(max(100000, base7 - span_sku), base7 + span_sku + 1):
                                     nb_sku = generate_mds_sku8(nb7)
                                     if nb_sku and nb_sku not in seen_neighbor_skus:
+                                        seen_neighbor_skus.add(nb_sku)
+                                        neighbor_sku_queue.append(nb_sku)
+                            elif len(sku_val) in (7, 9) and sku_val.isdigit():
+                                base_n = int(sku_val)
+                                for d in range(-4, 5):
+                                    nb_sku = str(base_n + d)
+                                    if nb_sku not in seen_neighbor_skus:
                                         seen_neighbor_skus.add(nb_sku)
                                         neighbor_sku_queue.append(nb_sku)
 

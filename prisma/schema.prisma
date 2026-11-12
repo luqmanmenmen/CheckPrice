@@ -101,6 +101,18 @@ model CatalogArticle {
   @@index([subBrand(ops: raw("gin_trgm_ops"))], type: Gin, map: "CatalogArticle_subBrand_trgm_idx")
 }
 
+/// Tabel alias multi-barcode per SKU agar 1 SKU bisa menyimpan banyak barcode (MDS internal + vendor EAN/alfanumerik)
+model BarcodeAlias {
+  barcode     String   @id
+  barcodeNorm String
+  sku         String
+  source      String?
+  updatedAt   DateTime @default(now()) @updatedAt
+
+  @@index([sku])
+  @@index([barcodeNorm])
+}
+
 model DailySales {
   id        String   @id @default(cuid())
   productId Int

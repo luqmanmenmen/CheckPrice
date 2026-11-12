@@ -1164,3 +1164,22 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   - `src/lib/offlineDb.ts`: Batas download katalog lokal diperluas menjadi `chunk < 12` (maks 108rb model) dan `MAX_CHUNKS = 60` (maks 360rb SKU).
   - `.github/workflows/retail-sync-engine.yml`: Menjalankan `python python-engine/matahari_catalog_expander.py` sebelum `brutal_image_scraper.py`.
 - **Verifikasi:** `npx tsc --noEmit`, `npm run build` (`53/53` halaman), `python -m py_compile`, dan `ANALYZE "Product" / "CatalogArticle"` lulus tanpa error.
+
+---
+
+### 76. Arsitektur Collect-Audit-Cook (`Raw Vault` + `BarcodeAlias`), Fix Bounce `/spv-gateway`, & Penautan Tag `19543756 ↔ 2340001284343` (13 November 2026)
+
+- **Akar Masalah Error `"Invalid prisma"` -> Terlempar ke `/spv-gateway` & Proses Lambat:**
+  1. Proses audit awal (`raw_vault_collector.py --audit`) sempat mencoba menyisipkan ulang 97k barcode utama ke `"BarcodeAlias"` dan menjalankan full seq-scan `COUNT("imageUrl")` / penarikan ulang 275k baris `"Product"`, sehingga membebani koneksi Supabase Nano dan memicu kegagalan Prisma sementara di `/api/auth/me`.
+  2. Ketika `prisma.user.findUnique` gagal sementara di [`src/app/api/auth/me/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/auth/me/route.ts), blok `catch` mengembalikan `{ user: null }` (HTTP 200) sehingga [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx) me-redirect user kembali ke `/login`, di mana [`src/middleware.ts`](file:///c:/Max%20Display/price-checker/src/middleware.ts) mendeteksi JWT valid `DEV/SUPERVISOR` (`22054178`) dan otomatis memantulkan user ke `/spv-gateway`.
+- **Perbaikan Menyeluruh yang Diterapkan & Diverifikasi:**
+  1. **Anti-Bounce Session Fallback (`/api/auth/me` & `page.tsx`):** Saat query Prisma gagal sementara, `/api/auth/me` kini mengembalikan sesi JWT terverifikasi (`transientFallback: true`), dan `page.tsx` hanya me-redirect ke `/login` ketika `reason === "unauthenticated" || reason === "device_switched"`.
+  2. **Multi-Barcode & Flexible Scraper (`BarcodeAlias`, `raw_vault_collector.py`, `morning_full_sweep.py`, `matahari_catalog_expander.py`):**
+     - Menambahkan tabel `"BarcodeAlias"` di [`prisma/schema.prisma`](file:///c:/Max%20Display/price-checker/prisma/schema.prisma) khusus untuk barcode sekunder/alternatif (tidak menduplikasi barcode utama `Product.barcode`).
+     - [`python-engine/raw_vault_collector.py`](file:///c:/Max%20Display/price-checker/python-engine/raw_vault_collector.py): Menyimpan seluruh data mentah SKU/barcode lintas format (termasuk alfanumerik & panjang fleksibel) ke SQLite lokal `raw_vault.db` (di-ignore di [`.gitignore`](file:///c:/Max%20Display/price-checker/.gitignore)), kemudian melakukan *delta sync* via index `Product_updatedAt_idx` (`--full-pg` untuk full pull), memulihkan barcode hilang, serta menghitung statistik dari vault lokal (`elapsed_sec: 14.8s`).
+     - [`src/lib/mdsBisaClient.ts`](file:///c:/Max%20Display/price-checker/src/lib/mdsBisaClient.ts) & [`src/app/api/product/[identifier]/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/product/%5Bidentifier%5D/route.ts): Panen seluruh barcode lintas baris StoreHub, dukung pencarian `"BarcodeAlias"` + normalisasi nol-depan/separator/check-digit EAN-13, serta jangkau kode alfanumerik & 5–20 digit.
+     - [`.github/workflows/retail-sync-engine.yml`](file:///c:/Max%20Display/price-checker/.github/workflows/retail-sync-engine.yml): Meneruskan `DATABASE_URL` ke `morning_full_sweep.py` dan mengeksekusi `raw_vault_collector.py --audit`.
+  3. **Penautan Tag Fisik Toko & Status DB (`2340001284343 ↔ 19543756`):**
+     - Berdasarkan foto hang-tag toko fisik user (`COLE`, `BD4-3 PSNYC01`, `NAVY`, `XL`, `Rp 149.900`), SKU `19543756` telah ditautkan resmi ke barcode `2340001284343` dan `16.000` baris alias duplikat dibersihkan.
+     - Status akhir vault & DB: **`275,639` SKU** (`97,379` ber-barcode utama, **`10` `BarcodeAlias`** multi-barcode aktif, **`217,962`** foto, ukuran DB **`396 MB`**).
+- **Verifikasi:** `npx tsc --noEmit`, `npm run build` (`53/53` halaman), `python -m py_compile`, dan `raw_vault_collector.py --audit` (`14.8s`) lulus dengan exit code `0`.

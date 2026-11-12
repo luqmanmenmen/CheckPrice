@@ -155,7 +155,7 @@ export async function getStoreHubCookie(forceRefresh: boolean = false): Promise<
       const scriptMatches = [...loginHtml.matchAll(/src="(\/_next\/static\/chunks\/[^"]+\.js)"/g)];
       for (const m of scriptMatches.slice(0, 12)) {
         const jsText = await fetch(`${STOREHUB_BASE}${m[1]}`).then(r => r.text()).catch(() => '');
-        const actMatch = jsText.match(/createServerReference\)\("([a-f0-9]{40,44})"[^)]*"login"/);
+        const actMatch = jsText.match(/createServerReference\)?\("([a-f0-9]{40,44})"[^)]*"login"/);
         if (actMatch?.[1]) {
           loginActionHash = actMatch[1];
           break;
@@ -216,13 +216,53 @@ export async function checkSingleItemStock(sku: string): Promise<{
 }> {
   const cleanSku = String(sku).trim();
 
-  // Helper untuk fallback anggun ke database Supabase (HANYA success jika benar-benar ada di DB!)
+  const normalizeCodeKey = (val: string) => val.replace(/[\s\-_]/g, '').toUpperCase();
+
+  const harvestBarcodes = (rows: any[], primaryItem?: any): string[] => {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    const addBc = (raw: any) => {
+      if (raw === undefined || raw === null) return;
+      const s = String(raw).trim();
+      if (!s || s.length < 4 || s.length > 32) return;
+      const up = s.toUpperCase();
+      if (['NAN', 'NONE', 'NULL', '-', 'N/A'].includes(up)) return;
+      if (!seen.has(s)) {
+        seen.add(s);
+        out.push(s);
+      }
+    };
+    const fields = ['VendorBarcode', 'vendorBarcode', 'Barcode', 'barcode', 'UPC', 'upc', 'EAN', 'ean', 'ItemLookupCode', 'AlternateCode'];
+    for (const r of rows) {
+      if (!r || typeof r !== 'object') continue;
+      for (const f of fields) addBc(r[f]);
+    }
+    if (primaryItem && typeof primaryItem === 'object') {
+      for (const f of fields) addBc(primaryItem[f]);
+    }
+    return out;
+  };
+
+  // Helper untuk fallback anggun ke database Supabase (Product + BarcodeAlias)
   const fallbackToDb = async (msg: string) => {
     try {
-      const dbProduct = await prisma.product.findFirst({
+      const cleanNorm = normalizeCodeKey(cleanSku);
+      let dbProduct = await prisma.product.findFirst({
         where: { OR: [{ sku: cleanSku }, { barcode: cleanSku }] },
         select: { sku: true, stok: true, barcode: true, article: true, hargaNormal: true }
       });
+      if (!dbProduct) {
+        const alias = await prisma.barcodeAlias.findFirst({
+          where: { OR: [{ barcode: cleanSku }, { barcodeNorm: cleanNorm }] },
+          select: { sku: true }
+        });
+        if (alias) {
+          dbProduct = await prisma.product.findUnique({
+            where: { sku: alias.sku },
+            select: { sku: true, stok: true, barcode: true, article: true, hargaNormal: true }
+          });
+        }
+      }
       if (!dbProduct) {
         return {
           success: false,
@@ -317,16 +357,29 @@ export async function checkSingleItemStock(sku: string): Promise<{
         try {
           const parsed = JSON.parse(line.substring(colonIdx + 1));
           if (parsed?.result?.data?.[code] && Array.isArray(parsed.result.data[code])) {
-            parsedItem = parsed.result.data[code][0];
+            const rows = parsed.result.data[code];
+            const matchUpc = kind === 'upc' ? rows.find((x: any) => String(x?.VendorBarcode || '').trim() === code) : null;
+            parsedItem = matchUpc || rows[rows.length - 1] || rows[0];
+            if (parsedItem && typeof parsedItem === 'object') {
+              parsedItem._harvestedBarcodes = harvestBarcodes(rows, parsedItem);
+            }
             break;
           }
           if (parsed?.result?.data) {
+            const allRows: any[] = [];
+            for (const val of Object.values(parsed.result.data)) {
+              if (Array.isArray(val)) allRows.push(...val);
+              else if (val && typeof val === 'object') allRows.push(val);
+            }
             const first = Object.values(parsed.result.data)[0];
             if (Array.isArray(first)) {
-              const matchUpc = kind === 'upc' ? first.find((x: any) => String(x.VendorBarcode).trim() === code) : null;
-              parsedItem = matchUpc || first[0];
+              const matchUpc = kind === 'upc' ? first.find((x: any) => String(x?.VendorBarcode || '').trim() === code) : null;
+              parsedItem = matchUpc || first[first.length - 1] || first[0];
             } else {
               parsedItem = first;
+            }
+            if (parsedItem && typeof parsedItem === 'object') {
+              parsedItem._harvestedBarcodes = harvestBarcodes(allRows, parsedItem);
             }
             break;
           }
@@ -344,10 +397,11 @@ export async function checkSingleItemStock(sku: string): Promise<{
       return await fallbackToDb('Server by luqman org belum ada session aktif. Menampilkan stok tersimpan.');
     }
 
-    const isUpc = /^\d{12,14}$/.test(cleanSku);
-    const kind: 'upc' | 'sku' = isUpc ? 'upc' : 'sku';
+    const isLikelySku = /^\d{7,9}$/.test(cleanSku);
+    const isUpc = !isLikelySku && (cleanSku.length >= 10 || /[^0-9]/.test(cleanSku) || cleanSku.length <= 6);
+    let activeKind: 'upc' | 'sku' = isUpc ? 'upc' : 'sku';
 
-    let queryRes = await queryStoreHubDetail(kind, cleanSku, cookie);
+    let queryRes = await queryStoreHubDetail(activeKind, cleanSku, cookie);
 
     // Jika Next-Action hash berubah di StoreHub, resolve dinamis lalu retry 1x
     if (queryRes.actionExpired) {
@@ -356,10 +410,10 @@ export async function checkSingleItemStock(sku: string): Promise<{
         const matches = [...html.matchAll(/src="(\/_next\/static\/chunks\/[^"]+\.js)"/g)];
         for (const m of matches.slice(0, 12)) {
           const jsText = await fetch(`${STOREHUB_BASE}${m[1]}`).then(r => r.text()).catch(() => '');
-          const actMatch = jsText.match(/createServerReference\)\("([a-f0-9]{40,44})"[^)]*"checkItemDetail"/);
+          const actMatch = jsText.match(/createServerReference\)?\("([a-f0-9]{40,44})"[^)]*"checkItemDetail"/);
           if (actMatch?.[1]) {
             ACTION_DETAIL = actMatch[1];
-            queryRes = await queryStoreHubDetail(kind, cleanSku, cookie);
+            queryRes = await queryStoreHubDetail(activeKind, cleanSku, cookie);
             break;
           }
         }
@@ -367,11 +421,11 @@ export async function checkSingleItemStock(sku: string): Promise<{
     }
 
     // Jika cookie expired (401 / redirect / empty), paksa muat ulang dari Supabase Storage / auto-login dan retry 1x
-    if (queryRes.authFailed || (!queryRes.itemData && !queryRes.offline)) {
+    if (queryRes.authFailed) {
       const freshCookie = await getStoreHubCookie(true).catch(() => null);
       if (freshCookie && freshCookie !== cookie) {
         cookie = freshCookie;
-        queryRes = await queryStoreHubDetail(kind, cleanSku, cookie);
+        queryRes = await queryStoreHubDetail(activeKind, cleanSku, cookie);
       }
     }
 
@@ -380,8 +434,18 @@ export async function checkSingleItemStock(sku: string): Promise<{
     }
 
     let queriedCode = cleanSku;
-    // Smart Fallback: Jika user mengetik manual barcode 13 digit 234000* dengan 1 salah ketik check digit (contoh 2340001264343 -> 2340001264345)
-    if (!queryRes.itemData && /^234000\d{7}$/.test(cleanSku)) {
+    // Fleksibel: jika pencarian jalur pertama kosong, coba jalur kebalikan (upc <-> sku)
+    if (!queryRes.itemData && !queryRes.offline) {
+      const altKind: 'upc' | 'sku' = activeKind === 'upc' ? 'sku' : 'upc';
+      const altRes = await queryStoreHubDetail(altKind, cleanSku, queryRes.cookie || cookie);
+      if (altRes.itemData) {
+        queryRes = altRes;
+        activeKind = altKind;
+      }
+    }
+
+    // Smart Fallback: Jika user mengetik manual barcode 13 digit (234000* atau EAN-13) dengan 1 salah check digit
+    if (!queryRes.itemData && /^\d{13}$/.test(cleanSku)) {
       const validCd = calculateEan13CheckDigit(cleanSku.slice(0, 12));
       const correctedBarcode = cleanSku.slice(0, 12) + validCd;
       if (correctedBarcode !== cleanSku) {
@@ -389,6 +453,7 @@ export async function checkSingleItemStock(sku: string): Promise<{
         if (correctedRes.itemData) {
           queryRes = correctedRes;
           queriedCode = correctedBarcode;
+          activeKind = 'upc';
         }
       }
     }
@@ -427,21 +492,35 @@ export async function checkSingleItemStock(sku: string): Promise<{
 
     // 2. Cari seluruh varian produk dari ARTIKEL ini di database Supabase
     let articleToSearch = article ? String(article).trim() : null;
+    const existingProduct = await prisma.product.findUnique({
+      where: { sku: itemSku },
+      select: { article: true, barcode: true },
+    });
     if (!articleToSearch) {
-      const existing = await prisma.product.findUnique({ where: { sku: itemSku }, select: { article: true } });
-      articleToSearch = existing?.article || null;
+      articleToSearch = existingProduct?.article || null;
+    }
+
+    const allDiscoveredBarcodes: string[] = Array.isArray(itemData._harvestedBarcodes)
+      ? [...itemData._harvestedBarcodes]
+      : [];
+    const primaryCandidate = barcode ? String(barcode).trim() : (activeKind === 'upc' ? queriedCode : null);
+    if (primaryCandidate && !allDiscoveredBarcodes.includes(primaryCandidate)) {
+      allDiscoveredBarcodes.unshift(primaryCandidate);
+    }
+    if (activeKind === 'upc' && queriedCode && !allDiscoveredBarcodes.includes(queriedCode)) {
+      allDiscoveredBarcodes.push(queriedCode);
     }
 
     const updatedVariants: Array<{ sku: string; color?: string | null; size?: string | null; stok: number }> = [];
-    const resolvedBarcode = barcode ? String(barcode).trim() : (isUpc ? queriedCode : null);
+    const resolvedBarcode = primaryCandidate || existingProduct?.barcode || null;
 
-    // Update atau insert produk baru secara instan ke Supabase
+    // Update atau insert produk baru secara instan ke Supabase (hindari menimpa barcode unik SKU lain)
     try {
       const updateData: any = {
         stok: currentSkuStok,
         updatedAt: new Date(),
       };
-      if (resolvedBarcode) updateData.barcode = resolvedBarcode;
+      if (resolvedBarcode && !existingProduct?.barcode) updateData.barcode = resolvedBarcode;
       if (articleToSearch) updateData.article = articleToSearch;
       if (itemColor) updateData.color = String(itemColor).trim();
       if (itemSize) updateData.size = String(itemSize).trim();
@@ -466,6 +545,18 @@ export async function checkSingleItemStock(sku: string): Promise<{
           updatedAt: new Date(),
         }
       });
+
+      // Simpan SEMUA barcode (utama + vendor + alias) agar 1 SKU punya banyak barcode valid tetap tembus scan!
+      for (const bCode of allDiscoveredBarcodes) {
+        const cleanBc = String(bCode).trim();
+        if (!cleanBc || cleanBc === itemSku) continue;
+        await prisma.barcodeAlias.upsert({
+          where: { barcode: cleanBc },
+          update: { barcodeNorm: normalizeCodeKey(cleanBc), sku: itemSku, source: 'MDS_LIVE', updatedAt: new Date() },
+          create: { barcode: cleanBc, barcodeNorm: normalizeCodeKey(cleanBc), sku: itemSku, source: 'MDS_LIVE' },
+        }).catch(() => {});
+      }
+
       updatedVariants.push({ sku: itemSku, color: itemColor, size: itemSize, stok: currentSkuStok });
     } catch (e) {
       console.warn('Gagal upsert main SKU:', e);

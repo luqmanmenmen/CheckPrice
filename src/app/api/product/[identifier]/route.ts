@@ -110,29 +110,47 @@ export async function GET(
     const hasTaxonomyFilter = brandGroup !== 'ALL' || category !== 'ALL' || Boolean(subBrand);
 
     // ─────────────────────────────────────────────────────────────
-    //  TAHAP 1: EXACT MATCH PRIORITAS (Hanya jika input memuat angka / format kode)
-    //  Menghemat 2-4 roundtrip SQL saat kasir mencari teks murni seperti "jaket"
+    //  TAHAP 1: EXACT & FLEXIBLE CODE MATCH (SKU / Barcode / BarcodeAlias)
+    //  Mendukung angka 5-20 digit, kode alfanumerik (PCL..., AN..., FC...), strip pemisah (-/_)
     // ─────────────────────────────────────────────────────────────
     const mayBeCode = /\d/.test(rawInput) && !/\s/.test(rawInput);
     if (mayBeCode) {
+      const upperInput = rawInput.toUpperCase();
+      const normNoSep = upperInput.replace(/[\s\-_]/g, "");
+      const candidateCodes = Array.from(new Set([rawInput, upperInput, normNoSep].filter(Boolean)));
+
+      if (/^\d+$/.test(rawInput)) {
+        const stripped = rawInput.replace(/^0+/, "");
+        if (stripped && stripped !== rawInput) candidateCodes.push(stripped);
+        if (rawInput.length === 12) candidateCodes.push(`0${rawInput}`);
+        if (rawInput.length === 13 && rawInput.startsWith("0")) candidateCodes.push(rawInput.slice(1));
+        if (rawInput.length === 13) {
+          const validCd = calculateEan13CheckDigit(rawInput.slice(0, 12));
+          if (validCd) candidateCodes.push(rawInput.slice(0, 12) + validCd);
+        }
+      }
+
       let directProduct = await db.product.findFirst({
-        where: { OR: [{ sku: rawInput }, { barcode: rawInput }] }
+        where: {
+          OR: [
+            { sku: { in: candidateCodes } },
+            { barcode: { in: candidateCodes } },
+          ]
+        }
       });
 
-      if (!directProduct && /^\d+$/.test(rawInput)) {
-        const stripped = rawInput.replace(/^0+/, "");
-        if (stripped && stripped !== rawInput) {
-          directProduct = await db.product.findFirst({
-            where: { OR: [{ barcode: stripped }, { sku: stripped }] }
-          });
-        }
-        // Fallback cerdas: koreksi 1 digit check-digit GS1 EAN-13 jika user mengetik manual barcode 234000*
-        if (!directProduct && /^234000\d{7}$/.test(rawInput)) {
-          const validCd = calculateEan13CheckDigit(rawInput.slice(0, 12));
-          const fixedBarcode = rawInput.slice(0, 12) + validCd;
-          if (fixedBarcode !== rawInput) {
-            directProduct = await db.product.findFirst({ where: { barcode: fixedBarcode } });
-          }
+      if (!directProduct) {
+        const aliasHit = await db.barcodeAlias.findFirst({
+          where: {
+            OR: [
+              { barcode: { in: candidateCodes } },
+              { barcodeNorm: { in: candidateCodes } },
+            ]
+          },
+          select: { sku: true }
+        });
+        if (aliasHit) {
+          directProduct = await db.product.findUnique({ where: { sku: aliasHit.sku } });
         }
       }
 
@@ -143,8 +161,12 @@ export async function GET(
       }
     }
 
-    // JALUR KILAT KODE ANGKA MURNI (SKU 8 digit / Barcode 12-14 digit):
-    if (/^\d{8,14}$/.test(rawInput)) {
+    // JALUR KILAT KODE NUMERIK MURNI (5-20 digit: SKU 7-9 digit, EAN-8, UPC-12, EAN-13, ITF-14+)
+    // Serta fallback Live MDS untuk kode alfanumerik bila belum ditemukan di artikel DB
+    const isPureDigitCode = /^\d{5,20}$/.test(rawInput);
+    const isAlphaVendorCode = !isPureDigitCode && /^(?=.*\d)[A-Za-z0-9._\-/]{6,28}$/.test(rawInput);
+
+    if (isPureDigitCode) {
       const numericMatches = await db.product.findMany({
         where: {
           OR: [
@@ -169,39 +191,52 @@ export async function GET(
           meta: { page: 1, limit: 20, total: cleaned.length, totalSkus: cleaned.length, totalPages: 1 }
         });
       }
+    }
 
-      // Coba live MDS BISA StoreHub: 5.5 detik saat toko buka agar scan/cari barang baru 100% tembus
-      try {
-        const liveTimeoutMs = isStoreOpen() ? 5500 : 1500;
-        const liveRes: any = await Promise.race([
-          checkSingleItemStock(rawInput),
-          new Promise((resolve) => setTimeout(() => resolve({ success: false, timeout: true }), liveTimeoutMs))
-        ]);
-        if (liveRes?.success && liveRes?.sku) {
-          let fetched = await db.product.findFirst({
-            where: {
-              OR: [
-                { sku: liveRes.sku },
-                ...(liveRes.barcode ? [{ barcode: liveRes.barcode }] : []),
-                { barcode: rawInput }
-              ]
+    if (isPureDigitCode || isAlphaVendorCode) {
+      // Untuk kode alfanumerik (mis. PSNYC01), jangan skip ke live MDS jika artikel DB sudah ada
+      const hasDbArticleMatch = isAlphaVendorCode
+        ? await db.product.findFirst({
+            where: { article: { contains: rawInput, mode: 'insensitive' as const } },
+            select: { sku: true }
+          })
+        : null;
+
+      if (!hasDbArticleMatch) {
+        try {
+          const liveTimeoutMs = isStoreOpen() ? 5500 : 1200;
+          const liveRes: any = await Promise.race([
+            checkSingleItemStock(rawInput),
+            new Promise((resolve) => setTimeout(() => resolve({ success: false, timeout: true }), liveTimeoutMs))
+          ]);
+          if (liveRes?.success && liveRes?.sku) {
+            let fetched = await db.product.findFirst({
+              where: {
+                OR: [
+                  { sku: liveRes.sku },
+                  ...(liveRes.barcode ? [{ barcode: liveRes.barcode }] : []),
+                  { barcode: rawInput }
+                ]
+              }
+            });
+            if (fetched) {
+              fetched = checkAndCleanPromo(fetched);
+              const siblings = await getProductSiblings(fetched);
+              return NextResponse.json({ data: fetched, siblings, source: 'MDS_BISA_LIVE' });
             }
-          });
-          if (fetched) {
-            fetched = checkAndCleanPromo(fetched);
-            const siblings = await getProductSiblings(fetched);
-            return NextResponse.json({ data: fetched, siblings, source: 'MDS_BISA_LIVE' });
           }
-        }
-      } catch {}
+        } catch {}
+      }
 
-      return NextResponse.json(
-        {
-          error: `Produk tidak ditemukan untuk: "${rawInput}"`,
-          hint: "Pastikan garis barcode fokus di tengah kotak kamera atau ketik 8 digit SKU / Kode Artikel."
-        },
-        { status: 404 }
-      );
+      if (isPureDigitCode) {
+        return NextResponse.json(
+          {
+            error: `Produk tidak ditemukan untuk: "${rawInput}"`,
+            hint: "Pastikan garis barcode fokus di tengah kotak kamera atau ketik kode SKU / Artikel."
+          },
+          { status: 404 }
+        );
+      }
     }
 
     // ─────────────────────────────────────────────────────────────

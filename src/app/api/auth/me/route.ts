@@ -16,10 +16,26 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ user: null, reason: "unauthenticated" });
     }
 
-    const dbUser = await prisma.user.findUnique({
-      where: { id: session.userId },
-      select: { status: true, sessionId: true, name: true, role: true, lastActive: true }
-    });
+    let dbUser: { status: string; sessionId: string | null; name: string; role: string; lastActive: Date | null } | null = null;
+    try {
+      dbUser = await prisma.user.findUnique({
+        where: { id: session.userId },
+        select: { status: true, sessionId: true, name: true, role: true, lastActive: true }
+      });
+    } catch (dbErr) {
+      // Jangan tendang user ke /login -> /spv-gateway hanya karena DB/pooler sedang sibuk!
+      console.warn("[AUTH ME] Transient DB warning, using verified JWT fallback:", dbErr);
+      return NextResponse.json({
+        user: {
+          ...session,
+          status: "ACTIVE",
+          name: session.name,
+          role: session.role,
+          jobTitle: session.jobTitle,
+          transientFallback: true,
+        }
+      });
+    }
 
     if (!dbUser) {
       return NextResponse.json({ user: null, reason: "unauthenticated" });
