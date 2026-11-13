@@ -1205,3 +1205,24 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
      `python-engine\.venv\Scripts\python.exe -u python-engine/morning_full_sweep.py --brutal --upc-first --workers=24`
   2. Lanjutkan sisa koleksi Kode Merah `matahari.com` (`801 -> 4.858`) lalu audit & masak ke Supabase (`< 440 MB`):
      `python-engine\.venv\Scripts\python.exe -u python-engine/raw_vault_collector.py --collect-web --code-red --audit`
+
+---
+
+### 78. Sapuan Brutal Siang Toko 719, Auto-Image (`--with-images`), Direct-PG Image Scraper, & Milestone 302rb+ SKU (13 November 2026, 13:45 WIB)
+
+- **Temuan Live StoreHub Toko 719 (`12:43 WIB`):**
+  1. `71885502` (`3 VANCE`): Live di StoreHub sebagai `SKU 71885502` | `VendorBarcode: 2340002908552` | `StyleCode: VANCE` | `DeptName: ZES MEN` | `SS SHIRT EMBROIDERY BOXY FIT V` (`NAVY BLUE/L`, `Rp 229.900`).
+  2. `TP090-10-02` (`TOME AME`): Live di StoreHub sebagai `SKU 72169883` | `VendorBarcode: TP090-10-02` | **`StyleCode: '0'`** *(anomali konsinyasi!)* | `DeptName: TOME AME` | `TM YUJIN LS PINK L:PINK:L` (`PINK/L`, `Rp 205.200`).
+  3. Server StoreHub tidak menyimpan gambar produk; foto studio resmi berasal dari CDN `matahari.com` (`cdn.shopify.com/s/files/1/0666/9212/0727/`) dan kini dapat dicari otomatis begitu SKU/UPC baru ditemukan.
+- **Perbaikan & Upgrade Mesin (`py_compile` & `npx tsc --noEmit` Lulus):**
+  1. [`python-engine/morning_full_sweep.py`](file:///c:/Max%20Display/price-checker/python-engine/morning_full_sweep.py):
+     - Guard anomali `StyleCode` (`"0"`, `"-"`, `"N/A"`, `"NONE"`, `"NULL"`) agar item konsinyasi tidak kolaps menjadi artikel `'0'`.
+     - Menambahkan mode `--census-sku` (probe klaster SKU 8-digit `7100000..7350000` Modulo-10 + ekspansi tetangga konsinyasi) & mode `--with-images` (otomatis aktif di `--brutal`: mencari foto langsung lewat **Raw Vault -> Sibling `(artikel, warna)` -> `matahari.com/search/suggest.json`** saat sweep berjalan + memanggil `brutal_image_scraper` di akhir).
+  2. [`python-engine/brutal_image_scraper.py`](file:///c:/Max%20Display/price-checker/python-engine/brutal_image_scraper.py):
+     - Memperbaiki pemuatan DB dari wave REST (yang sebelumnya berhenti di `156.000` SKU) menjadi query **Direct PostgreSQL** penuh (`280.992+` SKU) & batch SQL `UPDATE` paralel, menghasilkan **`+477` SKU baru berfoto** pada sweep penuh (total **`267.186` SKU berfoto terindeks** dari `96` sitemap + JSON + `67` koleksi + sibling).
+  3. [`python-engine/raw_vault_collector.py`](file:///c:/Max%20Display/price-checker/python-engine/raw_vault_collector.py):
+     - Memperpanjang jendela Auto-Resume `--code-red` menjadi `< 24 jam`.
+- **Hasil Verifikasi Eksekusi Siang Ini (`LAPORAN_AUDIT_KOLEKSI.md` & `LAPORAN_SCRAP_PAGI.md`):**
+  - **StoreHub Brutal + Census Sweep (`task-8776` & `task-8853`):** Menambah `+5.353` SKU baru & `+4.104` kode artikel baru langsung dari StoreHub Toko 719.
+  - **Audit & Cook Raw Vault (`task-8863`, `164.8s`):** Memasak **`+21.149` SKU varian pelengkap** dengan selamat di bawah batas aman Supabase.
+  - **Status Akhir Database Supabase:** **`302.141` SKU** | **`54.764` `CatalogArticle` unik** (`SUKO: 1.186` | `Mu+Ku: 52.640` lintas **`453` brand** | `ZES: 938`) | **`107.110` Barcode Utama** | **`9.797` `BarcodeAlias`** | **`239.984` Foto Produk** | Ukuran DB **`433 MB` / `500 MB`** (`raw_vault.db` lokal menampung **`482.194` baris mentah** & `276` vendor).

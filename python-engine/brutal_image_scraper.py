@@ -501,37 +501,72 @@ def execute_brutal_image_scrape():
     print("🛡️  FILTER AKTIF: 100% Foto Produk Studio (Blokir Logo, Banner, Ikon, Size Chart)")
     print("=" * 80)
 
-    # 1. Muat seluruh baris produk secara paralel dari Supabase (Wave Pagination bebas timeout)
-    print("📥 Memuat 84.763+ produk dari Supabase dengan 8 Workers...")
-
-    def fetch_db_chunk(off: int) -> List[Dict[str, Any]]:
-        for _ in range(3):
-            try:
-                res = sb.table("Product").select("*").order("sku").range(off, off + 999).execute()
-                return res.data or []
-            except Exception:
-                time.sleep(0.5)
-        return []
+    # 1. Muat seluruh baris produk via PostgreSQL langsung (bebas timeout, <15s) atau Wave Pagination fallback
+    print("📥 Memuat seluruh produk dari Database (direct Postgres / wave fallback)...")
 
     all_products: List[Dict[str, Any]] = []
-    offset = 0
-    wave_size = 16
-    while True:
-        offsets = [offset + i * 1000 for i in range(wave_size)]
-        reached_end = False
-        wave_rows = 0
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            for rows in executor.map(fetch_db_chunk, offsets):
-                if not rows:
-                    reached_end = True
-                    continue
-                wave_rows += len(rows)
-                all_products.extend(rows)
-                if len(rows) < 1000:
-                    reached_end = True
-        if reached_end or wave_rows == 0:
-            break
-        offset += wave_size * 1000
+    loaded_direct = False
+    try:
+        from raw_vault_collector import connect_pg
+        pg_conn = connect_pg()
+        pg_cur = pg_conn.cursor()
+        pg_cur.execute(
+            '''
+            SELECT sku, barcode, article, description, brand, dept, color, size,
+                   "hargaNormal", stok, "imageUrl", images
+            FROM "Product"
+            '''
+        )
+        for row in pg_cur.fetchall():
+            sku_v, bc_v, art_v, desc_v, br_v, dp_v, col_v, sz_v, hn_v, st_v, img_v, imgs_v = row
+            if sku_v:
+                all_products.append({
+                    "sku": sku_v,
+                    "barcode": bc_v,
+                    "article": art_v,
+                    "description": desc_v,
+                    "brand": br_v,
+                    "dept": dp_v,
+                    "color": col_v,
+                    "size": sz_v,
+                    "hargaNormal": hn_v,
+                    "stok": st_v,
+                    "imageUrl": img_v,
+                    "images": imgs_v or [],
+                })
+        pg_conn.close()
+        loaded_direct = bool(all_products)
+    except Exception as e:
+        print(f"   ⚠️ Fallback ke wave REST pagination ({e})")
+
+    if not loaded_direct:
+        def fetch_db_chunk(off: int) -> List[Dict[str, Any]]:
+            for _ in range(3):
+                try:
+                    res = sb.table("Product").select("*").order("sku").range(off, off + 999).execute()
+                    return res.data or []
+                except Exception:
+                    time.sleep(0.5)
+            return []
+
+        offset = 0
+        wave_size = 16
+        while True:
+            offsets = [offset + i * 1000 for i in range(wave_size)]
+            reached_end = False
+            wave_rows = 0
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                for rows in executor.map(fetch_db_chunk, offsets):
+                    if not rows:
+                        reached_end = True
+                        continue
+                    wave_rows += len(rows)
+                    all_products.extend(rows)
+                    if len(rows) < 1000:
+                        reached_end = True
+            if reached_end or wave_rows == 0:
+                break
+            offset += wave_size * 1000
 
     # Deduplikasi jika ada pergeseran range
     unique_map: Dict[str, Dict[str, Any]] = {}
@@ -652,40 +687,72 @@ def execute_brutal_image_scrape():
     print(f"   - Sibling (Kode Artikel Induk) : +{sibling_article_matched:,} SKU")
     print(f"   🔥 TOTAL SIAP UPDATE KE DB     : +{len(rows_to_upsert):,} SKU BARU BERFOTO!")
 
-    # 7. Simpan ke Supabase dengan Batch Full-Row Upsert (250 baris per panggilan HTTP, 8 Worker Paralel)
+    # 7. Simpan ke Supabase (direct PG batch update kilat, fallback REST)
     if rows_to_upsert:
-        print(f"\n💾 Menyimpan {len(rows_to_upsert):,} foto produk ke Supabase secara batch paralel...")
-        batch_size = 250
-        batches = [rows_to_upsert[i:i + batch_size] for i in range(0, len(rows_to_upsert), batch_size)]
+        print(f"\n💾 Menyimpan {len(rows_to_upsert):,} foto produk ke Supabase...")
+        saved_pg = False
+        try:
+            from psycopg2.extras import execute_values
+            from raw_vault_collector import connect_pg
+            pg_conn = connect_pg()
+            pg_cur = pg_conn.cursor()
+            tuples = [
+                (item["sku"], item["imageUrl"], item["images"], item["updatedAt"])
+                for item in rows_to_upsert
+            ]
+            for i in range(0, len(tuples), 500):
+                chunk = tuples[i:i + 500]
+                execute_values(
+                    pg_cur,
+                    '''
+                    UPDATE "Product" AS p
+                    SET "imageUrl" = v.img,
+                        images = v.imgs::text[],
+                        "updatedAt" = v.upd::timestamp
+                    FROM (VALUES %s) AS v(sku, img, imgs, upd)
+                    WHERE p.sku = v.sku
+                    ''',
+                    chunk,
+                    page_size=500,
+                )
+                pg_conn.commit()
+                print(f"   💾 Progress Simpan Foto: {min(i + 500, len(tuples)):,} / {len(tuples):,} SKU tersimpan...")
+            pg_conn.close()
+            saved_pg = True
+        except Exception as e:
+            print(f"   ⚠️ Fallback ke REST upsert foto ({e})")
 
-        def upsert_batch(batch: List[Dict[str, Any]]) -> int:
-            for _ in range(3):
-                try:
-                    sb.table("Product").upsert(batch, on_conflict="sku").execute()
-                    return len(batch)
-                except Exception:
-                    time.sleep(0.4)
-            # Fallback per item jika ada kendala di batch
-            ok = 0
-            for item in batch:
-                try:
-                    sb.table("Product").update({
-                        "imageUrl": item["imageUrl"],
-                        "images": item["images"],
-                        "updatedAt": item["updatedAt"],
-                    }).eq("sku", item["sku"]).execute()
-                    ok += 1
-                except Exception:
-                    pass
-            return ok
+        if not saved_pg:
+            batch_size = 250
+            batches = [rows_to_upsert[i:i + batch_size] for i in range(0, len(rows_to_upsert), batch_size)]
 
-        saved_count = 0
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = {executor.submit(upsert_batch, b): idx for idx, b in enumerate(batches)}
-            for idx_done, fut in enumerate(as_completed(futures), 1):
-                saved_count += fut.result()
-                if idx_done % 10 == 0 or idx_done == len(batches):
-                    print(f"   💾 Progress Simpan Foto: {saved_count:,} / {len(rows_to_upsert):,} SKU tersimpan...")
+            def upsert_batch(batch: List[Dict[str, Any]]) -> int:
+                for _ in range(3):
+                    try:
+                        sb.table("Product").upsert(batch, on_conflict="sku").execute()
+                        return len(batch)
+                    except Exception:
+                        time.sleep(0.4)
+                ok = 0
+                for item in batch:
+                    try:
+                        sb.table("Product").update({
+                            "imageUrl": item["imageUrl"],
+                            "images": item["images"],
+                            "updatedAt": item["updatedAt"],
+                        }).eq("sku", item["sku"]).execute()
+                        ok += 1
+                    except Exception:
+                        pass
+                return ok
+
+            saved_count = 0
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = {executor.submit(upsert_batch, b): idx for idx, b in enumerate(batches)}
+                for idx_done, fut in enumerate(as_completed(futures), 1):
+                    saved_count += fut.result()
+                    if idx_done % 10 == 0 or idx_done == len(batches):
+                        print(f"   💾 Progress Simpan Foto: {saved_count:,} / {len(rows_to_upsert):,} SKU tersimpan...")
 
     # Hitung statistik per brand
     brand_img_stats: Dict[str, Tuple[int, int]] = {}

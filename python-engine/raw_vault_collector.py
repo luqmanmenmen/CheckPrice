@@ -603,16 +603,16 @@ def collect_matahari_deep(max_collections: int = 360, code_red: bool = False) ->
     now_iso = datetime.now(timezone.utc).isoformat()
 
     if code_red:
-        cutoff_6h = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+        cutoff_24h = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
         recent_rows = cur_v.execute(
             "SELECT handle FROM raw_collections_state WHERE fetched_count > 0 AND last_fetched_at >= ?",
-            (cutoff_6h,),
+            (cutoff_24h,),
         ).fetchall()
         recent_handles = {r[0] for r in recent_rows}
         if recent_handles:
             before_cnt = len(selected)
             selected = [(h, cnt) for h, cnt in selected if h not in recent_handles]
-            print(f"   ⏭️ Resume Code-Red: lewati {before_cnt - len(selected):,} koleksi yang baru disedot <6 jam lalu (sisa {len(selected):,}).")
+            print(f"   ⏭️ Resume Code-Red: lewati {before_cnt - len(selected):,} koleksi yang baru disedot <24 jam lalu (sisa {len(selected):,}).")
 
     total_stored = 0
     seen_bcs: Set[str] = set()

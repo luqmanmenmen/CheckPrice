@@ -105,6 +105,71 @@ http_session.mount("http://", adapter)
 
 action_lock = threading.Lock()
 cookie_lock = threading.Lock()
+img_cache_lock = threading.Lock()
+SUGGEST_IMG_CACHE: Dict[str, Optional[str]] = {}
+
+
+def lookup_matahari_image(sku: str) -> Optional[str]:
+    """Mencari foto studio resmi Matahari.com secara live untuk 1 SKU/barcode via suggest API."""
+    key = str(sku or "").strip()
+    if not key:
+        return None
+    with img_cache_lock:
+        if key in SUGGEST_IMG_CACHE:
+            return SUGGEST_IMG_CACHE[key]
+    found_url: Optional[str] = None
+    try:
+        r = http_session.get(
+            f"https://matahari.com/search/suggest.json?q={key}&resources[type]=product",
+            timeout=2.5,
+        )
+        if r.status_code == 200:
+            prods = (((r.json() or {}).get("resources") or {}).get("results") or {}).get("products") or []
+            for p in prods:
+                img = str(p.get("image") or "").strip()
+                handle = str(p.get("handle") or "").lower()
+                url_p = str(p.get("url") or "").lower()
+                if img.startswith("//"):
+                    img = f"https:{img}"
+                if "cdn.shopify.com/s/files/1/0666/9212/0727/" not in img:
+                    continue
+                fn_lower = img.split("?")[0].split("/")[-1].lower()
+                if any(bad in fn_lower for bad in ("banner", "logo", "icon", "badge", "chart", "size", "panduan", ".svg", ".gif")):
+                    continue
+                if key.lower() in fn_lower or key.lower() in handle or key.lower() in url_p:
+                    found_url = img
+                    break
+    except Exception:
+        pass
+    with img_cache_lock:
+        SUGGEST_IMG_CACHE[key] = found_url
+    return found_url
+
+
+def load_vault_image_map() -> Dict[str, List[str]]:
+    """Memuat peta foto resmi dari Raw Vault lokal (`raw_vault.db`) dalam <1 detik."""
+    out: Dict[str, List[str]] = {}
+    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "raw_vault.db")
+    if not os.path.exists(db_path):
+        return out
+    try:
+        import sqlite3
+        conn = sqlite3.connect(db_path, timeout=5)
+        for sku_v, imgs_j in conn.execute(
+            "SELECT sku, images_json FROM raw_items WHERE images_json IS NOT NULL AND images_json != '[]'"
+        ):
+            if not sku_v or sku_v.startswith("SHP-"):
+                continue
+            try:
+                imgs = json.loads(imgs_j)
+                if imgs:
+                    out[str(sku_v)] = imgs[:6]
+            except Exception:
+                pass
+        conn.close()
+    except Exception:
+        pass
+    return out
 
 
 def log_sync_history(sync_type: str, file_name: str, total_records: int, status: str = "SUCCESS"):
@@ -703,7 +768,13 @@ def build_candidate_queues(existing_skus: Set[str], existing_barcodes: Set[str])
                     seen_sku_bodies.add(b7)
                     candidate_sku_bodies.append(b7)
 
-    sku_queue = [generate_mds_sku8(b7) for b7 in candidate_sku_bodies]
+    # Sparse census probe di klaster SKU 71xxxxxx-73xxxxxx (brand baru / ZES / 3 VANCE / TOME AME dsb.) diletakkan terdepan
+    sparse_sku8: List[str] = []
+    for b7 in range(7100000, 7350000, 125):
+        cand_s = generate_mds_sku8(b7)
+        if cand_s and cand_s not in existing_skus:
+            sparse_sku8.append(cand_s)
+    sku_queue = sparse_sku8 + [generate_mds_sku8(b7) for b7 in candidate_sku_bodies]
     # Tambahkan tetangga langsung (+/-3) untuk SKU 7 atau 9 digit yang ada di DB
     extra_len_skus = [int(s) for s in existing_skus if len(s) in (7, 9) and s.isdigit()]
     for n_sku in extra_len_skus:
@@ -711,11 +782,6 @@ def build_candidate_queues(existing_skus: Set[str], existing_barcodes: Set[str])
             cand_s = str(n_sku + d)
             if cand_s not in existing_skus:
                 sku_queue.append(cand_s)
-    # Sparse census probe di klaster SKU 71xxxx-72xxxx (brand baru / ZES / 3 VANCE dsb.)
-    for b7 in range(710000, 725000, 25):
-        cand_s = generate_mds_sku8(b7)
-        if cand_s not in existing_skus:
-            sku_queue.append(cand_s)
     sku_queue = [s for s in dict.fromkeys(sku_queue) if s and s not in existing_skus]
 
     # --- 2. KANDIDAT BARCODE: FLEKSIBEL PENUH (000001..999999 + KLASTER DINAMIS NON-234000) ---
@@ -847,8 +913,11 @@ def item_to_record(
     bc_val = existing_primary_bc or (all_bcs[0] if all_bcs else None)
 
     brand_val, dept_val = normalize_brand_and_dept(item)
-    art_val = str(item.get("StyleCode") or item.get("Description") or item.get("ItemDescription") or "PRODUK BARU").strip()
-    desc_val = str(item.get("Description") or item.get("ItemDescription") or art_val).strip()
+    raw_style = str(item.get("StyleCode") or "").strip()
+    if raw_style.upper() in ("", "0", "00", "000", "-", "N/A", "NA", "NONE", "NULL"):
+        raw_style = ""
+    desc_val = str(item.get("Description") or item.get("ItemDescription") or raw_style or "PRODUK BARU").strip()
+    art_val = raw_style or desc_val.split(":")[0].strip() or "PRODUK BARU"
     color_val = item.get("COLOR") or item.get("Color") or None
     size_val = item.get("Size") or item.get("SIZE") or None
 
@@ -991,6 +1060,7 @@ def flush_buffer(
     alias_records: List[Dict[str, Any]] = []
     seen_alias_bcs: Set[str] = set()
     records = []
+    new_img_updates: List[Tuple[str, str, List[str]]] = []
     now_iso = datetime.now(timezone.utc).isoformat()
 
     for r in buffer_by_sku.values():
@@ -1031,6 +1101,8 @@ def flush_buffer(
         for opt_k in ("brand", "dept", "color", "size"):
             clean_r.setdefault(opt_k, None)
         records.append(clean_r)
+        if r.get("_found_images") and r.get("imageUrl") and r.get("sku"):
+            new_img_updates.append((str(r["sku"]), str(r["imageUrl"]), list(r["_found_images"])))
     buffer_by_sku.clear()
 
     # 1. Simpan mentahan lengkap ke Raw Vault SQLite lokal (0 MB kuota Supabase)
@@ -1063,6 +1135,29 @@ def flush_buffer(
     if alias_records:
         try:
             sb.table("BarcodeAlias").upsert(alias_records, on_conflict="barcode").execute()
+        except Exception:
+            pass
+
+    # 4. Sinkronkan foto yang baru ditemukan untuk SKU tanpa foto (aman tidak menimpa galeri eksisting)
+    if new_img_updates:
+        try:
+            from psycopg2.extras import execute_values
+            pg_conn = connect_pg()
+            pg_cur = pg_conn.cursor()
+            execute_values(
+                pg_cur,
+                '''
+                UPDATE "Product" AS p
+                SET "imageUrl" = COALESCE(NULLIF(p."imageUrl", ''), v.img),
+                    images = CASE WHEN cardinality(p.images) = 0 THEN v.imgs::text[] ELSE p.images END
+                FROM (VALUES %s) AS v(sku, img, imgs)
+                WHERE p.sku = v.sku
+                ''',
+                new_img_updates,
+                page_size=200,
+            )
+            pg_conn.commit()
+            pg_conn.close()
         except Exception:
             pass
 
@@ -1279,6 +1374,8 @@ def execute_morning_sweep(
     upc_first: bool = False,
     custom_range: Optional[Tuple[int, int]] = None,
     workers: int = 28,
+    with_images: bool = False,
+    census_sku_only: bool = False,
 ):
     """Eksekusi penuh pemindaian brutal multi-threaded (Turbo 28 Workers)."""
     cookie = get_active_cookie()
@@ -1314,6 +1411,23 @@ def execute_morning_sweep(
         for r in catalog_by_sku.values()
         if str(r.get("article") or "").strip().upper() not in INVALID_ARTICLES
     }
+
+    # Bangun peta foto instan dari katalog + Raw Vault agar setiap SKU/UPC baru langsung ikut dicari gambarnya
+    vault_img_map = load_vault_image_map()
+    img_by_art_color: Dict[Tuple[str, str], List[str]] = {}
+    img_by_art: Dict[str, List[str]] = {}
+    for s_k, r_k in catalog_by_sku.items():
+        img_u = str(r_k.get("imageUrl") or "").strip()
+        if not img_u:
+            continue
+        gal = vault_img_map.get(s_k) or [img_u]
+        art_k = str(r_k.get("article") or "").strip().upper()
+        col_k = str(r_k.get("color") or "").strip().upper()
+        if art_k not in INVALID_ARTICLES:
+            if col_k and col_k not in ("", "-"):
+                img_by_art_color.setdefault((art_k, col_k), gal)
+            img_by_art.setdefault(art_k, gal)
+    live_images_matched = 0
     initial_count = len(existing_skus)
     initial_articles_count = len(seen_articles)
     print(f"📊 Katalog Saat Ini: {initial_articles_count:,} Artikel Unik | {initial_count:,} SKU di DB | {len(existing_barcodes):,} Barcode")
@@ -1372,7 +1486,7 @@ def execute_morning_sweep(
         expand_on_new_article: bool = True,
         phase_max_minutes: Optional[float] = None,
     ) -> None:
-        nonlocal cookie, new_discovered, new_articles_discovered, updated_count
+        nonlocal cookie, new_discovered, new_articles_discovered, updated_count, live_images_matched
         if not queue:
             return
         print(f"\n⚡ [{label}] Menyapu {len(queue):,} kandidat dengan {workers} Worker Threads...")
@@ -1422,8 +1536,34 @@ def execute_morning_sweep(
                         sku_val = rec["sku"]
                         bc_val = rec.get("barcode")
                         art_val_up = str(rec.get("article") or "").strip().upper()
+                        col_val_up = str(rec.get("color") or "").strip().upper()
                         is_new = sku_val not in existing_skus
                         is_new_article = bool(art_val_up and art_val_up not in INVALID_ARTICLES and art_val_up not in seen_articles)
+
+                        # Langsung carikan foto produk jika belum berfoto (Vault -> Sibling Artikel+Warna -> Live Matahari.com)
+                        if not rec.get("imageUrl"):
+                            matched_gal = (
+                                vault_img_map.get(sku_val)
+                                or (img_by_art_color.get((art_val_up, col_val_up)) if art_val_up not in INVALID_ARTICLES and col_val_up else None)
+                                or (img_by_art.get(art_val_up) if art_val_up not in INVALID_ARTICLES else None)
+                            )
+                            if not matched_gal and with_images:
+                                live_img = lookup_matahari_image(sku_val) or (lookup_matahari_image(bc_val) if bc_val else None)
+                                if live_img:
+                                    matched_gal = [live_img]
+                            if matched_gal:
+                                rec["imageUrl"] = matched_gal[0]
+                                rec["_found_images"] = matched_gal[:6]
+                                live_images_matched += 1
+                                if art_val_up not in INVALID_ARTICLES:
+                                    if col_val_up and col_val_up not in ("", "-"):
+                                        img_by_art_color.setdefault((art_val_up, col_val_up), matched_gal[:6])
+                                    img_by_art.setdefault(art_val_up, matched_gal[:6])
+                        elif art_val_up not in INVALID_ARTICLES:
+                            cur_gal = vault_img_map.get(sku_val) or [str(rec["imageUrl"])]
+                            if col_val_up and col_val_up not in ("", "-"):
+                                img_by_art_color.setdefault((art_val_up, col_val_up), cur_gal)
+                            img_by_art.setdefault(art_val_up, cur_gal)
 
                         existing_skus.add(sku_val)
                         catalog_by_sku[sku_val] = rec
@@ -1500,23 +1640,31 @@ def execute_morning_sweep(
             run_sweep_phase("upc", [b for b in neighbor_bc_queue if b not in existing_barcodes], "EXPAND-NEW-ART-BC", expand_on_new_article=False)
         if neighbor_sku_queue:
             run_sweep_phase("sku", [s for s in neighbor_sku_queue if s not in existing_skus], "EXPAND-NEW-ART-SKU", expand_on_new_article=False)
+    elif census_sku_only:
+        run_sweep_phase("sku", [s for s in sku_queue if s not in existing_skus], "CENSUS-SKU-SWEEP", expand_on_new_article=True)
+        if neighbor_bc_queue:
+            run_sweep_phase("upc", [b for b in neighbor_bc_queue if b not in existing_barcodes], "EXPAND-NEW-ART-BC", expand_on_new_article=False)
+        if neighbor_sku_queue:
+            run_sweep_phase("sku", [s for s in neighbor_sku_queue if s not in existing_skus], "EXPAND-NEW-ART-SKU", expand_on_new_article=False)
     else:
-        # JALUR 0: Tarik Barcode & Stok untuk SKU baru tanpa barcode (maks 12 menit agar tetap menyisakan waktu hunter panjang)
+        # JALUR 0: Tarik Barcode & Stok untuk SKU baru tanpa barcode
         if missing_bc_skus:
-            run_sweep_phase("sku", missing_bc_skus, "BARCODE-RECOVERY", expand_on_new_article=False, phase_max_minutes=12.0)
+            run_sweep_phase("sku", missing_bc_skus, "BARCODE-RECOVERY", expand_on_new_article=False, phase_max_minutes=7.0)
 
         # JALUR 1: Sapuan Article-Hunter Stride-4 merata di seluruh zona 234000* (SUKO, ZES, MUKU)
-        run_sweep_phase("upc", [b for b in hunter_bc_queue if b not in existing_barcodes], "ARTICLE-HUNTER-UPC", expand_on_new_article=True, phase_max_minutes=22.0)
+        run_sweep_phase("upc", [b for b in hunter_bc_queue if b not in existing_barcodes], "ARTICLE-HUNTER-UPC", expand_on_new_article=True, phase_max_minutes=14.0)
+
+        # JALUR 1B: Sensus SKU 8-digit klaster baru (71xxxx-73xxxx) & celah SKU Modulo-10 untuk menangkap konsinyasi non-234000
+        run_sweep_phase("sku", [s for s in sku_queue if s not in existing_skus], "CENSUS-SKU-SWEEP", expand_on_new_article=True, phase_max_minutes=5.0)
 
         # JALUR 2: Langsung lengkapi varian (warna/ukuran) untuk ARTIKEL BARU yang baru tertangkap
         if neighbor_bc_queue:
-            run_sweep_phase("upc", [b for b in neighbor_bc_queue if b not in existing_barcodes], "NEW-ART-VARIANTS-BC", expand_on_new_article=False, phase_max_minutes=8.0)
+            run_sweep_phase("upc", [b for b in neighbor_bc_queue if b not in existing_barcodes], "NEW-ART-VARIANTS-BC", expand_on_new_article=False, phase_max_minutes=6.0)
         if neighbor_sku_queue:
-            run_sweep_phase("sku", [s for s in neighbor_sku_queue if s not in existing_skus], "NEW-ART-VARIANTS-SKU", expand_on_new_article=False, phase_max_minutes=6.0)
+            run_sweep_phase("sku", [s for s in neighbor_sku_queue if s not in existing_skus], "NEW-ART-VARIANTS-SKU", expand_on_new_article=False, phase_max_minutes=5.0)
 
-        # JALUR 3: Jika masih ada sisa waktu, isi celah barcode & SKU Modulo-10
+        # JALUR 3: Jika masih ada sisa waktu, isi celah barcode lain (termasuk prefix non-234000)
         run_sweep_phase("upc", [b for b in fill_bc_queue if b not in existing_barcodes], "FILL-GAPS-UPC", expand_on_new_article=True)
-        run_sweep_phase("sku", [s for s in sku_queue if s not in existing_skus], "FILL-GAPS-SKU", expand_on_new_article=False)
 
     save_mapped_paths_registry(catalog_by_sku)
     save_report(start_time, initial_count, new_discovered, updated_count, brands_counter)
@@ -1527,6 +1675,14 @@ def execute_morning_sweep(
         "SUCCESS",
     )
 
+    if with_images:
+        try:
+            print("\n📸 [--with-images] Melanjutkan penyapuan foto penuh Matahari.com (Sitemap 209+ & Sibling)...")
+            from brutal_image_scraper import execute_brutal_image_scrape
+            execute_brutal_image_scrape()
+        except Exception as e:
+            print(f"⚠️ Lewati chain brutal_image_scraper: {e}")
+
     try:
         from build_catalog_index import build_and_verify_catalog
         build_and_verify_catalog()
@@ -1534,7 +1690,7 @@ def execute_morning_sweep(
         print(f"⚠️ Lewati auto-rebuild CatalogArticle: {e}")
 
     print("\n" + "=" * 80)
-    print(f"🎉 SUKSES TOTAL! Artikel Unik: {len(seen_articles):,} (+{new_articles_discovered:,} baru) | Total SKU: {len(existing_skus):,} (+{new_discovered:,} baru)")
+    print(f"🎉 SUKSES TOTAL! Artikel Unik: {len(seen_articles):,} (+{new_articles_discovered:,} baru) | Total SKU: {len(existing_skus):,} (+{new_discovered:,} baru) | Foto Baru: +{live_images_matched:,}")
     print(f"📄 Laporan lengkap tersimpan di: {REPORT_PATH}")
     print("=" * 80 + "\n")
 
@@ -1567,13 +1723,20 @@ if __name__ == "__main__":
         save_mapped_paths_registry(cat)
     elif "--stock-only" in args:
         execute_live_stock_sync(max_minutes=max_min_arg or 45)
-    elif "--brutal" in args or "--run-once" in args or "--force" in args or "--upc-first" in args or custom_range_arg or is_gh_actions:
+    elif "--census-sku" in args or "--brutal" in args or "--run-once" in args or "--force" in args or "--upc-first" in args or custom_range_arg or is_gh_actions:
         execute_morning_sweep(
             run_once_cloud=True,
             max_minutes=max_min_arg or 50,
             upc_first=("--upc-first" in args),
             custom_range=custom_range_arg,
             workers=workers_arg,
+            with_images=("--with-images" in args or "--brutal" in args),
+            census_sku_only=("--census-sku" in args),
         )
     else:
-        execute_morning_sweep(run_once_cloud=False, max_minutes=max_min_arg or 180, workers=workers_arg)
+        execute_morning_sweep(
+            run_once_cloud=False,
+            max_minutes=max_min_arg or 180,
+            workers=workers_arg,
+            with_images=("--with-images" in args),
+        )
