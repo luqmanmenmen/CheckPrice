@@ -4,6 +4,10 @@ import { groupProductsByArticle } from "@/lib/smartSearchEngine";
 import {
   BrandGroupKey,
   CategoryKey,
+  CATEGORY_DISPLAY_ORDER,
+  CATEGORY_LABELS,
+  CATEGORY_OPTIONS,
+  ResolvedCategoryKey,
   SubBrandCount,
   buildBrandPrismaWhere,
   buildCategoryPrismaWhere,
@@ -37,18 +41,25 @@ const VALID_CATEGORIES = new Set<CategoryKey>([
 ]);
 
 const CATALOG_CACHE_TTL_MS = 120_000;
-const CATALOG_CACHE_MAX = 40;
+const CATALOG_CACHE_MAX = 80;
 const catalogCache = new Map<
   string,
   {
-    groupedArticles: any[];
-    totalSkus: number;
-    brandCounts: Record<BrandGroupKey, number>;
-    categoryCounts: Record<CategoryKey, number>;
-    subBrandCounts?: SubBrandCount[];
+    payload: { data: any[]; meta: Record<string, any> };
     expiresAt: number;
   }
 >();
+
+function cacheCatalogPayload(key: string, payload: { data: any[]; meta: Record<string, any> }) {
+  if (catalogCache.size >= CATALOG_CACHE_MAX) {
+    const oldest = catalogCache.keys().next().value;
+    if (oldest !== undefined) catalogCache.delete(oldest);
+  }
+  catalogCache.set(key, {
+    payload,
+    expiresAt: Date.now() + CATALOG_CACHE_TTL_MS,
+  });
+}
 
 interface GlobalCatalogSummary {
   rows: Array<{
@@ -108,7 +119,10 @@ function summarizeFromPrebuilt(
   const brandCounts: Record<BrandGroupKey, number> = { ALL: 0, SUKO: 0, MUKU: 0, ZES: 0 };
   const categoryCounts: Record<CategoryKey, number> = createEmptyCategoryCounts();
   const mukuSubMap = new Map<string, SubBrandCount>();
+  const activeBrandSubMap = new Map<string, { subBrand: string; count: number; totalSkus: number; photoCount: number }>();
+  const activeCatMap = new Map<ResolvedCategoryKey, { count: number; totalSkus: number }>();
   let totalSkus = 0;
+  let totalArticles = 0;
 
   for (const r of summary.rows) {
     const matchCat = category === "ALL" || r.categoryKey === category;
@@ -135,14 +149,45 @@ function summarizeFromPrebuilt(
       };
       prev.count += r.count;
       mukuSubMap.set(r.subBrand, prev);
+
+      if (brandGroup === "MUKU" && !subBrand) {
+        const bPrev = activeBrandSubMap.get(r.subBrand) || {
+          subBrand: r.subBrand,
+          count: 0,
+          totalSkus: 0,
+          photoCount: summary.photoMap.get(r.subBrand) || 0,
+        };
+        bPrev.count += r.count;
+        bPrev.totalSkus += r.skuSum;
+        activeBrandSubMap.set(r.subBrand, bPrev);
+      }
     }
     if (matchBrand && matchCat && matchSub) {
       totalSkus += r.skuSum;
+      totalArticles += r.count;
+      if (category === "ALL") {
+        const ck = r.categoryKey as ResolvedCategoryKey;
+        const cPrev = activeCatMap.get(ck) || { count: 0, totalSkus: 0 };
+        cPrev.count += r.count;
+        cPrev.totalSkus += r.skuSum;
+        activeCatMap.set(ck, cPrev);
+      }
     }
   }
 
   const subBrandCounts = sortSubBrandStats(Array.from(mukuSubMap.values()), (x) => x.name);
-  return { brandCounts, categoryCounts, subBrandCounts, totalSkus };
+  const brandShowcaseMeta = sortSubBrandStats(Array.from(activeBrandSubMap.values()), (x) => x.subBrand);
+  const categoryShowcaseMeta = CATEGORY_DISPLAY_ORDER
+    .filter((ck) => (activeCatMap.get(ck)?.count || 0) > 0)
+    .map((ck) => ({
+      catKey: ck,
+      label: CATEGORY_LABELS[ck],
+      icon: CATEGORY_OPTIONS.find((o) => o.key === ck)?.icon || "📦",
+      count: activeCatMap.get(ck)!.count,
+      totalSkus: activeCatMap.get(ck)!.totalSkus,
+    }));
+
+  return { brandCounts, categoryCounts, subBrandCounts, totalSkus, totalArticles, brandShowcaseMeta, categoryShowcaseMeta };
 }
 
 export async function GET(request: NextRequest) {
@@ -158,93 +203,154 @@ export async function GET(request: NextRequest) {
     const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "20", 10)));
     const groupSections = searchParams.get("groupSections") !== "0";
 
-    const buildCatalogResponse = (
-      groupedList: any[],
-      totalSkus: number,
-      brandCounts: Record<BrandGroupKey, number>,
-      categoryCounts: Record<CategoryKey, number>,
-      isCached: boolean,
-      subBrandCountsOverride?: SubBrandCount[]
-    ) => {
-      const payload = buildTaxonomyListPayload({
-        groupedList,
-        totalSkus,
-        brandGroup,
-        category,
-        subBrand,
-        page,
-        limit,
-        groupSections,
-        isBrowseMode: true,
-        brandCounts,
-        categoryCounts,
-      });
-      return NextResponse.json({
-        data: payload.data,
-        meta: {
-          ...payload.meta,
-          ...(subBrandCountsOverride ? { subBrandCounts: subBrandCountsOverride } : {}),
-          ...(isCached ? { cached: true } : {}),
-        },
-      });
-    };
-
-    const cacheKey = `b=${brandGroup}::c=${category}::s=${subBrand}`;
+    const cacheKey = `b=${brandGroup}::c=${category}::s=${subBrand}::p=${page}::l=${limit}::g=${groupSections ? 1 : 0}`;
     const cached = catalogCache.get(cacheKey);
     if (cached && Date.now() <= cached.expiresAt) {
-      return buildCatalogResponse(
-        cached.groupedArticles,
-        cached.totalSkus,
-        cached.brandCounts,
-        cached.categoryCounts,
-        true,
-        cached.subBrandCounts
-      );
+      return NextResponse.json({
+        data: cached.payload.data,
+        meta: { ...cached.payload.meta, cached: true },
+      });
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // JALUR UTAMA (<25ms): Baca langsung tabel pre-computed `CatalogArticle`
-    // hasil olahan Python Engine (`build_catalog_index.py`)!
+    // JALUR UTAMA (<150ms): Paginasi SQL langsung pada tabel pre-computed
+    // `CatalogArticle` (hanya menarik 20-40 baris per halaman, bukan 54rb baris!)
     // ─────────────────────────────────────────────────────────────────────────
     const prebuiltSummary = await getPrebuiltCatalogSummary().catch(() => null);
     if (prebuiltSummary) {
-      const { brandCounts, categoryCounts, subBrandCounts, totalSkus } = summarizeFromPrebuilt(
-        prebuiltSummary,
-        brandGroup,
-        category,
-        subBrand
-      );
-      const where: any = {};
-      if (brandGroup !== "ALL") where.brandGroup = brandGroup;
-      if (category !== "ALL") where.categoryKey = category;
-      if (subBrand) where.subBrand = subBrand;
-
-      const groupedArticles = await db.catalogArticle.findMany({
-        where,
-        orderBy: { sortRank: "asc" },
-      });
-
-      if (catalogCache.size >= CATALOG_CACHE_MAX) {
-        const oldest = catalogCache.keys().next().value;
-        if (oldest !== undefined) catalogCache.delete(oldest);
-      }
-      catalogCache.set(cacheKey, {
-        groupedArticles,
-        totalSkus,
+      const {
         brandCounts,
         categoryCounts,
         subBrandCounts,
-        expiresAt: Date.now() + CATALOG_CACHE_TTL_MS,
-      });
-
-      return buildCatalogResponse(
-        groupedArticles,
         totalSkus,
-        brandCounts,
-        categoryCounts,
-        false,
-        subBrandCounts
-      );
+        totalArticles,
+        brandShowcaseMeta,
+        categoryShowcaseMeta,
+      } = summarizeFromPrebuilt(prebuiltSummary, brandGroup, category, subBrand);
+
+      const baseWhere: any = {};
+      if (brandGroup !== "ALL") baseWhere.brandGroup = brandGroup;
+      if (category !== "ALL") baseWhere.categoryKey = category;
+      if (subBrand) baseWhere.subBrand = subBrand;
+
+      let responsePayload: { data: any[]; meta: Record<string, any> };
+
+      if (brandGroup === "MUKU" && !subBrand && groupSections && brandShowcaseMeta.length > 0) {
+        const totalBrands = brandShowcaseMeta.length;
+        const totalPages = Math.max(1, Math.ceil(totalBrands / 8));
+        const safePage = Math.min(Math.max(1, page), totalPages);
+        const pageMeta = brandShowcaseMeta.slice((safePage - 1) * 8, safePage * 8);
+        const sectionItems = await Promise.all(
+          pageMeta.map((sec) =>
+            db.catalogArticle.findMany({
+              where: { ...baseWhere, subBrand: sec.subBrand },
+              orderBy: { sortRank: "asc" },
+              take: 5,
+            })
+          )
+        );
+        const sections = pageMeta.map((sec, i) => ({
+          subBrand: sec.subBrand,
+          count: sec.count,
+          totalSkus: sec.totalSkus,
+          items: sectionItems[i] || [],
+        }));
+        responsePayload = {
+          data: sections.flatMap((s) => s.items),
+          meta: {
+            page: safePage,
+            limit,
+            total: totalArticles,
+            totalSkus,
+            totalPages,
+            brandGroup,
+            category,
+            subBrand,
+            brandCounts,
+            categoryCounts,
+            subBrandCounts,
+            brandShowcaseSections: sections,
+            sectionMode: "BRAND_PAGES",
+          },
+        };
+      } else if (
+        (brandGroup === "SUKO" || brandGroup === "ZES" || (brandGroup === "MUKU" && Boolean(subBrand))) &&
+        category === "ALL" &&
+        groupSections &&
+        categoryShowcaseMeta.length > 0
+      ) {
+        const totalCategories = categoryShowcaseMeta.length;
+        const totalPages = Math.max(1, Math.ceil(totalCategories / 5));
+        const safePage = Math.min(Math.max(1, page), totalPages);
+        const pageMeta = categoryShowcaseMeta.slice((safePage - 1) * 5, safePage * 5);
+        const sectionItems = await Promise.all(
+          pageMeta.map((sec) =>
+            db.catalogArticle.findMany({
+              where: { ...baseWhere, categoryKey: sec.catKey },
+              orderBy: { sortRank: "asc" },
+              take: 5,
+            })
+          )
+        );
+        const sections = pageMeta.map((sec, i) => ({
+          catKey: sec.catKey,
+          label: sec.label,
+          icon: sec.icon,
+          count: sec.count,
+          totalSkus: sec.totalSkus,
+          items: sectionItems[i] || [],
+        }));
+        responsePayload = {
+          data: sections.flatMap((s) => s.items),
+          meta: {
+            page: safePage,
+            limit,
+            total: totalArticles,
+            totalSkus,
+            totalPages,
+            brandGroup,
+            category,
+            subBrand,
+            brandCounts,
+            categoryCounts,
+            subBrandCounts,
+            categoryShowcaseSections: sections,
+            sectionMode: "CATEGORY_PAGES",
+          },
+        };
+      } else {
+        const totalPages = Math.max(1, Math.ceil(totalArticles / limit));
+        const safePage = Math.min(Math.max(1, page), totalPages);
+        const pageRows =
+          totalArticles > 0
+            ? await db.catalogArticle.findMany({
+                where: baseWhere,
+                orderBy: { sortRank: "asc" },
+                skip: (safePage - 1) * limit,
+                take: limit,
+              })
+            : [];
+        responsePayload = {
+          data: pageRows,
+          meta: {
+            page: safePage,
+            limit,
+            total: totalArticles,
+            totalSkus,
+            totalPages,
+            brandGroup,
+            category,
+            subBrand,
+            brandCounts,
+            categoryCounts,
+            subBrandCounts,
+            sectionMode: "LIST",
+          },
+        };
+      }
+
+      cacheCatalogPayload(cacheKey, responsePayload);
+      return NextResponse.json(responsePayload);
     }
 
     // Fallback aman jika `CatalogArticle` belum terisi
@@ -278,25 +384,22 @@ export async function GET(request: NextRequest) {
     groupedArticles.sort(compareBrowseItems);
     const { brandCounts, categoryCounts } = summarizeTaxonomyCounts(groupedArticles);
 
-    if (catalogCache.size >= CATALOG_CACHE_MAX) {
-      const oldest = catalogCache.keys().next().value;
-      if (oldest !== undefined) catalogCache.delete(oldest);
-    }
-    catalogCache.set(cacheKey, {
-      groupedArticles,
+    const fallbackPayload = buildTaxonomyListPayload({
+      groupedList: groupedArticles,
       totalSkus: matched.length,
+      brandGroup,
+      category,
+      subBrand,
+      page,
+      limit,
+      groupSections,
+      isBrowseMode: true,
       brandCounts,
       categoryCounts,
-      expiresAt: Date.now() + CATALOG_CACHE_TTL_MS,
     });
+    cacheCatalogPayload(cacheKey, fallbackPayload);
 
-    return buildCatalogResponse(
-      groupedArticles,
-      matched.length,
-      brandCounts,
-      categoryCounts,
-      false
-    );
+    return NextResponse.json(fallbackPayload);
   } catch (error) {
     console.error("Error browsing catalog:", error);
     return NextResponse.json(
