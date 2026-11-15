@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma as db } from "@/lib/prisma";
-import { checkSingleItemStock, isStoreOpen, calculateEan13CheckDigit } from "@/lib/mdsBisaClient";
+import { checkSingleItemStock, calculateEan13CheckDigit } from "@/lib/mdsBisaClient";
 import {
   expandRetailQuery,
   computeProductRelevanceScore,
@@ -209,46 +209,57 @@ export async function GET(
       }
     }
 
-    if (isPureDigitCode || isAlphaVendorCode) {
-      // Untuk kode alfanumerik (mis. PSNYC01), jangan skip ke live MDS jika artikel DB sudah ada
-      const hasDbArticleMatch = isAlphaVendorCode
-        ? await db.product.findFirst({
-            where: { article: { contains: rawInput, mode: 'insensitive' as const } },
-            select: { sku: true }
-          })
-        : null;
+    const allowLiveFallback = searchParams.get('live') === '1';
 
-      if (!hasDbArticleMatch) {
-        try {
-          const liveTimeoutMs = isStoreOpen() ? 2000 : 900;
-          const liveRes: any = await Promise.race([
-            checkSingleItemStock(rawInput),
-            new Promise((resolve) => setTimeout(() => resolve({ success: false, timeout: true }), liveTimeoutMs))
-          ]);
-          if (liveRes?.success && liveRes?.sku) {
-            let fetched = await db.product.findFirst({
-              where: {
-                OR: [
-                  { sku: liveRes.sku },
-                  ...(liveRes.barcode ? [{ barcode: liveRes.barcode }] : []),
-                  { barcode: rawInput }
-                ]
-              }
-            });
-            if (fetched) {
-              fetched = checkAndCleanPromo(fetched);
-              const siblings = await getProductSiblings(fetched);
-              return NextResponse.json({ data: fetched, siblings, source: 'MDS_BISA_LIVE' });
+    if (isPureDigitCode || isAlphaVendorCode) {
+      if (allowLiveFallback) {
+        // Untuk kode alfanumerik (mis. PSNYC01), jangan skip ke live MDS jika artikel DB sudah ada
+        const hasDbArticleMatch = isAlphaVendorCode
+          ? await db.product.findFirst({
+              where: { article: { contains: rawInput, mode: 'insensitive' as const } },
+              select: { sku: true }
+            })
+          : null;
+
+        if (!hasDbArticleMatch) {
+          try {
+            const liveTimeoutMs = 2500;
+            const liveRes: any = await Promise.race([
+              checkSingleItemStock(rawInput),
+              new Promise((resolve) => setTimeout(() => resolve({ success: false, timeout: true }), liveTimeoutMs))
+            ]);
+            if (liveRes?.success && liveRes?.data) {
+              return NextResponse.json({
+                data: liveRes.data,
+                siblings: liveRes.siblings || [liveRes.data],
+                source: 'MDS_BISA_LIVE'
+              });
             }
-          }
-        } catch {}
+            if (liveRes?.success && liveRes?.sku) {
+              let fetched = await db.product.findFirst({
+                where: {
+                  OR: [
+                    { sku: liveRes.sku },
+                    ...(liveRes.barcode ? [{ barcode: liveRes.barcode }] : []),
+                    { barcode: rawInput }
+                  ]
+                }
+              });
+              if (fetched) {
+                fetched = checkAndCleanPromo(fetched);
+                const siblings = await getProductSiblings(fetched);
+                return NextResponse.json({ data: fetched, siblings, source: 'MDS_BISA_LIVE' });
+              }
+            }
+          } catch {}
+        }
       }
 
       if (isPureDigitCode) {
         return NextResponse.json(
           {
             error: `Produk tidak ditemukan untuk: "${rawInput}"`,
-            hint: "Pastikan garis barcode fokus di tengah kotak kamera atau ketik kode SKU / Artikel."
+            hint: "Pastikan garis barcode fokus di tengah kotak kamera, atau tekan tombol Cari & Scrap Server."
           },
           { status: 404 }
         );

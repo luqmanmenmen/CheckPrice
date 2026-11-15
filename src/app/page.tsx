@@ -250,6 +250,8 @@ export default function Home() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [error, setError] = useState("");
+  const [notFoundCode, setNotFoundCode] = useState<string>("");
+  const [discoveringServer, setDiscoveringServer] = useState<boolean>(false);
   const [localCacheStats, setLocalCacheStats] = useState<{
     skuCount: number;
     modelCount: number;
@@ -300,38 +302,51 @@ export default function Home() {
       const res = await fetch("/api/live-stock", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sku: product.sku }),
+        body: JSON.stringify({
+          sku: product.sku,
+          discoverFamily: true,
+          withImages: true,
+        }),
       });
       const data = await res.json();
-      if (data.success && data.stok !== undefined) {
-        setProduct((prev) => prev ? { ...prev, stok: data.stok } : null);
-
-        // Update seluruh siblings (varian warna & ukuran dalam 1 artikel yang sama)
-        if (data.variants && data.variants.length > 0) {
-          const stockMap = new Map<string, number>(data.variants.map((v: any) => [v.sku, v.stok]));
-          setSiblings((prevSiblings) => {
-            const updated = prevSiblings.map((sib) => {
-              if (stockMap.has(sib.sku)) {
-                return { ...sib, stok: stockMap.get(sib.sku)! };
-              }
-              return sib;
+      if (data.success && (data.data || data.stok !== undefined)) {
+        if (data.data) {
+          const nextSiblings: ProductData[] =
+            Array.isArray(data.siblings) && data.siblings.length > 0 ? data.siblings : [data.data];
+          setProduct(data.data);
+          setSiblings(nextSiblings);
+          preloadProductImages([data.data?.imageUrl, ...nextSiblings.map((s: ProductData) => s.imageUrl)], 400);
+          persistServerFamilyToLocal(data.data, nextSiblings, product.sku);
+        } else {
+          setProduct((prev) => (prev ? { ...prev, stok: data.stok } : null));
+          // Update seluruh siblings (varian warna & ukuran dalam 1 artikel yang sama)
+          if (data.variants && data.variants.length > 0) {
+            const stockMap = new Map<string, number>(data.variants.map((v: any) => [v.sku, v.stok]));
+            setSiblings((prevSiblings) => {
+              const updated = prevSiblings.map((sib) => {
+                if (stockMap.has(sib.sku)) {
+                  return { ...sib, stok: stockMap.get(sib.sku)! };
+                }
+                return sib;
+              });
+              updated.forEach((s) => {
+                if (s.sku) sessionCacheRef.current.set(s.sku.toLowerCase(), { product: s, siblings: updated });
+                if (s.barcode) sessionCacheRef.current.set(s.barcode.toLowerCase(), { product: s, siblings: updated });
+              });
+              return updated;
             });
-            // Update cache memory agar klik varian warna/ukuran selanjutnya instan 0ms membawa stok baru
-            updated.forEach(s => {
-              if (s.sku) sessionCacheRef.current.set(s.sku.toLowerCase(), { product: s, siblings: updated });
-              if (s.barcode) sessionCacheRef.current.set(s.barcode.toLowerCase(), { product: s, siblings: updated });
-            });
-            return updated;
-          });
+          }
         }
 
+        const resolvedStok = data.stok ?? data.data?.stok ?? 0;
         if (data.storeOffline) {
-          setLiveStockVerified(`Tersimpan: ${data.stok} pcs`);
-          showToast(data.message || `Toko tutup (malam). Menampilkan stok tersimpan: ${data.stok} pcs`, "info");
+          const imgNote = data.imagesMatched > 0 ? ` + ${data.imagesMatched} foto studio` : '';
+          setLiveStockVerified(`Tersimpan: ${resolvedStok} pcs${imgNote}`);
+          showToast(data.message || `Toko tutup (malam). Menampilkan stok tersimpan: ${resolvedStok} pcs${imgNote}`, "info");
         } else {
-          const countText = data.totalVariantsUpdated > 1 ? ` (${data.totalVariantsUpdated} varian warna & ukuran)` : '';
-          setLiveStockVerified(`Live: ${data.stok} pcs${countText}`);
-          showToast(`Stok seluruh warna & ukuran artikel ${data.article || product.article || ''} terverifikasi live by luqman org!`, "success");
+          const countText = data.totalVariantsUpdated > 1 ? ` (${data.totalVariantsUpdated} varian sekeluarga)` : '';
+          setLiveStockVerified(`Live: ${resolvedStok} pcs${countText}`);
+          showToast(`Stok & foto 1 keluarga artikel ${data.article || product.article || ''} terverifikasi live by luqman org!`, "success");
         }
       } else {
         showToast(data.message || "Menampilkan stok tersimpan di sistem", "info");
@@ -903,6 +918,104 @@ export default function Home() {
 
   const preDetailSearchRef = useRef<{ query: string; page: number } | null>(null);
 
+  /** Simpan 1 artikel keluarga lengkap dari server ke RAM sessionCache & IndexedDB Dexie HP */
+  const persistServerFamilyToLocal = (
+    srvProduct: ProductData,
+    srvSiblings: ProductData[],
+    queryKey?: string
+  ) => {
+    const familyList = Array.isArray(srvSiblings) && srvSiblings.length > 0 ? srvSiblings : [srvProduct];
+    if (queryKey && queryKey.trim()) {
+      sessionCacheRef.current.set(queryKey.trim().toLowerCase(), { product: srvProduct, siblings: familyList });
+    }
+    familyList.forEach((s: ProductData) => {
+      if (s.sku) sessionCacheRef.current.set(s.sku.toLowerCase(), { product: s, siblings: familyList });
+      if (s.barcode) sessionCacheRef.current.set(s.barcode.toLowerCase(), { product: s, siblings: familyList });
+    });
+    import('@/lib/offlineDb').then(({ db }) => {
+      const deduped = new Map<string, CachedProduct>();
+      for (const item of [srvProduct, ...familyList]) {
+        if (!item?.sku || deduped.has(item.sku)) continue;
+        deduped.set(item.sku, {
+          sku: item.sku,
+          barcode: item.barcode || null,
+          article: item.article || null,
+          name: item.description?.split(':')[0]?.trim() || item.description,
+          description: item.description,
+          brand: item.brand || null,
+          dept: item.dept || null,
+          color: item.color || "",
+          size: item.size || "",
+          hargaNormal: item.hargaNormal,
+          hargaPromo: item.hargaPromo || null,
+          diskon: item.diskon || null,
+          discountType: item.discountType || null,
+          acara: item.acara || null,
+          stok: item.stok ?? 0,
+          toDate: item.toDate || null,
+          imageUrl: item.imageUrl || null,
+          images: item.images && item.images.length > 0 ? item.images : (item.imageUrl ? [item.imageUrl] : []),
+        });
+      }
+      if (deduped.size > 0) {
+        db.products.bulkPut(Array.from(deduped.values())).catch(() => {});
+      }
+    });
+  };
+
+  /** Trigger manual: paksa cari & scrap StoreHub + foto studio Matahari + 1 keluarga artikel saat barang belum ketemu */
+  const handleDiscoverProductOnServer = async (targetCode?: string) => {
+    const codeToSearch = (targetCode ?? (notFoundCode || manualInput)).trim();
+    if (!codeToSearch || discoveringServer) return;
+    setDiscoveringServer(true);
+    try {
+      const res = await fetch("/api/live-stock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sku: codeToSearch,
+          discoverFamily: true,
+          withImages: true,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success && data.data) {
+        const resolvedSibs: ProductData[] =
+          Array.isArray(data.siblings) && data.siblings.length > 0 ? data.siblings : [data.data];
+        setError("");
+        setNotFoundCode("");
+        setProduct(data.data);
+        setSiblings(resolvedSibs);
+        setProductsList([]);
+        recordRecentSearch(data.article || data.data?.article || codeToSearch);
+        preloadProductImages(
+          [data.data?.imageUrl, ...resolvedSibs.map((s: ProductData) => s.imageUrl)],
+          400
+        );
+        persistServerFamilyToLocal(data.data, resolvedSibs, codeToSearch);
+        if (data.storeOffline) {
+          setLiveStockVerified(`Tersimpan + Foto: ${data.stok ?? data.data.stok ?? 0} pcs`);
+        } else {
+          setLiveStockVerified(`Live: ${data.stok ?? data.data.stok ?? 0} pcs (${resolvedSibs.length} varian)`);
+        }
+        showToast(
+          `Berhasil menarik ${data.article || data.sku} (${resolvedSibs.length} varian sekeluarga + foto) dari server!`,
+          "success"
+        );
+      } else {
+        const notFoundMsg =
+          data.message ||
+          `Kode "${codeToSearch}" sudah dicek langsung ke StoreHub Toko 719 & Matahari.com namun memang tidak terdaftar.`;
+        setError(notFoundMsg);
+        showToast("Produk tidak ditemukan di server toko maupun Matahari.com", "error");
+      }
+    } catch {
+      showToast("Gagal menghubungi server scrap langsung", "error");
+    } finally {
+      setDiscoveringServer(false);
+    }
+  };
+
   // Ganti varian warna/ukuran secara instan (0ms) dari memori tanpa reload layar
   const handleSelectVariant = (targetSku: string) => {
     setManualInput(targetSku);
@@ -993,6 +1106,7 @@ export default function Home() {
     setTotalModelsCount(0);
     setTotalSkusCount(0);
     setError("");
+    setNotFoundCode("");
     import('@/lib/offlineDb')
       .then(({ getLocalTaxonomyOverview }) => getLocalTaxonomyOverview())
       .then((overview) => {
@@ -1083,6 +1197,7 @@ export default function Home() {
 
     const currentSearch = ++searchCounterRef.current;
     setError("");
+    setNotFoundCode("");
 
     // 0A. CEK SIBLING LANGSUNG (0ms INSTAN!):
     if (trimmed && !hasTaxonomyFilter && page === 1 && siblings && siblings.length > 0) {
@@ -1239,34 +1354,7 @@ export default function Home() {
     };
 
     const syncServerProductToLocal = (srvProduct: ProductData, srvSiblings: ProductData[]) => {
-      sessionCacheRef.current.set(trimmed.toLowerCase(), { product: srvProduct, siblings: srvSiblings });
-      srvSiblings.forEach((s: ProductData) => {
-        if (s.sku) sessionCacheRef.current.set(s.sku.toLowerCase(), { product: s, siblings: srvSiblings });
-        if (s.barcode) sessionCacheRef.current.set(s.barcode.toLowerCase(), { product: s, siblings: srvSiblings });
-      });
-      import('@/lib/offlineDb').then(({ db }) => {
-        const items: CachedProduct[] = [srvProduct, ...srvSiblings].map((item: ProductData) => ({
-          sku: item.sku,
-          barcode: item.barcode || null,
-          article: item.article || null,
-          name: item.description?.split(':')[0]?.trim() || item.description,
-          description: item.description,
-          brand: item.brand || null,
-          dept: item.dept || null,
-          color: item.color || "",
-          size: item.size || "",
-          hargaNormal: item.hargaNormal,
-          hargaPromo: item.hargaPromo || null,
-          diskon: item.diskon || null,
-          discountType: item.discountType || null,
-          acara: item.acara || null,
-          stok: item.stok ?? 0,
-          toDate: item.toDate || null,
-          imageUrl: item.imageUrl || null,
-          images: item.images && item.images.length > 0 ? item.images : (item.imageUrl ? [item.imageUrl] : []),
-        }));
-        db.products.bulkPut(items).catch(() => {});
-      });
+      persistServerFamilyToLocal(srvProduct, srvSiblings, trimmed);
     };
 
     const endpointUrl = buildSearchEndpointUrl(
@@ -1427,6 +1515,7 @@ export default function Home() {
 
       if (res.ok) {
         setError("");
+        setNotFoundCode("");
         if (Array.isArray(data.data)) {
           if (data.data.length === 0) {
             setProductsList([]);
@@ -1439,6 +1528,7 @@ export default function Home() {
             setTaxonomyBrandCounts(data.meta?.brandCounts || null);
             setTaxonomyCategoryCounts(data.meta?.categoryCounts || null);
             if (!hasTaxonomyFilter && trimmed) {
+              setNotFoundCode(trimmed);
               const isDigitCode = /^\d{8,14}$/.test(trimmed);
               if (isDigitCode && localDbReady) {
                 setError(
@@ -1528,6 +1618,7 @@ export default function Home() {
         }
         if (isScanning) setIsScanning(false);
       } else {
+        if (trimmed) setNotFoundCode(trimmed);
         if (isCodeSearch && localDbReady && res.status === 404) {
           setError(
             `Produk tidak ditemukan untuk: "${trimmed}" di database offline (${(localSkuCount || 306312).toLocaleString('id-ID')} SKU) maupun server.`
@@ -1539,6 +1630,7 @@ export default function Home() {
     } catch {
       if (searchCounterRef.current === currentSearch) {
         if (localDbReady && isCodeSearch) {
+          if (trimmed) setNotFoundCode(trimmed);
           setError(
             `Produk tidak ditemukan untuk: "${trimmed}" di database offline (${(localSkuCount || 306312).toLocaleString('id-ID')} SKU) maupun server.`
           );
@@ -1593,9 +1685,11 @@ export default function Home() {
               setTotalPages(1);
             }
             setError("");
+            setNotFoundCode("");
             return;
           }
         } catch {}
+        if (trimmed) setNotFoundCode(trimmed);
         setError("Koneksi jaringan lambat & produk belum ditemukan di memori lokal.");
       }
     } finally {
@@ -2504,10 +2598,30 @@ export default function Home() {
         </div>
       )}
 
-      {/* Error */}
+      {/* Error + Trigger Scrap Server Langsung (StoreHub + Foto + 1 Keluarga Artikel) */}
       {error && (
-        <div className="bg-red-50 text-red-700 p-4 rounded-xl text-center border border-red-200 text-sm font-medium animate-in zoom-in duration-200">
-          {error}
+        <div className="bg-red-50 text-red-700 p-4 rounded-xl text-center border border-red-200 text-sm font-medium animate-in zoom-in duration-200 flex flex-col items-center gap-3">
+          <p>{error}</p>
+          {(notFoundCode || manualInput.trim()) && (
+            <button
+              type="button"
+              onClick={() => handleDiscoverProductOnServer(notFoundCode || manualInput)}
+              disabled={discoveringServer}
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white font-black text-xs shadow-md active:scale-95 transition-all cursor-pointer disabled:opacity-60"
+            >
+              {discoveringServer ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-amber-300 shrink-0" />
+                  <span>Menarik data StoreHub + 1 Keluarga Artikel + Foto Studio...</span>
+                </>
+              ) : (
+                <>
+                  <Zap className="w-4 h-4 text-amber-300 fill-amber-300 shrink-0" />
+                  <span>Cari &amp; Scrap Barang Ini di Server (StoreHub + Foto + 1 Keluarga Artikel)</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
       )}
 
@@ -3283,15 +3397,25 @@ export default function Home() {
                         type="button"
                         onClick={handleCheckLiveStock}
                         disabled={checkingLiveStock}
-                        title="Periksa stok langsung ke server kasir toko 719 untuk seluruh varian artikel ini"
-                        className="flex items-center gap-1.5 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold transition-all disabled:opacity-50 active:scale-95 cursor-pointer"
+                        title="Periksa stok langsung StoreHub Toko 719, lengkapi varian 1 keluarga artikel, & tarik foto studio"
+                        className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-50 active:scale-95 cursor-pointer border ${
+                          !heroImages.length || sourceSiblings.length <= 1
+                            ? "bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white border-indigo-700 shadow-sm"
+                            : "bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200"
+                        }`}
                       >
                         {checkingLiveStock ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-600" />
+                          <Loader2 className={`w-3.5 h-3.5 animate-spin ${!heroImages.length || sourceSiblings.length <= 1 ? "text-amber-300" : "text-indigo-600"}`} />
                         ) : (
                           <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
                         )}
-                        <span>{checkingLiveStock ? "Cek..." : "⚡ Live Stok"}</span>
+                        <span>
+                          {checkingLiveStock
+                            ? "Scrap 1 Artikel & Foto..."
+                            : !heroImages.length || sourceSiblings.length <= 1
+                            ? "Live Stok & Scrap 1 Artikel + Foto"
+                            : "Live Stok"}
+                        </span>
                       </button>
 
                       <div

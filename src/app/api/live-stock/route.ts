@@ -12,7 +12,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'SKU produk wajib diisi' }, { status: 400 });
     }
 
-    const result = await checkSingleItemStock(String(sku));
+    const result = await checkSingleItemStock(String(sku), {
+      discoverFamily: body.discoverFamily !== false,
+      withImages: body.withImages !== false,
+    });
     return NextResponse.json(result);
   } catch (err: any) {
     return NextResponse.json({
@@ -28,7 +31,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: false, error: 'SKU produk wajib diisi' }, { status: 400 });
   }
 
-  const result = await checkSingleItemStock(String(sku));
+  const discoverFamily = req.nextUrl.searchParams.get('discoverFamily') !== '0';
+  const withImages = req.nextUrl.searchParams.get('withImages') !== '0';
+  const result = await checkSingleItemStock(String(sku), { discoverFamily, withImages });
   return NextResponse.json(result);
 }
 

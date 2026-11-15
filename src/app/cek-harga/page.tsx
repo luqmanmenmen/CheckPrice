@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
-import { Tag, Sparkles, AlertCircle, Camera, RefreshCw, Zap, Gift, Percent, Barcode } from "lucide-react";
+import { Tag, Sparkles, AlertCircle, Camera, RefreshCw, Zap, Gift, Percent, Barcode, Loader2 } from "lucide-react";
 import ProductImageSlider from "@/components/ProductImageSlider";
 
 // Engine TextScanner — scan teks SKU 8 digit
@@ -117,6 +117,8 @@ export default function CekHargaPage() {
   const [product, setProduct] = useState<ProductData | null>(null);
   const [siblings, setSiblings] = useState<ProductData[]>([]);
   const [error, setError] = useState("");
+  const [notFoundCode, setNotFoundCode] = useState("");
+  const [discoveringServer, setDiscoveringServer] = useState(false);
   const [countdown, setCountdown] = useState(25);
   const [lastUpdateText, setLastUpdateText] = useState<string>("");
 
@@ -233,6 +235,7 @@ export default function CekHargaPage() {
     setProduct(null);
     setSiblings([]);
     setError("");
+    setNotFoundCode("");
     setIsScanning(true);
     setCountdown(25);
   }, []);
@@ -360,6 +363,7 @@ export default function CekHargaPage() {
     // 3. Fallback jika SKU belum ada di cache HP (baru ditambahkan beberapa menit lalu)
     setLoading(true);
     setSearchingFor(trimmed);
+    setNotFoundCode(trimmed);
     setIsScanning(false);
 
     try {
@@ -381,6 +385,7 @@ export default function CekHargaPage() {
             if (s.sku) sessionCache.current.set(s.sku.toLowerCase(), s);
             if (s.barcode) sessionCache.current.set(s.barcode.toLowerCase(), s);
           });
+          setNotFoundCode("");
           setProduct(found);
           setSiblings(allSibs);
         } else {
@@ -394,6 +399,68 @@ export default function CekHargaPage() {
     } finally {
       setLoading(false);
       setSearchingFor("");
+    }
+  };
+
+  // Trigger scrap langsung StoreHub + 1 keluarga artikel + foto studio Matahari
+  const handleDiscoverProductOnServer = async () => {
+    const codeToSearch = notFoundCode.trim();
+    if (!codeToSearch || discoveringServer) return;
+    setDiscoveringServer(true);
+    try {
+      const res = await fetch("/api/live-stock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sku: codeToSearch,
+          discoverFamily: true,
+          withImages: true,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success && data.data) {
+        const allSibs: ProductData[] =
+          Array.isArray(data.siblings) && data.siblings.length > 0 ? data.siblings : [data.data];
+        playScanBeep();
+        sessionCache.current.set(codeToSearch.toLowerCase(), data.data);
+        allSibs.forEach((s) => {
+          if (s.sku) sessionCache.current.set(s.sku.toLowerCase(), s);
+          if (s.barcode) sessionCache.current.set(s.barcode.toLowerCase(), s);
+        });
+        import("@/lib/offlineDb").then(({ db }) => {
+          const items = [data.data, ...allSibs].map((item: any) => ({
+            sku: item.sku,
+            barcode: item.barcode || null,
+            article: item.article || null,
+            name: item.description?.split(":")[0]?.trim() || item.description,
+            description: item.description,
+            brand: item.brand || null,
+            dept: item.dept || null,
+            color: item.color || "",
+            size: item.size || "",
+            hargaNormal: item.hargaNormal,
+            hargaPromo: item.hargaPromo || null,
+            diskon: item.diskon || null,
+            discountType: item.discountType || null,
+            acara: item.acara || null,
+            stok: item.stok ?? 0,
+            toDate: item.toDate || null,
+            imageUrl: item.imageUrl || null,
+            images: item.images && item.images.length > 0 ? item.images : (item.imageUrl ? [item.imageUrl] : []),
+          }));
+          db.products.bulkPut(items).catch(() => {});
+        });
+        setError("");
+        setNotFoundCode("");
+        setProduct(data.data);
+        setSiblings(allSibs);
+      } else {
+        setError(data.message || `Kode "${codeToSearch}" sudah dicek di StoreHub & Matahari.com namun tidak terdaftar.`);
+      }
+    } catch {
+      setError("Gagal menghubungi server scrap langsung.");
+    } finally {
+      setDiscoveringServer(false);
     }
   };
 
@@ -583,12 +650,32 @@ export default function CekHargaPage() {
       {/* ── ERROR VIEW ── */}
       {!isScanning && !loading && error && (
         <div className="fixed inset-0 z-[90] bg-gradient-to-b from-slate-50 to-slate-100 flex flex-col items-center justify-center p-6">
-          <div className="w-full max-w-sm bg-white rounded-3xl p-8 shadow-2xl border border-rose-100 text-center flex flex-col items-center">
-            <div className="w-16 h-16 bg-rose-50 text-rose-500 rounded-full flex items-center justify-center mb-4">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-8 shadow-2xl border border-rose-100 text-center flex flex-col items-center gap-3">
+            <div className="w-16 h-16 bg-rose-50 text-rose-500 rounded-full flex items-center justify-center mb-1">
               <AlertCircle className="w-8 h-8" />
             </div>
-            <h3 className="text-xl font-black text-slate-800 mb-2">SKU Tidak Ditemukan</h3>
-            <p className="text-slate-500 text-sm leading-relaxed mb-6 font-medium">{error}</p>
+            <h3 className="text-xl font-black text-slate-800">SKU Tidak Ditemukan</h3>
+            <p className="text-slate-500 text-sm leading-relaxed mb-2 font-medium">{error}</p>
+            {notFoundCode && (
+              <button
+                type="button"
+                onClick={handleDiscoverProductOnServer}
+                disabled={discoveringServer}
+                className="w-full py-3 px-4 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white font-black text-xs rounded-2xl shadow-lg transition-all active:scale-98 flex items-center justify-center gap-2 disabled:opacity-60"
+              >
+                {discoveringServer ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-amber-300 shrink-0" />
+                    <span>Menarik StoreHub + Foto + 1 Artikel...</span>
+                  </>
+                ) : (
+                  <>
+                    <Zap className="w-4 h-4 text-amber-300 fill-amber-300 shrink-0" />
+                    <span>Cari &amp; Scrap Barang Ini di Server (StoreHub + Foto + 1 Artikel)</span>
+                  </>
+                )}
+              </button>
+            )}
             <button
               onClick={resetKiosk}
               className="w-full h-12 bg-slate-900 hover:bg-black text-white font-black text-sm rounded-2xl shadow-lg transition-all active:scale-98 flex items-center justify-center gap-2"

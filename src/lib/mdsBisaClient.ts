@@ -1,9 +1,10 @@
 /**
- * MDS BISA (StoreHub) Client for Realtime Single-Item Queries
- * Digunakan untuk tombol "⚡ Cek Live Stok 1 SKU" langsung dari kasir/SPG
+ * MDS BISA (StoreHub) Client for Realtime Single-Item & 1-Article Family Discovery
+ * Digunakan untuk tombol "⚡ Live Stok" dan "⚡ Cari & Scrap Barang Ini di Server (StoreHub + Foto + 1 Keluarga Artikel)"
  */
 
 import { prisma } from './prisma';
+import { checkAndCleanPromo, getProductSiblings } from './productQueryHelpers';
 
 const STOREHUB_BASE = 'https://storehub.mdsretailing.id';
 const LOGIN_URL = `${STOREHUB_BASE}/login?next=%2F`;
@@ -18,10 +19,49 @@ const CREDENTIALS = {
   tz: 'Asia/Jakarta',
 };
 
+const INVALID_ARTICLE_CODES = new Set(['', '0', '-', 'N/A', 'NONE', 'NULL', 'PRODUK BARU']);
+const BAD_IMAGE_TOKENS = ['banner', 'logo', 'icon', 'badge', 'chart', 'size', 'panduan', '.svg', '.gif'];
+
 // In-memory cookie cache (session StoreHub bertahan ~20 menit)
 let cachedCookie: string | null = null;
 let cookieCachedAt: number = 0;
 const COOKIE_TTL_MS = 10 * 60 * 1000; // 10 menit (pendek agar selalu sinkron dengan Storage)
+
+export type LiveStockVariantSummary = {
+  sku: string;
+  color?: string | null;
+  size?: string | null;
+  stok: number;
+};
+
+export type CheckSingleItemOptions = {
+  discoverFamily?: boolean;
+  withImages?: boolean;
+};
+
+export type CheckSingleItemResult = {
+  success: boolean;
+  sku: string;
+  stok?: number;
+  barcode?: string | null;
+  article?: string | null;
+  hargaNormal?: number | null;
+  totalVariantsUpdated?: number;
+  newVariantsDiscovered?: number;
+  imagesMatched?: number;
+  variants?: LiveStockVariantSummary[];
+  data?: any;
+  siblings?: any[];
+  storeOffline?: boolean;
+  message?: string;
+};
+
+type MatahariFamilyImages = {
+  variantSkus: string[];
+  imagesBySku: Map<string, string[]>;
+  imagesByColor: Map<string, string[]>;
+  defaultImages: string[];
+};
 
 export function isStoreOpen(): boolean {
   const now = new Date();
@@ -33,7 +73,7 @@ export function isStoreOpen(): boolean {
   return totalMinutes >= 540 && totalMinutes <= 1290;
 }
 
-/** Hitung GS1 EAN-13 check digit yang valid (digunakan saat koreksi salah ketik 1 digit terakhir barcode 234000*) */
+/** Hitung GS1 EAN-13 check digit yang valid (bobot 1, 3) */
 export function calculateEan13CheckDigit(digits12: string): string {
   if (!/^\d{12}$/.test(digits12)) return '';
   let total = 0;
@@ -41,6 +81,219 @@ export function calculateEan13CheckDigit(digits12: string): string {
     total += parseInt(digits12[i], 10) * (i % 2 === 0 ? 1 : 3);
   }
   return String((10 - (total % 10)) % 10);
+}
+
+/** Buat SKU Matahari 8-digit valid Modulo-10 dari 7-digit body (bobot 1,2,1,2,1,2,1) */
+export function generateMdsSku8(body7: number): string {
+  const s7 = String(Math.floor(body7)).padStart(7, '0');
+  if (!/^\d{7}$/.test(s7)) return '';
+  const weights = [1, 2, 1, 2, 1, 2, 1];
+  let total = 0;
+  for (let i = 0; i < 7; i++) {
+    total += parseInt(s7[i], 10) * weights[i];
+  }
+  const cd = (10 - (total % 10)) % 10;
+  return `${s7}${cd}`;
+}
+
+function sanitizeArticleCode(raw: any): string | null {
+  const clean = String(raw ?? '').trim();
+  if (!clean || INVALID_ARTICLE_CODES.has(clean.toUpperCase())) return null;
+  return clean;
+}
+
+function normalizeCodeKey(val: string): string {
+  return val.replace(/[\s\-_./]/g, '').toUpperCase();
+}
+
+function normalizeMatahariImageUrl(rawUrl: any): string | null {
+  let url = String(rawUrl || '').trim();
+  if (!url) return null;
+  if (url.startsWith('//')) url = `https:${url}`;
+  if (!url.includes('cdn.shopify.com/s/files/1/0666/9212/0727/')) return null;
+  const filename = url.split('?')[0].split('/').pop()?.toLowerCase() || '';
+  if (!filename || BAD_IMAGE_TOKENS.some((bad) => filename.includes(bad))) return null;
+  return url;
+}
+
+function pushUniqueUrl(list: string[], url: string | null | undefined, maxCount: number = 8) {
+  if (!url || list.length >= maxCount) return;
+  if (!list.includes(url)) list.push(url);
+}
+
+/**
+ * Cari foto studio resmi & daftar SKU keluarga artikel di Matahari.com
+ * dengan verifikasi kepemilikan ketat agar tidak tertukar foto merk lain.
+ */
+async function fetchMatahariFamilyAndImages(
+  seedSku: string,
+  article: string | null,
+  seedBarcode: string | null
+): Promise<MatahariFamilyImages> {
+  const emptyResult: MatahariFamilyImages = {
+    variantSkus: [],
+    imagesBySku: new Map(),
+    imagesByColor: new Map(),
+    defaultImages: [],
+  };
+
+  const queries: string[] = [];
+  const addQ = (q: string | null | undefined) => {
+    const clean = String(q || '').trim();
+    if (clean && !queries.includes(clean)) queries.push(clean);
+  };
+  addQ(seedSku);
+  if (article && article.length >= 4) addQ(article);
+  if (seedBarcode && seedBarcode !== seedSku) addQ(seedBarcode);
+  if (queries.length === 0) return emptyResult;
+
+  const handles: string[] = [];
+  try {
+    const suggestResponses = await Promise.all(
+      queries.map(async (q) => {
+        try {
+          const res = await fetch(
+            `https://www.matahari.com/search/suggest.json?q=${encodeURIComponent(q)}&resources[type]=product`,
+            {
+              headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0' },
+              signal: AbortSignal.timeout(3500),
+            }
+          );
+          if (!res.ok) return [];
+          const json: any = await res.json().catch(() => null);
+          return (json?.resources?.results?.products || []) as any[];
+        } catch {
+          return [];
+        }
+      })
+    );
+
+    for (const prodList of suggestResponses) {
+      for (const p of prodList) {
+        const h = String(p?.handle || '').trim();
+        if (h && !handles.includes(h)) {
+          handles.push(h);
+          if (handles.length >= 4) break;
+        }
+      }
+      if (handles.length >= 4) break;
+    }
+  } catch {
+    return emptyResult;
+  }
+
+  if (handles.length === 0) return emptyResult;
+
+  const variantSkusSet = new Set<string>();
+  const imagesBySku = new Map<string, string[]>();
+  const imagesByColor = new Map<string, string[]>();
+  const defaultImages: string[] = [];
+
+  const seedLower = seedSku.trim().toLowerCase();
+  const articleClean = sanitizeArticleCode(article);
+  const isAlphaNumArticle = Boolean(articleClean && /^(?=.*[A-Za-z])(?=.*\d).{5,}$/.test(articleClean));
+  const articleLower = articleClean ? articleClean.toLowerCase() : '';
+
+  const productJsons = await Promise.all(
+    handles.map(async (handle) => {
+      try {
+        const res = await fetch(`https://www.matahari.com/products/${encodeURIComponent(handle)}.js`, {
+          headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0' },
+          signal: AbortSignal.timeout(3500),
+        });
+        if (!res.ok) return null;
+        return await res.json().catch(() => null);
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  for (const pj of productJsons) {
+    if (!pj || typeof pj !== 'object') continue;
+    const variants: any[] = Array.isArray(pj.variants) ? pj.variants : [];
+    const rawImages: any[] = Array.isArray(pj.images) ? pj.images : [];
+    const validImgs: string[] = [];
+    for (const imgRaw of rawImages) {
+      pushUniqueUrl(validImgs, normalizeMatahariImageUrl(imgRaw), 40);
+    }
+
+    // Cek kepemilikan ketat (anti foto merk lain)
+    const variantMatch = variants.some((v) => {
+      const vSku = String(v?.sku || '').trim();
+      const vBc = String(v?.barcode || '').trim();
+      return (seedSku && vSku === seedSku) || (seedBarcode && vBc === seedBarcode);
+    });
+    const imageFilenameMatch =
+      Boolean(seedLower) &&
+      validImgs.some((u) => {
+        const fn = u.split('?')[0].split('/').pop()?.toLowerCase() || '';
+        return fn.includes(`${seedLower}-`) || fn.includes(`${seedLower}_`) || fn.includes(`${seedLower}.`);
+      });
+    const haystack = [
+      pj.title,
+      pj.handle,
+      Array.isArray(pj.tags) ? pj.tags.join(' ') : pj.tags,
+      pj.body_html,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    const articleMatch = Boolean(isAlphaNumArticle && articleLower && haystack.includes(articleLower));
+
+    if (!variantMatch && !imageFilenameMatch && !articleMatch) {
+      continue;
+    }
+
+    for (const u of validImgs) {
+      pushUniqueUrl(defaultImages, u, 8);
+    }
+
+    let colorOptionKey: 'option1' | 'option2' | 'option3' = 'option1';
+    if (Array.isArray(pj.options)) {
+      const idx = pj.options.findIndex((o: any) => /color|warna/i.test(String(o?.name || o || '')));
+      if (idx === 1) colorOptionKey = 'option2';
+      else if (idx === 2) colorOptionKey = 'option3';
+    }
+
+    for (const v of variants) {
+      const vSku = String(v?.sku || '').trim();
+      if (!vSku) continue;
+      variantSkusSet.add(vSku);
+
+      const vSkuLower = vSku.toLowerCase();
+      const colorUp = String(v?.[colorOptionKey] || v?.option1 || '')
+        .trim()
+        .toUpperCase();
+
+      const skuImgs = imagesBySku.get(vSku) || [];
+      const featUrl = normalizeMatahariImageUrl(v?.featured_image?.src || v?.featured_image);
+      pushUniqueUrl(skuImgs, featUrl, 6);
+
+      for (const u of validImgs) {
+        const fn = u.split('?')[0].split('/').pop()?.toLowerCase() || '';
+        if (fn.includes(`${vSkuLower}-`) || fn.includes(`${vSkuLower}_`) || fn.includes(`${vSkuLower}.`)) {
+          pushUniqueUrl(skuImgs, u, 6);
+        }
+      }
+
+      if (skuImgs.length > 0) {
+        imagesBySku.set(vSku, skuImgs);
+        if (colorUp && !INVALID_ARTICLE_CODES.has(colorUp)) {
+          const colorImgs = imagesByColor.get(colorUp) || [];
+          for (const u of skuImgs) pushUniqueUrl(colorImgs, u, 6);
+          imagesByColor.set(colorUp, colorImgs);
+        }
+      }
+    }
+  }
+
+  return {
+    variantSkus: Array.from(variantSkusSet),
+    imagesBySku,
+    imagesByColor,
+    defaultImages,
+  };
 }
 
 /** Normalisasi Brand & Departemen agar konsisten dengan master python-engine (bukan hardcode SUKO) */
@@ -150,11 +403,11 @@ export async function getStoreHubCookie(forceRefresh: boolean = false): Promise<
   try {
     let loginActionHash = ACTION_LOGIN;
     try {
-      const loginHtmlRes = await fetch(LOGIN_URL, { method: 'GET' });
+      const loginHtmlRes = await fetch(LOGIN_URL, { method: 'GET', signal: AbortSignal.timeout(5000) });
       const loginHtml = await loginHtmlRes.text();
       const scriptMatches = [...loginHtml.matchAll(/src="(\/_next\/static\/chunks\/[^"]+\.js)"/g)];
       for (const m of scriptMatches.slice(0, 12)) {
-        const jsText = await fetch(`${STOREHUB_BASE}${m[1]}`).then(r => r.text()).catch(() => '');
+        const jsText = await fetch(`${STOREHUB_BASE}${m[1]}`, { signal: AbortSignal.timeout(4000) }).then(r => r.text()).catch(() => '');
         const actMatch = jsText.match(/createServerReference\)?\("([a-f0-9]{40,44})"[^)]*"login"/);
         if (actMatch?.[1]) {
           loginActionHash = actMatch[1];
@@ -181,6 +434,7 @@ export async function getStoreHubCookie(forceRefresh: boolean = false): Promise<
       },
       body: fd,
       redirect: 'manual',
+      signal: AbortSignal.timeout(6000),
     });
 
     const getSetCookie = (res.headers as any).getSetCookie;
@@ -202,67 +456,422 @@ export async function getStoreHubCookie(forceRefresh: boolean = false): Promise<
   throw new Error('Gagal mendapatkan session login by luqman org (mso_session tidak ditemukan)');
 }
 
-export async function checkSingleItemStock(sku: string): Promise<{
-  success: boolean;
-  sku: string;
-  stok?: number;
-  barcode?: string | null;
-  article?: string | null;
-  hargaNormal?: number | null;
-  totalVariantsUpdated?: number;
-  variants?: Array<{ sku: string; color?: string | null; size?: string | null; stok: number }>;
-  storeOffline?: boolean;
-  message?: string;
-}> {
-  const cleanSku = String(sku).trim();
-
-  const normalizeCodeKey = (val: string) => val.replace(/[\s\-_./]/g, '').toUpperCase();
-
-  const harvestBarcodes = (rows: any[], primaryItem?: any): string[] => {
-    const out: string[] = [];
-    const seen = new Set<string>();
-    const addBc = (raw: any) => {
-      if (raw === undefined || raw === null) return;
-      const s = String(raw).trim();
-      if (!s || s.length < 4 || s.length > 32) return;
-      const up = s.toUpperCase();
-      if (['NAN', 'NONE', 'NULL', '-', 'N/A'].includes(up)) return;
-      if (!seen.has(s)) {
-        seen.add(s);
-        out.push(s);
-      }
-    };
-    const fields = ['VendorBarcode', 'vendorBarcode', 'Barcode', 'barcode', 'UPC', 'upc', 'EAN', 'ean', 'ItemLookupCode', 'AlternateCode'];
-    for (const r of rows) {
-      if (!r || typeof r !== 'object') continue;
-      for (const f of fields) addBc(r[f]);
+function harvestBarcodes(rows: any[], primaryItem?: any): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const addBc = (raw: any) => {
+    if (raw === undefined || raw === null) return;
+    const s = String(raw).trim();
+    if (!s || s.length < 4 || s.length > 32) return;
+    const up = s.toUpperCase();
+    if (['NAN', 'NONE', 'NULL', '-', 'N/A'].includes(up)) return;
+    if (!seen.has(s)) {
+      seen.add(s);
+      out.push(s);
     }
-    if (primaryItem && typeof primaryItem === 'object') {
-      for (const f of fields) addBc(primaryItem[f]);
+  };
+  const fields = ['VendorBarcode', 'vendorBarcode', 'Barcode', 'barcode', 'UPC', 'upc', 'EAN', 'ean', 'ItemLookupCode', 'AlternateCode'];
+  for (const r of rows) {
+    if (!r || typeof r !== 'object') continue;
+    for (const f of fields) addBc(r[f]);
+  }
+  if (primaryItem && typeof primaryItem === 'object') {
+    for (const f of fields) addBc(primaryItem[f]);
+  }
+  return out;
+}
+
+function parseRetailPrice(rawPrice: any): number | null {
+  if (!rawPrice) return null;
+  let str = String(rawPrice).trim();
+  if (/\.\d{4,}$/.test(str) || /\.00$/.test(str)) {
+    str = str.split('.')[0];
+  }
+  const cleaned = str.replace(/[^0-9]/g, '');
+  return cleaned ? parseInt(cleaned, 10) : null;
+}
+
+function resolveProductGallery(
+  product: any,
+  mataImages: MatahariFamilyImages,
+  siblingImgByColor: Map<string, string>,
+  fallbackArticleImg: string | null
+): string[] {
+  const gallery: string[] = [];
+  const sku = String(product?.sku || '').trim();
+  const colorUp = String(product?.color || '').trim().toUpperCase();
+
+  pushUniqueUrl(gallery, product?.imageUrl, 8);
+  for (const u of mataImages.imagesBySku.get(sku) || []) pushUniqueUrl(gallery, u, 8);
+  if (colorUp) {
+    for (const u of mataImages.imagesByColor.get(colorUp) || []) pushUniqueUrl(gallery, u, 8);
+    pushUniqueUrl(gallery, siblingImgByColor.get(colorUp), 8);
+  }
+  for (const u of mataImages.defaultImages) pushUniqueUrl(gallery, u, 8);
+  pushUniqueUrl(gallery, fallbackArticleImg, 8);
+
+  if (gallery.length === 0 && product?.imageUrl) {
+    gallery.push(String(product.imageUrl));
+  }
+  return gallery;
+}
+
+/** Bentuk daftar kandidat awal StoreHub (exact, reverse kind, check-digit fix, prefix 234000 / 2*) */
+function buildInitialProbeCandidates(cleanCode: string): Array<{ kind: 'upc' | 'sku'; code: string }> {
+  const out: Array<{ kind: 'upc' | 'sku'; code: string }> = [];
+  const seen = new Set<string>();
+  const add = (kind: 'upc' | 'sku', code: string) => {
+    const trimmed = String(code || '').trim();
+    if (!trimmed) return;
+    const key = `${kind}:${trimmed}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push({ kind, code: trimmed });
     }
-    return out;
   };
 
-  // Helper untuk fallback anggun ke database Supabase (Product + BarcodeAlias)
-  const fallbackToDb = async (msg: string) => {
+  const isLikelySku = /^\d{7,9}$/.test(cleanCode);
+  const primaryKind: 'upc' | 'sku' = !isLikelySku && (cleanCode.length >= 10 || /[^0-9]/.test(cleanCode) || cleanCode.length <= 6) ? 'upc' : 'sku';
+  const altKind: 'upc' | 'sku' = primaryKind === 'upc' ? 'sku' : 'upc';
+
+  add(primaryKind, cleanCode);
+  add(altKind, cleanCode);
+
+  if (/^\d{13}$/.test(cleanCode)) {
+    const cd = calculateEan13CheckDigit(cleanCode.slice(0, 12));
+    if (cd) add('upc', `${cleanCode.slice(0, 12)}${cd}`);
+  } else if (/^\d{12}$/.test(cleanCode)) {
+    add('upc', `2${cleanCode}`);
+    if (cleanCode.startsWith('34000')) {
+      const base12 = `2${cleanCode.slice(0, 11)}`;
+      const cd = calculateEan13CheckDigit(base12);
+      if (cd) add('upc', `${base12}${cd}`);
+    }
+    const cd13 = calculateEan13CheckDigit(cleanCode);
+    if (cd13) add('upc', `${cleanCode}${cd13}`);
+    add('upc', `0${cleanCode}`);
+  } else if (/^\d{6}$/.test(cleanCode)) {
+    const base12 = `234000${cleanCode}`;
+    const cd = calculateEan13CheckDigit(base12);
+    if (cd) add('upc', `${base12}${cd}`);
+  } else if (/^\d{7}$/.test(cleanCode)) {
+    const sku8 = generateMdsSku8(parseInt(cleanCode, 10));
+    if (sku8) add('sku', sku8);
+    const base12 = `234000${cleanCode.slice(0, 6)}`;
+    const cd = calculateEan13CheckDigit(base12);
+    if (cd) add('upc', `${base12}${cd}`);
+  }
+
+  return out;
+}
+
+/** Simpan 1 item temuan StoreHub ke Prisma Product & BarcodeAlias secara aman */
+async function upsertStoreHubItemToDb(
+  itemData: any,
+  opts: {
+    queriedCode: string;
+    queriedKind: 'upc' | 'sku';
+    mataImages: MatahariFamilyImages;
+    siblingImgByColor: Map<string, string>;
+    fallbackArticle?: string | null;
+    fallbackArticleImg?: string | null;
+  }
+): Promise<{
+  sku: string;
+  article: string | null;
+  color: string | null;
+  size: string | null;
+  stok: number;
+  barcode: string | null;
+  hargaNormal: number | null;
+  wasNewSku: boolean;
+  imageUpdated: boolean;
+} | null> {
+  const itemSku = String(itemData?.SKU ?? itemData?.sku ?? '').trim();
+  if (!itemSku) return null;
+
+  const directStok = itemData.StockOnHand ?? itemData.stockOnHand ?? itemData.stock_on_hand ?? itemData.soh;
+  const currentSkuStok = directStok !== undefined && directStok !== null ? (parseInt(String(directStok), 10) || 0) : 0;
+  const rawBarcode = itemData.VendorBarcode ?? itemData.vendorBarcode ?? itemData.barcode ?? null;
+  const rawArticle = sanitizeArticleCode(itemData.StyleCode ?? itemData.styleCode ?? itemData.article);
+  const itemColor = itemData.COLOR ?? itemData.Color ?? itemData.color ?? null;
+  const itemSize = itemData.Size ?? itemData.SIZE ?? itemData.size ?? null;
+  const cleanColor = itemColor ? String(itemColor).trim() : null;
+  const cleanSize = itemSize ? String(itemSize).trim() : null;
+  const colorUp = cleanColor ? cleanColor.toUpperCase() : '';
+  const { brand: normalizedBrand, dept: normalizedDept } = normalizeBrandAndDept(itemData);
+  const hargaNormal = parseRetailPrice(itemData.RetailPrice ?? itemData.retailPrice ?? itemData.price);
+
+  const existingProduct = await prisma.product.findUnique({
+    where: { sku: itemSku },
+    select: { article: true, barcode: true, imageUrl: true },
+  });
+  const articleToUse = rawArticle || sanitizeArticleCode(existingProduct?.article) || opts.fallbackArticle || null;
+
+  const allDiscoveredBarcodes: string[] = Array.isArray(itemData._harvestedBarcodes)
+    ? [...itemData._harvestedBarcodes]
+    : [];
+  const primaryCandidate = rawBarcode
+    ? String(rawBarcode).trim()
+    : (opts.queriedKind === 'upc' ? opts.queriedCode : null);
+  if (primaryCandidate && !allDiscoveredBarcodes.includes(primaryCandidate)) {
+    allDiscoveredBarcodes.unshift(primaryCandidate);
+  }
+  if (opts.queriedKind === 'upc' && opts.queriedCode && !allDiscoveredBarcodes.includes(opts.queriedCode)) {
+    allDiscoveredBarcodes.push(opts.queriedCode);
+  }
+
+  const candidateBarcode = primaryCandidate || existingProduct?.barcode || null;
+  let safeBarcodeForProduct = existingProduct?.barcode || null;
+  if (!safeBarcodeForProduct && candidateBarcode) {
+    const owner = await prisma.product.findUnique({
+      where: { barcode: candidateBarcode },
+      select: { sku: true },
+    });
+    if (!owner || owner.sku === itemSku) {
+      safeBarcodeForProduct = candidateBarcode;
+    }
+  }
+
+  const resolvedImg =
+    opts.mataImages.imagesBySku.get(itemSku)?.[0] ||
+    (colorUp ? opts.mataImages.imagesByColor.get(colorUp)?.[0] : undefined) ||
+    (colorUp ? opts.siblingImgByColor.get(colorUp) : undefined) ||
+    opts.mataImages.defaultImages[0] ||
+    opts.fallbackArticleImg ||
+    null;
+
+  const imageUpdated = Boolean(!existingProduct?.imageUrl && resolvedImg);
+
+  try {
+    const updateData: any = {
+      stok: currentSkuStok,
+      updatedAt: new Date(),
+    };
+    if (safeBarcodeForProduct && !existingProduct?.barcode) updateData.barcode = safeBarcodeForProduct;
+    if (articleToUse) updateData.article = articleToUse;
+    if (cleanColor) updateData.color = cleanColor;
+    if (cleanSize) updateData.size = cleanSize;
+    if (normalizedBrand) updateData.brand = normalizedBrand;
+    if (normalizedDept) updateData.dept = normalizedDept;
+    if (hargaNormal && hargaNormal > 0) updateData.hargaNormal = hargaNormal;
+    if (!existingProduct?.imageUrl && resolvedImg) updateData.imageUrl = resolvedImg;
+
+    await prisma.product.upsert({
+      where: { sku: itemSku },
+      update: updateData,
+      create: {
+        sku: itemSku,
+        barcode: safeBarcodeForProduct,
+        article: articleToUse || 'PRODUK BARU',
+        description: String(itemData.Description || itemData.ItemDescription || articleToUse || 'PRODUK BARU').trim(),
+        brand: normalizedBrand,
+        dept: normalizedDept,
+        color: cleanColor,
+        size: cleanSize,
+        hargaNormal: hargaNormal || 0,
+        stok: currentSkuStok,
+        imageUrl: resolvedImg,
+        updatedAt: new Date(),
+      },
+    });
+
+    await Promise.allSettled(
+      allDiscoveredBarcodes
+        .map((b) => String(b).trim())
+        .filter((b) => b && b !== itemSku)
+        .map((cleanBc) =>
+          prisma.barcodeAlias.upsert({
+            where: { barcode: cleanBc },
+            update: { barcodeNorm: normalizeCodeKey(cleanBc), sku: itemSku, source: 'MDS_LIVE', updatedAt: new Date() },
+            create: { barcode: cleanBc, barcodeNorm: normalizeCodeKey(cleanBc), sku: itemSku, source: 'MDS_LIVE' },
+          })
+        )
+    );
+  } catch (e) {
+    console.warn(`[MDS-CLIENT] Gagal upsert SKU ${itemSku}:`, e);
+  }
+
+  return {
+    sku: itemSku,
+    article: articleToUse,
+    color: cleanColor,
+    size: cleanSize,
+    stok: currentSkuStok,
+    barcode: safeBarcodeForProduct || candidateBarcode,
+    hargaNormal,
+    wasNewSku: !existingProduct,
+    imageUpdated,
+  };
+}
+
+/** Rakit respon final lengkap (`data` + `siblings` 1 keluarga + `images` galeri studio) & backfill foto yang hilang */
+async function finalizeProductFamilyResponse(params: {
+  mainSku: string;
+  fallbackBarcode?: string | null;
+  mataImages: MatahariFamilyImages;
+  withImages: boolean;
+  updatedVariants: LiveStockVariantSummary[];
+  newVariantsDiscovered: number;
+  imagesMatched: number;
+  storeOffline: boolean;
+  message?: string;
+}): Promise<CheckSingleItemResult> {
+  let dbMain = await prisma.product.findUnique({ where: { sku: params.mainSku } });
+  if (!dbMain && params.fallbackBarcode) {
+    dbMain = await prisma.product.findFirst({ where: { barcode: params.fallbackBarcode } });
+  }
+  if (!dbMain) {
+    return {
+      success: false,
+      sku: params.mainSku,
+      storeOffline: params.storeOffline,
+      message: params.message || 'Produk tidak ditemukan di database maupun server toko.',
+    };
+  }
+
+  const cleanedMain = checkAndCleanPromo(dbMain);
+  let siblings = await getProductSiblings(cleanedMain);
+  if (!siblings || siblings.length === 0) {
+    siblings = [cleanedMain];
+  }
+
+  let mataImages = params.mataImages;
+  const anyMissingImg = !cleanedMain.imageUrl || siblings.some((s) => !s.imageUrl);
+  const cleanArticle = sanitizeArticleCode(cleanedMain.article);
+  if (
+    params.withImages &&
+    anyMissingImg &&
+    mataImages.defaultImages.length === 0 &&
+    mataImages.imagesBySku.size === 0
+  ) {
+    mataImages = await fetchMatahariFamilyAndImages(cleanedMain.sku, cleanArticle, cleanedMain.barcode).catch(
+      () => mataImages
+    );
+  }
+
+  // Petakan foto yang sudah ada di database antar-sibling dalam artikel yang sama
+  const siblingImgByColor = new Map<string, string>();
+  let fallbackArticleImg: string | null = cleanedMain.imageUrl || mataImages.defaultImages[0] || null;
+  for (const sib of siblings) {
+    if (sib.imageUrl) {
+      if (!fallbackArticleImg) fallbackArticleImg = sib.imageUrl;
+      const cUp = String(sib.color || '').trim().toUpperCase();
+      if (cUp && !siblingImgByColor.has(cUp)) siblingImgByColor.set(cUp, sib.imageUrl);
+    }
+  }
+
+  let extraImagesMatched = params.imagesMatched;
+  if (params.withImages) {
+    const dbBackfillUpdates: Promise<any>[] = [];
+    for (const sib of siblings) {
+      if (!sib.imageUrl) {
+        const sibGal = resolveProductGallery(sib, mataImages, siblingImgByColor, fallbackArticleImg);
+        if (sibGal.length > 0) {
+          sib.imageUrl = sibGal[0];
+          extraImagesMatched++;
+          dbBackfillUpdates.push(
+            prisma.product
+              .update({
+                where: { sku: sib.sku },
+                data: { imageUrl: sibGal[0], updatedAt: new Date() },
+              })
+              .catch(() => {})
+          );
+        }
+      }
+    }
+    if (dbBackfillUpdates.length > 0) {
+      await Promise.allSettled(dbBackfillUpdates);
+    }
+  }
+
+  const enrichedSiblings = siblings.map((sib) => {
+    const images = resolveProductGallery(sib, mataImages, siblingImgByColor, fallbackArticleImg);
+    const resolvedUrl = sib.imageUrl || images[0] || null;
+    return {
+      ...sib,
+      imageUrl: resolvedUrl,
+      images,
+    };
+  });
+
+  const matchedFromSibs = enrichedSiblings.find((s) => s.sku === cleanedMain.sku);
+  const mainImages = matchedFromSibs?.images || resolveProductGallery(cleanedMain, mataImages, siblingImgByColor, fallbackArticleImg);
+  const enrichedMain = {
+    ...cleanedMain,
+    imageUrl: matchedFromSibs?.imageUrl || cleanedMain.imageUrl || mainImages[0] || null,
+    images: mainImages,
+  };
+
+  return {
+    success: true,
+    sku: enrichedMain.sku,
+    article: enrichedMain.article,
+    stok: enrichedMain.stok ?? 0,
+    barcode: enrichedMain.barcode,
+    hargaNormal: enrichedMain.hargaNormal,
+    totalVariantsUpdated: params.updatedVariants.length > 0 ? params.updatedVariants.length : enrichedSiblings.length,
+    newVariantsDiscovered: params.newVariantsDiscovered,
+    imagesMatched: extraImagesMatched,
+    variants:
+      params.updatedVariants.length > 0
+        ? params.updatedVariants
+        : enrichedSiblings.map((s) => ({ sku: s.sku, color: s.color, size: s.size, stok: s.stok ?? 0 })),
+    data: enrichedMain,
+    siblings: enrichedSiblings,
+    storeOffline: params.storeOffline,
+    ...(params.message ? { message: params.message } : {}),
+  };
+}
+
+export async function checkSingleItemStock(
+  sku: string,
+  options: CheckSingleItemOptions = {}
+): Promise<CheckSingleItemResult> {
+  const cleanSku = String(sku).trim();
+  const discoverFamily = options.discoverFamily !== false;
+  const withImages = options.withImages !== false;
+  const emptyMata: MatahariFamilyImages = {
+    variantSkus: [],
+    imagesBySku: new Map(),
+    imagesByColor: new Map(),
+    defaultImages: [],
+  };
+
+  // Helper fallback anggun ke database Supabase (Product + BarcodeAlias) + backfill foto Matahari bila kurang
+  const fallbackToDb = async (msg: string): Promise<CheckSingleItemResult> => {
     try {
       const cleanNorm = normalizeCodeKey(cleanSku);
+      const candidates = buildInitialProbeCandidates(cleanSku).map((c) => c.code);
       let dbProduct = await prisma.product.findFirst({
-        where: { OR: [{ sku: cleanSku }, { barcode: cleanSku }] },
-        select: { sku: true, stok: true, barcode: true, article: true, hargaNormal: true }
+        where: {
+          OR: [
+            { sku: { in: candidates } },
+            { barcode: { in: candidates } },
+          ],
+        },
+        select: { sku: true, barcode: true },
       });
+
       if (!dbProduct) {
         const alias = await prisma.barcodeAlias.findFirst({
-          where: { OR: [{ barcode: cleanSku }, { barcodeNorm: cleanNorm }] },
-          select: { sku: true }
+          where: {
+            OR: [
+              { barcode: { in: candidates } },
+              { barcodeNorm: cleanNorm },
+            ],
+          },
+          select: { sku: true },
         });
         if (alias) {
           dbProduct = await prisma.product.findUnique({
             where: { sku: alias.sku },
-            select: { sku: true, stok: true, barcode: true, article: true, hargaNormal: true }
+            select: { sku: true, barcode: true },
           });
         }
       }
+
       if (!dbProduct) {
         return {
           success: false,
@@ -271,25 +880,18 @@ export async function checkSingleItemStock(sku: string): Promise<{
           message: msg,
         };
       }
-      let variants: Array<{ sku: string; color?: string | null; size?: string | null; stok: number }> = [];
-      if (dbProduct.article) {
-        const siblings = await prisma.product.findMany({
-          where: { article: dbProduct.article },
-          select: { sku: true, color: true, size: true, stok: true }
-        });
-        variants = siblings.map(s => ({ sku: s.sku, color: s.color, size: s.size, stok: s.stok }));
-      }
-      return {
-        success: true,
-        sku: dbProduct.sku,
-        stok: dbProduct.stok ?? 0,
-        barcode: dbProduct.barcode,
-        article: dbProduct.article,
-        hargaNormal: dbProduct.hargaNormal,
-        variants,
+
+      return await finalizeProductFamilyResponse({
+        mainSku: dbProduct.sku,
+        fallbackBarcode: dbProduct.barcode,
+        mataImages: emptyMata,
+        withImages,
+        updatedVariants: [],
+        newVariantsDiscovered: 0,
+        imagesMatched: 0,
         storeOffline: true,
         message: msg,
-      };
+      });
     } catch {
       return {
         success: false,
@@ -299,14 +901,15 @@ export async function checkSingleItemStock(sku: string): Promise<{
     }
   };
 
-  /** Helper tunggal pemanggilan checkItemDetail StoreHub + parser Next.js RSC */
+  /** Helper tunggal pemanggilan checkItemDetail StoreHub + parser Next.js RSC (mengembalikan allItems sekaligus) */
   const queryStoreHubDetail = async (
     kind: 'upc' | 'sku',
     code: string,
-    activeCookie: string
-  ): Promise<{ itemData: any; authFailed: boolean; offline: boolean; actionExpired: boolean; cookie: string }> => {
+    activeCookie: string,
+    timeoutMs: number = 5000
+  ): Promise<{ itemData: any; allItems: any[]; authFailed: boolean; offline: boolean; actionExpired: boolean; cookie: string }> => {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     let res: Response;
     try {
       res = await fetch(ITEM_CHECKER_URL, {
@@ -326,7 +929,7 @@ export async function checkSingleItemStock(sku: string): Promise<{
       });
     } catch {
       clearTimeout(timeoutId);
-      return { itemData: null, authFailed: false, offline: true, actionExpired: false, cookie: activeCookie };
+      return { itemData: null, allItems: [], authFailed: false, offline: true, actionExpired: false, cookie: activeCookie };
     } finally {
       clearTimeout(timeoutId);
     }
@@ -334,61 +937,75 @@ export async function checkSingleItemStock(sku: string): Promise<{
     const updatedCookie = await persistRefreshedSessionIfAny(res, activeCookie);
 
     if (res.status === 404) {
-      return { itemData: null, authFailed: false, offline: false, actionExpired: true, cookie: updatedCookie };
+      return { itemData: null, allItems: [], authFailed: false, offline: false, actionExpired: true, cookie: updatedCookie };
     }
 
     const redirectTarget = res.headers.get('location') || res.headers.get('x-action-redirect') || '';
     if (res.status === 401 || (res.status >= 300 && res.status < 400 && redirectTarget.includes('/login')) || redirectTarget.includes('/login')) {
-      return { itemData: null, authFailed: true, offline: false, actionExpired: false, cookie: updatedCookie };
+      return { itemData: null, allItems: [], authFailed: true, offline: false, actionExpired: false, cookie: updatedCookie };
     }
 
     const text = await res.text();
-    if (text.includes('504 Gateway') || text.includes('Gateway Time-out') || text.includes('no route to host') || res.status === 504) {
-      return { itemData: null, authFailed: false, offline: true, actionExpired: false, cookie: updatedCookie };
+    if (
+      text.includes('504 Gateway') ||
+      text.includes('Gateway Time-out') ||
+      text.includes('no route to host') ||
+      text.includes('unable to open tcp connection') ||
+      res.status === 504
+    ) {
+      return { itemData: null, allItems: [], authFailed: false, offline: true, actionExpired: false, cookie: updatedCookie };
     }
     if (text.includes('NEXT_REDIRECT') && text.includes('/login')) {
-      return { itemData: null, authFailed: true, offline: false, actionExpired: false, cookie: updatedCookie };
+      return { itemData: null, allItems: [], authFailed: true, offline: false, actionExpired: false, cookie: updatedCookie };
     }
 
+    const allItems: any[] = [];
     let parsedItem: any = null;
     for (const line of text.split('\n')) {
       const colonIdx = line.indexOf(':');
       if (colonIdx > 0 && colonIdx <= 3) {
         try {
           const parsed = JSON.parse(line.substring(colonIdx + 1));
-          if (parsed?.result?.data?.[code] && Array.isArray(parsed.result.data[code])) {
-            const rows = parsed.result.data[code];
-            const matchUpc = kind === 'upc' ? rows.find((x: any) => String(x?.VendorBarcode || '').trim() === code) : null;
-            parsedItem = matchUpc || rows[rows.length - 1] || rows[0];
-            if (parsedItem && typeof parsedItem === 'object') {
-              parsedItem._harvestedBarcodes = harvestBarcodes(rows, parsedItem);
+          if (parsed?.error) {
+            const errStr = String(parsed.error);
+            if (errStr.includes('no route to host') || errStr.includes('tcp connection')) {
+              return { itemData: null, allItems: [], authFailed: false, offline: true, actionExpired: false, cookie: updatedCookie };
             }
-            break;
           }
-          if (parsed?.result?.data) {
-            const allRows: any[] = [];
-            for (const val of Object.values(parsed.result.data)) {
-              if (Array.isArray(val)) allRows.push(...val);
-              else if (val && typeof val === 'object') allRows.push(val);
+          if (parsed?.result?.data && typeof parsed.result.data === 'object') {
+            const entries = Object.entries(parsed.result.data);
+            for (const [skuKey, val] of entries) {
+              const rowList = Array.isArray(val) ? val : (val && typeof val === 'object' ? [val] : []);
+              if (rowList.length === 0) continue;
+              const matchedRow =
+                kind === 'upc'
+                  ? rowList.find((x: any) => String(x?.VendorBarcode || '').trim() === code)
+                  : rowList.find((x: any) => String(x?.SKU || '').trim() === code);
+              const chosen = matchedRow || rowList[rowList.length - 1] || rowList[0];
+              if (chosen && typeof chosen === 'object') {
+                const copy = { ...chosen };
+                if (!copy.SKU && !copy.sku) copy.SKU = String(skuKey);
+                copy._harvestedBarcodes = harvestBarcodes(rowList, copy);
+                allItems.push(copy);
+              }
             }
-            const first = Object.values(parsed.result.data)[0];
-            if (Array.isArray(first)) {
-              const matchUpc = kind === 'upc' ? first.find((x: any) => String(x?.VendorBarcode || '').trim() === code) : null;
-              parsedItem = matchUpc || first[first.length - 1] || first[0];
-            } else {
-              parsedItem = first;
+            if (allItems.length > 0) {
+              parsedItem =
+                allItems.find((it) =>
+                  kind === 'upc'
+                    ? String(it?.VendorBarcode || '').trim() === code
+                    : String(it?.SKU || it?.sku || '').trim() === code
+                ) || allItems[0];
+              break;
             }
-            if (parsedItem && typeof parsedItem === 'object') {
-              parsedItem._harvestedBarcodes = harvestBarcodes(allRows, parsedItem);
-            }
-            break;
           }
         } catch {
           continue;
         }
       }
     }
-    return { itemData: parsedItem, authFailed: false, offline: false, actionExpired: false, cookie: updatedCookie };
+
+    return { itemData: parsedItem, allItems, authFailed: false, offline: false, actionExpired: false, cookie: updatedCookie };
   };
 
   try {
@@ -397,35 +1014,36 @@ export async function checkSingleItemStock(sku: string): Promise<{
       return await fallbackToDb('Server by luqman org belum ada session aktif. Menampilkan stok tersimpan.');
     }
 
-    const isLikelySku = /^\d{7,9}$/.test(cleanSku);
-    const isUpc = !isLikelySku && (cleanSku.length >= 10 || /[^0-9]/.test(cleanSku) || cleanSku.length <= 6);
-    let activeKind: 'upc' | 'sku' = isUpc ? 'upc' : 'sku';
+    const initialCandidates = buildInitialProbeCandidates(cleanSku);
+    const firstProbe = initialCandidates[0] || { kind: 'sku' as const, code: cleanSku };
 
-    let queryRes = await queryStoreHubDetail(activeKind, cleanSku, cookie);
+    let activeKind: 'upc' | 'sku' = firstProbe.kind;
+    let queriedCode = firstProbe.code;
+    let queryRes = await queryStoreHubDetail(activeKind, queriedCode, cookie);
 
     // Jika Next-Action hash berubah di StoreHub, resolve dinamis lalu retry 1x
     if (queryRes.actionExpired) {
       try {
-        const html = await fetch(ITEM_CHECKER_URL, { headers: { Cookie: cookie } }).then(r => r.text());
+        const html = await fetch(ITEM_CHECKER_URL, { headers: { Cookie: cookie }, signal: AbortSignal.timeout(4000) }).then(r => r.text());
         const matches = [...html.matchAll(/src="(\/_next\/static\/chunks\/[^"]+\.js)"/g)];
         for (const m of matches.slice(0, 12)) {
-          const jsText = await fetch(`${STOREHUB_BASE}${m[1]}`).then(r => r.text()).catch(() => '');
+          const jsText = await fetch(`${STOREHUB_BASE}${m[1]}`, { signal: AbortSignal.timeout(3500) }).then(r => r.text()).catch(() => '');
           const actMatch = jsText.match(/createServerReference\)?\("([a-f0-9]{40,44})"[^)]*"checkItemDetail"/);
           if (actMatch?.[1]) {
             ACTION_DETAIL = actMatch[1];
-            queryRes = await queryStoreHubDetail(activeKind, cleanSku, cookie);
+            queryRes = await queryStoreHubDetail(activeKind, queriedCode, cookie);
             break;
           }
         }
       } catch {}
     }
 
-    // Jika cookie expired (401 / redirect / empty), paksa muat ulang dari Supabase Storage / auto-login dan retry 1x
+    // Jika cookie expired (401 / redirect), muat ulang paksa lalu retry 1x
     if (queryRes.authFailed) {
       const freshCookie = await getStoreHubCookie(true).catch(() => null);
       if (freshCookie && freshCookie !== cookie) {
         cookie = freshCookie;
-        queryRes = await queryStoreHubDetail(activeKind, cleanSku, cookie);
+        queryRes = await queryStoreHubDetail(activeKind, queriedCode, cookie);
       }
     }
 
@@ -433,159 +1051,216 @@ export async function checkSingleItemStock(sku: string): Promise<{
       return await fallbackToDb('Server toko fisik sedang istirahat (malam hari). Menampilkan stok tersimpan.');
     }
 
-    let queriedCode = cleanSku;
-    // Fleksibel: jika pencarian jalur pertama kosong, coba jalur kebalikan (upc <-> sku)
-    if (!queryRes.itemData && !queryRes.offline) {
-      const altKind: 'upc' | 'sku' = activeKind === 'upc' ? 'sku' : 'upc';
-      const altRes = await queryStoreHubDetail(altKind, cleanSku, queryRes.cookie || cookie);
-      if (altRes.itemData) {
-        queryRes = altRes;
-        activeKind = altKind;
-      }
-    }
-
-    // Smart Fallback: Jika user mengetik manual barcode 13 digit (234000* atau EAN-13) dengan 1 salah check digit
-    if (!queryRes.itemData && /^\d{13}$/.test(cleanSku)) {
-      const validCd = calculateEan13CheckDigit(cleanSku.slice(0, 12));
-      const correctedBarcode = cleanSku.slice(0, 12) + validCd;
-      if (correctedBarcode !== cleanSku) {
-        const correctedRes = await queryStoreHubDetail('upc', correctedBarcode, queryRes.cookie || cookie);
-        if (correctedRes.itemData) {
-          queryRes = correctedRes;
-          queriedCode = correctedBarcode;
-          activeKind = 'upc';
+    // Jika jalur utama tidak menemukannya, coba kandidat alternatif (reverse kind, check-digit fix, prefix 234000 / 2*)
+    if (!queryRes.itemData) {
+      for (const cand of initialCandidates.slice(1)) {
+        const altRes = await queryStoreHubDetail(cand.kind, cand.code, queryRes.cookie || cookie, 4000);
+        if (altRes.cookie) cookie = altRes.cookie;
+        if (altRes.offline) {
+          return await fallbackToDb('Server toko fisik sedang istirahat (malam hari). Menampilkan stok tersimpan.');
+        }
+        if (altRes.itemData) {
+          queryRes = altRes;
+          activeKind = cand.kind;
+          queriedCode = cand.code;
+          break;
         }
       }
     }
 
     const itemData = queryRes.itemData;
     if (!itemData || itemData.error) {
-      return await fallbackToDb('Produk tidak ditemukan di server by luqman org maupun sistem.');
+      return await fallbackToDb('Produk tidak ditemukan di server toko maupun database lokal.');
     }
 
-    // 1. Ekstraksi nilai stok, barcode, artikel, warna, ukuran, brand, dan dept yang akurat
-    let currentSkuStok = 0;
-    const directStok = itemData.StockOnHand ?? itemData.stockOnHand ?? itemData.stock_on_hand ?? itemData.soh;
-    if (directStok !== undefined && directStok !== null) {
-      currentSkuStok = parseInt(String(directStok), 10) || 0;
-    }
+    const seedSku = String(itemData.SKU ?? itemData.sku ?? cleanSku).trim();
+    const seedBarcode = itemData.VendorBarcode ? String(itemData.VendorBarcode).trim() : (activeKind === 'upc' ? queriedCode : null);
+    let articleToSearch = sanitizeArticleCode(itemData.StyleCode ?? itemData.styleCode ?? itemData.article);
 
-    const barcode = itemData.VendorBarcode ?? itemData.vendorBarcode ?? itemData.barcode ?? null;
-    const article = itemData.StyleCode ?? itemData.styleCode ?? itemData.article ?? null;
-    const itemColor = itemData.COLOR ?? itemData.Color ?? itemData.color ?? null;
-    const itemSize = itemData.Size ?? itemData.SIZE ?? itemData.size ?? null;
-    const { brand: normalizedBrand, dept: normalizedDept } = normalizeBrandAndDept(itemData);
-
-    // Parse harga normal ritel
-    const rawPrice = itemData.RetailPrice ?? itemData.retailPrice ?? itemData.price;
-    let hargaNormal: number | null = null;
-    if (rawPrice) {
-      let str = String(rawPrice).trim();
-      if (/\.\d{4,}$/.test(str) || /\.00$/.test(str)) {
-        str = str.split('.')[0];
-      }
-      const cleaned = str.replace(/[^0-9]/g, '');
-      hargaNormal = cleaned ? parseInt(cleaned, 10) : null;
-    }
-
-    const itemSku = String(itemData.SKU ?? itemData.sku ?? cleanSku).trim();
-
-    // 2. Cari seluruh varian produk dari ARTIKEL ini di database Supabase
-    let articleToSearch = article ? String(article).trim() : null;
-    const existingProduct = await prisma.product.findUnique({
-      where: { sku: itemSku },
-      select: { article: true, barcode: true },
+    const existingMain = await prisma.product.findUnique({
+      where: { sku: seedSku },
+      select: { article: true, barcode: true, imageUrl: true },
     });
     if (!articleToSearch) {
-      articleToSearch = existingProduct?.article || null;
+      articleToSearch = sanitizeArticleCode(existingMain?.article);
     }
 
-    const allDiscoveredBarcodes: string[] = Array.isArray(itemData._harvestedBarcodes)
-      ? [...itemData._harvestedBarcodes]
-      : [];
-    const primaryCandidate = barcode ? String(barcode).trim() : (activeKind === 'upc' ? queriedCode : null);
-    if (primaryCandidate && !allDiscoveredBarcodes.includes(primaryCandidate)) {
-      allDiscoveredBarcodes.unshift(primaryCandidate);
-    }
-    if (activeKind === 'upc' && queriedCode && !allDiscoveredBarcodes.includes(queriedCode)) {
-      allDiscoveredBarcodes.push(queriedCode);
-    }
+    // Tarik foto studio & daftar SKU varian dari Matahari.com bila diminta
+    const mataImages = (discoverFamily || withImages)
+      ? await fetchMatahariFamilyAndImages(seedSku, articleToSearch, seedBarcode || existingMain?.barcode || null).catch(() => emptyMata)
+      : emptyMata;
 
-    const updatedVariants: Array<{ sku: string; color?: string | null; size?: string | null; stok: number }> = [];
-    const resolvedBarcode = primaryCandidate || existingProduct?.barcode || null;
-
-    // Update atau insert produk baru secara instan ke Supabase (hindari menimpa barcode unik SKU lain)
-    try {
-      const updateData: any = {
-        stok: currentSkuStok,
-        updatedAt: new Date(),
-      };
-      if (resolvedBarcode && !existingProduct?.barcode) updateData.barcode = resolvedBarcode;
-      if (articleToSearch) updateData.article = articleToSearch;
-      if (itemColor) updateData.color = String(itemColor).trim();
-      if (itemSize) updateData.size = String(itemSize).trim();
-      if (normalizedBrand) updateData.brand = normalizedBrand;
-      if (normalizedDept) updateData.dept = normalizedDept;
-      if (hargaNormal && hargaNormal > 0) updateData.hargaNormal = hargaNormal;
-
-      await prisma.product.upsert({
-        where: { sku: itemSku },
-        update: updateData,
-        create: {
-          sku: itemSku,
-          barcode: resolvedBarcode,
-          article: articleToSearch || 'PRODUK BARU',
-          description: String(itemData.Description || itemData.ItemDescription || articleToSearch || 'PRODUK BARU').trim(),
-          brand: normalizedBrand,
-          dept: normalizedDept,
-          color: itemColor ? String(itemColor).trim() : null,
-          size: itemSize ? String(itemSize).trim() : null,
-          hargaNormal: hargaNormal || 0,
-          stok: currentSkuStok,
-          updatedAt: new Date(),
-        }
+    // Peta foto sibling eksisting di database Supabase
+    const siblingImgByColor = new Map<string, string>();
+    const existingFamilySkus = new Set<string>();
+    const existingFamilyBarcodes = new Set<string>();
+    let fallbackArticleImg: string | null = existingMain?.imageUrl || mataImages.defaultImages[0] || null;
+    if (articleToSearch) {
+      const dbSibs = await prisma.product.findMany({
+        where: { article: articleToSearch },
+        select: { sku: true, barcode: true, color: true, imageUrl: true },
       });
+      for (const s of dbSibs) {
+        existingFamilySkus.add(s.sku);
+        if (s.barcode) existingFamilyBarcodes.add(s.barcode);
+        if (s.imageUrl) {
+          if (!fallbackArticleImg) fallbackArticleImg = s.imageUrl;
+          const cUp = String(s.color || '').trim().toUpperCase();
+          if (cUp && !siblingImgByColor.has(cUp)) siblingImgByColor.set(cUp, s.imageUrl);
+        }
+      }
+    }
 
-      // Simpan SEMUA barcode (utama + vendor + alias) agar 1 SKU punya banyak barcode valid tetap tembus scan!
-      for (const bCode of allDiscoveredBarcodes) {
-        const cleanBc = String(bCode).trim();
-        if (!cleanBc || cleanBc === itemSku) continue;
-        await prisma.barcodeAlias.upsert({
-          where: { barcode: cleanBc },
-          update: { barcodeNorm: normalizeCodeKey(cleanBc), sku: itemSku, source: 'MDS_LIVE', updatedAt: new Date() },
-          create: { barcode: cleanBc, barcodeNorm: normalizeCodeKey(cleanBc), sku: itemSku, source: 'MDS_LIVE' },
-        }).catch(() => {});
+    // 1. Upsert item utama + seluruh allItems yang ikut terbawa di payload awal
+    const itemsToUpsert = queryRes.allItems.length > 0 ? queryRes.allItems : [itemData];
+    const updatedVariants: LiveStockVariantSummary[] = [];
+    const seenUpdatedSkus = new Set<string>();
+    const probedKeys = new Set<string>([`sku:${seedSku}`, ...(seedBarcode ? [`upc:${seedBarcode}`] : [])]);
+    let newVariantsDiscovered = 0;
+    let imagesMatched = 0;
+
+    for (const rawIt of itemsToUpsert) {
+      const saved = await upsertStoreHubItemToDb(rawIt, {
+        queriedCode,
+        queriedKind: activeKind,
+        mataImages,
+        siblingImgByColor,
+        fallbackArticle: articleToSearch,
+        fallbackArticleImg,
+      });
+      if (!saved) continue;
+      probedKeys.add(`sku:${saved.sku}`);
+      if (saved.barcode) probedKeys.add(`upc:${saved.barcode}`);
+      if (saved.wasNewSku) newVariantsDiscovered++;
+      if (saved.imageUpdated) imagesMatched++;
+      if (!seenUpdatedSkus.has(saved.sku)) {
+        seenUpdatedSkus.add(saved.sku);
+        updatedVariants.push({ sku: saved.sku, color: saved.color, size: saved.size, stok: saved.stok });
+      }
+    }
+
+    const resolvedSeedBarcode = seedBarcode || existingMain?.barcode || null;
+
+    // 2. Sapu saudara se-keluarga artikel (Matahari variantSkus + tetangga SKU Modulo-10 + tetangga EAN-13)
+    if (discoverFamily) {
+      const neighborCandidates: Array<{ kind: 'sku' | 'upc'; code: string }> = [];
+      const enqueueNeighbor = (kind: 'sku' | 'upc', code: string) => {
+        const trimmed = String(code || '').trim();
+        if (!trimmed) return;
+        const k = `${kind}:${trimmed}`;
+        if (!probedKeys.has(k)) {
+          probedKeys.add(k);
+          neighborCandidates.push({ kind, code: trimmed });
+        }
+      };
+
+      for (const mSku of mataImages.variantSkus) {
+        enqueueNeighbor('sku', mSku);
       }
 
-      updatedVariants.push({ sku: itemSku, color: itemColor, size: itemSize, stok: currentSkuStok });
-    } catch (e) {
-      console.warn('Gagal upsert main SKU:', e);
+      if (/^\d{8}$/.test(seedSku)) {
+        const base7 = parseInt(seedSku.slice(0, 7), 10);
+        for (let d = -8; d <= 8; d++) {
+          if (d === 0 || base7 + d < 100000) continue;
+          const nbSku = generateMdsSku8(base7 + d);
+          if (nbSku) enqueueNeighbor('sku', nbSku);
+        }
+      }
+
+      if (resolvedSeedBarcode && /^\d{13}$/.test(resolvedSeedBarcode)) {
+        const pfx6 = resolvedSeedBarcode.slice(0, 6);
+        const base6 = parseInt(resolvedSeedBarcode.slice(6, 12), 10);
+        const minB = pfx6 === '234000' ? 1000 : 0;
+        for (let d = -6; d <= 10; d++) {
+          if (d === 0) continue;
+          const nb6 = base6 + d;
+          if (nb6 < minB || nb6 > 999999) continue;
+          const d12 = `${pfx6}${String(nb6).padStart(6, '0')}`;
+          const nbBc = `${d12}${calculateEan13CheckDigit(d12)}`;
+          if (nbBc.length === 13) enqueueNeighbor('upc', nbBc);
+        }
+      }
+
+      // Filter kandidat yang sudah ada di artikel target agar hemat waktu
+      const probeQueue = neighborCandidates.filter((c) => {
+        if (c.kind === 'sku') {
+          return mataImages.variantSkus.includes(c.code) || !existingFamilySkus.has(c.code);
+        }
+        return !existingFamilyBarcodes.has(c.code);
+      });
+
+      const probeBudgetStart = Date.now();
+      const BATCH_SIZE = 8;
+      let hitOffline = false;
+      for (let i = 0; i < probeQueue.length && !hitOffline; i += BATCH_SIZE) {
+        if (Date.now() - probeBudgetStart >= 5500) break;
+        const batch = probeQueue.slice(i, i + BATCH_SIZE);
+        const batchResults = await Promise.all(
+          batch.map(async (c) => ({
+            cand: c,
+            res: await queryStoreHubDetail(c.kind, c.code, cookie!, 3000),
+          }))
+        );
+
+        for (const { cand, res } of batchResults) {
+          if (res.offline) {
+            hitOffline = true;
+            continue;
+          }
+          const foundList = res.allItems.length > 0 ? res.allItems : (res.itemData ? [res.itemData] : []);
+          for (const foundRaw of foundList) {
+            const foundArt = sanitizeArticleCode(foundRaw?.StyleCode ?? foundRaw?.styleCode ?? foundRaw?.article);
+            const foundSku = String(foundRaw?.SKU ?? foundRaw?.sku ?? '').trim();
+            const isMataFamilySku = mataImages.variantSkus.includes(foundSku);
+            const sameArticle = Boolean(articleToSearch && foundArt && foundArt.toUpperCase() === articleToSearch.toUpperCase());
+
+            // Upsert seluruh temuan baru valid, dan catat varian bila masih 1 keluarga artikel
+            if (!sameArticle && !isMataFamilySku && articleToSearch && foundArt) {
+              continue;
+            }
+
+            const saved = await upsertStoreHubItemToDb(foundRaw, {
+              queriedCode: cand.code,
+              queriedKind: cand.kind,
+              mataImages,
+              siblingImgByColor,
+              fallbackArticle: sameArticle || isMataFamilySku ? articleToSearch : foundArt,
+              fallbackArticleImg,
+            });
+            if (!saved) continue;
+            if (saved.wasNewSku) newVariantsDiscovered++;
+            if (saved.imageUpdated) imagesMatched++;
+            if (!seenUpdatedSkus.has(saved.sku)) {
+              seenUpdatedSkus.add(saved.sku);
+              updatedVariants.push({ sku: saved.sku, color: saved.color, size: saved.size, stok: saved.stok });
+            }
+          }
+        }
+      }
     }
 
-    // 3. Jika ada artikel dan relatedStock dari StoreHub: perbarui SELURUH varian (warna & ukuran)
+    // 3. Sinkronkan relatedStock dari StoreHub ke seluruh varian warna/ukuran DB untuk artikel ini
     if (articleToSearch && itemData.relatedStock && typeof itemData.relatedStock === 'object') {
       try {
         const siblings = await prisma.product.findMany({
           where: { article: articleToSearch },
           select: { id: true, sku: true, color: true, size: true, stok: true },
         });
-
-        const normalize = (s: any) => String(s || '').trim().toUpperCase();
+        const norm = (s: any) => String(s || '').trim().toUpperCase();
+        const updates: Promise<any>[] = [];
 
         for (const sib of siblings) {
-          if (sib.sku === itemSku) continue;
-
-          const sibColor = normalize(sib.color);
-          const sibSize = normalize(sib.size);
-
+          if (seenUpdatedSkus.has(sib.sku)) continue;
+          const sibColor = norm(sib.color);
+          const sibSize = norm(sib.size);
           let foundQty: number | null = null;
 
           for (const [relColorKey, sizesObj] of Object.entries(itemData.relatedStock)) {
-            const relColor = normalize(relColorKey);
+            const relColor = norm(relColorKey);
             if (relColor === sibColor || relColor.includes(sibColor) || sibColor.includes(relColor)) {
               if (sizesObj && typeof sizesObj === 'object') {
                 for (const [relSizeKey, qtyVal] of Object.entries(sizesObj as Record<string, any>)) {
-                  const relSize = normalize(relSizeKey);
+                  const relSize = norm(relSizeKey);
                   if (relSize === sibSize || relSize.includes(sibSize) || sibSize.includes(relSize)) {
                     foundQty = parseInt(String(qtyVal), 10) || 0;
                     break;
@@ -597,30 +1272,34 @@ export async function checkSingleItemStock(sku: string): Promise<{
           }
 
           if (foundQty !== null) {
-            await prisma.product.update({
-              where: { id: sib.id },
-              data: { stok: foundQty, updatedAt: new Date() },
-            });
+            updates.push(
+              prisma.product.update({
+                where: { id: sib.id },
+                data: { stok: foundQty, updatedAt: new Date() },
+              })
+            );
+            seenUpdatedSkus.add(sib.sku);
             updatedVariants.push({ sku: sib.sku, color: sib.color, size: sib.size, stok: foundQty });
           }
         }
+        if (updates.length > 0) {
+          await Promise.allSettled(updates);
+        }
       } catch (sibErr) {
-        console.warn('Gagal update sibling variants:', sibErr);
+        console.warn('[MDS-CLIENT] Gagal update sibling variants:', sibErr);
       }
     }
 
-    // Penting: Kembalikan itemSku (SKU 8-digit asli di DB), bukan cleanSku (yang bisa berupa barcode 13-digit)
-    return {
-      success: true,
-      sku: itemSku,
-      article: articleToSearch,
-      stok: currentSkuStok,
-      barcode: resolvedBarcode,
-      hargaNormal,
-      totalVariantsUpdated: updatedVariants.length,
-      variants: updatedVariants,
+    return await finalizeProductFamilyResponse({
+      mainSku: seedSku,
+      fallbackBarcode: resolvedSeedBarcode,
+      mataImages,
+      withImages,
+      updatedVariants,
+      newVariantsDiscovered,
+      imagesMatched,
       storeOffline: false,
-    };
+    });
   } catch (err: any) {
     return {
       success: false,
@@ -629,4 +1308,3 @@ export async function checkSingleItemStock(sku: string): Promise<{
     };
   }
 }
-
