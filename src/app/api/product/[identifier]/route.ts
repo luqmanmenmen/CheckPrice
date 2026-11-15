@@ -26,6 +26,21 @@ import {
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * Bangun filter prefix range B-tree PostgreSQL (`en_US.UTF-8` safe).
+ * Menggantikan Prisma `startsWith` (`LIKE 'x%'`) yang memicu 24,5s Sequential Scan
+ * saat digabungkan dalam `OR`. Di collation `en_US.UTF-8`, huruf kecil urut sebelum
+ * huruf besar dan `:` urut sebelum digit, sehingga rentang `lower..UPPER+\uffff` akurat.
+ */
+function buildBtreePrefixWhere(field: 'sku' | 'barcode', prefix: string) {
+  return {
+    AND: [
+      { [field]: { gte: prefix.toLowerCase() } },
+      { [field]: { lt: `${prefix.toUpperCase()}\uffff` } }
+    ]
+  };
+}
+
 const SEARCH_CACHE_TTL_MS = 60_000;
 const SEARCH_CACHE_MAX_KEYS = 80;
 const searchListCache = new Map<
@@ -170,9 +185,9 @@ export async function GET(
       const numericMatches = await db.product.findMany({
         where: {
           OR: [
-            { sku: { startsWith: rawInput } },
-            { barcode: { startsWith: rawInput } },
-            ...(rawInput.length <= 7 ? [{ barcode: { startsWith: `234000${rawInput}` } }] : []),
+            buildBtreePrefixWhere('sku', rawInput),
+            buildBtreePrefixWhere('barcode', rawInput),
+            ...(rawInput.length <= 7 ? [buildBtreePrefixWhere('barcode', `234000${rawInput}`)] : []),
             { article: { contains: rawInput, mode: 'insensitive' as const } }
           ]
         },
@@ -312,10 +327,9 @@ export async function GET(
         clauses.push({ size: { contains: term, mode: 'insensitive' as const } });
       }
       if (/\d/.test(term)) {
-        const upperTerm = term.toUpperCase();
         clauses.push(
-          { sku: { startsWith: upperTerm } },
-          { barcode: { startsWith: upperTerm } }
+          buildBtreePrefixWhere('sku', term),
+          buildBtreePrefixWhere('barcode', term)
         );
       }
       return clauses;
