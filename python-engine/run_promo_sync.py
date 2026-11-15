@@ -302,7 +302,10 @@ def run_promo_sync(target_file_or_url: str = None, explicit_name: str = None):
 
     if target_file_or_url:
         total = process_single_promo_file(target_file_or_url, explicit_name)
-        log_sync_history(explicit_name or target_file_or_url, total)
+        if total > 0:
+            log_sync_history(explicit_name or target_file_or_url, total)
+        else:
+            print("ℹ️ Tidak ada baris promo yang diperbarui — lewati pencatatan SyncHistory.")
         return
 
     print("🔍 Mencari file promo terbaru di Supabase Storage (PROMO/)...")
@@ -320,7 +323,10 @@ def run_promo_sync(target_file_or_url: str = None, explicit_name: str = None):
     print("=" * 60)
     print(f"🎉 [SUKSES BATCH] Total {grand_total} produk berhasil diperbarui dari {len(files_to_process)} file!")
     print("=" * 60)
-    log_sync_history(f"Batch Promo ({len(files_to_process)} file)", grand_total)
+    if grand_total > 0:
+        log_sync_history(f"Batch Promo ({len(files_to_process)} file)", grand_total)
+    else:
+        print("ℹ️ 0 produk promo berubah — lewati pencatatan SyncHistory.")
 
 
 if __name__ == "__main__":

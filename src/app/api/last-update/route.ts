@@ -8,14 +8,12 @@ let cachedPayload: any = null;
 let cachedTimestamp = 0;
 const LAST_UPDATE_CACHE_TTL_MS = 15000;
 
+// Hanya event yang berpotensi membawa produk baru atau perubahan promo aktif
+// yang menaikkan catalogVersion ("UPDATE SEKARANG").
 const CATALOG_SYNC_TYPES = [
   'CATALOG_BUNDLE',
-  'MDS_BISA_SYNC',
-  'PHOTO_SYNC',
   'UPDATE_PROMO',
   'PROMO_MINGGUAN',
-  'EXCEL_UPLOAD',
-  'SYNC_PQ',
 ];
 
 async function fetchStorageManifest() {
@@ -55,6 +53,7 @@ export async function GET() {
         where: {
           status: 'SUCCESS',
           type: { in: CATALOG_SYNC_TYPES },
+          records: { gt: 0 },
         },
         orderBy: { createdAt: 'desc' },
         select: { createdAt: true },

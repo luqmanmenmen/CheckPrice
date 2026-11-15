@@ -1298,3 +1298,28 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
    - Timeout fetch server dinaikkan dari `2.500ms` ke `6.500ms` (lokal siap) / `12.000ms` (lokal kosong), dan di `GET /api/product/[identifier]` cabang `article ILIKE` dilewati untuk kode numerik panjang (`>= 11` digit) agar scan barcode tidak menyentuh indeks trigram `article`.
 
 - **Verifikasi:** `build_offline_snapshot.py` teruji langsung (`307.732 SKU`, `56.194 Model`, `14.999 Alias`, `8.753.987 byte` terverifikasi dari CDN Storage), `py_compile` lulus, `npx tsc --noEmit` dan `npm run build` (`53/53` route) lulus exit code `0`.
+
+---
+
+### 83. Notif `"UPDATE SEKARANG"` Ketat Hanya untuk Produk Baru atau Promo Berubah (16 November 2026)
+
+- **Masalah:** Sebelumnya `CATALOG_SYNC_TYPES` di [`/api/check-update`](file:///c:/Max%20Display/price-checker/src/app/api/check-update/route.ts) dan [`/api/last-update`](file:///c:/Max%20Display/price-checker/src/app/api/last-update/route.ts) masih mengikutkan event yang sering berjalan tanpa produk baru atau perubahan promo (`MDS_BISA_SYNC`, `PHOTO_SYNC`, `EXCEL_UPLOAD`, `SYNC_PQ`), serta [`python-engine/build_offline_snapshot.py`](file:///c:/Max%20Display/price-checker/python-engine/build_offline_snapshot.py) selalu menaikkan `catalogVersion` dan mencatat `CATALOG_BUNDLE` setiap kali dijalankan tanpa `--stock-only` meskipun hanya ada pergerakan stok `1 pcs`.
+- **Perubahan Arsitektur ("Python yang Mikir, Vercel Display"):**
+  1. **Deteksi Sidik Jari Katalog (`skuHash` & `promoHash`) di [`python-engine/build_offline_snapshot.py`](file:///c:/Max%20Display/price-checker/python-engine/build_offline_snapshot.py):**
+     - Menambahkan fungsi `compute_catalog_hashes()` untuk menghitung SHA-256 `skuHash` (dari himpunan terurut `(sku, article)`) dan `promoHash` (dari himpunan promo aktif `(sku, hargaPromo, diskon, discountType, acara, toDate)` yang belum kadaluarsa) dengan **mengabaikan `stok`, `imageUrl`, sales, dan `updatedAt`**.
+     - Menambahkan `decide_catalog_version_bump()` untuk membandingkan `skuHash` dan `promoHash` terhadap `offline-db/manifest.json` sebelumnya:
+       - `catalogVersion` dinaikkan dan `CATALOG_BUNDLE` dicatat ke `SyncHistory` **HANYA** jika `not stock_only` dan (`NEW_PRODUCT`, `PROMO_CHANGED`, `NEW_PRODUCT_AND_PROMO`, atau `INITIAL`).
+       - Jika tidak ada produk baru maupun perubahan promo (`NONE` / `STOCK_ONLY` / migrasi awal `SEED_HASHES`), `catalogVersion` dipertahankan dan `SyncHistory` tidak ditulis, sementara `snapshot-*.json.gz` dan `bundleRevision` tetap diperbarui dengan stok serta foto terbaru.
+  2. **Filter Ketat Endpoint Update ([`src/app/api/check-update/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/check-update/route.ts) & [`src/app/api/last-update/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/last-update/route.ts)):**
+     - `CATALOG_SYNC_TYPES` dipersempit hanya ke `CATALOG_BUNDLE`, `UPDATE_PROMO`, dan `PROMO_MINGGUAN`, dengan syarat tambahan `records: { gt: 0 }` pada kueri `SyncHistory`.
+     - Menghapus `MDS_BISA_SYNC`, `PHOTO_SYNC`, `EXCEL_UPLOAD`, dan `SYNC_PQ` dari pemicu `catalogVersion`.
+  3. **Penjagaan Log Promo Kosong ([`python-engine/run_promo_sync.py`](file:///c:/Max%20Display/price-checker/python-engine/run_promo_sync.py)) & Salinan Banner ([`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx)):**
+     - `run_promo_sync.py` hanya mencatat `UPDATE_PROMO` ke `SyncHistory` bila `total > 0` (atau `grand_total > 0`).
+     - Teks sub-judul banner di `src/app/page.tsx` disesuaikan menjadi `"Ada produk baru, update promo, atau fitur sistem terbaru."`.
+- **Verifikasi:**
+  - `python-engine\.venv\Scripts\python.exe -m py_compile` lulus (`0`).
+  - Unit assertion Python (`SEED_HASHES`, `NONE`, `NEW_PRODUCT`, `PROMO_CHANGED`) lulus (`0`).
+  - Dua kali eksekusi langsung `build_offline_snapshot.py`:
+    - Tahap 1 menghasilkan `reason=SEED_HASHES, bump=False, promoAktif=5,246, catalogVersion=1794784498977` (skip `SyncHistory`).
+    - Tahap 2 menghasilkan `reason=NONE, bump=False, promoAktif=5,246, catalogVersion=1794784498977` (skip `SyncHistory`, `raw=63.04 MB -> gzip=8.35 MB`, `307,732 SKU`, `56,194 Model`, `14,999 Alias`).
+  - `npx tsc --noEmit` (`0`) dan `npm run build` (`53/53` route, exit code `0`).

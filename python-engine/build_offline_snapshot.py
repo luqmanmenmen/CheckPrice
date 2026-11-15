@@ -19,6 +19,7 @@ Penggunaan:
 
 import argparse
 import gzip
+import hashlib
 import json
 import os
 import sys
@@ -200,6 +201,85 @@ class DictInterner:
 IMG_SHOPIFY_PREFIX = "https://cdn.shopify.com/s/files/1/0666/9212/0727/"
 
 
+def compute_catalog_hashes(
+    catalog_entries: List[Tuple[str, str, Any, Optional[str], Optional[str], Optional[str], Optional[str]]],
+) -> Tuple[str, str, int]:
+    """
+    Hitung sidik jari deterministik (SHA-256) HANYA untuk:
+    1. `skuHash`: himpunan (sku, article) -> berubah ONLY jika ada produk baru / berubah SKU/artikel.
+    2. `promoHash`: himpunan promo aktif (sku, hargaPromo, diskon, discountType, acara, toDate)
+       -> berubah ONLY jika promo baru/berubah/kadaluarsa.
+    Stok, imageUrl, sales, dan updatedAt SENGAJA diabaikan agar pergerakan stok 1 pcs
+    atau update foto tidak menyalakan notif "UPDATE SEKARANG".
+    """
+    sku_set = sorted({
+        (str(sku or "").strip(), str(article or "").strip())
+        for (sku, article, *_rest) in catalog_entries
+        if str(sku or "").strip()
+    })
+    promo_set = sorted({
+        (
+            str(sku or "").strip(),
+            float(h_promo_val) if h_promo_val is not None else None,
+            str(diskon or "").strip(),
+            str(d_type or "").strip(),
+            str(acara or "").strip(),
+            str(to_date or "").strip(),
+        )
+        for (sku, _article, h_promo_val, diskon, d_type, acara, to_date) in catalog_entries
+        if str(sku or "").strip()
+        and (
+            (h_promo_val is not None and float(h_promo_val) > 0)
+            or bool(str(diskon or "").strip())
+            or bool(str(d_type or "").strip())
+        )
+    })
+
+    sku_hash = hashlib.sha256(
+        json.dumps(sku_set, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    promo_hash = hashlib.sha256(
+        json.dumps(promo_set, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    return sku_hash, promo_hash, len(promo_set)
+
+
+def decide_catalog_version_bump(
+    now_ms: int,
+    existing_manifest: Dict[str, Any],
+    sku_hash: str,
+    promo_hash: str,
+    stock_only: bool,
+) -> Tuple[int, bool, str]:
+    """Tentukan apakah catalogVersion wajib naik ("UPDATE SEKARANG") atau tetap."""
+    raw_prev_ver = existing_manifest.get("catalogVersion")
+    prev_ver = int(raw_prev_ver) if raw_prev_ver else 0
+    prev_sku_hash = existing_manifest.get("skuHash")
+    prev_promo_hash = existing_manifest.get("promoHash")
+
+    if stock_only:
+        return (prev_ver if prev_ver > 0 else now_ms, False, "STOCK_ONLY")
+
+    if prev_ver <= 0:
+        return (now_ms, True, "INITIAL")
+
+    # Migrasi pertama dari manifest lama yang belum memiliki skuHash/promoHash:
+    # simpan hash tanpa menaikkan catalogVersion agar tidak muncul notif palsu.
+    if not prev_sku_hash or not prev_promo_hash:
+        return (prev_ver, False, "SEED_HASHES")
+
+    sku_changed = sku_hash != prev_sku_hash
+    promo_changed = promo_hash != prev_promo_hash
+
+    if sku_changed and promo_changed:
+        return (now_ms, True, "NEW_PRODUCT_AND_PROMO")
+    if sku_changed:
+        return (now_ms, True, "NEW_PRODUCT")
+    if promo_changed:
+        return (now_ms, True, "PROMO_CHANGED")
+    return (prev_ver, False, "NONE")
+
+
 def build_and_upload_offline_snapshot(stock_only: bool = False) -> Dict[str, Any]:
     _load_env_files()
     t0 = time.time()
@@ -212,44 +292,7 @@ def build_and_upload_offline_snapshot(stock_only: bool = False) -> Dict[str, Any
     now_utc = datetime.now(timezone.utc)
     now_wib_date = datetime.fromtimestamp(time.time() + 7 * 3600, tz=timezone.utc).strftime("%Y-%m-%d")
     now_ms = int(now_utc.timestamp() * 1000)
-
-    # Bila --stock-only, PERTAHANKAN catalogVersion lama agar notif UPDATE SEKARANG tidak menyala
-    if stock_only and existing_manifest.get("catalogVersion"):
-        catalog_version = int(existing_manifest["catalogVersion"])
-    else:
-        catalog_version = now_ms
-
     bundle_revision = now_ms
-
-    # Tentukan userId & catat CATALOG_BUNDLE ke SyncHistory terlebih dahulu (sebelum upload)
-    # bila bukan --stock-only, agar endpoint /api/check-update sinkron dengan manifest.
-    if not stock_only:
-        try:
-            cur.execute('SELECT id FROM "User" WHERE nik = \'22054178\' LIMIT 1')
-            row_u = cur.fetchone()
-            if not row_u:
-                cur.execute('SELECT id FROM "User" LIMIT 1')
-                row_u = cur.fetchone()
-            if row_u:
-                cur.execute(
-                    '''
-                    INSERT INTO "SyncHistory" (id, "userId", type, "fileName", status, records, "createdAt")
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ''',
-                    (
-                        f"snap_{uuid.uuid4().hex[:18]}",
-                        row_u[0],
-                        "CATALOG_BUNDLE",
-                        f"Python Offline Snapshot v{catalog_version}",
-                        "SUCCESS",
-                        0,
-                        now_utc,
-                    ),
-                )
-                conn.commit()
-        except Exception as exc:
-            conn.rollback()
-            print(f"[SNAPSHOT] Peringatan catat SyncHistory: {exc}")
 
     brands_dict = DictInterner()
     depts_dict = DictInterner()
@@ -296,6 +339,7 @@ def build_and_upload_offline_snapshot(stock_only: bool = False) -> Dict[str, Any
         print(f"[SNAPSHOT] Loaded {len(prod_rows):,} SKU...", flush=True)
 
     products_packed: List[Any] = []
+    catalog_entries: List[Tuple[str, str, Any, Optional[str], Optional[str], Optional[str], Optional[str]]] = []
     for r in prod_rows:
         (
             _pid, sku, barcode, article, desc, brand, dept, color, size,
@@ -312,6 +356,15 @@ def build_and_upload_offline_snapshot(stock_only: bool = False) -> Dict[str, Any
         if h_promo is not None and float(h_promo) > 0:
             h_promo_val = int(round(float(h_promo))) if float(h_promo).is_integer() else float(h_promo)
 
+        catalog_entries.append((
+            str(sku or ""),
+            str(article or ""),
+            h_promo_val,
+            diskon,
+            d_type,
+            acara,
+            to_date,
+        ))
         products_packed.append([
             sku,
             barcode or "",
@@ -330,6 +383,19 @@ def build_and_upload_offline_snapshot(stock_only: bool = False) -> Dict[str, Any
             to_dates_dict.intern(to_date),
             encode_img(img_url),
         ])
+
+    sku_hash, promo_hash, active_promo_count = compute_catalog_hashes(catalog_entries)
+    catalog_version, should_bump, change_reason = decide_catalog_version_bump(
+        now_ms=now_ms,
+        existing_manifest=existing_manifest,
+        sku_hash=sku_hash,
+        promo_hash=promo_hash,
+        stock_only=stock_only,
+    )
+    print(
+        f"[SNAPSHOT] Deteksi perubahan katalog: reason={change_reason}, bump={should_bump}, "
+        f"promoAktif={active_promo_count:,}, catalogVersion={catalog_version}"
+    )
 
     print(f"[SNAPSHOT] Terbaca {len(products_packed):,} SKU. Membaca CatalogArticle & BarcodeAlias...")
     cur.execute(
@@ -399,15 +465,36 @@ def build_and_upload_offline_snapshot(stock_only: bool = False) -> Dict[str, Any
     alias_rows = cur.fetchall()
     aliases_packed = [[r[0], r[1], r[2]] for r in alias_rows]
 
-    if not stock_only:
+    if should_bump:
         try:
-            cur.execute(
-                'UPDATE "SyncHistory" SET records = %s WHERE type = %s AND "createdAt" = %s',
-                (len(products_packed), "CATALOG_BUNDLE", now_utc),
-            )
-            conn.commit()
-        except Exception:
+            cur.execute('SELECT id FROM "User" WHERE nik = \'22054178\' LIMIT 1')
+            row_u = cur.fetchone()
+            if not row_u:
+                cur.execute('SELECT id FROM "User" LIMIT 1')
+                row_u = cur.fetchone()
+            if row_u:
+                cur.execute(
+                    '''
+                    INSERT INTO "SyncHistory" (id, "userId", type, "fileName", status, records, "createdAt")
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ''',
+                    (
+                        f"snap_{uuid.uuid4().hex[:18]}",
+                        row_u[0],
+                        "CATALOG_BUNDLE",
+                        f"Python Offline Snapshot [{change_reason}] v{catalog_version}",
+                        "SUCCESS",
+                        len(products_packed),
+                        now_utc,
+                    ),
+                )
+                conn.commit()
+                print(f"[SNAPSHOT] Catat CATALOG_BUNDLE ke SyncHistory (reason={change_reason}).")
+        except Exception as exc:
             conn.rollback()
+            print(f"[SNAPSHOT] Peringatan catat SyncHistory: {exc}")
+    else:
+        print(f"[SNAPSHOT] Skip SyncHistory CATALOG_BUNDLE (reason={change_reason}) — notif UPDATE SEKARANG tetap mati.")
 
     cur.close()
     conn.close()
@@ -463,6 +550,10 @@ def build_and_upload_offline_snapshot(stock_only: bool = False) -> Dict[str, Any
         "bundleRevision": bundle_revision,
         "stockUpdatedAt": now_utc.isoformat(),
         "stockOnly": stock_only,
+        "changeReason": change_reason,
+        "skuHash": sku_hash,
+        "promoHash": promo_hash,
+        "activePromoCount": active_promo_count,
         "totalSkus": len(products_packed),
         "totalModels": len(models_packed),
         "totalAliases": len(aliases_packed),

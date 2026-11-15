@@ -4,14 +4,13 @@ import { prisma } from "@/lib/prisma";
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
+// Hanya event yang berpotensi membawa produk baru atau perubahan promo aktif
+// yang menaikkan catalogVersion ("UPDATE SEKARANG"). Update stok/foto/PQ harian
+// TIDAK boleh menyalakan notifikasi merah di HP kasir.
 const CATALOG_SYNC_TYPES = [
   "CATALOG_BUNDLE",
-  "MDS_BISA_SYNC",
-  "PHOTO_SYNC",
   "UPDATE_PROMO",
   "PROMO_MINGGUAN",
-  "EXCEL_UPLOAD",
-  "SYNC_PQ",
 ];
 
 interface CheckUpdatePayload {
@@ -65,6 +64,7 @@ export async function GET() {
         where: {
           status: "SUCCESS",
           type: { in: CATALOG_SYNC_TYPES },
+          records: { gt: 0 },
         },
         orderBy: { createdAt: "desc" },
         select: { createdAt: true },

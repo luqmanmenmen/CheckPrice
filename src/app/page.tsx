@@ -2226,7 +2226,7 @@ export default function Home() {
               <CloudDownload className="w-6 h-6 text-white animate-bounce shrink-0" />
               <div>
                 <p className="text-white font-black text-sm uppercase tracking-wide leading-tight">Pembaruan Tersedia!</p>
-                <p className="text-rose-100 text-[10px] font-medium leading-tight mt-0.5">Update data promo, harga, dan fitur sistem terbaru.</p>
+                <p className="text-rose-100 text-[10px] font-medium leading-tight mt-0.5">Ada produk baru, update promo, atau fitur sistem terbaru.</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
