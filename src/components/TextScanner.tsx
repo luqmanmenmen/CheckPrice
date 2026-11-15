@@ -15,7 +15,13 @@ import {
   VolumeX,
   AlertCircle,
   RefreshCw,
+  ImagePlus,
 } from "lucide-react";
+import {
+  decodeBarcodeFromFile,
+  isValidGs1CheckDigit,
+  isValidMdsSku8,
+} from "@/lib/barcodeImageDecoder";
 
 export interface DetectedSku {
   text: string;
@@ -41,45 +47,18 @@ const SUPPORTED_FORMATS = [
   Html5QrcodeSupportedFormats.QR_CODE,
 ];
 
-/**
- * Validasi Check-Digit Standar GS1 Modulo-10 untuk EAN-13 (13 digit) & UPC-A (12 digit)
- */
-function isValidGs1CheckDigit(code: string): boolean {
-  if (!/^\d{12,13}$/.test(code)) return false;
-  const digits = code.split("").map(Number);
-  const checkDigit = digits.pop()!;
-  let sum = 0;
-  for (let i = digits.length - 1, pos = 1; i >= 0; i--, pos++) {
-    sum += digits[i] * (pos % 2 === 1 ? 3 : 1);
-  }
-  const expected = (10 - (sum % 10)) % 10;
-  return checkDigit === expected;
-}
-
-/**
- * Validasi Check-Digit 8-Digit SKU Matahari Bobot (1, 2, 1, 2, 1, 2, 1) Modulo-10
- */
-function isValidMdsSku8(code: string): boolean {
-  if (!/^\d{8}$/.test(code)) return false;
-  const weights = [1, 2, 1, 2, 1, 2, 1];
-  let sum = 0;
-  for (let i = 0; i < 7; i++) {
-    sum += Number(code[i]) * weights[i];
-  }
-  const expected = (10 - (sum % 10)) % 10;
-  return Number(code[7]) === expected;
-}
-
 export default function TextScanner({ onScanResult }: TextScannerProps) {
   const hiddenSinkId = "retail-barcode-decoder-sink";
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const decoderRef = useRef<Html5Qrcode | null>(null);
   const nativeDetectorRef = useRef<any>(null);
 
   const isHandlingResult = useRef(false);
   const isDecodingFrame = useRef(false);
+  const isDecodingImageRef = useRef(false);
   const scanPassCounter = useRef(0);
 
   // Multi-frame consensus tracker untuk mencegah salah baca 1 frame blur
@@ -96,6 +75,9 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [foundCode, setFoundCode] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [uploadNotice, setUploadNotice] = useState<string | null>(null);
+  const [isDecodingImage, setIsDecodingImage] = useState(false);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [facingMode, setFacingMode] = useState<"environment" | "user">("environment");
   const [restartTrigger, setRestartTrigger] = useState(0);
 
@@ -249,16 +231,6 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     isHandlingResult.current = false;
     isDecodingFrame.current = false;
     lastCandidateRef.current = { code: "", count: 0, ts: 0 };
-    setErrorMessage(null);
-    setFoundCode(null);
-    setIsReady(false);
-    setHasTorch(false);
-    setTorchOn(false);
-    setStatus(
-      facingMode === "environment"
-        ? "Menyalakan Kamera Belakang..."
-        : "Menyalakan Kamera Depan..."
-    );
 
     const acquireCameraStream = async (): Promise<MediaStream> => {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -413,6 +385,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
         !isMounted ||
         isHandlingResult.current ||
         isDecodingFrame.current ||
+        isDecodingImageRef.current ||
         !videoRef.current ||
         !canvasRef.current
       ) {
@@ -518,20 +491,128 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     }
   };
 
+  const resetCameraUi = (nextFacing: "environment" | "user") => {
+    setErrorMessage(null);
+    setFoundCode(null);
+    setIsReady(false);
+    setHasTorch(false);
+    setTorchOn(false);
+    setStatus(
+      nextFacing === "environment"
+        ? "Menyalakan Kamera Belakang..."
+        : "Menyalakan Kamera Depan..."
+    );
+  };
+
   // Toggle Switch Kamera (Belakang <-> Depan)
   const switchCamera = () => {
-    setTorchOn(false);
-    setFacingMode((prev) => (prev === "environment" ? "user" : "environment"));
+    const nextFacing = facingMode === "environment" ? "user" : "environment";
+    resetCameraUi(nextFacing);
+    setFacingMode(nextFacing);
   };
 
   // Segarkan Kamera Manual (1-Klik Anti Black Screen)
   const refreshCamera = () => {
-    setTorchOn(false);
+    resetCameraUi(facingMode);
     setRestartTrigger((prev) => prev + 1);
   };
 
+  // Dekode barcode otomatis dari file gambar galeri / screenshot / clipboard (gaya QRIS)
+  const processImageFile = useCallback(
+    async (file: File) => {
+      if (isHandlingResult.current || isDecodingImageRef.current) return;
+      if (!file.type.startsWith("image/") && !/\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name)) {
+        setUploadNotice("Pilih file gambar (JPG, PNG, WEBP) yang berisi barcode.");
+        return;
+      }
+
+      isDecodingImageRef.current = true;
+      setIsDecodingImage(true);
+      setUploadNotice(null);
+      setStatus("Membaca barcode dari gambar...");
+
+      try {
+        const decodedCode = await decodeBarcodeFromFile(file, {
+          nativeDetector: nativeDetectorRef.current,
+          zxingShim: (decoderRef.current as any)?.qrcode,
+          html5Qrcode: decoderRef.current,
+        });
+
+        if (decodedCode) {
+          commitValidBarcode(decodedCode);
+          return;
+        }
+
+        setUploadNotice("Barcode tidak terbaca di gambar. Coba gambar lebih dekat / terang.");
+        setStatus("Arahkan Garis Barcode atau Upload Gambar Lain");
+      } catch {
+        setUploadNotice("Gagal memproses gambar. Coba pilih file gambar lain.");
+        setStatus("Gagal Memproses Gambar");
+      } finally {
+        isDecodingImageRef.current = false;
+        setIsDecodingImage(false);
+      }
+    },
+    [commitValidBarcode]
+  );
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (file) {
+      void processImageFile(file);
+    }
+  };
+
+  // Dukungan Paste Screenshot (Ctrl+V) langsung di layar scanner
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      if (isHandlingResult.current) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith("image/")) {
+          const pastedFile = items[i].getAsFile();
+          if (pastedFile) {
+            e.preventDefault();
+            void processImageFile(pastedFile);
+            return;
+          }
+        }
+      }
+    };
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+  }, [processImageFile]);
+
   return (
-    <div className="relative w-full h-full min-h-[360px] flex flex-col items-center justify-center bg-black overflow-hidden select-none rounded-2xl">
+    <div
+      onDragOver={(e) => {
+        e.preventDefault();
+        if (!isDraggingFile) setIsDraggingFile(true);
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget === e.target) setIsDraggingFile(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setIsDraggingFile(false);
+        const droppedFile = e.dataTransfer?.files?.[0];
+        if (droppedFile) void processImageFile(droppedFile);
+      }}
+      className={`relative w-full h-full min-h-[360px] flex flex-col items-center justify-center bg-black overflow-hidden select-none rounded-2xl transition ${
+        isDraggingFile ? "ring-4 ring-emerald-400/80" : ""
+      }`}
+    >
+      {/* Input File Tersembunyi untuk Upload Gambar Barcode (Galeri / Screenshot) */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        onChange={handleFileInputChange}
+        className="hidden"
+      />
+
       {/* Elemen Sink Tersembunyi untuk ZXing Decoder */}
       <div id={hiddenSinkId} className="hidden" />
       <canvas ref={canvasRef} className="hidden" />
@@ -566,6 +647,16 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
           {/* Ikon Barcode Halus di Background Bidik */}
           <Barcode className="w-16 h-16 text-emerald-400/20" />
 
+          {/* Overlay Saat Memproses Gambar Upload */}
+          {isDecodingImage && !foundCode && (
+            <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-xs flex flex-col items-center justify-center text-white z-20 gap-2">
+              <Loader2 className="w-8 h-8 text-emerald-400 animate-spin" />
+              <span className="text-xs font-bold text-emerald-200 tracking-wide">
+                Membaca Barcode dari Gambar...
+              </span>
+            </div>
+          )}
+
           {/* Animasi Berhasil Terbaca */}
           {foundCode && (
             <div className="absolute inset-0 bg-emerald-600/90 flex flex-col items-center justify-center text-white animate-in zoom-in-95 duration-200 z-20">
@@ -584,7 +675,11 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
         <div className="mt-4 px-3.5 py-1.5 bg-black/70 backdrop-blur-md rounded-full border border-white/10 text-center shadow-lg">
           <p className="text-xs font-medium text-emerald-300 flex items-center gap-1.5">
             <Barcode className="w-3.5 h-3.5 animate-pulse" />
-            <span>Posisikan garis barcode di dalam kotak</span>
+            <span>
+              {isDraggingFile
+                ? "Lepaskan gambar untuk langsung scan barcode"
+                : "Posisikan barcode di kotak atau upload gambar di bawah"}
+            </span>
           </p>
         </div>
 
@@ -663,9 +758,39 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
         </div>
       </div>
 
-      {/* FOOTER BOTTOM STATUS */}
-      <div className="absolute bottom-4 left-4 right-4 flex flex-col items-center justify-center z-30 pointer-events-auto">
-        <div className="w-full max-w-sm bg-slate-900/95 backdrop-blur-md px-4 py-2.5 rounded-2xl border border-slate-700/80 shadow-2xl flex items-center justify-between">
+      {/* FOOTER BOTTOM CONTROLS (GAYA QRIS: UPLOAD GAMBAR + STATUS) */}
+      <div className="absolute bottom-4 left-4 right-4 flex flex-col items-center justify-center gap-2 z-30 pointer-events-auto">
+        {uploadNotice && (
+          <button
+            type="button"
+            onClick={() => setUploadNotice(null)}
+            className="w-full max-w-sm bg-amber-950/95 border border-amber-500/50 text-amber-200 px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 shadow-xl text-left"
+          >
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span className="flex-1">{uploadNotice}</span>
+          </button>
+        )}
+
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={isDecodingImage}
+          className="w-full max-w-sm py-2.5 px-4 rounded-2xl bg-emerald-500 hover:bg-emerald-400 active:scale-[0.98] disabled:opacity-60 text-slate-950 font-extrabold text-xs sm:text-sm shadow-[0_6px_24px_rgba(16,185,129,0.4)] flex items-center justify-center gap-2 transition cursor-pointer"
+        >
+          {isDecodingImage ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+              <span>Membaca Barcode dari Gambar...</span>
+            </>
+          ) : (
+            <>
+              <ImagePlus className="w-4 h-4 shrink-0" />
+              <span>Upload Gambar Barcode (Galeri)</span>
+            </>
+          )}
+        </button>
+
+        <div className="w-full max-w-sm bg-slate-900/95 backdrop-blur-md px-4 py-2 rounded-2xl border border-slate-700/80 shadow-2xl flex items-center justify-between">
           <div className="flex items-center gap-2.5 overflow-hidden">
             {!isReady && !errorMessage ? (
               <Loader2 className="w-4 h-4 text-emerald-400 animate-spin shrink-0" />
@@ -681,7 +806,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
           <div className="shrink-0 flex items-center gap-1.5 ml-2">
             <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/80 border border-emerald-800/80 px-2 py-0.5 rounded-full font-bold">
-              EAN-13
+              EAN / QR
             </span>
           </div>
         </div>

@@ -21,7 +21,6 @@ import {
   sortSubBrandStats,
   paginateBrandSections,
   paginateCategorySections,
-  compareBrowseItems,
 } from "./productTaxonomy";
 
 export interface CachedProduct {
@@ -130,9 +129,25 @@ export const db = new SukoDatabase();
 
 let memoryModelsCache: CachedArticleModel[] | null = null;
 let modelsBuildPromise: Promise<CachedArticleModel[] | null> | null = null;
+let cachedTaxonomyOverview: {
+  brandCounts: Record<BrandGroupKey, number>;
+  categoryCounts: Record<CategoryKey, number>;
+  subBrandCounts?: LocalSubBrandCount[];
+} | null = null;
 
 export function clearModelsMemoryCache() {
   memoryModelsCache = null;
+  cachedTaxonomyOverview = null;
+}
+
+/** Hitung GS1 EAN-13 check digit (12 digit awal -> digit ke-13) */
+function calcGs1CheckDigit12(digits12: string): string {
+  if (!/^\d{12}$/.test(digits12)) return "";
+  let sum = 0;
+  for (let i = 0; i < 12; i++) {
+    sum += parseInt(digits12[i], 10) * (i % 2 === 0 ? 1 : 3);
+  }
+  return String((10 - (sum % 10)) % 10);
 }
 
 /** Bentuk daftar kandidat kode SKU/barcode fleksibel untuk pencarian lokal (case-insensitive & tanpa pemisah). */
@@ -145,21 +160,71 @@ export function buildCodeSearchCandidates(rawCode: string): string[] {
   if (/^\d+$/.test(trimmed)) {
     const stripped = trimmed.replace(/^0+/, "");
     if (stripped) out.add(stripped);
-    if (trimmed.length === 12) out.add(`0${trimmed}`);
-    if (trimmed.length === 13 && trimmed.startsWith("0")) out.add(trimmed.slice(1));
+    if (trimmed.length === 12) {
+      out.add(`0${trimmed}`);
+      const cd = calcGs1CheckDigit12(trimmed);
+      if (cd) out.add(trimmed + cd);
+    }
+    if (trimmed.length === 13) {
+      if (trimmed.startsWith("0")) out.add(trimmed.slice(1));
+      const base12 = trimmed.slice(0, 12);
+      out.add(base12);
+      const cd = calcGs1CheckDigit12(base12);
+      if (cd) out.add(base12 + cd);
+    }
+    if (trimmed.length >= 6 && trimmed.length <= 7) {
+      const mdsBody = `234000${trimmed.slice(0, 6).padStart(6, "0")}`;
+      const cd = calcGs1CheckDigit12(mdsBody);
+      out.add(mdsBody);
+      if (cd) out.add(mdsBody + cd);
+    }
   }
   return Array.from(out).filter(Boolean);
 }
 
-/** Cari 1 SKU/barcode di Dexie lokal dengan normalisasi huruf kapital, pemisah (-/_/./spasi), dan nol depan. */
+/** Cari 1 SKU/barcode/artikel di Dexie lokal dengan normalisasi huruf kapital, pemisah, cek digit GS1, dan prefix B-tree. */
 export async function findOfflineProductByCode(rawCode: string): Promise<CachedProduct | null> {
-  const candidates = buildCodeSearchCandidates(rawCode);
+  const trimmed = String(rawCode || "").trim();
+  const candidates = buildCodeSearchCandidates(trimmed);
   if (candidates.length === 0) return null;
   await ensureDbOpenSafe();
+
   const bySku = await db.products.where("sku").anyOf(candidates).first();
   if (bySku) return bySku;
+
   const byBarcode = await db.products.where("barcode").anyOf(candidates).first();
-  return byBarcode || null;
+  if (byBarcode) return byBarcode;
+
+  const byArticle = await db.products.where("article").anyOf(candidates).toArray();
+  if (byArticle.length > 0) {
+    byArticle.sort((a, b) => (b.stok ?? 0) - (a.stok ?? 0));
+    return byArticle[0];
+  }
+
+  if (trimmed.length >= 5) {
+    const [prefSku, prefBc, prefArt] = await Promise.all([
+      db.products.where("sku").startsWithAnyOf(candidates).limit(15).toArray().catch(() => []),
+      db.products.where("barcode").startsWithAnyOf(candidates).limit(15).toArray().catch(() => []),
+      db.products.where("article").startsWithAnyOfIgnoreCase(candidates).limit(15).toArray().catch(() => []),
+    ]);
+
+    const mergedMap = new Map<string, CachedProduct>();
+    for (const p of [...prefSku, ...prefBc, ...prefArt]) {
+      if (!mergedMap.has(p.sku)) mergedMap.set(p.sku, p);
+    }
+    const merged = Array.from(mergedMap.values());
+    if (merged.length > 0) {
+      const uniqueArticles = new Set(
+        merged.map((p) => (p.article || p.sku).trim().toUpperCase())
+      );
+      if (merged.length === 1 || uniqueArticles.size === 1) {
+        merged.sort((a, b) => (b.stok ?? 0) - (a.stok ?? 0));
+        return merged[0];
+      }
+    }
+  }
+
+  return null;
 }
 
 function isLocalPromoExpired(toDate: string | null | undefined): boolean {
@@ -809,7 +874,6 @@ export async function queryLocalModelsInstant({
     baseMatched = scored.map((x) => x.item);
   } else {
     baseMatched = models.filter((m) => !isIgnoredCatalogProduct(m));
-    baseMatched.sort(compareBrowseItems);
   }
 
   // Hitung brandCounts lintas semua brand (terfilter oleh kategori jika aktif)
@@ -957,14 +1021,38 @@ export async function getLocalTaxonomyOverview(): Promise<{
   categoryCounts: Record<CategoryKey, number>;
   subBrandCounts?: LocalSubBrandCount[];
 } | null> {
+  if (cachedTaxonomyOverview) return cachedTaxonomyOverview;
   try {
-    const res = await queryLocalModelsInstant({ query: "", brandGroup: "ALL", category: "ALL", page: 1, limit: 1 });
-    if (!res) return null;
-    return {
-      brandCounts: res.brandCounts,
-      categoryCounts: res.categoryCounts,
-      subBrandCounts: res.subBrandCounts,
-    };
+    const models = await ensureModelsIndexReady();
+    if (!models || models.length < 1000) return null;
+
+    const brandCounts: Record<BrandGroupKey, number> = { ALL: 0, SUKO: 0, MUKU: 0, ZES: 0 };
+    const categoryCounts: Record<CategoryKey, number> = createEmptyCategoryCounts();
+    const mukuSubBrandTotals = new Map<string, LocalSubBrandCount>();
+
+    for (let i = 0; i < models.length; i++) {
+      const m = models[i];
+      if (isIgnoredCatalogProduct(m)) continue;
+      brandCounts.ALL += 1;
+      brandCounts[m.brandGroup] += 1;
+      categoryCounts.ALL += 1;
+      categoryCounts[m.categoryKey] += 1;
+      if (m.brandGroup === "MUKU") {
+        const itemSubBrand = m.subBrand || getNormalizedSubBrand(m);
+        const prev = mukuSubBrandTotals.get(itemSubBrand) || {
+          name: itemSubBrand,
+          count: 0,
+          photoCount: 0,
+        };
+        prev.count += 1;
+        if (m.imageUrl) prev.photoCount += 1;
+        mukuSubBrandTotals.set(itemSubBrand, prev);
+      }
+    }
+
+    const subBrandCounts = sortSubBrandStats(Array.from(mukuSubBrandTotals.values()), (x) => x.name);
+    cachedTaxonomyOverview = { brandCounts, categoryCounts, subBrandCounts };
+    return cachedTaxonomyOverview;
   } catch {
     return null;
   }

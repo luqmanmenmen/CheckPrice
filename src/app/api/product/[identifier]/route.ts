@@ -170,14 +170,15 @@ export async function GET(
       const numericMatches = await db.product.findMany({
         where: {
           OR: [
-            { sku: { contains: rawInput } },
-            { barcode: { contains: rawInput } },
+            { sku: { startsWith: rawInput } },
+            { barcode: { startsWith: rawInput } },
+            ...(rawInput.length <= 7 ? [{ barcode: { startsWith: `234000${rawInput}` } }] : []),
             { article: { contains: rawInput, mode: 'insensitive' as const } }
           ]
         },
-        orderBy: [{ stok: 'desc' }],
-        take: 20
+        take: 30
       });
+      numericMatches.sort((a, b) => (b.stok ?? 0) - (a.stok ?? 0));
 
       if (numericMatches.length === 1) {
         const top = checkAndCleanPromo(numericMatches[0]);
@@ -204,7 +205,7 @@ export async function GET(
 
       if (!hasDbArticleMatch) {
         try {
-          const liveTimeoutMs = isStoreOpen() ? 5500 : 1200;
+          const liveTimeoutMs = isStoreOpen() ? 2000 : 900;
           const liveRes: any = await Promise.race([
             checkSingleItemStock(rawInput),
             new Promise((resolve) => setTimeout(() => resolve({ success: false, timeout: true }), liveTimeoutMs))
@@ -311,9 +312,10 @@ export async function GET(
         clauses.push({ size: { contains: term, mode: 'insensitive' as const } });
       }
       if (/\d/.test(term)) {
+        const upperTerm = term.toUpperCase();
         clauses.push(
-          { sku: { contains: term, mode: 'insensitive' as const } },
-          { barcode: { contains: term, mode: 'insensitive' as const } }
+          { sku: { startsWith: upperTerm } },
+          { barcode: { startsWith: upperTerm } }
         );
       }
       return clauses;
@@ -352,7 +354,6 @@ export async function GET(
     const strictMatches = await db.product.findMany({
       where: strictWhere,
       select: PRODUCT_LIST_SELECT,
-      orderBy: [{ stok: 'desc' }],
       take: 240
     });
     for (const p of strictMatches) candidateMap.set(p.sku, p);
@@ -377,7 +378,6 @@ export async function GET(
         const relaxedMatches = await db.product.findMany({
           where: relaxedWhere,
           select: PRODUCT_LIST_SELECT,
-          orderBy: [{ stok: 'desc' }],
           take: 140
         });
         for (const p of relaxedMatches) {
@@ -412,7 +412,6 @@ export async function GET(
         const aiMatches = await db.product.findMany({
           where: aiWhere,
           select: PRODUCT_LIST_SELECT,
-          orderBy: [{ stok: 'desc' }],
           take: 100
         });
         for (const p of aiMatches) {
@@ -424,22 +423,6 @@ export async function GET(
     const candidateMatches = Array.from(candidateMap.values());
 
     if (candidateMatches.length === 0) {
-      if (/^\d{8,14}$/.test(rawInput)) {
-        try {
-          const liveRes = await checkSingleItemStock(rawInput);
-          if (liveRes.success && liveRes.sku) {
-            let fetched = await db.product.findUnique({ where: { sku: liveRes.sku } });
-            if (fetched) {
-              fetched = checkAndCleanPromo(fetched);
-              const siblings = await getProductSiblings(fetched);
-              return NextResponse.json({ data: fetched, siblings, source: 'MDS_BISA_LIVE' });
-            }
-          }
-        } catch (e) {
-          console.warn("Gagal lookup live MDS BISA fallback:", e);
-        }
-      }
-
       const totalCount = await db.product.count();
       return NextResponse.json(
         {

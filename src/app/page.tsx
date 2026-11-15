@@ -12,7 +12,7 @@ import Link from "next/link";
 import { ChipLoader } from "@/components/ChipLoader";
 import ProductImageSlider, { optimizeRetailImageUrl, preloadProductImages } from "@/components/ProductImageSlider";
 import ShiftLoader, { SyncProgressModal } from "@/components/ShiftLoader";
-import type { SyncProgressDetails } from "@/lib/offlineDb";
+import type { SyncProgressDetails, CachedProduct, CachedArticleModel } from "@/lib/offlineDb";
 import ImageLightboxModal from "@/components/ImageLightboxModal";
 import { createPortal } from "react-dom";
 import {
@@ -1204,22 +1204,162 @@ export default function Home() {
       return;
     }
 
-    // 0D. INSTAN DATA LOKAL HP (~5-10ms): Untuk cari teks ("jaket"), filter SUKO/Mu+Ku/ZES, & klik Selanjutnya!
+    type LocalOfflineCandidate = CachedProduct | CachedArticleModel;
+
+    const mapCachedToProduct = (item: LocalOfflineCandidate): ProductData => {
+      const nameFallback = "name" in item ? item.name : "";
+      const imagesList =
+        "images" in item && item.images && item.images.length > 0
+          ? item.images
+          : item.imageUrl
+            ? [item.imageUrl]
+            : [];
+      return {
+        id: 0,
+        sku: item.sku,
+        barcode: item.barcode || null,
+        article: item.article || null,
+        description: item.description || nameFallback || "",
+        acara: item.acara || null,
+        fromDate: null,
+        toDate: item.toDate || null,
+        hargaNormal: item.hargaNormal ?? 0,
+        hargaPromo: item.hargaPromo || null,
+        diskon: item.diskon || null,
+        discountType: item.discountType || null,
+        brand: item.brand || null,
+        dept: item.dept || null,
+        color: item.color || null,
+        size: item.size || null,
+        stok: item.stok ?? 0,
+        promoFileName: null,
+        imageUrl: item.imageUrl || null,
+        images: imagesList,
+      };
+    };
+
+    const syncServerProductToLocal = (srvProduct: ProductData, srvSiblings: ProductData[]) => {
+      sessionCacheRef.current.set(trimmed.toLowerCase(), { product: srvProduct, siblings: srvSiblings });
+      srvSiblings.forEach((s: ProductData) => {
+        if (s.sku) sessionCacheRef.current.set(s.sku.toLowerCase(), { product: s, siblings: srvSiblings });
+        if (s.barcode) sessionCacheRef.current.set(s.barcode.toLowerCase(), { product: s, siblings: srvSiblings });
+      });
+      import('@/lib/offlineDb').then(({ db }) => {
+        const items: CachedProduct[] = [srvProduct, ...srvSiblings].map((item: ProductData) => ({
+          sku: item.sku,
+          barcode: item.barcode || null,
+          article: item.article || null,
+          name: item.description?.split(':')[0]?.trim() || item.description,
+          description: item.description,
+          brand: item.brand || null,
+          dept: item.dept || null,
+          color: item.color || "",
+          size: item.size || "",
+          hargaNormal: item.hargaNormal,
+          hargaPromo: item.hargaPromo || null,
+          diskon: item.diskon || null,
+          discountType: item.discountType || null,
+          acara: item.acara || null,
+          stok: item.stok ?? 0,
+          toDate: item.toDate || null,
+          imageUrl: item.imageUrl || null,
+          images: item.images && item.images.length > 0 ? item.images : (item.imageUrl ? [item.imageUrl] : []),
+        }));
+        db.products.bulkPut(items).catch(() => {});
+      });
+    };
+
+    const endpointUrl = buildSearchEndpointUrl(
+      trimmed,
+      page,
+      activeBrand,
+      activeCategory,
+      activeSubBrand,
+      activeGroupSections
+    );
+
+    const presentLocalProductAndRefreshBg = async (localItem: LocalOfflineCandidate) => {
+      const { db } = await import('@/lib/offlineDb');
+      if (searchCounterRef.current !== currentSearch) return;
+      setError("");
+      const localProduct = mapCachedToProduct(localItem);
+      let currentSiblings: ProductData[] = [localProduct];
+      if (localItem.article) {
+        const localSiblings = await db.products.where('article').equals(localItem.article).toArray().catch(() => []);
+        if (localSiblings && localSiblings.length > 0) {
+          currentSiblings = localSiblings.map(mapCachedToProduct);
+        }
+      }
+      if (searchCounterRef.current !== currentSearch) return;
+      setProduct(localProduct);
+      setSiblings(currentSiblings);
+      preloadProductImages([localProduct.imageUrl, ...currentSiblings.map((s) => s.imageUrl)], 400);
+      sessionCacheRef.current.set(trimmed.toLowerCase(), { product: localProduct, siblings: currentSiblings });
+      currentSiblings.forEach((s) => {
+        if (s.sku) sessionCacheRef.current.set(s.sku.toLowerCase(), { product: s, siblings: currentSiblings });
+        if (s.barcode) sessionCacheRef.current.set(s.barcode.toLowerCase(), { product: s, siblings: currentSiblings });
+      });
+      setProductsList([]);
+      setLoading(false);
+      if (isScanning) setIsScanning(false);
+
+      // Non-blocking background refresh (max 2.5 detik, tidak pernah menggantung UI atau menghapus produk lokal)
+      const bgCtrl = new AbortController();
+      const bgTimer = setTimeout(() => bgCtrl.abort(), 2500);
+      fetch(endpointUrl, { cache: 'no-store', signal: bgCtrl.signal })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((bgJson: { data?: ProductData | ProductData[]; siblings?: ProductData[] } | null) => {
+          if (searchCounterRef.current !== currentSearch) return;
+          if (bgJson && bgJson.data && !Array.isArray(bgJson.data)) {
+            const bgSibs: ProductData[] = bgJson.siblings || [];
+            setProduct(bgJson.data);
+            setSiblings(bgSibs);
+            preloadProductImages([bgJson.data?.imageUrl, ...bgSibs.map((s) => s.imageUrl)], 400);
+            syncServerProductToLocal(bgJson.data, bgSibs);
+          }
+        })
+        .catch(() => {})
+        .finally(() => clearTimeout(bgTimer));
+    };
+
+    // 0D. INSTAN DATA LOKAL HP (~0-10ms SEBELUM spinner muncul):
     const isCodeSearch = Boolean(trimmed && !hasTaxonomyFilter && (/\d/.test(trimmed) || /[\-._/]/.test(trimmed)) && !/\s/.test(trimmed));
-    if (!isCodeSearch) {
+    if (isCodeSearch && page === 1) {
       try {
-        const { queryLocalModelsInstant } = await import('@/lib/offlineDb');
-        const localRes = await queryLocalModelsInstant({
-          query: trimmed,
-          brandGroup: activeBrand,
-          category: activeCategory,
-          subBrand: activeSubBrand,
-          page,
-          limit: 20,
-          groupSections: activeGroupSections,
-        });
+        const { ensureDbOpenSafe, findOfflineProductByCode } = await import('@/lib/offlineDb');
+        await ensureDbOpenSafe();
+        const localData = await findOfflineProductByCode(trimmed);
         if (searchCounterRef.current !== currentSearch) return;
-        if (localRes && !localRes.singleMatch && (localRes.total > 0 || !trimmed)) {
+        if (localData) {
+          await presentLocalProductAndRefreshBg(localData);
+          return;
+        }
+      } catch {}
+    }
+
+    // Cek juga ke index model (`db.models` in-RAM) baik untuk teks/filter MAUPUN kode yang belum kena index exact
+    try {
+      const { queryLocalModelsInstant, findOfflineProductByCode } = await import('@/lib/offlineDb');
+      const localRes = await queryLocalModelsInstant({
+        query: trimmed,
+        brandGroup: activeBrand,
+        category: activeCategory,
+        subBrand: activeSubBrand,
+        page,
+        limit: 20,
+        groupSections: activeGroupSections,
+      });
+      if (searchCounterRef.current !== currentSearch) return;
+      if (localRes) {
+        const singleModel =
+          localRes.singleMatch || (localRes.data.length === 1 && !hasTaxonomyFilter ? localRes.data[0] : null);
+        if (singleModel) {
+          const hitSku = await findOfflineProductByCode(singleModel.sku).catch(() => null);
+          if (searchCounterRef.current !== currentSearch) return;
+          await presentLocalProductAndRefreshBg(hitSku || singleModel);
+          return;
+        }
+        if (localRes.total > 0 || !trimmed) {
           setProduct(null);
           setSiblings([]);
           setProductsList(localRes.data as unknown as ProductData[]);
@@ -1253,110 +1393,34 @@ export default function Home() {
           }
           return;
         }
+      }
+    } catch {}
+
+    let localDbReady = Boolean(localCacheStats?.ready);
+    let localSkuCount = localCacheStats?.skuCount || 0;
+    if (!localDbReady) {
+      try {
+        const { db, ensureDbOpenSafe } = await import('@/lib/offlineDb');
+        await ensureDbOpenSafe();
+        localSkuCount = await db.products.count().catch(() => 0);
+        localDbReady = localSkuCount >= 80000;
       } catch {}
     }
+    if (searchCounterRef.current !== currentSearch) return;
 
     setLoading(true);
 
+    let netTimer: ReturnType<typeof setTimeout> | null = null;
     try {
-      // 1. OFFLINE-FIRST: Cek SKU/Barcode di Dexie secara fleksibel (huruf besar, pemisah -/_/./spasi, nol depan)
-      let localData = null;
-      if (trimmed && !hasTaxonomyFilter && page === 1 && (/\d/.test(trimmed) || /[\-._/]/.test(trimmed)) && !/\s/.test(trimmed)) {
-        const { db, ensureDbOpenSafe, findOfflineProductByCode } = await import('@/lib/offlineDb');
-        await ensureDbOpenSafe();
-        localData = await findOfflineProductByCode(trimmed);
+      // 1. Minta data live ke server dengan timeout cepat jika DB offline lokal sudah penuh
+      const timeoutMs = localDbReady ? 2500 : 8000;
+      const netCtrl = new AbortController();
+      netTimer = setTimeout(() => netCtrl.abort(), timeoutMs);
+      const res = await fetch(endpointUrl, {
+        cache: 'no-store',
+        signal: netCtrl.signal,
+      });
 
-        // Jika data ditemukan di HP, langsung tampilkan (0ms instan & tanpa internet!)
-        if (localData) {
-          if (searchCounterRef.current !== currentSearch) return;
-
-          setError("");
-          const localProduct: ProductData = {
-            id: 0,
-            sku: localData.sku,
-            barcode: localData.barcode || null,
-            article: localData.article || null,
-            description: localData.description || localData.name,
-            acara: localData.acara || null,
-            fromDate: null,
-            toDate: localData.toDate,
-            hargaNormal: localData.hargaNormal,
-            hargaPromo: localData.hargaPromo,
-            diskon: localData.diskon || null,
-            discountType: localData.discountType || null,
-            brand: localData.brand || null,
-            dept: localData.dept || null,
-            color: localData.color || null,
-            size: localData.size || null,
-            stok: localData.stok ?? 0,
-            promoFileName: null,
-            imageUrl: localData.imageUrl || null,
-            images: localData.images && localData.images.length > 0 ? localData.images : (localData.imageUrl ? [localData.imageUrl] : [])
-          };
-          setProduct(localProduct);
-
-          // Ambil siblings varian dari Dexie secara instan (stok & warna varian lain langsung muncul!)
-          let currentSiblings: ProductData[] = [localProduct];
-          if (localData.article) {
-            const localSiblings = await db.products.where('article').equals(localData.article).toArray();
-            if (localSiblings && localSiblings.length > 0) {
-              currentSiblings = localSiblings.map(s => ({
-                id: 0,
-                sku: s.sku,
-                barcode: s.barcode || null,
-                article: s.article || null,
-                description: s.description || s.name,
-                acara: s.acara || null,
-                fromDate: null,
-                toDate: s.toDate || null,
-                hargaNormal: s.hargaNormal,
-                hargaPromo: s.hargaPromo || null,
-                diskon: s.diskon || null,
-                discountType: s.discountType || null,
-                brand: s.brand || null,
-                dept: s.dept || null,
-                color: s.color || null,
-                size: s.size || null,
-                stok: s.stok ?? 0,
-                promoFileName: null,
-                imageUrl: s.imageUrl || null,
-                images: s.images && s.images.length > 0 ? s.images : (s.imageUrl ? [s.imageUrl] : [])
-              }));
-            }
-          }
-          setSiblings(currentSiblings);
-          preloadProductImages([localProduct.imageUrl, ...currentSiblings.map((s) => s.imageUrl)], 400);
-          sessionCacheRef.current.set(trimmed.toLowerCase(), { product: localProduct, siblings: currentSiblings });
-          currentSiblings.forEach((s) => {
-            if (s.sku) sessionCacheRef.current.set(s.sku.toLowerCase(), { product: s, siblings: currentSiblings });
-            if (s.barcode) sessionCacheRef.current.set(s.barcode.toLowerCase(), { product: s, siblings: currentSiblings });
-          });
-
-          setProductsList([]);
-          setLoading(false);
-          if (isScanning) setIsScanning(false);
-        }
-      }
-
-      // 2. Minta data terbaru/live ke server (di background jika localData sudah tampil)
-      let res: Response | null = null;
-      const endpointUrl = buildSearchEndpointUrl(
-        trimmed,
-        page,
-        activeBrand,
-        activeCategory,
-        activeSubBrand,
-        activeGroupSections
-      );
-      try {
-        res = await fetch(endpointUrl, {
-          cache: 'no-store'
-        });
-      } catch (fetchErr) {
-        if (localData) return; // Jika sudah tampil dari Dexie lokal, abaikan error sinyal!
-        throw fetchErr;
-      }
-      
       if (searchCounterRef.current !== currentSearch) return;
 
       const data = await res.json();
@@ -1376,7 +1440,11 @@ export default function Home() {
             setTaxonomyCategoryCounts(data.meta?.categoryCounts || null);
             if (!hasTaxonomyFilter && trimmed) {
               const isDigitCode = /^\d{8,14}$/.test(trimmed);
-              if (isDigitCode) {
+              if (isDigitCode && localDbReady) {
+                setError(
+                  `Produk tidak ditemukan untuk: "${trimmed}" di database offline (${(localSkuCount || 306312).toLocaleString('id-ID')} SKU) maupun server.`
+                );
+              } else if (isDigitCode) {
                 setError(`Produk tidak ditemukan untuk: "${trimmed}". (Produk baru belum tercatat di database master toko. Akan otomatis disinkronkan saat toko buka besok).`);
               } else {
                 setError(`Produk tidak ditemukan untuk: "${trimmed}"`);
@@ -1455,48 +1523,27 @@ export default function Home() {
           const serverSiblings = data.siblings || [];
           setSiblings(serverSiblings);
           setProductsList([]);
-          preloadProductImages([data.data?.imageUrl, ...serverSiblings.map((s: any) => s.imageUrl)], 400);
-
-          // Simpan produk & SEMUA siblings ke session cache agar klik/scan varian berikutnya 0ms
-          sessionCacheRef.current.set(trimmed.toLowerCase(), { product: data.data, siblings: serverSiblings });
-          serverSiblings.forEach((s: ProductData) => {
-            if (s.sku) sessionCacheRef.current.set(s.sku.toLowerCase(), { product: s, siblings: serverSiblings });
-            if (s.barcode) sessionCacheRef.current.set(s.barcode.toLowerCase(), { product: s, siblings: serverSiblings });
-          });
-
-          // Sinkronisasi data live produk & siblings ini ke Dexie agar harga promo selalu tersimpan
-          import('@/lib/offlineDb').then(({ db }) => {
-            const items = [data.data, ...serverSiblings].map((item: any) => ({
-              sku: item.sku,
-              barcode: item.barcode || null,
-              article: item.article || null,
-              name: item.description?.split(':')[0]?.trim() || item.description,
-              description: item.description,
-              brand: item.brand || null,
-              dept: item.dept || null,
-              color: item.color || "",
-              size: item.size || "",
-              hargaNormal: item.hargaNormal,
-              hargaPromo: item.hargaPromo || null,
-              diskon: item.diskon || null,
-              discountType: item.discountType || null,
-              acara: item.acara || null,
-              stok: item.stok ?? 0,
-              toDate: item.toDate || null,
-              imageUrl: item.imageUrl || null,
-              images: item.images && item.images.length > 0 ? item.images : (item.imageUrl ? [item.imageUrl] : [])
-            }));
-            db.products.bulkPut(items).catch(() => {});
-          });
+          preloadProductImages([data.data?.imageUrl, ...serverSiblings.map((s: ProductData) => s.imageUrl)], 400);
+          syncServerProductToLocal(data.data, serverSiblings);
         }
         if (isScanning) setIsScanning(false);
       } else {
-        if (!localData) {
+        if (isCodeSearch && localDbReady && res.status === 404) {
+          setError(
+            `Produk tidak ditemukan untuk: "${trimmed}" di database offline (${(localSkuCount || 306312).toLocaleString('id-ID')} SKU) maupun server.`
+          );
+        } else {
           setError(data.error || "Produk tidak ditemukan");
         }
       }
     } catch {
-      if (searchCounterRef.current === currentSearch && !product) {
+      if (searchCounterRef.current === currentSearch) {
+        if (localDbReady && isCodeSearch) {
+          setError(
+            `Produk tidak ditemukan untuk: "${trimmed}" di database offline (${(localSkuCount || 306312).toLocaleString('id-ID')} SKU) maupun server.`
+          );
+          return;
+        }
         try {
           const { searchOfflineSmart, browseOfflineCatalog } = await import('@/lib/offlineDb');
           const offlineMatches = trimmed
@@ -1552,6 +1599,7 @@ export default function Home() {
         setError("Koneksi jaringan lambat & produk belum ditemukan di memori lokal.");
       }
     } finally {
+      if (netTimer) clearTimeout(netTimer);
       if (searchCounterRef.current === currentSearch) {
         setLoading(false);
       }
