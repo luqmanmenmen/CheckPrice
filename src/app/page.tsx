@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react";
 import dynamic from "next/dynamic";
-import { Search, ScanText, Barcode, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle, ArrowLeft, CloudDownload, Loader2, Menu, Sparkles, ArrowRight, Gift, Maximize2, Zap } from "lucide-react";
+import { Search, ScanText, Barcode, X, CalendarRange, Tag, Package2, Layers, MessageSquare, HandHelping, LogOut, UserCircle2, CheckCircle2, XCircle, ArrowLeft, CloudDownload, Loader2, Menu, Sparkles, ArrowRight, Gift, Maximize2, Zap, ShoppingCart } from "lucide-react";
 import { useEffect } from "react";
 import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
 import PullToRefresh from "@/components/PullToRefresh";
@@ -917,6 +917,18 @@ export default function Home() {
   >(new Map());
 
   const preDetailSearchRef = useRef<{ query: string; page: number } | null>(null);
+  const productPhotoTopRef = useRef<HTMLDivElement>(null);
+
+  const scrollToProductPhoto = () => {
+    if (typeof window === "undefined") return;
+    requestAnimationFrame(() => {
+      if (productPhotoTopRef.current) {
+        productPhotoTopRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+      } else {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+    });
+  };
 
   /** Simpan 1 artikel keluarga lengkap dari server ke RAM sessionCache & IndexedDB Dexie HP */
   const persistServerFamilyToLocal = (
@@ -1017,19 +1029,23 @@ export default function Home() {
   };
 
   // Ganti varian warna/ukuran secara instan (0ms) dari memori tanpa reload layar
-  const handleSelectVariant = (targetSku: string) => {
+  const handleSelectVariant = (targetSku: string, scrollToPhoto: boolean = false) => {
     setManualInput(targetSku);
 
     // 1. Cek dari daftar siblings yang sedang aktif di memori
     const existing = siblings.find(s => s.sku === targetSku);
     if (existing) {
       setProduct(existing);
+      setQty(multiVariantQty[targetSku] && multiVariantQty[targetSku] > 0 ? multiVariantQty[targetSku] : 1);
       sessionCacheRef.current.set(targetSku, { product: existing, siblings });
+      if (scrollToPhoto) {
+        scrollToProductPhoto();
+      }
       return;
     }
 
     // 2. Jika tidak ada di siblings aktif, cari via searchProduct
-    searchProduct(targetSku);
+    searchProduct(targetSku, 1, scrollToPhoto);
   };
 
   const handleBackToCatalog = () => {
@@ -1714,27 +1730,42 @@ export default function Home() {
   // Reset pilihan multi-varian jika pindah ke artikel yang berbeda
   useEffect(() => {
     setMultiVariantQty({});
+    setQty(1);
   }, [product?.article]);
 
   const adjustVariantQty = (sku: string, delta: number, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
+    const current = multiVariantQty[sku] || 0;
+    const next = Math.max(0, current + delta);
     setMultiVariantQty((prev) => {
-      const current = prev[sku] || 0;
-      const next = Math.max(0, current + delta);
+      const updated = Math.max(0, (prev[sku] || 0) + delta);
       const copy = { ...prev };
-      if (next === 0) {
+      if (updated === 0) {
         delete copy[sku];
       } else {
-        copy[sku] = next;
+        copy[sku] = updated;
       }
       return copy;
     });
+    if (sku === product?.sku) {
+      setQty(next > 0 ? next : 1);
+    }
   };
 
-  /** 1 ketuk kotak ukuran di dalam kartu warna -> langsung +1 & ganti preview varian */
-  const quickTapSizePill = (targetSku: string) => {
-    handleSelectVariant(targetSku);
-    adjustVariantQty(targetSku, 1);
+  const setActiveVariantStepperQty = (nextQty: number) => {
+    const clamped = Math.max(1, nextQty);
+    setQty(clamped);
+    if (product?.sku) {
+      setMultiVariantQty((prev) => ({
+        ...prev,
+        [product.sku]: clamped,
+      }));
+    }
+  };
+
+  /** Ketuk kotak size hanya untuk review/cek detail size tsb tanpa menambah jumlah */
+  const handleReviewSizeVariant = (targetSku: string) => {
+    handleSelectVariant(targetSku, false);
   };
 
   /** Tambah cepat +1 untuk semua size yang tersedia di dalam 1 warna sekaligus */
@@ -1744,7 +1775,7 @@ export default function Home() {
     const hasAnyStock = items.some((x) => (x.stok ?? 0) > 0);
     const targets = hasAnyStock ? items.filter((x) => (x.stok ?? 0) > 0) : items;
     if (targets.length === 0) return;
-    handleSelectVariant(targets[0].sku);
+    handleSelectVariant(targets[0].sku, false);
     setMultiVariantQty((prev) => {
       const next = { ...prev };
       for (const t of targets) {
@@ -1752,83 +1783,102 @@ export default function Home() {
       }
       return next;
     });
+    setQty((multiVariantQty[targets[0].sku] || 0) + 1);
     showToast(`+1 semua ukuran (${targets.length} size) ditambahkan!`, "success");
   };
 
-  const addToCart = (type: string, qty: number, size: string, keepOpen: boolean = false) => {
+  /** Tambah cepat +1 untuk seluruh varian 1 artikel (semua warna & ukuran) */
+  const addFullArticleSetQty = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
     if (!product) return;
-
-    // Gabungkan jika SKU & tipe yang sama sudah ada di keranjang
-    const existingIdx = cart.findIndex((c) => c.sku === product.sku && c.type === type);
-    let nextCart: any[];
-    if (existingIdx !== -1) {
-      nextCart = [...cart];
-      nextCart[existingIdx] = {
-        ...nextCart[existingIdx],
-        qty: (nextCart[existingIdx].qty || 1) + qty,
-      };
-    } else {
-      nextCart = [
-        ...cart,
-        {
-          sku: product.sku,
-          productName: product.description,
-          type,
-          qty,
-          size,
-          photoUrl: product.imageUrl || null,
-          ocrData: null,
-        },
-      ];
+    const sourceSiblings = siblings && siblings.length > 0 ? siblings : [product];
+    const hasAnyStock = sourceSiblings.some((x) => (x.stok ?? 0) > 0);
+    const targets = hasAnyStock ? sourceSiblings.filter((x) => (x.stok ?? 0) > 0) : sourceSiblings;
+    if (targets.length === 0) return;
+    setMultiVariantQty((prev) => {
+      const next = { ...prev };
+      for (const t of targets) {
+        next[t.sku] = (next[t.sku] || 0) + 1;
+      }
+      return next;
+    });
+    if (product.sku && targets.some((t) => t.sku === product.sku)) {
+      setQty((multiVariantQty[product.sku] || 0) + 1);
     }
-
-    updateCart(nextCart);
-    setQty(1);
-
-    if (keepOpen) {
-      showToast(`+${qty} pcs (${size || product.sku}) masuk keranjang! Silakan pilih warna/size lain.`, "success");
-      return;
-    }
-
-    setProduct(null);
-    setManualInput("");
-    setMultiVariantQty({});
-    showToast(`Berhasil ditambahkan ke daftar. Total: ${nextCart.length} item`);
-    if (continuousMode) {
-      setIsScanning(true);
-    }
+    showToast(`+1 seluruh artikel (${targets.length} varian) dipilih!`, "success");
   };
 
-  const addMultipleVariantsToCart = (type: string, keepOpen: boolean = false) => {
+  const adjustCartItemQty = (idx: number, delta: number) => {
+    const nextCart = cart
+      .map((item, i) => (i === idx ? { ...item, qty: (item.qty || 1) + delta } : item))
+      .filter((item) => (item.qty || 0) > 0);
+    updateCart(nextCart);
+  };
+
+  const handleUnifiedAddToCart = (type: string, keepOpen: boolean = false) => {
     if (!product) return;
     const allSibs = siblings && siblings.length > 0 ? siblings : [product];
     const selectedEntries = Object.entries(multiVariantQty).filter(([, q]) => q > 0);
-    if (selectedEntries.length === 0) return;
 
     let nextCart = [...cart];
     let totalPcsAdded = 0;
 
-    for (const [targetSku, selectedQty] of selectedEntries) {
-      const sib = allSibs.find((s) => s.sku === targetSku);
-      if (!sib) continue;
-      const sibInfo = parseProductInfo(sib);
-      const itemSize = sibInfo.size || sib.size || "";
-      totalPcsAdded += selectedQty;
+    if (selectedEntries.length > 0) {
+      for (const [targetSku, rawQty] of selectedEntries) {
+        const sib = allSibs.find((s) => s.sku === targetSku) || (targetSku === product.sku ? product : undefined);
+        if (!sib) continue;
+        const sibInfo = parseProductInfo(sib);
+        const itemSize = sibInfo.size || sib.size || "";
+        const itemColor = sibInfo.color || sib.color || "";
+        const itemQty =
+          selectedEntries.length === 1 && targetSku === product.sku
+            ? Math.max(rawQty, qty)
+            : rawQty;
+        totalPcsAdded += itemQty;
 
-      const existingIdx = nextCart.findIndex((c) => c.sku === sib.sku && c.type === type);
+        const existingIdx = nextCart.findIndex((c) => c.sku === sib.sku && c.type === type);
+        if (existingIdx !== -1) {
+          nextCart[existingIdx] = {
+            ...nextCart[existingIdx],
+            qty: (nextCart[existingIdx].qty || 1) + itemQty,
+            color: nextCart[existingIdx].color || itemColor,
+          };
+        } else {
+          nextCart.push({
+            sku: sib.sku,
+            productName: sib.description,
+            type,
+            qty: itemQty,
+            size: itemSize,
+            color: itemColor,
+            photoUrl: sib.imageUrl || product.imageUrl || null,
+            ocrData: null,
+          });
+        }
+      }
+    } else {
+      const activeInfo = parseProductInfo(product);
+      const itemSize = activeInfo.size || product.size || "";
+      const itemColor = activeInfo.color || product.color || "";
+      const itemQty = Math.max(1, qty);
+      totalPcsAdded = itemQty;
+
+      const existingIdx = nextCart.findIndex((c) => c.sku === product.sku && c.type === type);
       if (existingIdx !== -1) {
         nextCart[existingIdx] = {
           ...nextCart[existingIdx],
-          qty: (nextCart[existingIdx].qty || 1) + selectedQty,
+          qty: (nextCart[existingIdx].qty || 1) + itemQty,
+          color: nextCart[existingIdx].color || itemColor,
         };
       } else {
         nextCart.push({
-          sku: sib.sku,
-          productName: sib.description,
+          sku: product.sku,
+          productName: product.description,
           type,
-          qty: selectedQty,
+          qty: itemQty,
           size: itemSize,
-          photoUrl: sib.imageUrl || product.imageUrl || null,
+          color: itemColor,
+          photoUrl: product.imageUrl || null,
           ocrData: null,
         });
       }
@@ -1838,14 +1888,16 @@ export default function Home() {
     setMultiVariantQty({});
     setQty(1);
 
+    const nextTotalPcs = nextCart.reduce((acc, c) => acc + (c.qty || 1), 0);
+
     if (keepOpen) {
-      showToast(`Berhasil menambahkan ${selectedEntries.length} varian (${totalPcsAdded} pcs) ke keranjang!`, "success");
+      showToast(`+${totalPcsAdded} pcs masuk keranjang! Silakan pilih warna/size lain atau kirim ke gudang.`, "success");
       return;
     }
 
     setProduct(null);
     setManualInput("");
-    showToast(`Mantap! ${selectedEntries.length} warna/size (${totalPcsAdded} pcs) masuk keranjang!`, "success");
+    showToast(`Berhasil masuk keranjang (+${totalPcsAdded} pcs). Total keranjang: ${nextTotalPcs} pcs`, "success");
     if (continuousMode) {
       setIsScanning(true);
     }
@@ -1862,7 +1914,8 @@ export default function Home() {
       });
       const data = await res.json();
       if (res.ok) {
-        showToast(`${cart.length} tiket berhasil dikirim ke Gudang!`);
+        const totalSentPcs = cart.reduce((acc, c) => acc + (c.qty || 1), 0);
+        showToast(`${cart.length} varian (${totalSentPcs} pcs) berhasil dikirim ke Gudang!`);
         updateCart([]);
       } else if (res.status === 401) {
         // Sesi pindah tab/belum login: Pastikan keranjang tetap tersimpan di localStorage lalu arahkan ke login!
@@ -3243,9 +3296,21 @@ export default function Home() {
           activeTab === "STOCK_CHECK" ? "STOCK_CHECK" : "FACING_OUT";
         const isFacingAction = targetCartActionType === "FACING_OUT";
         const totalInCartPcs = cart.reduce((acc, c) => acc + (c.qty || 1), 0);
+        const effectiveActiveQty =
+          multiVariantQty[product.sku] !== undefined && multiVariantQty[product.sku] > 0
+            ? multiVariantQty[product.sku]
+            : qty;
+        const pendingVariantsCount = selectedVariantsCount > 0 ? selectedVariantsCount : 1;
+        const pendingTotalPcs = selectedVariantsCount > 0 ? selectedTotalPcs : effectiveActiveQty;
+        const activeColorGroup =
+          colorGroupsList.find((c) => c.color === activeColorUpper) || colorGroupsList[0];
+        const reviewColorsSorted = [...colorGroupsList].sort((a, b) => a.color.localeCompare(b.color));
 
         return (
-          <div className="bg-white rounded-2xl shadow-xl border border-slate-200/80 overflow-hidden">
+          <div
+            ref={productPhotoTopRef}
+            className="bg-white rounded-2xl shadow-xl border border-slate-200/80 overflow-hidden scroll-mt-3"
+          >
             {/* Sticky / Top Utility Bar */}
             <div className="px-3.5 sm:px-5 py-2.5 border-b border-slate-100 bg-slate-50/90 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0">
@@ -3345,8 +3410,8 @@ export default function Home() {
               {/* KOLOM KANAN: Detail Inti, Harga/Stok & Rapid Facing Out Matrix Per Warna */}
               <div className="md:col-span-7 p-4 md:p-0 flex flex-col gap-4 min-w-0">
 
-                {/* Judul & Ringkasan */}
-                <div className="space-y-2">
+                {/* Judul & Ringkasan + Strip Review Warna Cepat Dekat Foto */}
+                <div className="space-y-2.5">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span className="text-[11px] font-bold bg-slate-100 text-slate-700 px-2.5 py-0.5 rounded-full">
                       {productCatLabel}
@@ -3366,9 +3431,38 @@ export default function Home() {
                   <h2 className="text-xl sm:text-2xl font-black text-slate-900 leading-snug tracking-tight">
                     {parsedInfo.name}
                   </h2>
+
+                  {reviewColorsSorted.length > 1 && (
+                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                      <span className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider shrink-0">
+                        🎨 Review Warna ({reviewColorsSorted.length}):
+                      </span>
+                      {reviewColorsSorted.map((cg) => {
+                        const isActivePill = cg.color === activeColorUpper;
+                        return (
+                          <button
+                            key={cg.color}
+                            type="button"
+                            onClick={() => handleSelectVariant(cg.repSku, true)}
+                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-bold whitespace-nowrap shrink-0 cursor-pointer transition-all ${
+                              isActivePill
+                                ? "bg-indigo-600 text-white border-indigo-700 shadow-xs"
+                                : "bg-white hover:bg-indigo-50 text-slate-700 border-slate-200"
+                            }`}
+                          >
+                            <span
+                              className="w-3 h-3 rounded-full border border-black/15 shrink-0"
+                              style={{ backgroundColor: cg.hex || "#cbd5e1" }}
+                            />
+                            <span>{cg.color}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
 
-                {/* Box Harga + Sisa Stok EOH + Live Stok + Aksi Varian Aktif */}
+                {/* Box Harga + Sisa Stok EOH + Live Stok + Info Varian Aktif & Cetak Label */}
                 <div className="bg-slate-50/90 rounded-2xl p-4 border border-slate-200/80 flex flex-col gap-3.5">
                   <div className="flex flex-wrap items-end justify-between gap-3">
                     <div>
@@ -3446,72 +3540,31 @@ export default function Home() {
                     </div>
                   )}
 
-                  {/* Aksi Cepat Varian Tunggal + Cetak Label */}
+                  {/* Ringkasan Varian Aktif + Cetak Label */}
                   <div className="pt-3 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2.5">
-                      <div className="inline-flex items-center bg-white border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
-                        <button
-                          type="button"
-                          onClick={() => setQty(Math.max(1, qty - 1))}
-                          className="w-8 h-8 flex items-center justify-center text-slate-600 hover:bg-slate-100 font-black cursor-pointer"
-                        >
-                          −
-                        </button>
-                        <span className="w-8 text-center text-xs font-black text-slate-800 tabular-nums">
-                          {qty}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setQty(qty + 1)}
-                          className="w-8 h-8 flex items-center justify-center text-slate-600 hover:bg-slate-100 font-black cursor-pointer"
-                        >
-                          +
-                        </button>
-                      </div>
-
-                      <label
-                        className="flex items-center gap-1.5 cursor-pointer select-none"
-                        title="Otomatis buka kamera setelah ditambahkan"
-                      >
-                        <input
-                          type="checkbox"
-                          className="w-3.5 h-3.5 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                          checked={continuousMode}
-                          onChange={(e) => setContinuousMode(e.target.checked)}
-                        />
-                        <span className="text-[11px] font-bold text-slate-600">Scan Lanjut</span>
-                      </label>
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-bold text-slate-600">
+                      <span className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-700">
+                        Varian Aktif: <strong className="text-indigo-700">{parsedInfo.color || "STANDAR"}</strong> • Size <strong className="text-slate-900">{parsedInfo.size || "ALL"}</strong>
+                      </span>
+                      <span className="px-2 py-1 rounded-lg bg-white border border-slate-200 font-mono text-[10px] text-slate-500">
+                        SKU {product.sku}
+                      </span>
                     </div>
 
-                    <div className="flex items-center gap-2 flex-1 sm:flex-initial justify-end">
-                      <button
-                        type="button"
-                        onClick={() => addToCart(targetCartActionType, qty, parsedInfo.size || product.size || "", false)}
-                        className={`flex-1 sm:flex-initial px-4 py-2 rounded-xl text-white font-black text-xs flex items-center justify-center gap-1.5 shadow-sm active:scale-95 transition-all cursor-pointer ${
-                          isFacingAction
-                            ? "bg-amber-500 hover:bg-amber-600"
-                            : "bg-indigo-600 hover:bg-indigo-700"
-                        }`}
-                      >
-                        {isFacingAction ? <Package2 className="w-4 h-4" /> : <MessageSquare className="w-4 h-4" />}
-                        <span>{isFacingAction ? `Facing Out (${parsedInfo.color || ""} ${parsedInfo.size || ""})` : "Tanya Stok"}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={handlePrintLabel}
-                        className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs flex items-center gap-1 shadow-2xs active:scale-95 transition-all cursor-pointer shrink-0"
-                        title="Cetak Label Harga (PDF)"
-                      >
-                        <span>🖨️</span>
-                        <span className="hidden sm:inline">Label</span>
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={handlePrintLabel}
+                      className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-2xs active:scale-95 transition-all cursor-pointer shrink-0"
+                      title="Cetak Label Harga (PDF)"
+                    >
+                      <span>🖨️</span>
+                      <span>Cetak Label</span>
+                    </button>
                   </div>
                 </div>
 
                 {/* ════════════════════════════════════════════════════════════════
-                    TAMBAH CEPAT PER WARNA & SIZE (Sekali Scan, Isi Semua Warna!)
+                    PILIHAN WARNA (AUTO SCROLL FOTO) & UKURAN (AMAN UNTUK REVIEW)
                     ════════════════════════════════════════════════════════════════ */}
                 {colorGroupsList.length > 0 && (
                   <div className="flex flex-col gap-3">
@@ -3519,12 +3572,21 @@ export default function Home() {
                       <div>
                         <h3 className="text-sm font-black text-slate-800 flex items-center gap-2">
                           <span className={`w-2.5 h-2.5 rounded-full ${isFacingAction ? "bg-emerald-500" : "bg-indigo-500"}`} />
-                          <span>Tambah Cepat Per Warna ({colorGroupsList.length} Warna • {sourceSiblings.length} Varian)</span>
+                          <span>Pilihan Warna &amp; Ukuran ({colorGroupsList.length} Warna • {sourceSiblings.length} Varian)</span>
                         </h3>
                         <p className="text-[11px] text-slate-500 mt-0.5">
-                          Ketuk langsung kotak size di dalam warna untuk <strong>+1</strong> tanpa perlu scan ulang barcode satu per satu.
+                          Ketuk warna untuk lihat foto di atas • Ketuk kotak size untuk cek detail • Gunakan tombol <strong>+</strong> untuk tambah jumlah
                         </p>
                       </div>
+                      {sourceSiblings.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={(e) => addFullArticleSetQty(e)}
+                          className="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-[11px] font-extrabold transition-colors shrink-0 cursor-pointer shadow-2xs"
+                        >
+                          📦 +1 Seluruh Artikel ({sourceSiblings.length} Varian)
+                        </button>
+                      )}
                     </div>
 
                     <div className="flex flex-col gap-2.5">
@@ -3535,7 +3597,7 @@ export default function Home() {
                         return (
                           <div
                             key={cg.color}
-                            onClick={() => handleSelectVariant(cg.repSku)}
+                            onClick={() => handleSelectVariant(cg.repSku, true)}
                             className={`rounded-2xl border-2 p-3 sm:p-3.5 transition-all cursor-pointer flex flex-col gap-2.5 ${
                               isActiveColorGroup
                                 ? "border-indigo-500 bg-indigo-50/20 shadow-xs"
@@ -3558,11 +3620,11 @@ export default function Home() {
                                     </span>
                                     {isActiveColorGroup ? (
                                       <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-indigo-600 text-white uppercase">
-                                        Foto Aktif
+                                        ✓ Foto Tampil di Atas
                                       </span>
                                     ) : (
-                                      <span className="text-[10px] font-semibold text-slate-400">
-                                        (Ketuk lihat foto)
+                                      <span className="text-[10px] font-semibold text-indigo-600">
+                                        👁️ Ketuk lihat foto atas
                                       </span>
                                     )}
                                     {colorPickedPcs > 0 && (
@@ -3582,11 +3644,11 @@ export default function Home() {
                                 onClick={(e) => addFullColorSetQty(cg.sizes, e)}
                                 className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border border-slate-200 hover:border-emerald-300 text-[11px] font-extrabold transition-colors shrink-0 cursor-pointer shadow-2xs"
                               >
-                                ⚡ +1 Semua Size
+                                ⚡ +1 Semua Size ({cg.sizes.length})
                               </button>
                             </div>
 
-                            {/* Kotak Ukuran di dalam Kartu Warna (1-Tap Add!) */}
+                            {/* Kotak Ukuran di dalam Kartu Warna (Review-Safe: Tap Kotak = Review Detail, Tap + = Tambah Keranjang) */}
                             <div
                               className="grid grid-cols-2 sm:grid-cols-4 gap-2"
                               onClick={(e) => e.stopPropagation()}
@@ -3599,7 +3661,7 @@ export default function Home() {
                                 return (
                                   <div
                                     key={item.sku}
-                                    onClick={() => quickTapSizePill(item.sku)}
+                                    onClick={() => handleReviewSizeVariant(item.sku)}
                                     className={`rounded-xl p-2.5 bg-white border-2 flex flex-col justify-between gap-1.5 cursor-pointer transition-all select-none ${
                                       pickedQty > 0
                                         ? "border-emerald-500 ring-2 ring-emerald-500/20 shadow-xs"
@@ -3616,9 +3678,13 @@ export default function Home() {
                                         <span className="px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-black tabular-nums">
                                           +{pickedQty}
                                         </span>
+                                      ) : item.isCurrent ? (
+                                        <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 uppercase">
+                                          Aktif
+                                        </span>
                                       ) : (
-                                        <span className="w-5 h-5 rounded-md bg-slate-100 text-slate-600 border border-slate-200 flex items-center justify-center text-xs font-black">
-                                          +
+                                        <span className="text-[10px] font-semibold text-slate-400">
+                                          Cek
                                         </span>
                                       )}
                                     </div>
@@ -3646,25 +3712,34 @@ export default function Home() {
                                         <button
                                           type="button"
                                           onClick={(e) => adjustVariantQty(item.sku, -1, e)}
-                                          className="flex-1 h-6 rounded-md bg-slate-100 hover:bg-rose-50 hover:text-rose-600 text-slate-700 font-black text-xs cursor-pointer"
+                                          className="flex-1 h-7 rounded-md bg-slate-100 hover:bg-rose-50 hover:text-rose-600 text-slate-700 font-black text-xs cursor-pointer"
                                         >
                                           −
                                         </button>
-                                        <span className="text-[11px] font-black text-emerald-700 px-1 tabular-nums">
-                                          {pickedQty}
+                                        <span className="text-[11px] font-black text-emerald-700 px-1.5 tabular-nums">
+                                          {pickedQty} pcs
                                         </span>
                                         <button
                                           type="button"
                                           onClick={(e) => adjustVariantQty(item.sku, 1, e)}
-                                          className="flex-1 h-6 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs cursor-pointer"
+                                          className="flex-1 h-7 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs cursor-pointer"
                                         >
                                           +
                                         </button>
                                       </div>
                                     ) : (
-                                      <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 pt-1 border-t border-slate-100">
-                                        <span>#{item.sku.slice(-4)}</span>
-                                        <span>{formatRupiah(item.hargaNormal)}</span>
+                                      <div
+                                        className="flex items-center justify-between gap-1 pt-1 border-t border-slate-100"
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        <span className="text-[10px] font-mono text-slate-400">#{item.sku.slice(-4)}</span>
+                                        <button
+                                          type="button"
+                                          onClick={(e) => adjustVariantQty(item.sku, 1, e)}
+                                          className="px-2 py-1 rounded-md bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white border border-emerald-200 hover:border-emerald-600 text-[10px] font-black transition-colors cursor-pointer"
+                                        >
+                                          + Pilih
+                                        </button>
                                       </div>
                                     )}
                                   </div>
@@ -3729,55 +3804,150 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Sticky Bar Floating Saat Ada Multi-Varian Dipilih */}
-            {selectedVariantsCount > 0 && (
-              <div className="fixed bottom-4 inset-x-3 sm:max-w-2xl sm:mx-auto z-40 bg-white/95 backdrop-blur-md border-2 border-emerald-500 rounded-2xl p-3 sm:p-3.5 shadow-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 animate-in fade-in duration-200">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-black text-emerald-700 uppercase tracking-wide">
-                      🎯 {selectedVariantsCount} Varian ({selectedTotalPcs} Pcs)
+            {/* Curated Sticky Bottom "Add Keranjang" Bar (1 Size / 1 Warna / 1 Artikel Full + 2 Tombol Aksi) */}
+            <div className="sticky bottom-2 z-40 mx-2 mb-2 sm:mx-4 sm:mb-4 rounded-2xl bg-slate-900 text-white p-3 sm:p-4 shadow-2xl border border-slate-700 flex flex-col gap-2.5">
+              {/* Strip Keranjang Aktif di HP/Desktop agar user bisa langsung Kirim dari bawah */}
+              {cart.length > 0 && (
+                <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-700/80 text-xs">
+                  <span className="font-bold text-emerald-300 truncate">
+                    🛒 Keranjang Aktif: {cart.length} Varian ({totalInCartPcs} Pcs)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={submitCart}
+                    disabled={submitting}
+                    className="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-black text-[11px] transition-colors shrink-0 cursor-pointer disabled:opacity-50"
+                  >
+                    {submitting ? "Mengirim..." : "Kirim ke Gudang 🚀"}
+                  </button>
+                </div>
+              )}
+
+              {/* Row 1: Kurasi Pilihan Cepat (1 Size / 1 Warna / 1 Artikel Full) */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMultiVariantQty({ [product.sku]: effectiveActiveQty });
+                    setQty(effectiveActiveQty);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-[11px] font-bold text-slate-200 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+                >
+                  1 Size Ini ({parsedInfo.color || "STD"} • {parsedInfo.size || "ALL"})
+                </button>
+                {activeColorGroup && activeColorGroup.sizes.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={(e) => addFullColorSetQty(activeColorGroup.sizes, e)}
+                    className="px-2.5 py-1 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-600/60 text-[11px] font-bold text-emerald-200 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+                  >
+                    +1 Warna {activeColorGroup.color} ({activeColorGroup.sizes.length} Size)
+                  </button>
+                )}
+                {sourceSiblings.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={(e) => addFullArticleSetQty(e)}
+                    className="px-2.5 py-1 rounded-lg bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-500/60 text-[11px] font-bold text-indigo-200 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+                  >
+                    +1 Artikel Full ({sourceSiblings.length} Varian)
+                  </button>
+                )}
+                {selectedVariantsCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMultiVariantQty({});
+                      setQty(1);
+                    }}
+                    className="ml-auto px-2.5 py-1 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-500/50 text-[11px] font-bold text-rose-200 whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+
+              {/* Row 2: Stepper Jumlah Terpadu + Summary + 2 Tombol Add Keranjang */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div className="flex items-center justify-between sm:justify-start gap-3">
+                  <div className="inline-flex items-center bg-slate-800 border border-slate-600 rounded-xl overflow-hidden shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (selectedVariantEntries.length === 1) {
+                          adjustVariantQty(selectedVariantEntries[0][0], -1);
+                        } else if (selectedVariantEntries.length === 0) {
+                          setActiveVariantStepperQty(effectiveActiveQty - 1);
+                        } else {
+                          adjustVariantQty(product.sku, -1);
+                        }
+                      }}
+                      className="w-9 h-9 flex items-center justify-center text-white hover:bg-slate-700 font-black text-base cursor-pointer"
+                    >
+                      −
+                    </button>
+                    <span className="min-w-[3.75rem] px-2 text-center text-xs font-black text-emerald-300 tabular-nums">
+                      {pendingTotalPcs} pcs
                     </span>
                     <button
                       type="button"
-                      onClick={() => setMultiVariantQty({})}
-                      className="text-[11px] font-bold text-rose-600 hover:underline cursor-pointer"
+                      onClick={() => {
+                        if (selectedVariantEntries.length === 1) {
+                          adjustVariantQty(selectedVariantEntries[0][0], 1);
+                        } else if (selectedVariantEntries.length === 0) {
+                          setActiveVariantStepperQty(effectiveActiveQty + 1);
+                        } else {
+                          adjustVariantQty(product.sku, 1);
+                        }
+                      }}
+                      className="w-9 h-9 flex items-center justify-center text-white hover:bg-slate-700 font-black text-base cursor-pointer"
                     >
-                      Reset
+                      +
                     </button>
                   </div>
-                  <p className="text-[11px] text-slate-600 truncate mt-0.5">
-                    {selectedVariantEntries
-                      .map(([vSku, vQty]) => {
-                        const foundSib = sourceSiblings.find((s) => s.sku === vSku);
-                        const info = foundSib ? parseProductInfo(foundSib) : { color: "", size: "" };
-                        return `${info.color || "STD"} ${info.size || "ALL"} x${vQty}`;
-                      })
-                      .join(" • ")}
-                  </p>
+
+                  <div className="min-w-0">
+                    <p className="text-xs font-black text-white tabular-nums truncate">
+                      {pendingVariantsCount} Varian • {pendingTotalPcs} Pcs
+                    </p>
+                    <label
+                      className="inline-flex items-center gap-1.5 cursor-pointer select-none mt-0.5"
+                      title="Otomatis buka kamera setelah ditambahkan"
+                    >
+                      <input
+                        type="checkbox"
+                        className="w-3 h-3 text-emerald-500 rounded border-slate-500 bg-slate-800 focus:ring-emerald-400"
+                        checked={continuousMode}
+                        onChange={(e) => setContinuousMode(e.target.checked)}
+                      />
+                      <span className="text-[10px] font-semibold text-slate-300">Scan Lanjut</span>
+                    </label>
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="grid grid-cols-2 sm:flex items-center gap-2 shrink-0">
                   <button
                     type="button"
-                    onClick={() => addMultipleVariantsToCart(targetCartActionType, true)}
-                    className="px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold text-xs cursor-pointer"
+                    onClick={() => handleUnifiedAddToCart(targetCartActionType, true)}
+                    className="px-3 py-2.5 rounded-xl border border-slate-500 bg-slate-700 hover:bg-slate-600 text-white font-bold text-xs cursor-pointer transition-all active:scale-95 text-center"
                   >
-                    + Tambah Lagi
+                    + Keranjang, Pilih Lagi
                   </button>
                   <button
                     type="button"
-                    onClick={() => addMultipleVariantsToCart(targetCartActionType, false)}
-                    className={`flex-1 sm:flex-initial px-4 py-2 rounded-xl text-white font-black text-xs shadow-md active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                    onClick={() => handleUnifiedAddToCart(targetCartActionType, false)}
+                    className={`px-3.5 py-2.5 rounded-xl font-black text-xs shadow-md active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                       isFacingAction
-                        ? "bg-emerald-600 hover:bg-emerald-700"
-                        : "bg-indigo-600 hover:bg-indigo-700"
+                        ? "bg-emerald-500 hover:bg-emerald-400 text-slate-950"
+                        : "bg-indigo-500 hover:bg-indigo-400 text-white"
                     }`}
                   >
-                    <span>{isFacingAction ? `Simpan Facing Out (${selectedTotalPcs}) →` : `Kirim Tanya Stok (${selectedTotalPcs}) →`}</span>
+                    <ShoppingCart className="w-4 h-4 shrink-0" />
+                    <span>{isFacingAction ? `+ Keranjang (${pendingTotalPcs} Pcs)` : `+ Tanya Stok (${pendingTotalPcs} Pcs)`}</span>
                   </button>
                 </div>
               </div>
-            )}
+            </div>
           </div>
         );
       })()}
@@ -3844,34 +4014,60 @@ export default function Home() {
       </div> {/* End left column */}
 
       {/* Cart FAB (Mobile) / Sidebar (Desktop) */}
-      {cart.length > 0 && (
-        <div className="fixed lg:sticky lg:top-24 bottom-0 left-0 right-0 lg:left-auto lg:right-auto p-4 lg:p-5 bg-white lg:rounded-2xl lg:border border-t shadow-[0_-10px_20px_rgba(0,0,0,0.05)] lg:shadow-xl z-50 animate-in slide-in-from-bottom-full lg:slide-in-from-right-8 duration-300 w-full lg:w-[350px] mx-auto h-fit">
+      {cart.length > 0 && (() => {
+        const totalCartPcs = cart.reduce((acc, c) => acc + (c.qty || 1), 0);
+        return (
+        <div className={`${product ? 'hidden lg:block' : 'fixed'} lg:sticky lg:top-24 bottom-0 left-0 right-0 lg:left-auto lg:right-auto p-4 lg:p-5 bg-white lg:rounded-2xl lg:border border-t shadow-[0_-10px_20px_rgba(0,0,0,0.05)] lg:shadow-xl z-50 animate-in slide-in-from-bottom-full lg:slide-in-from-right-8 duration-300 w-full lg:w-[350px] mx-auto h-fit`}>
           <div className="flex justify-between items-center mb-3">
             <div>
               <p className="text-xs text-slate-500 font-bold uppercase">Daftar Kirim</p>
-              <p className="font-extrabold text-blue-700">{cart.length} Barang</p>
+              <p className="font-extrabold text-blue-700 tabular-nums">{cart.length} Varian • {totalCartPcs} Pcs</p>
             </div>
-            <button onClick={() => updateCart([])} className="text-xs text-red-500 font-bold uppercase py-1 px-3 bg-red-50 rounded-lg hover:bg-red-100 transition-colors">Kosongkan</button>
+            <button onClick={() => updateCart([])} className="text-xs text-red-500 font-bold uppercase py-1 px-3 bg-red-50 rounded-lg hover:bg-red-100 transition-colors cursor-pointer">Kosongkan</button>
           </div>
           
-          {/* Desktop Cart Items Preview */}
-          <div className="hidden lg:flex flex-col gap-2 mb-4 max-h-[40vh] overflow-y-auto pr-1">
+          {/* Cart Items Preview (Mobile & Desktop) */}
+          <div className="flex flex-col gap-2 mb-3 max-h-40 lg:max-h-[40vh] overflow-y-auto pr-1">
             {cart.map((item, idx) => (
-              <div key={idx} className="text-xs border rounded-lg p-2.5 flex justify-between items-start gap-2 bg-slate-50">
+              <div key={`${item.sku}_${item.type}_${idx}`} className="text-xs border rounded-lg p-2.5 flex justify-between items-center gap-2 bg-slate-50">
                 <div className="min-w-0 flex-1">
                   <span className="font-bold block whitespace-normal break-words text-slate-800">{item.productName.split(':')[0]}</span>
-                  <span className="text-slate-500 font-mono">{item.sku}{item.size ? ` • ${item.size}` : ''}{item.qty ? ` • ${item.qty} pcs` : ''}</span>
+                  <span className="text-slate-500 font-mono text-[11px]">{item.sku}{item.color ? ` • ${item.color}` : ''}{item.size ? ` • ${item.size}` : ''}</span>
                 </div>
-                <div className="font-bold text-blue-700 shrink-0">{item.type === 'REQUEST' ? 'REQ' : 'CEK'}</div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <div className="inline-flex items-center bg-white border border-slate-200 rounded-lg overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => adjustCartItemQty(idx, -1)}
+                      className="w-6 h-6 flex items-center justify-center text-slate-600 hover:bg-rose-50 hover:text-rose-600 font-black cursor-pointer"
+                    >
+                      −
+                    </button>
+                    <span className="px-1.5 text-[11px] font-black text-blue-700 tabular-nums">
+                      {item.qty || 1}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => adjustCartItemQty(idx, 1)}
+                      className="w-6 h-6 flex items-center justify-center text-slate-600 hover:bg-emerald-50 hover:text-emerald-600 font-black cursor-pointer"
+                    >
+                      +
+                    </button>
+                  </div>
+                  <div className="font-bold text-[10px] text-blue-700 uppercase">
+                    {item.type === 'STOCK_CHECK' ? 'CEK' : 'FO'}
+                  </div>
+                </div>
               </div>
             ))}
           </div>
 
-          <button onClick={submitCart} disabled={submitting} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-4 rounded-xl shadow-lg shadow-blue-200 flex items-center justify-center gap-2 active:scale-95 transition-all">
-            {submitting ? <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white" /> : "Kirim Semua ke Gudang 🚀"}
+          <button onClick={submitCart} disabled={submitting} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-3.5 rounded-xl shadow-lg shadow-blue-200 flex items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer">
+            {submitting ? <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white" /> : `Kirim Semua ke Gudang (${totalCartPcs} Pcs) 🚀`}
           </button>
         </div>
-      )}
+        );
+      })()}
 
       </div>
     </div>

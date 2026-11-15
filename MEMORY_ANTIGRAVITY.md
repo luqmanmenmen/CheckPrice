@@ -1261,3 +1261,16 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
 - **Perombakan UI/UX (`src/app/page.tsx`, `src/app/cek-harga/page.tsx`):**
   1. Saat SKU/barcode belum ditemukan, kotak error langsung menampilkan tombol **`⚡ Cari & Scrap Barang Ini di Server (StoreHub + Foto + 1 Keluarga Artikel)`** yang memicu `POST /api/live-stock`, mengisi kartu detail lengkap 1 keluarga artikel + galeri foto, sekaligus menyimpannya ke IndexedDB Dexie HP (`persistServerFamilyToLocal`).
   2. Pada kartu detail produk yang belum punya foto atau baru memiliki 1 varian (`!heroImages.length || sourceSiblings.length <= 1`), tombol aksi menampilkan **`⚡ Live Stok & Scrap 1 Artikel + Foto`**.
+
+---
+
+### 81. Fix Review Warna Auto-Scroll Foto, Penghapusan Tombol Kuning Bermasalah, & Kurasi Sticky Bottom Bar "Add Keranjang" (16 November 2026)
+
+- **Masalah Yang Diperbaiki ([`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx)):**
+  1. **Klik warna/size untuk review malah masuk Facing Out:** Ketukan pada kotak size sebelumnya memanggil `quickTapSizePill()` yang otomatis memanggil `adjustVariantQty(..., +1)`. Kini diganti `handleReviewSizeVariant()` yang **hanya mem-preview varian tersebut tanpa menambah jumlah**, sedangkan penambahan kuantitas dilakukan secara eksplisit lewat tombol `+ Pilih` / `−` / `+`.
+  2. **Klik warna kini auto-scroll mulus ke foto produk di atas:** Menambahkan `productPhotoTopRef`, helper `scrollToProductPhoto()`, parameter `scrollToPhoto = true` pada `handleSelectVariant(cg.repSku, true)` di kartu warna maupun strip pill **Review Warna** tepat di bawah judul produk agar user langsung melihat foto warnanya tanpa capek scroll ke atas secara manual.
+  3. **Menghapus tombol kuning bermasalah (klik +5 malah terbaca 1 pcs) & menyatukan stepper dengan Bottom Bar "Add Keranjang":**
+     - Menghapus tombol kuning `Facing Out` dan stepper terpisah di kotak harga atas (kini diganti ringkasan **Varian Aktif** + tombol **Cetak Label**).
+     - Menyatukan `qty` dan `multiVariantQty` melalui `setActiveVariantStepperQty`, sinkronisasi `adjustVariantQty`, serta `handleUnifiedAddToCart()` (sehingga berapa pun jumlah yang diketuk di kotak size maupun stepper bawah — misalnya `5 pcs` — dikirim akurat ke keranjang).
+     - Menghadirkan **Curated Sticky Bottom "Add Keranjang" Bar** dengan preset cepat (`1 Size Ini`, `+1 Warna ...`, `+1 Artikel Full`), stepper terpadu, indikator `Keranjang Aktif` + tombol kirim langsung, serta **2 tombol utama** (`+ Keranjang, Pilih Lagi` & `+ Keranjang (... Pcs)` / `+ Tanya Stok (... Pcs)`).
+  4. **Pembenahan Daftar Kirim / Keranjang (`Daftar Kirim`):** Menampilkan total varian & total pcs (`X Varian • Y Pcs`), daftar item + kontrol `−`/`+` kuantitas di HP maupun Desktop (disembunyikan di HP sementara kartu produk sedang terbuka agar tidak menumpuk dengan Bottom Bar).
