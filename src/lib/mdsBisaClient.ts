@@ -712,6 +712,7 @@ async function finalizeProductFamilyResponse(params: {
   mataImages: MatahariFamilyImages;
   withImages: boolean;
   updatedVariants: LiveStockVariantSummary[];
+  freshStockBySku?: Map<string, number>;
   newVariantsDiscovered: number;
   imagesMatched: number;
   storeOffline: boolean;
@@ -731,9 +732,19 @@ async function finalizeProductFamilyResponse(params: {
   }
 
   const cleanedMain = checkAndCleanPromo(dbMain);
+  if (params.freshStockBySku?.has(cleanedMain.sku)) {
+    cleanedMain.stok = params.freshStockBySku.get(cleanedMain.sku)!;
+  }
   let siblings = await getProductSiblings(cleanedMain);
   if (!siblings || siblings.length === 0) {
     siblings = [cleanedMain];
+  }
+  if (params.freshStockBySku && params.freshStockBySku.size > 0) {
+    siblings = siblings.map((sib) =>
+      params.freshStockBySku!.has(sib.sku)
+        ? { ...sib, stok: params.freshStockBySku!.get(sib.sku)! }
+        : sib
+    );
   }
 
   let mataImages = params.mataImages;
@@ -1114,12 +1125,18 @@ export async function checkSingleItemStock(
     // 1. Upsert item utama + seluruh allItems yang ikut terbawa di payload awal
     const itemsToUpsert = queryRes.allItems.length > 0 ? queryRes.allItems : [itemData];
     const updatedVariants: LiveStockVariantSummary[] = [];
+    const freshStockBySku = new Map<string, number>();
     const seenUpdatedSkus = new Set<string>();
     const probedKeys = new Set<string>([`sku:${seedSku}`, ...(seedBarcode ? [`upc:${seedBarcode}`] : [])]);
     let newVariantsDiscovered = 0;
     let imagesMatched = 0;
 
     for (const rawIt of itemsToUpsert) {
+      const rawSku = String(rawIt?.SKU ?? rawIt?.sku ?? '').trim();
+      const rawDirectStok = rawIt?.StockOnHand ?? rawIt?.stockOnHand ?? rawIt?.stock_on_hand ?? rawIt?.soh;
+      if (rawSku && rawDirectStok !== undefined && rawDirectStok !== null) {
+        freshStockBySku.set(rawSku, parseInt(String(rawDirectStok), 10) || 0);
+      }
       const saved = await upsertStoreHubItemToDb(rawIt, {
         queriedCode,
         queriedKind: activeKind,
@@ -1129,6 +1146,7 @@ export async function checkSingleItemStock(
         fallbackArticleImg,
       });
       if (!saved) continue;
+      freshStockBySku.set(saved.sku, saved.stok);
       probedKeys.add(`sku:${saved.sku}`);
       if (saved.barcode) probedKeys.add(`upc:${saved.barcode}`);
       if (saved.wasNewSku) newVariantsDiscovered++;
@@ -1190,15 +1208,15 @@ export async function checkSingleItemStock(
       });
 
       const probeBudgetStart = Date.now();
-      const BATCH_SIZE = 8;
+      const BATCH_SIZE = 10;
       let hitOffline = false;
       for (let i = 0; i < probeQueue.length && !hitOffline; i += BATCH_SIZE) {
-        if (Date.now() - probeBudgetStart >= 5500) break;
+        if (Date.now() - probeBudgetStart >= 3500) break;
         const batch = probeQueue.slice(i, i + BATCH_SIZE);
         const batchResults = await Promise.all(
           batch.map(async (c) => ({
             cand: c,
-            res: await queryStoreHubDetail(c.kind, c.code, cookie!, 3000),
+            res: await queryStoreHubDetail(c.kind, c.code, cookie!, 2500),
           }))
         );
 
@@ -1228,6 +1246,7 @@ export async function checkSingleItemStock(
               fallbackArticleImg,
             });
             if (!saved) continue;
+            freshStockBySku.set(saved.sku, saved.stok);
             if (saved.wasNewSku) newVariantsDiscovered++;
             if (saved.imageUpdated) imagesMatched++;
             if (!seenUpdatedSkus.has(saved.sku)) {
@@ -1239,7 +1258,7 @@ export async function checkSingleItemStock(
       }
     }
 
-    // 3. Sinkronkan relatedStock dari StoreHub ke seluruh varian warna/ukuran DB untuk artikel ini
+    // 3. Sinkronkan relatedStock dari StoreHub ke seluruh varian warna/ukuran DB secara batch per qty
     if (articleToSearch && itemData.relatedStock && typeof itemData.relatedStock === 'object') {
       try {
         const siblings = await prisma.product.findMany({
@@ -1247,7 +1266,7 @@ export async function checkSingleItemStock(
           select: { id: true, sku: true, color: true, size: true, stok: true },
         });
         const norm = (s: any) => String(s || '').trim().toUpperCase();
-        const updates: Promise<any>[] = [];
+        const idsByStock = new Map<number, number[]>();
 
         for (const sib of siblings) {
           if (seenUpdatedSkus.has(sib.sku)) continue;
@@ -1272,18 +1291,23 @@ export async function checkSingleItemStock(
           }
 
           if (foundQty !== null) {
-            updates.push(
-              prisma.product.update({
-                where: { id: sib.id },
-                data: { stok: foundQty, updatedAt: new Date() },
-              })
-            );
+            freshStockBySku.set(sib.sku, foundQty);
+            if (sib.stok !== foundQty) {
+              const list = idsByStock.get(foundQty) || [];
+              list.push(sib.id);
+              idsByStock.set(foundQty, list);
+            }
             seenUpdatedSkus.add(sib.sku);
             updatedVariants.push({ sku: sib.sku, color: sib.color, size: sib.size, stok: foundQty });
           }
         }
-        if (updates.length > 0) {
-          await Promise.allSettled(updates);
+        if (idsByStock.size > 0) {
+          for (const [qtyVal, idList] of idsByStock.entries()) {
+            await prisma.product.updateMany({
+              where: { id: { in: idList } },
+              data: { stok: qtyVal },
+            }).catch(() => {});
+          }
         }
       } catch (sibErr) {
         console.warn('[MDS-CLIENT] Gagal update sibling variants:', sibErr);
@@ -1296,6 +1320,7 @@ export async function checkSingleItemStock(
       mataImages,
       withImages,
       updatedVariants,
+      freshStockBySku,
       newVariantsDiscovered,
       imagesMatched,
       storeOffline: false,

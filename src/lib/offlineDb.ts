@@ -74,11 +74,19 @@ export interface CachedArticleModel {
   _searchHay?: string;
 }
 
+export interface CachedBarcodeAlias {
+  barcode: string;
+  barcodeNorm: string;
+  sku: string;
+}
+
 const STORE_SCHEMA = 'sku, barcode, article, name, description, brand, dept, color, size, hargaNormal, hargaPromo, diskon, discountType, acara, stok, toDate, imageUrl';
+const LOCAL_DB_SCHEMA_VERSION = "v13";
 
 class SukoDatabase extends Dexie {
   products!: Dexie.Table<CachedProduct, string>;
   models!: Dexie.Table<CachedArticleModel, string>;
+  aliases!: Dexie.Table<CachedBarcodeAlias, string>;
 
   constructor() {
     super("SukoScannerDB");
@@ -117,6 +125,12 @@ class SukoDatabase extends Dexie {
       products: 'sku, barcode, article',
       models: 'key, brandGroup, categoryKey',
     });
+    // Versi 13: Tambahkan tabel aliases (BarcodeAlias multi-barcode per SKU) + Python compressed snapshot
+    this.version(13).stores({
+      products: 'sku, barcode, article',
+      models: 'key, brandGroup, categoryKey',
+      aliases: 'barcode, barcodeNorm, sku',
+    });
 
     this.on('versionchange', () => {
       this.close();
@@ -138,6 +152,31 @@ let cachedTaxonomyOverview: {
 export function clearModelsMemoryCache() {
   memoryModelsCache = null;
   cachedTaxonomyOverview = null;
+}
+
+export function getLoadedModelsMemoryCache(): CachedArticleModel[] | null {
+  return memoryModelsCache;
+}
+
+/** Sinkronkan stok terbaru (hasil Live Stok) ke RAM cache model + IndexedDB lokal */
+export function updateLocalFamilyStockInMemory(
+  items: Array<{ sku: string; stok?: number; imageUrl?: string | null }>
+) {
+  if (!items || items.length === 0) return;
+  const map = new Map<string, { stok?: number; imageUrl?: string | null }>();
+  for (const it of items) {
+    if (it?.sku) map.set(it.sku, it);
+  }
+  if (memoryModelsCache) {
+    for (let i = 0; i < memoryModelsCache.length; i++) {
+      const m = memoryModelsCache[i];
+      const upd = map.get(m.sku);
+      if (upd) {
+        if (typeof upd.stok === "number") m.stok = upd.stok;
+        if (upd.imageUrl && !m.imageUrl) m.imageUrl = upd.imageUrl;
+      }
+    }
+  }
 }
 
 /** Hitung GS1 EAN-13 check digit (12 digit awal -> digit ke-13) */
@@ -182,49 +221,74 @@ export function buildCodeSearchCandidates(rawCode: string): string[] {
   return Array.from(out).filter(Boolean);
 }
 
-/** Cari 1 SKU/barcode/artikel di Dexie lokal dengan normalisasi huruf kapital, pemisah, cek digit GS1, dan prefix B-tree. */
+/** Cari 1 SKU/barcode/artikel/alias di Dexie lokal dengan batas waktu aman agar scan tidak pernah nge-hang. */
 export async function findOfflineProductByCode(rawCode: string): Promise<CachedProduct | null> {
   const trimmed = String(rawCode || "").trim();
   const candidates = buildCodeSearchCandidates(trimmed);
   if (candidates.length === 0) return null;
-  await ensureDbOpenSafe();
 
-  const bySku = await db.products.where("sku").anyOf(candidates).first();
-  if (bySku) return bySku;
+  // Jika IndexedDB sedang sibuk menulis snapshot massal, batasi lookup lokal maksimal 550ms
+  const raceTimeoutMs = activeSyncPromise ? 550 : 1800;
 
-  const byBarcode = await db.products.where("barcode").anyOf(candidates).first();
-  if (byBarcode) return byBarcode;
+  const lookupPromise = (async (): Promise<CachedProduct | null> => {
+    await ensureDbOpenSafe();
 
-  const byArticle = await db.products.where("article").anyOf(candidates).toArray();
-  if (byArticle.length > 0) {
-    byArticle.sort((a, b) => (b.stok ?? 0) - (a.stok ?? 0));
-    return byArticle[0];
-  }
+    const bySku = await db.products.where("sku").anyOf(candidates).first();
+    if (bySku) return bySku;
 
-  if (trimmed.length >= 5) {
-    const [prefSku, prefBc, prefArt] = await Promise.all([
-      db.products.where("sku").startsWithAnyOf(candidates).limit(15).toArray().catch(() => []),
-      db.products.where("barcode").startsWithAnyOf(candidates).limit(15).toArray().catch(() => []),
-      db.products.where("article").startsWithAnyOfIgnoreCase(candidates).limit(15).toArray().catch(() => []),
-    ]);
+    const byBarcode = await db.products.where("barcode").anyOf(candidates).first();
+    if (byBarcode) return byBarcode;
 
-    const mergedMap = new Map<string, CachedProduct>();
-    for (const p of [...prefSku, ...prefBc, ...prefArt]) {
-      if (!mergedMap.has(p.sku)) mergedMap.set(p.sku, p);
+    try {
+      const aliasHit =
+        (await db.aliases.where("barcode").anyOf(candidates).first()) ||
+        (await db.aliases.where("barcodeNorm").anyOf(candidates).first());
+      if (aliasHit?.sku) {
+        const aliasedProd = await db.products.get(aliasHit.sku);
+        if (aliasedProd) return aliasedProd;
+      }
+    } catch {}
+
+    const byArticle = await db.products.where("article").anyOfIgnoreCase(candidates).toArray();
+    if (byArticle.length > 0) {
+      byArticle.sort((a, b) => (b.stok ?? 0) - (a.stok ?? 0));
+      return byArticle[0];
     }
-    const merged = Array.from(mergedMap.values());
-    if (merged.length > 0) {
-      const uniqueArticles = new Set(
-        merged.map((p) => (p.article || p.sku).trim().toUpperCase())
-      );
-      if (merged.length === 1 || uniqueArticles.size === 1) {
-        merged.sort((a, b) => (b.stok ?? 0) - (a.stok ?? 0));
-        return merged[0];
+
+    if (trimmed.length >= 5) {
+      const [prefSku, prefBc, prefArt] = await Promise.all([
+        db.products.where("sku").startsWithAnyOf(candidates).limit(15).toArray().catch(() => []),
+        db.products.where("barcode").startsWithAnyOf(candidates).limit(15).toArray().catch(() => []),
+        db.products.where("article").startsWithAnyOfIgnoreCase(candidates).limit(15).toArray().catch(() => []),
+      ]);
+
+      const mergedMap = new Map<string, CachedProduct>();
+      for (const p of [...prefSku, ...prefBc, ...prefArt]) {
+        if (!mergedMap.has(p.sku)) mergedMap.set(p.sku, p);
+      }
+      const merged = Array.from(mergedMap.values());
+      if (merged.length > 0) {
+        const uniqueArticles = new Set(
+          merged.map((p) => (p.article || p.sku).trim().toUpperCase())
+        );
+        if (merged.length === 1 || uniqueArticles.size === 1) {
+          merged.sort((a, b) => (b.stok ?? 0) - (a.stok ?? 0));
+          return merged[0];
+        }
       }
     }
-  }
 
-  return null;
+    return null;
+  })();
+
+  try {
+    return await Promise.race<CachedProduct | null>([
+      lookupPromise,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), raceTimeoutMs)),
+    ]);
+  } catch {
+    return null;
+  }
 }
 
 function isLocalPromoExpired(toDate: string | null | undefined): boolean {
@@ -470,6 +534,10 @@ const SYNC_BACKOFF_STORAGE_KEY = "suko_sync_backoff_until";
 let activeSyncPromise: Promise<boolean> | null = null;
 const activeSyncListeners = new Set<SyncProgressCallback>();
 
+export function isOfflineSyncRunning(): boolean {
+  return Boolean(activeSyncPromise);
+}
+
 export async function checkIfUpdateAvailable(): Promise<boolean> {
   try {
     await ensureDbOpenSafe();
@@ -482,13 +550,237 @@ export async function checkIfUpdateAvailable(): Promise<boolean> {
     const checkData = await checkRes.json();
 
     if (checkData.success) {
-      const serverVersion = checkData.lastUpdate.toString();
-      if (localDbSchema !== "v12" || localVersion !== serverVersion || count < 80000) {
+      const serverVersion = String(checkData.catalogVersion ?? checkData.lastUpdate ?? "0");
+      if (localDbSchema !== LOCAL_DB_SCHEMA_VERSION || localVersion !== serverVersion || count < 80000) {
         return true;
       }
     }
     return false;
   } catch {
+    return false;
+  }
+}
+
+/**
+ * Jalur Kilat Tier 1: Unduh SATU file Python Compressed Snapshot (.json.gz) dari CDN
+ * + Dekompresi native C++ `DecompressionStream('gzip')` (~5-15 detik vs 15 menit!).
+ */
+async function trySyncFromPythonSnapshot(
+  checkData: any,
+  emit: (
+    isSyncing: boolean,
+    rawPercent: number,
+    downloadedSkus: number,
+    totalSkus: number,
+    etaSeconds: number | null,
+    statusText: string,
+    stage: SyncProgressDetails["stage"]
+  ) => void,
+  serverVersion: string,
+  expectedTotalHint: number
+): Promise<boolean> {
+  const snapshotUrl = typeof checkData?.snapshotUrl === "string" ? checkData.snapshotUrl : "";
+  if (!snapshotUrl || typeof DecompressionStream === "undefined") {
+    return false;
+  }
+
+  try {
+    const t0 = Date.now();
+    const knownTotal = Number(checkData.snapshotTotalSkus || expectedTotalHint || 307000);
+    const knownGzipBytes = Number(checkData.snapshotGzipBytes || 0);
+    emit(true, 6, 0, knownTotal, null, "Mengunduh paket katalog Python (CDN)...", "downloading");
+
+    const res = await fetch(snapshotUrl, { cache: "force-cache" });
+    if (!res.ok) return false;
+
+    const totalBytes = Number(res.headers.get("content-length") || knownGzipBytes || 0);
+    let gzBlob: Blob;
+
+    if (res.body && typeof res.body.getReader === "function") {
+      const reader = res.body.getReader();
+      const chunks: BlobPart[] = [];
+      let loadedBytes = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          chunks.push(value);
+          loadedBytes += value.byteLength;
+          const mbDone = (loadedBytes / (1024 * 1024)).toFixed(1);
+          const mbTot = totalBytes > 0 ? (totalBytes / (1024 * 1024)).toFixed(1) : "?";
+          const dlRatio = totalBytes > 0 ? Math.min(0.99, loadedBytes / totalBytes) : 0.5;
+          const elapsed = Math.max(0.2, (Date.now() - t0) / 1000);
+          const eta = totalBytes > 0 && dlRatio > 0.05 ? Math.max(1, (elapsed / dlRatio) - elapsed + 4) : null;
+          emit(
+            true,
+            6 + dlRatio * 30,
+            Math.round(knownTotal * dlRatio * 0.2),
+            knownTotal,
+            eta,
+            `Unduh snapshot Python: ${mbDone} / ${mbTot} MB`,
+            "downloading"
+          );
+        }
+      }
+      gzBlob = new Blob(chunks);
+    } else {
+      gzBlob = await res.blob();
+    }
+
+    emit(true, 38, 0, knownTotal, 5, "Membuka paket terkompresi Python...", "indexing");
+    const decompressedStream = gzBlob.stream().pipeThrough(new DecompressionStream("gzip"));
+    const jsonText = await new Response(decompressedStream).text();
+    const bundle = JSON.parse(jsonText);
+
+    if (!bundle || !Array.isArray(bundle.products) || bundle.products.length < 1000) {
+      return false;
+    }
+
+    const dicts = bundle.dicts || {};
+    const imgPrefix: string = bundle.imgPrefix || "";
+    const getDict = (arr: string[] | undefined, idx: number): string | null =>
+      typeof idx === "number" && idx >= 0 && arr && idx < arr.length ? arr[idx] : null;
+    const decodeImg = (raw: string | null | undefined): string | null => {
+      if (!raw) return null;
+      return raw.startsWith("~") ? imgPrefix + raw.slice(1) : raw;
+    };
+
+    const rawProds: any[][] = bundle.products;
+    const totalSkus = rawProds.length;
+    await ensureDbOpenSafe();
+    await db.products.clear();
+
+    const PROD_BATCH = 15000;
+    let savedSkus = 0;
+    const writeStart = Date.now();
+
+    for (let i = 0; i < totalSkus; i += PROD_BATCH) {
+      const end = Math.min(i + PROD_BATCH, totalSkus);
+      const batchObjs: CachedProduct[] = new Array(end - i);
+      for (let j = i; j < end; j++) {
+        const r = rawProds[j];
+        const imgUrl = decodeImg(r[15]);
+        const desc = r[3] || "";
+        const colonIdx = desc.indexOf(":");
+        batchObjs[j - i] = {
+          sku: r[0],
+          barcode: r[1] || null,
+          article: r[2] || null,
+          name: colonIdx > 0 ? desc.slice(0, colonIdx).trim() : desc,
+          description: desc,
+          brand: getDict(dicts.brands, r[4]),
+          dept: getDict(dicts.depts, r[5]),
+          color: r[6] || "",
+          size: r[7] || "",
+          hargaNormal: r[8] ?? 0,
+          hargaPromo: r[9] ?? null,
+          diskon: getDict(dicts.discounts, r[10]),
+          discountType: getDict(dicts.discountTypes, r[11]),
+          acara: getDict(dicts.acaras, r[12]),
+          stok: r[13] ?? 0,
+          toDate: getDict(dicts.toDates, r[14]),
+          imageUrl: imgUrl,
+          images: imgUrl ? [imgUrl] : [],
+        };
+      }
+      await db.products.bulkPut(batchObjs);
+      savedSkus += batchObjs.length;
+      const elapsedWrite = Math.max(0.2, (Date.now() - writeStart) / 1000);
+      const wRatio = Math.min(0.99, savedSkus / totalSkus);
+      const etaWrite = wRatio > 0.05 ? Math.max(1, (elapsedWrite / wRatio) - elapsedWrite + 1.5) : null;
+      emit(
+        true,
+        40 + wRatio * 44,
+        savedSkus,
+        totalSkus,
+        etaWrite,
+        `Menyimpan ${savedSkus.toLocaleString("id-ID")} / ${totalSkus.toLocaleString("id-ID")} SKU ke HP...`,
+        "indexing"
+      );
+    }
+
+    // Simpan CatalogArticle pre-compiled Python (tanpa perlu rebuild JS di HP!)
+    if (Array.isArray(bundle.models) && bundle.models.length > 0) {
+      emit(true, 86, savedSkus, totalSkus, 2, "Memasang indeks model cepat Python...", "indexing");
+      const rawModels: any[][] = bundle.models;
+      const inRamModels: CachedArticleModel[] = new Array(rawModels.length);
+      const dbModels: CachedArticleModel[] = new Array(rawModels.length);
+
+      for (let i = 0; i < rawModels.length; i++) {
+        const m = rawModels[i];
+        const baseObj: CachedArticleModel = {
+          key: m[0],
+          sku: m[1],
+          barcode: m[2] || null,
+          article: m[3] || null,
+          description: m[4] || "",
+          brand: getDict(dicts.brands, m[5]),
+          dept: getDict(dicts.depts, m[6]),
+          brandGroup: (getDict(dicts.brandGroups, m[7]) || "MUKU") as ResolvedBrandGroup,
+          subBrand: getDict(dicts.subBrands, m[8]) || undefined,
+          categoryKey: (getDict(dicts.catKeys, m[9]) || "OTHER") as ResolvedCategoryKey,
+          color: m[10] || null,
+          size: m[11] || null,
+          stok: m[12] ?? 0,
+          hargaNormal: m[13] ?? 0,
+          hargaPromo: m[14] ?? null,
+          diskon: getDict(dicts.discounts, m[15]),
+          discountType: getDict(dicts.discountTypes, m[16]),
+          acara: getDict(dicts.acaras, m[17]),
+          toDate: getDict(dicts.toDates, m[18]),
+          imageUrl: decodeImg(m[19]),
+          articleGroupCount: m[20] ?? 1,
+          articleTotalStok: m[21] ?? 0,
+          articleColors: Array.isArray(m[22]) ? m[22] : [],
+          articleSizes: Array.isArray(m[23]) ? m[23] : [],
+          articleHasPromo: Boolean(m[24]),
+          articlePromoLabel: m[25] || null,
+        };
+        dbModels[i] = baseObj;
+        inRamModels[i] = sanitizeAndIndexModel(baseObj);
+      }
+
+      await db.models.clear();
+      const MODEL_BATCH = 12000;
+      for (let i = 0; i < dbModels.length; i += MODEL_BATCH) {
+        await db.models.bulkPut(dbModels.slice(i, i + MODEL_BATCH));
+      }
+      memoryModelsCache = inRamModels;
+      cachedTaxonomyOverview = null;
+    }
+
+    // Simpan BarcodeAlias multi-barcode
+    if (Array.isArray(bundle.aliases) && bundle.aliases.length > 0) {
+      emit(true, 94, savedSkus, totalSkus, 1, "Menyimpan indeks alias barcode...", "indexing");
+      const aliasObjs: CachedBarcodeAlias[] = bundle.aliases.map((a: any[]) => ({
+        barcode: a[0],
+        barcodeNorm: a[1],
+        sku: a[2],
+      }));
+      await db.aliases.clear();
+      const ALIAS_BATCH = 20000;
+      for (let i = 0; i < aliasObjs.length; i += ALIAS_BATCH) {
+        await db.aliases.bulkPut(aliasObjs.slice(i, i + ALIAS_BATCH));
+      }
+    }
+
+    localStorage.setItem("suko_server_version", serverVersion);
+    localStorage.setItem("suko_dismissed_update", serverVersion);
+    localStorage.setItem("suko_db_schema_version", LOCAL_DB_SCHEMA_VERSION);
+    localStorage.setItem("suko_models_taxonomy_ver", MODELS_TAXONOMY_VERSION);
+    if (checkData.snapshotRevision) {
+      localStorage.setItem("suko_snapshot_revision", String(checkData.snapshotRevision));
+    }
+    if (typeof window !== "undefined") {
+      sessionStorage.removeItem(SYNC_BACKOFF_STORAGE_KEY);
+    }
+
+    const totalSec = ((Date.now() - t0) / 1000).toFixed(1);
+    emit(false, 100, savedSkus, savedSkus, 0, `Selesai dalam ${totalSec}d! (${savedSkus.toLocaleString("id-ID")} SKU siap scan).`, "done");
+    console.log(`[OfflineDB-Python] Sukses sinkron ${savedSkus.toLocaleString()} SKU via CDN Snapshot dalam ${totalSec}s`);
+    return true;
+  } catch (err) {
+    console.warn("[OfflineDB-Python] Gagal memakai CDN snapshot, fallback ke API chunk:", err);
     return false;
   }
 }
@@ -592,9 +884,15 @@ export async function syncOfflineDatabase(
         throw new Error(checkData?.error || "Respon cek update tidak valid");
       }
 
-      const serverVersion = checkData.lastUpdate.toString();
+      const serverVersion = String(checkData.catalogVersion ?? checkData.lastUpdate ?? "0");
+      const lastSnapRev = localStorage.getItem("suko_snapshot_revision");
+      const currentSnapRev = checkData.snapshotRevision ? String(checkData.snapshotRevision) : null;
       const needsDownload =
-        forceSync || localDbSchema !== "v12" || localVersion !== serverVersion || count < 80000;
+        forceSync ||
+        localDbSchema !== LOCAL_DB_SCHEMA_VERSION ||
+        localVersion !== serverVersion ||
+        count < 80000 ||
+        Boolean(forceSync && currentSnapRev && currentSnapRev !== lastSnapRev);
 
       if (!needsDownload) {
         await ensureModelsIndexReady();
@@ -602,7 +900,19 @@ export async function syncOfflineDatabase(
         return true;
       }
 
-      emit(true, 4, 0, Math.max(count, 97546), null, "Memulai unduhan data produk...", "downloading");
+      // ── TIER 1 (UTAMA): Python Compressed Snapshot via Cloudflare CDN (~5-15 detik!) ──
+      const snapshotOk = await trySyncFromPythonSnapshot(
+        checkData,
+        emit,
+        serverVersion,
+        Math.max(count, 307000)
+      );
+      if (snapshotOk) {
+        return true;
+      }
+
+      // ── TIER 2 (FALLBACK): Chunked Keyset API /api/export-products ──
+      emit(true, 4, 0, Math.max(count, 307000), null, "Memulai unduhan data produk (mode cadangan)...", "downloading");
 
       const CHUNK_LIMIT = 6000;
       const MAX_CHUNKS = 60; // Mendukung hingga 360.000 SKU secara aman
@@ -722,7 +1032,7 @@ export async function syncOfflineDatabase(
 
       localStorage.setItem("suko_server_version", serverVersion);
       localStorage.setItem("suko_dismissed_update", serverVersion);
-      localStorage.setItem("suko_db_schema_version", "v12");
+      localStorage.setItem("suko_db_schema_version", LOCAL_DB_SCHEMA_VERSION);
       localStorage.setItem("suko_models_taxonomy_ver", MODELS_TAXONOMY_VERSION);
       if (typeof window !== "undefined") {
         sessionStorage.removeItem(SYNC_BACKOFF_STORAGE_KEY);

@@ -349,7 +349,7 @@ def resolve_db_url() -> str:
     return url.split("?")[0] + "?sslmode=require" if "sslmode=" not in url else url.replace("&pgbouncer=true", "").replace("?pgbouncer=true&", "?").replace("?pgbouncer=true", "")
 
 
-def build_and_verify_catalog() -> Dict[str, Any]:
+def build_and_verify_catalog(stock_only: bool = False, upload_snapshot: bool = True) -> Dict[str, Any]:
     import psycopg2
     from psycopg2.extras import execute_values
 
@@ -581,13 +581,27 @@ def build_and_verify_catalog() -> Dict[str, Any]:
     print("[PYTHON-CATALOG] Page 3 Mu+Ku (Brand 17-24):", [(k, v["count"]) for k, v in sorted_muku[16:24]])
     assert len(set(k for k, _ in sorted_muku[:24])) == min(24, len(sorted_muku)), "Brand Mu+Ku dobel!"
 
+    snapshot_info: Optional[Dict[str, Any]] = None
+    if upload_snapshot:
+        try:
+            from build_offline_snapshot import build_and_upload_offline_snapshot
+            snapshot_info = build_and_upload_offline_snapshot(stock_only=stock_only)
+        except Exception as snap_err:
+            print(f"[PYTHON-CATALOG] Peringatan gagal unggah offline snapshot: {snap_err}")
+
     return {
         "total_articles": len(compiled),
         "ignored_rows": ignored_count,
         "by_store": by_store,
         "elapsed_sec": round(elapsed, 2),
+        "snapshot": snapshot_info,
     }
 
 
 if __name__ == "__main__":
-    build_and_verify_catalog()
+    import argparse
+    parser = argparse.ArgumentParser(description="Build CatalogArticle index & compressed offline snapshot")
+    parser.add_argument("--stock-only", action="store_true", help="Jangan naikkan catalogVersion")
+    parser.add_argument("--no-snapshot", action="store_true", help="Lewati pembuatan snapshot .json.gz")
+    args = parser.parse_args()
+    build_and_verify_catalog(stock_only=args.stock_only, upload_snapshot=not args.no_snapshot)

@@ -8,6 +8,32 @@ let cachedPayload: any = null;
 let cachedTimestamp = 0;
 const LAST_UPDATE_CACHE_TTL_MS = 15000;
 
+const CATALOG_SYNC_TYPES = [
+  'CATALOG_BUNDLE',
+  'MDS_BISA_SYNC',
+  'PHOTO_SYNC',
+  'UPDATE_PROMO',
+  'PROMO_MINGGUAN',
+  'EXCEL_UPLOAD',
+  'SYNC_PQ',
+];
+
+async function fetchStorageManifest() {
+  const supaUrl = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim().replace(/\/+$/, '');
+  if (!supaUrl) return null;
+  try {
+    const res = await fetch(
+      `${supaUrl}/storage/v1/object/public/excel-uploads/offline-db/manifest.json?t=${Date.now()}`,
+      { cache: 'no-store', signal: AbortSignal.timeout(2500) }
+    );
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json && typeof json === 'object' ? json : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function GET() {
   try {
     const now = Date.now();
@@ -19,11 +45,19 @@ export async function GET() {
       });
     }
 
-    // 1. Ambil waktu update produk terakhir dari tabel Product + 10 riwayat paralel
-    const [lastUpdatedProduct, recentHistories] = await Promise.all([
+    // 1. Ambil waktu update terakhir + versi katalog murni (non stock-only) + 10 riwayat paralel
+    const [lastUpdatedProduct, lastCatalogSync, recentHistories, manifest] = await Promise.all([
       prisma.product.findFirst({
         orderBy: { updatedAt: 'desc' },
         select: { updatedAt: true }
+      }),
+      prisma.syncHistory.findFirst({
+        where: {
+          status: 'SUCCESS',
+          type: { in: CATALOG_SYNC_TYPES },
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
       }),
       prisma.syncHistory.findMany({
         orderBy: { createdAt: 'desc' },
@@ -37,8 +71,14 @@ export async function GET() {
             }
           }
         }
-      })
+      }),
+      fetchStorageManifest(),
     ]);
+
+    const catalogVersion = Math.max(
+      lastCatalogSync ? lastCatalogSync.createdAt.getTime() : 0,
+      Number(manifest?.catalogVersion || 0) || 0
+    );
 
     // 3. Ambil riwayat terakhir masing-masing pilar
     const lastMds = recentHistories.find(h => h.type === 'MDS_BISA_SYNC' || h.type === 'STOCK_SYNC');
@@ -57,6 +97,8 @@ export async function GET() {
     const payload = {
       success: true,
       lastUpdate: lastUpdatedProduct ? lastUpdatedProduct.updatedAt : null,
+      catalogVersion,
+      snapshotUrl: typeof manifest?.snapshotUrl === 'string' ? manifest.snapshotUrl : null,
       histories: cleanHistories,
       pillars: {
         mdsBisa: lastMds ? {

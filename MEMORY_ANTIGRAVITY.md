@@ -1274,3 +1274,27 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
      - Menyatukan `qty` dan `multiVariantQty` melalui `setActiveVariantStepperQty`, sinkronisasi `adjustVariantQty`, serta `handleUnifiedAddToCart()` (sehingga berapa pun jumlah yang diketuk di kotak size maupun stepper bawah — misalnya `5 pcs` — dikirim akurat ke keranjang).
      - Menghadirkan **Curated Sticky Bottom "Add Keranjang" Bar** dengan preset cepat (`1 Size Ini`, `+1 Warna ...`, `+1 Artikel Full`), stepper terpadu, indikator `Keranjang Aktif` + tombol kirim langsung, serta **2 tombol utama** (`+ Keranjang, Pilih Lagi` & `+ Keranjang (... Pcs)` / `+ Tanya Stok (... Pcs)`).
   4. **Pembenahan Daftar Kirim / Keranjang (`Daftar Kirim`):** Menampilkan total varian & total pcs (`X Varian • Y Pcs`), daftar item + kontrol `−`/`+` kuantitas di HP maupun Desktop (disembunyikan di HP sementara kartu produk sedang terbuka agar tidak menumpuk dengan Bottom Bar).
+
+---
+
+### 82. Perbaikan Live Stok 1x Klik, Python Compressed DB Offline CDN (8,35 MB), Pisah Versi Stok vs Katalog, & Scan Anti-Hang (16 November 2026)
+
+1. **Live Stok Langsung Berubah pada Klik Pertama (`src/app/page.tsx`, `src/lib/mdsBisaClient.ts`):**
+   - `handleCheckLiveStock()` sebelumnya selalu mengirim `discoverFamily: true, withImages: true` di setiap klik sehingga eksekusi menembus `12–20+ detik` (sering gagal/timeout pada klik ke-1). Kini `discoverFamily: true, withImages: true` hanya aktif bila foto atau varian keluarga memang belum ada (`curSibs.length <= 1 || !curSibs.some(s => Boolean(s.imageUrl))`); tombol `"Live Stok"` normal memakai mode cepat (`~2–3,7s`).
+   - Menambahkan `liveStockEpochRef` agar background refresh `presentLocalProductAndRefreshBg()` tidak pernah menimpa hasil Live Stok yang baru diklik.
+   - Di `mdsBisaClient.ts`, `freshStockBySku` langsung menimpa nilai `stok` pada `data` dan `siblings` sebelum respon dikembalikan, plus `relatedStock` di-update secara batch per kuantitas (`updateMany`) serta budget probe tetangga dirampingkan (`3.5s`).
+
+2. **Database Offline Dibangun oleh Python + CDN Snapshot Terkompresi (`python-engine/build_offline_snapshot.py`, `src/lib/offlineDb.ts`, `.github/workflows/retail-sync-engine.yml`):**
+   - Python mengompilasi `307.732 SKU`, `56.194 Model CatalogArticle`, dan `14.999 BarcodeAlias` langsung dari PostgreSQL dengan *tuple encoding + string dictionary* ke **1 berkas CDN `.json.gz`** (`offline-db/snapshot-<rev>.json.gz`, ukuran aktual **`8,35 MB`** dari `63,04 MB` mentah) + `offline-db/manifest.json`.
+   - `src/lib/offlineDb.ts` (Dexie `v13` dengan tabel tambahan `aliases`) mengunduh 1 berkas CDN secara *streaming*, mendekompresi memakai native `DecompressionStream('gzip')`, menulis batch besar (`15.000 SKU/tx`), dan langsung mengisi `db.models` + RAM tanpa `rebuildModelsIndexFromProducts()` (`db.products.toArray()`). Jalur lama `/api/export-products` dipertahankan sebagai fallback cadangan.
+
+3. **Update Stok Tidak Lagi Menyalakan Banner Merah `"UPDATE SEKARANG"` (`src/app/api/check-update/route.ts`, `src/app/api/last-update/route.ts`, `src/app/page.tsx`):**
+   - `serverVersion` dipisah menjadi `catalogVersion` (hanya naik dari `SyncHistory` tipe `CATALOG_BUNDLE`, `MDS_BISA_SYNC`, `PHOTO_SYNC`, `UPDATE_PROMO`, `PROMO_MINGGUAN`, `EXCEL_UPLOAD`, `SYNC_PQ`, atau manifest katalog), bukan lagi dari `MAX(Product.updatedAt)`.
+   - `--stock-only` pada `.github/workflows/retail-sync-engine.yml` dan `build_offline_snapshot.py --stock-only` memperbarui stok di snapshot sambil **mempertahankan `catalogVersion` tetap sama**.
+
+4. **Pencarian/Scan SKU Eksisting Anti-Hang & Anti-Abort Prematur (`src/app/page.tsx`, `src/lib/offlineDb.ts`, `src/app/api/product/[identifier]/route.ts`):**
+   - `findOfflineProductByCode` kini ikut memeriksa tabel `db.aliases` (`barcode`/`barcodeNorm`) dan `article` *case-insensitive*, dengan race timeout aman (`550ms` saat IndexedDB sibuk sync, `1.800ms` normal).
+   - Scan kode (`isCodeSearch`) tidak lagi memblokir UI thread memanggil `ensureModelsIndexReady()` (12 chunk `/api/catalog-models` / `db.products.toArray()`) sebelum mencari ke server; `queryLocalModelsInstant` hanya dipakai untuk kode jika RAM sudah siap (`getLoadedModelsMemoryCache()`).
+   - Timeout fetch server dinaikkan dari `2.500ms` ke `6.500ms` (lokal siap) / `12.000ms` (lokal kosong), dan di `GET /api/product/[identifier]` cabang `article ILIKE` dilewati untuk kode numerik panjang (`>= 11` digit) agar scan barcode tidak menyentuh indeks trigram `article`.
+
+- **Verifikasi:** `build_offline_snapshot.py` teruji langsung (`307.732 SKU`, `56.194 Model`, `14.999 Alias`, `8.753.987 byte` terverifikasi dari CDN Storage), `py_compile` lulus, `npx tsc --noEmit` dan `npm run build` (`53/53` route) lulus exit code `0`.

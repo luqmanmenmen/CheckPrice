@@ -188,7 +188,7 @@ export async function GET(
             buildBtreePrefixWhere('sku', rawInput),
             buildBtreePrefixWhere('barcode', rawInput),
             ...(rawInput.length <= 7 ? [buildBtreePrefixWhere('barcode', `234000${rawInput}`)] : []),
-            { article: { contains: rawInput, mode: 'insensitive' as const } }
+            ...(rawInput.length <= 10 ? [{ article: { contains: rawInput, mode: 'insensitive' as const } }] : []),
           ]
         },
         take: 30

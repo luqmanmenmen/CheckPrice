@@ -294,38 +294,60 @@ export default function Home() {
 
   const [checkingLiveStock, setCheckingLiveStock] = useState(false);
   const [liveStockVerified, setLiveStockVerified] = useState<string | null>(null);
+  const liveStockEpochRef = useRef(0);
 
   const handleCheckLiveStock = async () => {
     if (!product?.sku || checkingLiveStock) return;
     setCheckingLiveStock(true);
+    const requestEpoch = ++liveStockEpochRef.current;
+    const targetSku = product.sku;
+    const curSibs = siblings && siblings.length > 0 ? siblings : [product];
+    const needsDiscovery = curSibs.length <= 1 || !curSibs.some((s) => Boolean(s.imageUrl));
     try {
       const res = await fetch("/api/live-stock", {
         method: "POST",
+        cache: "no-store",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sku: product.sku,
-          discoverFamily: true,
-          withImages: true,
+          sku: targetSku,
+          discoverFamily: needsDiscovery,
+          withImages: needsDiscovery,
         }),
       });
       const data = await res.json();
       if (data.success && (data.data || data.stok !== undefined)) {
+        const variantStockMap = new Map<string, number>();
+        if (Array.isArray(data.variants)) {
+          for (const v of data.variants) {
+            if (v?.sku && typeof v.stok === "number") {
+              variantStockMap.set(v.sku, v.stok);
+            }
+          }
+        }
+        if (typeof data.stok === "number") {
+          variantStockMap.set(data.sku || targetSku, data.stok);
+        }
+
         if (data.data) {
-          const nextSiblings: ProductData[] =
-            Array.isArray(data.siblings) && data.siblings.length > 0 ? data.siblings : [data.data];
-          setProduct(data.data);
+          const freshMainStok = variantStockMap.get(data.data.sku) ?? data.stok ?? data.data.stok ?? 0;
+          const updatedMain: ProductData = { ...data.data, stok: freshMainStok };
+          const rawSiblings: ProductData[] =
+            Array.isArray(data.siblings) && data.siblings.length > 0 ? data.siblings : [updatedMain];
+          const nextSiblings: ProductData[] = rawSiblings.map((s) =>
+            variantStockMap.has(s.sku) ? { ...s, stok: variantStockMap.get(s.sku)! } : s
+          );
+          setProduct(updatedMain);
           setSiblings(nextSiblings);
-          preloadProductImages([data.data?.imageUrl, ...nextSiblings.map((s: ProductData) => s.imageUrl)], 400);
-          persistServerFamilyToLocal(data.data, nextSiblings, product.sku);
+          preloadProductImages([updatedMain.imageUrl, ...nextSiblings.map((s: ProductData) => s.imageUrl)], 400);
+          persistServerFamilyToLocal(updatedMain, nextSiblings, targetSku);
         } else {
           setProduct((prev) => (prev ? { ...prev, stok: data.stok } : null));
           // Update seluruh siblings (varian warna & ukuran dalam 1 artikel yang sama)
-          if (data.variants && data.variants.length > 0) {
-            const stockMap = new Map<string, number>(data.variants.map((v: any) => [v.sku, v.stok]));
+          if (variantStockMap.size > 0) {
             setSiblings((prevSiblings) => {
               const updated = prevSiblings.map((sib) => {
-                if (stockMap.has(sib.sku)) {
-                  return { ...sib, stok: stockMap.get(sib.sku)! };
+                if (variantStockMap.has(sib.sku)) {
+                  return { ...sib, stok: variantStockMap.get(sib.sku)! };
                 }
                 return sib;
               });
@@ -354,7 +376,9 @@ export default function Home() {
     } catch {
       showToast("Menampilkan stok tersimpan di sistem", "info");
     } finally {
-      setCheckingLiveStock(false);
+      if (liveStockEpochRef.current === requestEpoch) {
+        setCheckingLiveStock(false);
+      }
     }
   };
 
@@ -401,7 +425,12 @@ export default function Home() {
 
   // Fetch last update date (Cek tiap 5 menit = 300000 ms agar tidak membebani server/kuota)
   const { data: updateData, mutate: mutateLastUpdate } = useSWR("/api/last-update", fetcher, { refreshInterval: 300000 });
-  const serverVersion = updateData?.lastUpdate ? new Date(updateData.lastUpdate).getTime().toString() : null;
+  // Gunakan catalogVersion murni agar update stok harian / Live Stok tidak memicu banner "UPDATE SEKARANG"
+  const serverVersion = updateData?.catalogVersion
+    ? String(updateData.catalogVersion)
+    : updateData?.lastUpdate
+      ? new Date(updateData.lastUpdate).getTime().toString()
+      : null;
   
   const [localVersion, setLocalVersion] = useState<string | null>(null);
   const [hasAppCodeUpdate, setHasAppCodeUpdate] = useState(false);
@@ -452,7 +481,7 @@ export default function Home() {
         await ensureDbOpenSafe();
         const count = await db.products.count().catch(() => 0);
         const schemaVer = localStorage.getItem("suko_db_schema_version");
-        if (count < 80000 || schemaVer !== "v12") {
+        if (count < 80000 || schemaVer !== "v13") {
           if (isMounted) {
             setSyncProgress(0);
             setSyncDetails({
@@ -944,7 +973,8 @@ export default function Home() {
       if (s.sku) sessionCacheRef.current.set(s.sku.toLowerCase(), { product: s, siblings: familyList });
       if (s.barcode) sessionCacheRef.current.set(s.barcode.toLowerCase(), { product: s, siblings: familyList });
     });
-    import('@/lib/offlineDb').then(({ db }) => {
+    import('@/lib/offlineDb').then(({ db, updateLocalFamilyStockInMemory }) => {
+      updateLocalFamilyStockInMemory(familyList);
       const deduped = new Map<string, CachedProduct>();
       for (const item of [srvProduct, ...familyList]) {
         if (!item?.sku || deduped.has(item.sku)) continue;
@@ -1407,13 +1437,15 @@ export default function Home() {
       setLoading(false);
       if (isScanning) setIsScanning(false);
 
-      // Non-blocking background refresh (max 2.5 detik, tidak pernah menggantung UI atau menghapus produk lokal)
+      // Non-blocking background refresh (max 4.5 detik, tidak menimpa bila user menekan Live Stok)
+      const bgStartEpoch = liveStockEpochRef.current;
       const bgCtrl = new AbortController();
-      const bgTimer = setTimeout(() => bgCtrl.abort(), 2500);
+      const bgTimer = setTimeout(() => bgCtrl.abort(), 4500);
       fetch(endpointUrl, { cache: 'no-store', signal: bgCtrl.signal })
         .then((r) => (r.ok ? r.json() : null))
         .then((bgJson: { data?: ProductData | ProductData[]; siblings?: ProductData[] } | null) => {
           if (searchCounterRef.current !== currentSearch) return;
+          if (liveStockEpochRef.current !== bgStartEpoch) return;
           if (bgJson && bgJson.data && !Array.isArray(bgJson.data)) {
             const bgSibs: ProductData[] = bgJson.siblings || [];
             setProduct(bgJson.data);
@@ -1441,18 +1473,25 @@ export default function Home() {
       } catch {}
     }
 
-    // Cek juga ke index model (`db.models` in-RAM) baik untuk teks/filter MAUPUN kode yang belum kena index exact
+    // Cek index model (`db.models` in-RAM) untuk teks/filter, ATAU untuk kode hanya bila RAM sudah hangat (anti-hang!)
     try {
-      const { queryLocalModelsInstant, findOfflineProductByCode } = await import('@/lib/offlineDb');
-      const localRes = await queryLocalModelsInstant({
-        query: trimmed,
-        brandGroup: activeBrand,
-        category: activeCategory,
-        subBrand: activeSubBrand,
-        page,
-        limit: 20,
-        groupSections: activeGroupSections,
-      });
+      const {
+        queryLocalModelsInstant,
+        findOfflineProductByCode,
+        getLoadedModelsMemoryCache,
+      } = await import('@/lib/offlineDb');
+      const shouldQueryModels = !isCodeSearch || Boolean(getLoadedModelsMemoryCache());
+      const localRes = shouldQueryModels
+        ? await queryLocalModelsInstant({
+            query: trimmed,
+            brandGroup: activeBrand,
+            category: activeCategory,
+            subBrand: activeSubBrand,
+            page,
+            limit: 20,
+            groupSections: activeGroupSections,
+          })
+        : null;
       if (searchCounterRef.current !== currentSearch) return;
       if (localRes) {
         const singleModel =
@@ -1504,10 +1543,15 @@ export default function Home() {
     let localSkuCount = localCacheStats?.skuCount || 0;
     if (!localDbReady) {
       try {
-        const { db, ensureDbOpenSafe } = await import('@/lib/offlineDb');
-        await ensureDbOpenSafe();
-        localSkuCount = await db.products.count().catch(() => 0);
-        localDbReady = localSkuCount >= 80000;
+        const { db, ensureDbOpenSafe, isOfflineSyncRunning } = await import('@/lib/offlineDb');
+        if (!isOfflineSyncRunning()) {
+          await ensureDbOpenSafe();
+          localSkuCount = await Promise.race([
+            db.products.count().catch(() => 0),
+            new Promise<number>((resolve) => setTimeout(() => resolve(0), 300)),
+          ]);
+          localDbReady = localSkuCount >= 80000;
+        }
       } catch {}
     }
     if (searchCounterRef.current !== currentSearch) return;
@@ -1516,8 +1560,8 @@ export default function Home() {
 
     let netTimer: ReturnType<typeof setTimeout> | null = null;
     try {
-      // 1. Minta data live ke server dengan timeout cepat jika DB offline lokal sudah penuh
-      const timeoutMs = localDbReady ? 2500 : 8000;
+      // 1. Minta data live ke server dengan timeout memadai (cukup untuk cold-start Vercel + DB tanpa abort prematur)
+      const timeoutMs = localDbReady ? 6500 : 12000;
       const netCtrl = new AbortController();
       netTimer = setTimeout(() => netCtrl.abort(), timeoutMs);
       const res = await fetch(endpointUrl, {

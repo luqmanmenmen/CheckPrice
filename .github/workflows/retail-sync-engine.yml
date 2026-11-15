@@ -121,13 +121,20 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
-      - name: 🧠 [KATEGORI 4 - CATALOG BRAIN INDEX] Susun Tabel CatalogArticle (Pre-Grouped & Anti-Dobel)
+      - name: 🧠 [KATEGORI 4 - CATALOG BRAIN INDEX & OFFLINE SNAPSHOT] Susun CatalogArticle + Kompilasi DB Offline .json.gz
         if: ${{ success() }}
         run: |
           if [ -n "$DATABASE_URL" ]; then
-            python python-engine/build_catalog_index.py
+            STOCK_ONLY_FLAG=""
+            if [ "${{ github.event.inputs.action }}" = "stock-only" ] || [ "${{ github.event.action }}" = "trigger-stock-only" ]; then
+              STOCK_ONLY_FLAG="--stock-only"
+            fi
+            python python-engine/build_catalog_index.py $STOCK_ONLY_FLAG
           else
             echo "DATABASE_URL belum dikonfigurasi di GitHub Secrets, lewati rebuild CatalogArticle."
           fi
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
