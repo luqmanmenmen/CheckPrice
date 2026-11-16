@@ -1367,3 +1367,56 @@ export async function getLocalTaxonomyOverview(): Promise<{
     return null;
   }
 }
+
+/** Perbarui foto URL pada Dexie & RAM cache lokal setelah auto-heal dari server berhasil */
+export async function updateOfflineFamilyImages(
+  updatedItems: Array<{ sku: string; imageUrl?: string | null; images?: string[] }>,
+  article?: string | null
+): Promise<void> {
+  if (!updatedItems || updatedItems.length === 0) return;
+  try {
+    await ensureDbOpenSafe();
+    const bySku = new Map(updatedItems.map((it) => [it.sku, it]));
+    const skus = Array.from(bySku.keys());
+
+    const existingProds = await db.products.bulkGet(skus);
+    const toPut: CachedProduct[] = [];
+    for (let i = 0; i < existingProds.length; i++) {
+      const ex = existingProds[i];
+      if (!ex) continue;
+      const upd = bySku.get(ex.sku);
+      if (!upd) continue;
+      const nextImg = upd.imageUrl || (upd.images && upd.images[0]) || ex.imageUrl;
+      const nextGallery = upd.images && upd.images.length > 0 ? upd.images : nextImg ? [nextImg] : ex.images;
+      toPut.push({
+        ...ex,
+        imageUrl: nextImg,
+        images: nextGallery,
+      });
+    }
+    if (toPut.length > 0) {
+      await db.products.bulkPut(toPut);
+    }
+
+    const rep = updatedItems.find((it) => it.imageUrl);
+    const repImg = rep?.imageUrl || null;
+    if (repImg) {
+      const models = await db.models
+        .filter((m) => Boolean((article && m.article === article) || bySku.has(m.sku)))
+        .toArray();
+      if (models.length > 0) {
+        const nextModels = models.map((m) => ({
+          ...m,
+          imageUrl: bySku.get(m.sku)?.imageUrl || repImg,
+        }));
+        await db.models.bulkPut(nextModels);
+        if (memoryModelsCache) {
+          const modelMap = new Map(nextModels.map((m) => [m.key, m]));
+          memoryModelsCache = memoryModelsCache.map((m) => modelMap.get(m.key) || m);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("[OfflineDB] Gagal update cache foto lokal:", err);
+  }
+}

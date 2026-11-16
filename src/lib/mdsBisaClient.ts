@@ -1333,3 +1333,127 @@ export async function checkSingleItemStock(
     };
   }
 }
+
+/**
+ * Pulihkan URL foto produk & seluruh varian artikel yang sudah 404/rotasi UUID di Shopify CDN
+ * dengan mengambil ulang URL studio terbaru dari Matahari.com, lalu memperbarui DB PostgreSQL.
+ */
+export async function healProductImagesInDb(params: {
+  sku?: string | null;
+  article?: string | null;
+  barcode?: string | null;
+}): Promise<{
+  success: boolean;
+  healed: boolean;
+  data?: any;
+  siblings?: any[];
+}> {
+  const cleanSku = String(params.sku || '').trim();
+  const cleanArticle = sanitizeArticleCode(params.article);
+  const cleanBarcode = String(params.barcode || '').trim() || null;
+
+  let dbMain = cleanSku ? await prisma.product.findUnique({ where: { sku: cleanSku } }) : null;
+  if (!dbMain && cleanArticle) {
+    dbMain = await prisma.product.findFirst({ where: { article: cleanArticle } });
+  }
+  if (!dbMain && cleanBarcode) {
+    dbMain = await prisma.product.findFirst({ where: { barcode: cleanBarcode } });
+  }
+  if (!dbMain) {
+    return { success: false, healed: false };
+  }
+
+  const artToUse = sanitizeArticleCode(dbMain.article) || cleanArticle;
+  const mataImages = await fetchMatahariFamilyAndImages(
+    dbMain.sku,
+    artToUse,
+    dbMain.barcode || cleanBarcode
+  );
+
+  const hasFreshMata =
+    mataImages.defaultImages.length > 0 ||
+    mataImages.imagesBySku.size > 0 ||
+    mataImages.imagesByColor.size > 0;
+
+  if (!hasFreshMata) {
+    return { success: false, healed: false };
+  }
+
+  let siblings = await getProductSiblings(checkAndCleanPromo(dbMain));
+  if (!siblings || siblings.length === 0) {
+    siblings = [checkAndCleanPromo(dbMain)];
+  }
+
+  const dbUpdates: Promise<any>[] = [];
+  let healedCount = 0;
+
+  const updatedSiblings = siblings.map((sib) => {
+    const skuKey = String(sib.sku || '').trim();
+    const colorUp = String(sib.color || '').trim().toUpperCase();
+    const freshList: string[] = [];
+
+    for (const u of mataImages.imagesBySku.get(skuKey) || []) pushUniqueUrl(freshList, u, 8);
+    if (colorUp) {
+      for (const u of mataImages.imagesByColor.get(colorUp) || []) pushUniqueUrl(freshList, u, 8);
+    }
+    for (const u of mataImages.defaultImages) pushUniqueUrl(freshList, u, 8);
+
+    if (freshList.length === 0) return sib;
+
+    const samePrimary = sib.imageUrl === freshList[0];
+    const sameGallery =
+      Array.isArray(sib.images) &&
+      sib.images.length === freshList.length &&
+      sib.images.every((u: string, i: number) => u === freshList[i]);
+
+    if (!samePrimary || !sameGallery) {
+      healedCount++;
+      dbUpdates.push(
+        prisma.product
+          .update({
+            where: { sku: skuKey },
+            data: {
+              imageUrl: freshList[0],
+              images: freshList,
+            },
+          })
+          .catch(() => {})
+      );
+    }
+
+    return {
+      ...sib,
+      imageUrl: freshList[0],
+      images: freshList,
+    };
+  });
+
+  if (artToUse && mataImages.defaultImages.length > 0) {
+    const mainMatch = updatedSiblings.find((s) => s.sku === dbMain!.sku);
+    const catalogImg = mainMatch?.imageUrl || mataImages.defaultImages[0];
+    if (catalogImg) {
+      dbUpdates.push(
+        prisma.catalogArticle
+          .updateMany({
+            where: { article: artToUse },
+            data: { imageUrl: catalogImg },
+          })
+          .catch(() => {})
+      );
+    }
+  }
+
+  if (dbUpdates.length > 0) {
+    await Promise.allSettled(dbUpdates);
+  }
+
+  const enrichedMain =
+    updatedSiblings.find((s) => s.sku === dbMain!.sku) || updatedSiblings[0];
+
+  return {
+    success: true,
+    healed: healedCount > 0 || Boolean(enrichedMain?.imageUrl),
+    data: enrichedMain,
+    siblings: updatedSiblings,
+  };
+}

@@ -37,6 +37,7 @@ export default function ImageLightboxModal({
   }, [images, imageUrl]);
 
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
+  const [brokenSlides, setBrokenSlides] = useState<Record<number, boolean>>({});
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -73,6 +74,7 @@ export default function ImageLightboxModal({
     if (!isOpen) return;
 
     setCurrentIndex(initialIndex || 0);
+    setBrokenSlides({});
     setScale(1);
     setPosition({ x: 0, y: 0 });
     setIsDragging(false);
@@ -348,17 +350,23 @@ export default function ImageLightboxModal({
               : "cursor-zoom-in"
           }`}
         >
-          <img
-            src={currentSrc}
-            alt={title}
-            draggable={false}
-            style={{
-              transform: `translate3d(${position.x}px, ${position.y}px, 0) scale(${scale})`,
-              transition: isDragging || isPinching ? "none" : "transform 0.18s cubic-bezier(0.2, 0, 0, 1)",
-              transformOrigin: "center center",
-            }}
-            className="max-h-[60dvh] w-auto max-w-full object-contain rounded-lg shadow-md pointer-events-none select-none"
-          />
+          {brokenSlides[currentIndex] ? (
+            <div className="text-slate-400 text-xs font-bold py-10">Foto tidak tersedia</div>
+          ) : (
+            <img
+              src={currentSrc}
+              alt={title}
+              draggable={false}
+              referrerPolicy="no-referrer"
+              onError={() => setBrokenSlides((prev) => ({ ...prev, [currentIndex]: true }))}
+              style={{
+                transform: `translate3d(${position.x}px, ${position.y}px, 0) scale(${scale})`,
+                transition: isDragging || isPinching ? "none" : "transform 0.18s cubic-bezier(0.2, 0, 0, 1)",
+                transformOrigin: "center center",
+              }}
+              className="max-h-[60dvh] w-auto max-w-full object-contain rounded-lg shadow-md pointer-events-none select-none"
+            />
+          )}
 
           {/* Left / Right Navigation Buttons for Multi Images */}
           {isMulti && scale === 1 && (

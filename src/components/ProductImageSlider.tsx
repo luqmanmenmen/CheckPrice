@@ -7,22 +7,22 @@ import ImageLightboxModal from "@/components/ImageLightboxModal";
 const preloadedUrls = new Set<string>();
 
 /**
- * Mengoptimalkan URL gambar CDN Shopify / Matahari.com agar berukuran ringan (~12–18 KB vs 1.2 MB)
- * sehingga langsung tampil 0ms tanpa loading lama saat di-scan atau dicari!
+ * Menormalkan URL gambar retail (https://) tanpa menambah query `?width=...`
+ * karena sebagian URL Shopify CDN mengembalikan HTTP 404 jika diberi parameter width.
  */
-export function optimizeRetailImageUrl(rawUrl?: string | null, width: number = 400): string {
+export function optimizeRetailImageUrl(rawUrl?: string | null, _width: number = 400): string {
   if (!rawUrl || typeof rawUrl !== "string") return "";
-  const trimmed = rawUrl.trim();
+  let trimmed = rawUrl.trim();
   if (!trimmed) return "";
+  if (trimmed.startsWith("//")) trimmed = `https:${trimmed}`;
 
   if (trimmed.includes("cdn.shopify.com") || trimmed.includes("matahari.com/cdn/shop")) {
     try {
       const u = new URL(trimmed);
-      u.searchParams.set("width", String(width));
+      u.searchParams.delete("width");
       return u.toString();
     } catch {
-      const sep = trimmed.includes("?") ? "&" : "?";
-      return `${trimmed}${sep}width=${width}`;
+      return trimmed.replace(/([?&])width=\d+&?/g, "$1").replace(/[?&]$/, "");
     }
   }
   return trimmed;
@@ -55,6 +55,8 @@ interface ProductImageSliderProps {
   imageWidth?: number;
   showThumbnails?: boolean;
   colorBadge?: string | null;
+  onBrokenImages?: () => Promise<boolean | void> | void;
+  isHealing?: boolean;
 }
 
 export default function ProductImageSlider({
@@ -66,6 +68,8 @@ export default function ProductImageSlider({
   imageWidth = 400,
   showThumbnails = false,
   colorBadge = null,
+  onBrokenImages,
+  isHealing = false,
 }: ProductImageSliderProps) {
   const cleanImages = (images || []).filter(
     (u): u is string => typeof u === "string" && u.trim().length > 0
@@ -74,18 +78,29 @@ export default function ProductImageSlider({
   const [isZoomed, setIsZoomed] = useState(false);
   const [useRawFallback, setUseRawFallback] = useState<Record<number, boolean>>({});
   const [hasError, setHasError] = useState<Record<number, boolean>>({});
+  const [thumbError, setThumbError] = useState<Record<number, boolean>>({});
+  const healTriggeredKeyRef = useRef<string>("");
 
-  // Reset index ketika gambar utama berganti (misal ganti produk / warna)
-  const firstImageKey = cleanImages[0] || "";
+  // Reset state ketika daftar gambar berganti (misal ganti produk / warna / selesai heal)
+  const imagesKey = cleanImages.join("|");
   useEffect(() => {
     setCurrentIndex(0);
     setUseRawFallback({});
     setHasError({});
+    setThumbError({});
+    healTriggeredKeyRef.current = "";
     // Preload slide ke-2 dst di background setelah gambar utama
     if (cleanImages.length > 1) {
       preloadProductImages(cleanImages.slice(1), imageWidth);
     }
-  }, [firstImageKey, imageWidth]);
+  }, [imagesKey, imageWidth]);
+
+  const triggerBrokenHeal = () => {
+    if (!onBrokenImages) return;
+    if (healTriggeredKeyRef.current === imagesKey) return;
+    healTriggeredKeyRef.current = imagesKey;
+    Promise.resolve(onBrokenImages()).catch(() => {});
+  };
 
   // Touch Swipe Handling
   const touchStartX = useRef<number | null>(null);
@@ -159,9 +174,18 @@ export default function ProductImageSlider({
         {/* Render langsung gambar aktif tanpa delay animasi fade agar muncul 0ms */}
         <div className="w-full h-full relative overflow-hidden bg-slate-100">
           {hasError[safeIndex] ? (
-            <div className="w-full h-full flex flex-col items-center justify-center bg-slate-100 text-slate-400 p-2">
-              <ImageIcon className="w-8 h-8 opacity-40 mb-1" />
-              <span className="text-[10px] font-bold">Gagal memuat</span>
+            <div className="w-full h-full flex flex-col items-center justify-center bg-slate-100 text-slate-400 p-3 text-center">
+              {isHealing ? (
+                <>
+                  <div className="w-6 h-6 rounded-full border-2 border-blue-500 border-t-transparent animate-spin mb-2" />
+                  <span className="text-[11px] font-bold text-blue-600">Memperbarui foto dari server...</span>
+                </>
+              ) : (
+                <>
+                  <ImageIcon className="w-8 h-8 opacity-40 mb-1" />
+                  <span className="text-[10px] font-bold">Foto tidak tersedia</span>
+                </>
+              )}
             </div>
           ) : (
             <img
@@ -178,6 +202,7 @@ export default function ProductImageSlider({
                   setUseRawFallback((prev) => ({ ...prev, [safeIndex]: true }));
                 } else {
                   setHasError((prev) => ({ ...prev, [safeIndex]: true }));
+                  triggerBrokenHeal();
                 }
               }}
               className="w-full h-full object-cover object-top cursor-zoom-in transition-transform duration-300 group-hover:scale-[1.02]"
@@ -265,13 +290,23 @@ export default function ProductImageSlider({
                 }`}
                 aria-label={`Lihat sudut foto ${idx + 1}`}
               >
-                <img
-                  src={thumbSrc}
-                  alt={`${alt} thumbnail ${idx + 1}`}
-                  loading="lazy"
-                  referrerPolicy="no-referrer"
-                  className="w-full h-full object-cover object-top"
-                />
+                {thumbError[idx] ? (
+                  <div className="w-full h-full flex items-center justify-center bg-slate-100 text-slate-300">
+                    <ImageIcon className="w-4 h-4" />
+                  </div>
+                ) : (
+                  <img
+                    src={thumbSrc}
+                    alt=""
+                    loading="lazy"
+                    referrerPolicy="no-referrer"
+                    onError={() => {
+                      setThumbError((prev) => ({ ...prev, [idx]: true }));
+                      triggerBrokenHeal();
+                    }}
+                    className="w-full h-full object-cover object-top"
+                  />
+                )}
                 <span className="absolute bottom-0.5 right-0.5 px-1 rounded bg-black/65 text-white text-[9px] font-mono font-bold">
                   {idx + 1}
                 </span>

@@ -382,8 +382,68 @@ export default function Home() {
     }
   };
 
+  const [healingImageKey, setHealingImageKey] = useState<string | null>(null);
+  const healingAttemptsRef = useRef<Set<string>>(new Set());
+
+  const handleHealProductImages = async (target: { sku?: string | null; article?: string | null; barcode?: string | null }) => {
+    const key = String(target.article || target.sku || "").trim();
+    if (!key || healingAttemptsRef.current.has(key)) return false;
+    healingAttemptsRef.current.add(key);
+    setHealingImageKey(key);
+    try {
+      const res = await fetch("/api/product/heal-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sku: target.sku || "",
+          article: target.article || "",
+          barcode: target.barcode || "",
+        }),
+      });
+      const json = await res.json().catch(() => null);
+      if (res.ok && json?.success && json?.healed) {
+        const healedSibs: ProductData[] = Array.isArray(json.siblings) ? json.siblings : [];
+        const healedMain: ProductData | undefined = json.data;
+        const sibMap = new Map(healedSibs.map((s) => [s.sku, s]));
+
+        if (healedMain) {
+          setProduct((cur) => {
+            if (!cur) return cur;
+            const match = sibMap.get(cur.sku) || (cur.sku === healedMain.sku ? healedMain : undefined);
+            if (!match && (!cur.article || cur.article !== healedMain.article)) return cur;
+            const img = match?.imageUrl || healedMain.imageUrl;
+            const imgs = match?.images || healedMain.images;
+            return { ...cur, imageUrl: img || cur.imageUrl, images: imgs && imgs.length > 0 ? imgs : cur.images };
+          });
+        }
+        if (healedSibs.length > 0) {
+          setSiblings((prev) =>
+            prev.map((s) => {
+              const m = sibMap.get(s.sku);
+              return m ? { ...s, imageUrl: m.imageUrl || s.imageUrl, images: m.images?.length ? m.images : s.images } : s;
+            })
+          );
+          setProductsList((prev) =>
+            prev.map((p) => {
+              const m = sibMap.get(p.sku) || (p.article && healedMain?.article === p.article ? healedMain : undefined);
+              return m?.imageUrl ? { ...p, imageUrl: m.imageUrl } : p;
+            })
+          );
+          const { updateOfflineFamilyImages } = await import("@/lib/offlineDb");
+          await updateOfflineFamilyImages(healedSibs, healedMain?.article || target.article);
+        }
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    } finally {
+      setHealingImageKey((cur) => (cur === key ? null : cur));
+    }
+  };
+
   const [submitting, setSubmitting] = useState(false);
-  const [qty, setQty] = useState(1);
+  const [qty, setQty] = useState(0);
   const [activeTab, setActiveTab] = useState<"FACING_OUT" | "STOCK_CHECK" | "ORDERS">("FACING_OUT");
   const [cart, setCart] = useState<any[]>([]);
 
@@ -1066,7 +1126,7 @@ export default function Home() {
     const existing = siblings.find(s => s.sku === targetSku);
     if (existing) {
       setProduct(existing);
-      setQty(multiVariantQty[targetSku] && multiVariantQty[targetSku] > 0 ? multiVariantQty[targetSku] : 1);
+      setQty(multiVariantQty[targetSku] || 0);
       sessionCacheRef.current.set(targetSku, { product: existing, siblings });
       if (scrollToPhoto) {
         scrollToProductPhoto();
@@ -1771,10 +1831,10 @@ export default function Home() {
   // State Multi-Warna & Multi-Size Sekaligus dalam 1x Scan (SKU -> Qty)
   const [multiVariantQty, setMultiVariantQty] = useState<Record<string, number>>({});
 
-  // Reset pilihan multi-varian jika pindah ke artikel yang berbeda
+  // Reset pilihan multi-varian jika pindah ke artikel yang berbeda (pure e-commerce: mulai dari 0)
   useEffect(() => {
     setMultiVariantQty({});
-    setQty(1);
+    setQty(0);
   }, [product?.article]);
 
   const adjustVariantQty = (sku: string, delta: number, e?: React.MouseEvent) => {
@@ -1792,18 +1852,23 @@ export default function Home() {
       return copy;
     });
     if (sku === product?.sku) {
-      setQty(next > 0 ? next : 1);
+      setQty(next);
     }
   };
 
   const setActiveVariantStepperQty = (nextQty: number) => {
-    const clamped = Math.max(1, nextQty);
+    const clamped = Math.max(0, nextQty);
     setQty(clamped);
     if (product?.sku) {
-      setMultiVariantQty((prev) => ({
-        ...prev,
-        [product.sku]: clamped,
-      }));
+      setMultiVariantQty((prev) => {
+        const copy = { ...prev };
+        if (clamped === 0) {
+          delete copy[product.sku];
+        } else {
+          copy[product.sku] = clamped;
+        }
+        return copy;
+      });
     }
   };
 
@@ -1853,10 +1918,15 @@ export default function Home() {
   };
 
   const adjustCartItemQty = (idx: number, delta: number) => {
+    const targetItem = cart[idx];
+    const nextQty = (targetItem?.qty || 1) + delta;
     const nextCart = cart
       .map((item, i) => (i === idx ? { ...item, qty: (item.qty || 1) + delta } : item))
       .filter((item) => (item.qty || 0) > 0);
     updateCart(nextCart);
+    if (targetItem && nextQty <= 0) {
+      showToast(`"${targetItem.productName?.split(':')[0] || targetItem.sku}" dihapus dari Request`, "info");
+    }
   };
 
   const handleUnifiedAddToCart = (type: string, keepOpen: boolean = false) => {
@@ -1864,50 +1934,24 @@ export default function Home() {
     const allSibs = siblings && siblings.length > 0 ? siblings : [product];
     const selectedEntries = Object.entries(multiVariantQty).filter(([, q]) => q > 0);
 
+    if (selectedEntries.length === 0) {
+      showToast("Pilih ukuran / ketuk + Pilih dulu sebelum masuk keranjang", "info");
+      return;
+    }
+
     let nextCart = [...cart];
     let totalPcsAdded = 0;
 
-    if (selectedEntries.length > 0) {
-      for (const [targetSku, rawQty] of selectedEntries) {
-        const sib = allSibs.find((s) => s.sku === targetSku) || (targetSku === product.sku ? product : undefined);
-        if (!sib) continue;
-        const sibInfo = parseProductInfo(sib);
-        const itemSize = sibInfo.size || sib.size || "";
-        const itemColor = sibInfo.color || sib.color || "";
-        const itemQty =
-          selectedEntries.length === 1 && targetSku === product.sku
-            ? Math.max(rawQty, qty)
-            : rawQty;
-        totalPcsAdded += itemQty;
+    for (const [targetSku, rawQty] of selectedEntries) {
+      const sib = allSibs.find((s) => s.sku === targetSku) || (targetSku === product.sku ? product : undefined);
+      if (!sib) continue;
+      const sibInfo = parseProductInfo(sib);
+      const itemSize = sibInfo.size || sib.size || "";
+      const itemColor = sibInfo.color || sib.color || "";
+      const itemQty = rawQty;
+      totalPcsAdded += itemQty;
 
-        const existingIdx = nextCart.findIndex((c) => c.sku === sib.sku && c.type === type);
-        if (existingIdx !== -1) {
-          nextCart[existingIdx] = {
-            ...nextCart[existingIdx],
-            qty: (nextCart[existingIdx].qty || 1) + itemQty,
-            color: nextCart[existingIdx].color || itemColor,
-          };
-        } else {
-          nextCart.push({
-            sku: sib.sku,
-            productName: sib.description,
-            type,
-            qty: itemQty,
-            size: itemSize,
-            color: itemColor,
-            photoUrl: sib.imageUrl || product.imageUrl || null,
-            ocrData: null,
-          });
-        }
-      }
-    } else {
-      const activeInfo = parseProductInfo(product);
-      const itemSize = activeInfo.size || product.size || "";
-      const itemColor = activeInfo.color || product.color || "";
-      const itemQty = Math.max(1, qty);
-      totalPcsAdded = itemQty;
-
-      const existingIdx = nextCart.findIndex((c) => c.sku === product.sku && c.type === type);
+      const existingIdx = nextCart.findIndex((c) => c.sku === sib.sku && c.type === type);
       if (existingIdx !== -1) {
         nextCart[existingIdx] = {
           ...nextCart[existingIdx],
@@ -1916,13 +1960,13 @@ export default function Home() {
         };
       } else {
         nextCart.push({
-          sku: product.sku,
-          productName: product.description,
+          sku: sib.sku,
+          productName: sib.description,
           type,
           qty: itemQty,
           size: itemSize,
           color: itemColor,
-          photoUrl: product.imageUrl || null,
+          photoUrl: sib.imageUrl || product.imageUrl || null,
           ocrData: null,
         });
       }
@@ -1930,7 +1974,7 @@ export default function Home() {
 
     updateCart(nextCart);
     setMultiVariantQty({});
-    setQty(1);
+    setQty(0);
 
     const nextTotalPcs = nextCart.reduce((acc, c) => acc + (c.qty || 1), 0);
 
@@ -1987,7 +2031,7 @@ export default function Home() {
     setSelectedCategory("ALL");
     clearListToIdle();
     setMultiVariantQty({});
-    setQty(1);
+    setQty(0);
     inputRef.current?.focus();
   };
 
@@ -2362,8 +2406,12 @@ export default function Home() {
                           title="Perbesar foto"
                         >
                           <img 
-                            src={itemImage} 
+                            src={optimizeRetailImageUrl(itemImage)} 
                             alt={t.sku} 
+                            referrerPolicy="no-referrer"
+                            onError={(e) => {
+                              (e.currentTarget as HTMLImageElement).style.display = "none";
+                            }}
                             className="w-full h-full object-cover transition-transform group-hover:scale-105"
                           />
                           <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
@@ -2404,11 +2452,19 @@ export default function Home() {
                     </span>
                   </div>
                   
-                  {/* Action to clear it from list */}
+                  {/* Action to clear/cancel it from list */}
+                  {t.status === 'PENDING' && (
+                    <button 
+                      onClick={() => markAsCompleted(t.id)}
+                      className="w-full mt-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold py-2.5 rounded-lg text-xs transition-colors active:scale-95 cursor-pointer"
+                    >
+                      Batalkan / Hapus Request
+                    </button>
+                  )}
                   {(t.status === 'READY' || t.status === 'OOS') && (
                     <button 
                       onClick={() => markAsCompleted(t.id)}
-                      className="w-full mt-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 rounded-lg text-sm transition-colors active:scale-95"
+                      className="w-full mt-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 rounded-lg text-sm transition-colors active:scale-95 cursor-pointer"
                     >
                       Selesai & Tutup Pesanan
                     </button>
@@ -2886,6 +2942,14 @@ export default function Home() {
                     loading="eager"
                     decoding="sync"
                     referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      const imgEl = e.currentTarget as HTMLImageElement;
+                      if (!imgEl.dataset.healRequested) {
+                        imgEl.dataset.healRequested = "1";
+                        handleHealProductImages({ sku: p.sku, article: p.article, barcode: p.barcode });
+                      }
+                      imgEl.style.opacity = "0";
+                    }}
                     className="w-full h-full object-cover object-top group-hover:scale-105 transition-transform duration-300"
                   />
                 ) : (
@@ -3340,12 +3404,9 @@ export default function Home() {
           activeTab === "STOCK_CHECK" ? "STOCK_CHECK" : "FACING_OUT";
         const isFacingAction = targetCartActionType === "FACING_OUT";
         const totalInCartPcs = cart.reduce((acc, c) => acc + (c.qty || 1), 0);
-        const effectiveActiveQty =
-          multiVariantQty[product.sku] !== undefined && multiVariantQty[product.sku] > 0
-            ? multiVariantQty[product.sku]
-            : qty;
-        const pendingVariantsCount = selectedVariantsCount > 0 ? selectedVariantsCount : 1;
-        const pendingTotalPcs = selectedVariantsCount > 0 ? selectedTotalPcs : effectiveActiveQty;
+        const effectiveActiveQty = multiVariantQty[product.sku] || 0;
+        const pendingVariantsCount = selectedVariantsCount;
+        const pendingTotalPcs = selectedTotalPcs;
         const activeColorGroup =
           colorGroupsList.find((c) => c.color === activeColorUpper) || colorGroupsList[0];
         const reviewColorsSorted = [...colorGroupsList].sort((a, b) => a.color.localeCompare(b.color));
@@ -3448,6 +3509,14 @@ export default function Home() {
                   imageWidth={800}
                   showThumbnails={true}
                   colorBadge={parsedInfo.color || product.color || null}
+                  onBrokenImages={() =>
+                    handleHealProductImages({
+                      sku: product.sku,
+                      article: product.article,
+                      barcode: product.barcode,
+                    })
+                  }
+                  isHealing={healingImageKey === (product.article || product.sku)}
                 />
               </div>
 
@@ -3872,8 +3941,9 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={() => {
-                    setMultiVariantQty({ [product.sku]: effectiveActiveQty });
-                    setQty(effectiveActiveQty);
+                    const nextVal = effectiveActiveQty > 0 ? effectiveActiveQty : 1;
+                    setMultiVariantQty({ [product.sku]: nextVal });
+                    setQty(nextVal);
                   }}
                   className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-[11px] font-bold text-slate-200 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
                 >
@@ -3902,11 +3972,11 @@ export default function Home() {
                     type="button"
                     onClick={() => {
                       setMultiVariantQty({});
-                      setQty(1);
+                      setQty(0);
                     }}
                     className="ml-auto px-2.5 py-1 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-500/50 text-[11px] font-bold text-rose-200 whitespace-nowrap shrink-0 cursor-pointer"
                   >
-                    Reset
+                    Hapus (0)
                   </button>
                 )}
               </div>
@@ -3917,20 +3987,26 @@ export default function Home() {
                   <div className="inline-flex items-center bg-slate-800 border border-slate-600 rounded-xl overflow-hidden shrink-0">
                     <button
                       type="button"
+                      disabled={pendingTotalPcs === 0}
                       onClick={() => {
                         if (selectedVariantEntries.length === 1) {
                           adjustVariantQty(selectedVariantEntries[0][0], -1);
-                        } else if (selectedVariantEntries.length === 0) {
-                          setActiveVariantStepperQty(effectiveActiveQty - 1);
+                        } else if (selectedVariantEntries.length > 1) {
+                          const targetDecrementSku =
+                            (multiVariantQty[product.sku] || 0) > 0
+                              ? product.sku
+                              : selectedVariantEntries[selectedVariantEntries.length - 1][0];
+                          adjustVariantQty(targetDecrementSku, -1);
                         } else {
-                          adjustVariantQty(product.sku, -1);
+                          setActiveVariantStepperQty(0);
                         }
                       }}
-                      className="w-9 h-9 flex items-center justify-center text-white hover:bg-slate-700 font-black text-base cursor-pointer"
+                      title="Kurangi jumlah (sampai 0 untuk batal/hapus)"
+                      className="w-9 h-9 flex items-center justify-center text-white hover:bg-rose-900/70 font-black text-base cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed"
                     >
                       −
                     </button>
-                    <span className="min-w-[3.75rem] px-2 text-center text-xs font-black text-emerald-300 tabular-nums">
+                    <span className={`min-w-[3.75rem] px-2 text-center text-xs font-black tabular-nums ${pendingTotalPcs > 0 ? "text-emerald-300" : "text-slate-400"}`}>
                       {pendingTotalPcs} pcs
                     </span>
                     <button
@@ -3938,8 +4014,6 @@ export default function Home() {
                       onClick={() => {
                         if (selectedVariantEntries.length === 1) {
                           adjustVariantQty(selectedVariantEntries[0][0], 1);
-                        } else if (selectedVariantEntries.length === 0) {
-                          setActiveVariantStepperQty(effectiveActiveQty + 1);
                         } else {
                           adjustVariantQty(product.sku, 1);
                         }
@@ -3951,8 +4025,10 @@ export default function Home() {
                   </div>
 
                   <div className="min-w-0">
-                    <p className="text-xs font-black text-white tabular-nums truncate">
-                      {pendingVariantsCount} Varian • {pendingTotalPcs} Pcs
+                    <p className={`text-xs font-black tabular-nums truncate ${pendingTotalPcs > 0 ? "text-white" : "text-slate-300"}`}>
+                      {pendingTotalPcs > 0
+                        ? `${pendingVariantsCount} Varian • ${pendingTotalPcs} Pcs`
+                        : "0 Varian • Pilih ukuran"}
                     </p>
                     <label
                       className="inline-flex items-center gap-1.5 cursor-pointer select-none mt-0.5"
@@ -3972,22 +4048,32 @@ export default function Home() {
                 <div className="grid grid-cols-2 sm:flex items-center gap-2 shrink-0">
                   <button
                     type="button"
+                    disabled={pendingTotalPcs === 0}
                     onClick={() => handleUnifiedAddToCart(targetCartActionType, true)}
-                    className="px-3 py-2.5 rounded-xl border border-slate-500 bg-slate-700 hover:bg-slate-600 text-white font-bold text-xs cursor-pointer transition-all active:scale-95 text-center"
+                    className="px-3 py-2.5 rounded-xl border border-slate-500 bg-slate-700 hover:bg-slate-600 text-white font-bold text-xs cursor-pointer transition-all active:scale-95 text-center disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     + Keranjang, Pilih Lagi
                   </button>
                   <button
                     type="button"
+                    disabled={pendingTotalPcs === 0}
                     onClick={() => handleUnifiedAddToCart(targetCartActionType, false)}
-                    className={`px-3.5 py-2.5 rounded-xl font-black text-xs shadow-md active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                      isFacingAction
-                        ? "bg-emerald-500 hover:bg-emerald-400 text-slate-950"
-                        : "bg-indigo-500 hover:bg-indigo-400 text-white"
+                    className={`px-3.5 py-2.5 rounded-xl font-black text-xs shadow-md transition-all flex items-center justify-center gap-1.5 ${
+                      pendingTotalPcs === 0
+                        ? "bg-slate-700 text-slate-400 border border-slate-600 cursor-not-allowed shadow-none"
+                        : isFacingAction
+                        ? "bg-emerald-500 hover:bg-emerald-400 text-slate-950 cursor-pointer active:scale-95"
+                        : "bg-indigo-500 hover:bg-indigo-400 text-white cursor-pointer active:scale-95"
                     }`}
                   >
                     <ShoppingCart className="w-4 h-4 shrink-0" />
-                    <span>{isFacingAction ? `+ Keranjang (${pendingTotalPcs} Pcs)` : `+ Tanya Stok (${pendingTotalPcs} Pcs)`}</span>
+                    <span>
+                      {pendingTotalPcs === 0
+                        ? "Pilih Size Dulu"
+                        : isFacingAction
+                        ? `+ Keranjang (${pendingTotalPcs} Pcs)`
+                        : `+ Tanya Stok (${pendingTotalPcs} Pcs)`}
+                    </span>
                   </button>
                 </div>
               </div>
