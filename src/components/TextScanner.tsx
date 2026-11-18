@@ -16,9 +16,14 @@ import {
   AlertCircle,
   RefreshCw,
   ImagePlus,
+  ZoomIn,
+  Aperture,
 } from "lucide-react";
 import {
+  applyPixelContrastBoost,
+  decodeBarcodeFromCanvas,
   decodeBarcodeFromFile,
+  enableZxingTryHarder,
   isValidGs1CheckDigit,
   isValidMdsSku8,
 } from "@/lib/barcodeImageDecoder";
@@ -46,6 +51,41 @@ const SUPPORTED_FORMATS = [
   Html5QrcodeSupportedFormats.CODABAR,
   Html5QrcodeSupportedFormats.QR_CODE,
 ];
+
+const ZOOM_STEPS = [1, 1.5, 2] as const;
+
+function isAppleMobileBrowser(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return (
+    /iPad|iPhone|iPod/i.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+  );
+}
+
+async function tryApplyHardwareZoom(
+  track: MediaStreamTrack | undefined,
+  targetZoom: number
+): Promise<boolean> {
+  if (!track || typeof track.getCapabilities !== "function") return false;
+  try {
+    const caps = track.getCapabilities() as any;
+    const zCap = caps?.zoom;
+    if (!zCap || typeof zCap.max !== "number") return false;
+    const minZ = typeof zCap.min === "number" ? zCap.min : 1;
+    if (targetZoom < minZ || targetZoom > zCap.max) return false;
+
+    await track.applyConstraints({
+      advanced: [{ zoom: targetZoom } as any],
+    });
+    const settings = typeof track.getSettings === "function" ? (track.getSettings() as any) : null;
+    if (typeof settings?.zoom === "number") {
+      return Math.abs(settings.zoom - targetZoom) <= 0.35;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export default function TextScanner({ onScanResult }: TextScannerProps) {
   const hiddenSinkId = "retail-barcode-decoder-sink";
@@ -80,6 +120,11 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [facingMode, setFacingMode] = useState<"environment" | "user">("environment");
   const [restartTrigger, setRestartTrigger] = useState(0);
+  const [zoomLevel, setZoomLevel] = useState<number>(1);
+  const [hwZoomActive, setHwZoomActive] = useState(false);
+
+  const zoomRatioRef = useRef<number>(1);
+  const hwZoomActiveRef = useRef<boolean>(false);
 
   // Audio feedback nada beep kasir (1.8 kHz, 100ms)
   const playBeep = useCallback(() => {
@@ -184,9 +229,16 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       const currentCount = lastCandidateRef.current.count;
       const isStandardMdsEan13 = /^234000\d{7}$/.test(cleanCode) && passesGs1;
       const isStandardMdsSku = isValidMdsSku8(cleanCode);
+      const hasNative = Boolean(nativeDetectorRef.current);
 
-      // Kode 12-13 digit non-GS1 (bukan dari Dexie) tetap butuh 4 frame identik agar terhindar dari noise EAN blur
-      const requiredFrames = !passesGs1 ? 4 : (isStandardMdsEan13 || isStandardMdsSku ? 2 : 3);
+      // Di browser tanpa Native BarcodeDetector (mis. iOS Safari), validasi checksum GS1 / SKU 8-digit langsung eksekusi 1 frame
+      const requiredFrames = !passesGs1
+        ? 4
+        : !hasNative && (isStandardMdsEan13 || isStandardMdsSku || isNumeric12Or13)
+          ? 1
+          : isStandardMdsEan13 || isStandardMdsSku
+            ? 2
+            : 3;
       if (currentCount < requiredFrames) {
         setStatus("Memfokuskan lensa ke garis barcode...");
         return;
@@ -214,8 +266,10 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       if (document.getElementById(hiddenSinkId)) {
         decoderRef.current = new Html5Qrcode(hiddenSinkId, {
           formatsToSupport: SUPPORTED_FORMATS,
+          useBarCodeDetectorIfSupported: false,
           verbose: false,
         });
+        enableZxingTryHarder(decoderRef.current);
       }
     } catch (e) {
       console.warn("Init ZXing decoder fallback warning:", e);
@@ -237,13 +291,13 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
         throw new Error("Browser tidak mendukung akses kamera.");
       }
 
-      // TIER 1: Kamera HD dengan facingMode ideal
+      // TIER 1: Kamera Full-HD ideal (lebih tajam untuk garis tipis EAN-13 di Safari iPhone)
       try {
         return await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: facingMode },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
           },
           audio: false,
         });
@@ -344,7 +398,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
           ensurePlaying();
         }
 
-        // Aktifkan Continuous Autofocus & Cek Fitur Senter (Torch)
+        // Aktifkan Continuous Autofocus, Zoom iPhone, & Cek Fitur Senter (Torch)
         const track = stream.getVideoTracks()[0];
         if (track && typeof track.getCapabilities === "function") {
           try {
@@ -358,6 +412,21 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
                 .catch(() => {});
             }
           } catch {}
+        }
+
+        // Pada kamera belakang iPhone Safari (lensa 1x jarak fokus minimum ~18-20cm), preset 1.5x zoom membantu agar tag baju terbaca tajam
+        const initialZoom = facingMode === "environment" && isAppleMobileBrowser() ? 1.5 : 1;
+        zoomRatioRef.current = initialZoom;
+        setZoomLevel(initialZoom);
+        if (initialZoom > 1) {
+          const hwOk = await tryApplyHardwareZoom(track, initialZoom);
+          if (isMounted) {
+            hwZoomActiveRef.current = hwOk;
+            setHwZoomActive(hwOk);
+          }
+        } else {
+          hwZoomActiveRef.current = false;
+          setHwZoomActive(false);
         }
 
         // Watchdog Anti-Black-Screen: Jika dalam 2 detik video masih paused / dimensi 0, paksa play ulang!
@@ -407,19 +476,51 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
         const ctx = canvas.getContext("2d", { willReadFrequently: true });
         if (!ctx) return;
 
-        // Pass ganjil: fokus ke pita horizontal tengah (kotak barcode); Pass genap: area tengah lebih luas
-        const cropW = Math.floor(vw * 0.88);
-        const cropH = pass % 2 === 1 ? Math.floor(vh * 0.42) : Math.floor(vh * 0.68);
-        const sx = Math.floor((vw - cropW) / 2);
-        const sy = Math.floor((vh - cropH) / 2);
+        // Jika zoom digital aktif (hardware zoom tidak didukung browser/iOS lama), persempit area crop agar sesuai kotak bidik
+        const digitalZoom = hwZoomActiveRef.current ? 1 : Math.max(1, zoomRatioRef.current);
+        const passMode = pass % 4;
 
-        const targetW = Math.min(960, cropW);
-        const targetH = Math.max(120, Math.floor(cropH * (targetW / cropW)));
+        if (passMode === 3) {
+          // Pass 3: Rotasi 90 derajat + kontras tinggi untuk barcode vertikal / miring di hangtag
+          const cropW = Math.max(120, Math.floor((vw * 0.56) / digitalZoom));
+          const cropH = Math.max(120, Math.floor((vh * 0.72) / digitalZoom));
+          const sx = Math.floor((vw - cropW) / 2);
+          const sy = Math.floor((vh - cropH) / 2);
 
-        if (canvas.width !== targetW) canvas.width = targetW;
-        if (canvas.height !== targetH) canvas.height = targetH;
+          const drawW = Math.min(960, cropW);
+          const drawH = Math.max(120, Math.floor(cropH * (drawW / cropW)));
+          if (canvas.width !== drawH) canvas.width = drawH;
+          if (canvas.height !== drawW) canvas.height = drawW;
 
-        ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, targetW, targetH);
+          ctx.save();
+          ctx.translate(drawH / 2, drawW / 2);
+          ctx.rotate(Math.PI / 2);
+          ctx.drawImage(video, sx, sy, cropW, cropH, -drawW / 2, -drawH / 2, drawW, drawH);
+          ctx.restore();
+          applyPixelContrastBoost(ctx, drawH, drawW);
+        } else {
+          // Pass 0 & 1: fokus pita horizontal tengah (kotak barcode); Pass 2: area tengah lebih luas
+          const cropW = Math.max(160, Math.floor((vw * 0.88) / digitalZoom));
+          const cropH = Math.max(
+            120,
+            Math.floor((vh * (passMode === 2 ? 0.68 : 0.44)) / digitalZoom)
+          );
+          const sx = Math.floor((vw - cropW) / 2);
+          const sy = Math.floor((vh - cropH) / 2);
+
+          const targetW = Math.min(1120, cropW);
+          const targetH = Math.max(140, Math.floor(cropH * (targetW / cropW)));
+
+          if (canvas.width !== targetW) canvas.width = targetW;
+          if (canvas.height !== targetH) canvas.height = targetH;
+
+          ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, targetW, targetH);
+
+          // Pass 1 & 2 mengaktifkan kontras pixel-buffer (membuat barcode agak blur / kena cahaya lebih terbaca di Safari iOS)
+          if (passMode === 1 || passMode === 2) {
+            applyPixelContrastBoost(ctx, targetW, targetH);
+          }
+        }
 
         // 1. Coba Native BarcodeDetector dulu jika tersedia (sangat cepat di GPU HP)
         if (nativeDetectorRef.current) {
@@ -491,12 +592,83 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     }
   };
 
+  // Siklus Zoom Kamera 1x -> 1.5x -> 2x (otomatis hardware zoom atau crop digital presisi di iPhone)
+  const cycleZoomLevel = async () => {
+    const idx = ZOOM_STEPS.indexOf(zoomLevel as (typeof ZOOM_STEPS)[number]);
+    const nextZoom = ZOOM_STEPS[(idx + 1) % ZOOM_STEPS.length];
+    zoomRatioRef.current = nextZoom;
+    setZoomLevel(nextZoom);
+
+    const track = streamRef.current?.getVideoTracks()?.[0];
+    const hwOk = await tryApplyHardwareZoom(track, nextZoom);
+    hwZoomActiveRef.current = hwOk;
+    setHwZoomActive(hwOk);
+  };
+
+  // Jepret 1 frame resolusi penuh & jalankan 8 variasi dekoder (rotasi/kontras/quiet-zone) untuk kasus membandel
+  const captureAndDecodeFrame = useCallback(async () => {
+    if (isHandlingResult.current || isDecodingImageRef.current) return;
+    const video = videoRef.current;
+    if (!video || video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) {
+      setUploadNotice("Kamera belum siap. Tunggu gambar tampil lalu tekan Jepret & Scan.");
+      return;
+    }
+
+    isDecodingImageRef.current = true;
+    setIsDecodingImage(true);
+    setUploadNotice(null);
+    setStatus("Menganalisa foto frame kamera...");
+
+    const snapCanvas = document.createElement("canvas");
+    try {
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      const digitalZoom = hwZoomActiveRef.current ? 1 : Math.max(1, zoomRatioRef.current);
+      const cropW = Math.max(200, Math.floor((vw * 0.92) / digitalZoom));
+      const cropH = Math.max(200, Math.floor((vh * 0.8) / digitalZoom));
+      const sx = Math.floor((vw - cropW) / 2);
+      const sy = Math.floor((vh - cropH) / 2);
+
+      snapCanvas.width = cropW;
+      snapCanvas.height = cropH;
+      const ctx = snapCanvas.getContext("2d", { willReadFrequently: true });
+      if (ctx) {
+        ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
+        const decodedCode = await decodeBarcodeFromCanvas(snapCanvas, {
+          nativeDetector: nativeDetectorRef.current,
+          zxingShim: (decoderRef.current as any)?.qrcode,
+        });
+        if (decodedCode) {
+          commitValidBarcode(decodedCode);
+          return;
+        }
+      }
+
+      setUploadNotice(
+        "Barcode belum terbaca. Coba ketuk 1.5x/2x zoom & jauhkan HP ~18cm agar fokus, atau upload foto."
+      );
+      setStatus("Coba 1.5x/2x Zoom atau Jauhkan Sedikit Agar Fokus");
+    } catch {
+      setUploadNotice("Gagal memproses jepretan kamera. Coba lagi.");
+      setStatus("Gagal Memproses Frame");
+    } finally {
+      snapCanvas.width = 0;
+      snapCanvas.height = 0;
+      isDecodingImageRef.current = false;
+      setIsDecodingImage(false);
+    }
+  }, [commitValidBarcode]);
+
   const resetCameraUi = (nextFacing: "environment" | "user") => {
     setErrorMessage(null);
     setFoundCode(null);
     setIsReady(false);
     setHasTorch(false);
     setTorchOn(false);
+    hwZoomActiveRef.current = false;
+    setHwZoomActive(false);
+    zoomRatioRef.current = 1;
+    setZoomLevel(1);
     setStatus(
       nextFacing === "environment"
         ? "Menyalakan Kamera Belakang..."
@@ -628,7 +800,12 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
             videoRef.current.play().catch(() => {});
           }
         }}
-        className="absolute inset-0 w-full h-full object-cover bg-black z-0"
+        style={
+          !hwZoomActive && zoomLevel > 1
+            ? { transform: `scale(${zoomLevel})`, transformOrigin: "center center" }
+            : undefined
+        }
+        className="absolute inset-0 w-full h-full object-cover bg-black z-0 transition-transform duration-200"
       />
 
       {/* OVERLAY VIEWFINDER KASIR MODERN */}
@@ -705,7 +882,21 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2">
+          <button
+            type="button"
+            onClick={cycleZoomLevel}
+            className={`px-2.5 py-1.5 rounded-full backdrop-blur-md border text-[11px] font-black tracking-tight transition active:scale-95 flex items-center gap-1 ${
+              zoomLevel > 1
+                ? "bg-emerald-500/90 border-emerald-300 text-slate-950 shadow-[0_0_12px_rgba(16,185,129,0.45)]"
+                : "bg-black/60 border-white/15 text-white hover:bg-white/20"
+            }`}
+            title="Atur Zoom Kamera (1x / 1.5x / 2x agar fokus barcode lebih tajam di iPhone)"
+          >
+            <ZoomIn className="w-3.5 h-3.5" />
+            <span>{zoomLevel}x</span>
+          </button>
+
           <button
             type="button"
             onClick={refreshCamera}
@@ -771,24 +962,36 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
           </button>
         )}
 
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={isDecodingImage}
-          className="w-full max-w-sm py-2.5 px-4 rounded-2xl bg-emerald-500 hover:bg-emerald-400 active:scale-[0.98] disabled:opacity-60 text-slate-950 font-extrabold text-xs sm:text-sm shadow-[0_6px_24px_rgba(16,185,129,0.4)] flex items-center justify-center gap-2 transition cursor-pointer"
-        >
-          {isDecodingImage ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-              <span>Membaca Barcode dari Gambar...</span>
-            </>
-          ) : (
-            <>
-              <ImagePlus className="w-4 h-4 shrink-0" />
-              <span>Upload Gambar Barcode (Galeri)</span>
-            </>
-          )}
-        </button>
+        <div className="w-full max-w-sm grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={captureAndDecodeFrame}
+            disabled={isDecodingImage || !isReady}
+            className="py-2.5 px-3 rounded-2xl bg-sky-500 hover:bg-sky-400 active:scale-[0.98] disabled:opacity-55 text-slate-950 font-extrabold text-xs shadow-[0_6px_20px_rgba(14,165,233,0.35)] flex items-center justify-center gap-1.5 transition cursor-pointer"
+          >
+            {isDecodingImage ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                <span>Analisa...</span>
+              </>
+            ) : (
+              <>
+                <Aperture className="w-4 h-4 shrink-0" />
+                <span>Jepret & Scan</span>
+              </>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isDecodingImage}
+            className="py-2.5 px-3 rounded-2xl bg-emerald-500 hover:bg-emerald-400 active:scale-[0.98] disabled:opacity-60 text-slate-950 font-extrabold text-xs shadow-[0_6px_24px_rgba(16,185,129,0.4)] flex items-center justify-center gap-1.5 transition cursor-pointer"
+          >
+            <ImagePlus className="w-4 h-4 shrink-0" />
+            <span>Upload Foto</span>
+          </button>
+        </div>
 
         <div className="w-full max-w-sm bg-slate-900/95 backdrop-blur-md px-4 py-2 rounded-2xl border border-slate-700/80 shadow-2xl flex items-center justify-between">
           <div className="flex items-center gap-2.5 overflow-hidden">

@@ -82,13 +82,93 @@ function loadImageFromFile(file: File): Promise<{ img: HTMLImageElement; cleanup
   });
 }
 
+/**
+ * Mengaktifkan DecodeHintType.TRY_HARDER (enum key = 3) pada semua instance
+ * decoder ZXing di dalam Html5QrcodeShim agar iOS Safari (tanpa native
+ * BarcodeDetector) melakukan scan multi-baris & retry lebih teliti pada 1D EAN/Code128.
+ */
+export function enableZxingTryHarder(decoderInstance: any): void {
+  const shim = decoderInstance?.qrcode;
+  if (!shim) return;
+  const subDecoders = [shim.primaryDecoder, shim.secondaryDecoder];
+  for (const dec of subDecoders) {
+    const hints = dec?.hints;
+    if (hints && typeof hints.set === "function") {
+      try {
+        hints.set(3, true); // DecodeHintType.TRY_HARDER === 3
+      } catch {}
+    }
+  }
+}
+
+/**
+ * Kontras pixel-buffer (aman 100% di Safari iOS yang mengabaikan ctx.filter).
+ * Mengubah frame kamera/foto menjadi grayscale berkontras tinggi adaptif
+ * sehingga batang barcode tipis tetap tajam meski agak blur/kurang cahaya.
+ */
+export function applyPixelContrastBoost(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number
+): void {
+  if (w <= 0 || h <= 0) return;
+  try {
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const data = imgData.data;
+    const totalPixels = w * h;
+
+    // Pass 1: Sampling cepat rentang luminansi agar tahan bayangan & glare
+    let minY = 255;
+    let maxY = 0;
+    const step = Math.max(1, Math.floor(totalPixels / 8000));
+    for (let p = 0; p < totalPixels; p += step) {
+      const idx = p * 4;
+      const y = (77 * data[idx] + 150 * data[idx + 1] + 29 * data[idx + 2]) >> 8;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+
+    const spread = Math.max(36, maxY - minY);
+    const low = minY + Math.floor(spread * 0.08);
+    const high = maxY - Math.floor(spread * 0.08);
+    const effRange = Math.max(24, high - low);
+    const factor = 255 / effRange;
+
+    // Pass 2: Grayscale + adaptive stretch (menjaga gradien anti-aliased batang tipis)
+    for (let i = 0; i < data.length; i += 4) {
+      const y = (77 * data[i] + 150 * data[i + 1] + 29 * data[i + 2]) >> 8;
+      let stretched = (y - low) * factor;
+      if (stretched < 0) stretched = 0;
+      else if (stretched > 255) stretched = 255;
+      // Dorong S-curve ringan untuk mempertegas hitam batang vs putih kertas tag
+      const val =
+        stretched < 128
+          ? Math.max(0, Math.round(stretched * 0.78))
+          : Math.min(255, Math.round(128 + (stretched - 128) * 1.35));
+      data[i] = val;
+      data[i + 1] = val;
+      data[i + 2] = val;
+    }
+
+    ctx.putImageData(imgData, 0, 0);
+  } catch {}
+}
+
+type CanvasImageInput = HTMLImageElement | HTMLCanvasElement;
+
+function getSourceDimensions(src: CanvasImageInput): { w: number; h: number } {
+  if (typeof HTMLImageElement !== "undefined" && src instanceof HTMLImageElement) {
+    return { w: src.naturalWidth || src.width, h: src.naturalHeight || src.height };
+  }
+  return { w: src.width, h: src.height };
+}
+
 function renderVariantToCanvas(
   canvas: HTMLCanvasElement,
-  img: HTMLImageElement,
+  src: CanvasImageInput,
   variant: DecodeVariant
 ): boolean {
-  const srcW = img.naturalWidth || img.width;
-  const srcH = img.naturalHeight || img.height;
+  const { w: srcW, h: srcH } = getSourceDimensions(src);
   if (!srcW || !srcH) return false;
 
   const cropW = Math.max(1, Math.floor(srcW * variant.cropRatio));
@@ -118,11 +198,12 @@ function renderVariantToCanvas(
   if (variant.angleDeg !== 0) {
     ctx.rotate((variant.angleDeg * Math.PI) / 180);
   }
-  if (variant.boostContrast && "filter" in ctx) {
-    ctx.filter = "grayscale(100%) contrast(175%) brightness(105%)";
-  }
-  ctx.drawImage(img, sx, sy, cropW, cropH, -drawW / 2, -drawH / 2, drawW, drawH);
+  ctx.drawImage(src, sx, sy, cropW, cropH, -drawW / 2, -drawH / 2, drawW, drawH);
   ctx.restore();
+
+  if (variant.boostContrast) {
+    applyPixelContrastBoost(ctx, outW, outH);
+  }
   return true;
 }
 
@@ -152,6 +233,33 @@ async function decodeCanvasWithEngines(
   }
 
   return null;
+}
+
+/**
+ * Multi-pass rotasi, quiet-zone, dan contrast boost pada source canvas
+ * (dipakai oleh tombol "Jepret Frame" di kamera live Safari / HP tanpa native detector).
+ */
+export async function decodeBarcodeFromCanvas(
+  sourceCanvas: HTMLCanvasElement,
+  engines: {
+    nativeDetector?: any;
+    zxingShim?: any;
+  }
+): Promise<string | null> {
+  const { nativeDetector, zxingShim } = engines;
+  const workCanvas = document.createElement("canvas");
+
+  try {
+    for (const variant of IMAGE_DECODE_VARIANTS) {
+      if (!renderVariantToCanvas(workCanvas, sourceCanvas, variant)) continue;
+      const hit = await decodeCanvasWithEngines(workCanvas, nativeDetector, zxingShim);
+      if (hit) return hit;
+    }
+    return null;
+  } finally {
+    workCanvas.width = 0;
+    workCanvas.height = 0;
+  }
 }
 
 /**
