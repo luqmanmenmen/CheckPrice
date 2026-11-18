@@ -242,7 +242,7 @@ export default function ProductImageSlider({
         {/* Bar Badge Bawah Gambar (Warna, Counter 1/6, & Tombol Layar Penuh) */}
         <div className="absolute bottom-2.5 inset-x-2.5 z-20 flex items-center justify-between gap-2 pointer-events-none">
           {colorBadge ? (
-            <span className="px-2.5 py-1 rounded-full bg-slate-950/75 backdrop-blur-md text-white text-[11px] font-black uppercase tracking-wide shadow-sm truncate max-w-[55%]">
+            <span className="px-2.5 py-1 rounded-full bg-slate-950/75 backdrop-blur-md text-white text-[11px] font-black uppercase tracking-wide shadow-sm whitespace-normal break-words max-w-[65%]">
               Warna: {colorBadge}
             </span>
           ) : (

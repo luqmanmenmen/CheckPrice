@@ -365,11 +365,26 @@ export default function UpdateHargaPage() {
               Menggunakan mesin Python v{APP_VERSION} di GitHub Actions (<code className="text-slate-200">run_promo_sync.py</code> + <code className="text-slate-200">build_catalog_index.py</code>) — sinkron penuh dengan Pusat Trigger 4 Kategori.
             </p>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <Link
+              href="/promo-mendatang"
+              className="flex items-center gap-1.5 px-3 py-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-400/40 text-xs font-bold rounded-xl transition-colors"
+              title="Buka halaman Cek Promo Mendatang H-2/H-1 untuk Crew POP"
+            >
+              <span>Buka Cek POP (H-2)</span>
+            </Link>
+            <button
+              onClick={() => handleGitHubDispatch('upcoming-promo')}
+              disabled={isGhDispatching}
+              className="flex items-center gap-1.5 px-3 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black rounded-xl transition-colors disabled:opacity-50 shadow-sm cursor-pointer"
+              title="Compile folder promo terbaru ke draf H-2/H-1 tanpa merusak promo berjalan"
+            >
+              <span>Proses Draf POP H-2</span>
+            </button>
             <button
               onClick={() => handleGitHubDispatch('promo')}
               disabled={isGhDispatching}
-              className="flex items-center gap-1.5 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 text-xs font-black rounded-xl transition-colors disabled:opacity-50 shadow-sm"
+              className="flex items-center gap-1.5 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 text-xs font-black rounded-xl transition-colors disabled:opacity-50 shadow-sm cursor-pointer"
             >
               {isGhDispatching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current" />}
               {isGhDispatching ? "Mengirim sinyal..." : "Picu Update Promo"}
@@ -506,7 +521,7 @@ export default function UpdateHargaPage() {
             <p className="font-bold text-slate-800 mb-1">{files.length} File Terpilih</p>
             <div className="flex flex-wrap gap-2 justify-center max-w-md mb-6 mt-2">
               {files.map((f, i) => (
-                <span key={i} className="px-2 py-1 bg-slate-100 text-slate-600 text-[10px] rounded border border-slate-200 truncate max-w-[150px]">
+                <span key={i} className="px-2 py-1 bg-slate-100 text-slate-600 text-[10px] rounded border border-slate-200 whitespace-normal break-words max-w-[260px]">
                   {f.name}
                 </span>
               ))}
@@ -532,7 +547,7 @@ export default function UpdateHargaPage() {
             {status === "uploading" && (
               <div className="w-full max-w-xs">
                 <div className="flex justify-between text-xs font-bold text-slate-600 mb-2">
-                  <span className="truncate flex-1 mr-2">{resultMsg || "Menganalisis..."}</span>
+                  <span className="whitespace-normal break-words flex-1 mr-2">{resultMsg || "Menganalisis..."}</span>
                   <span className="w-8 text-right">{progress}%</span>
                 </div>
                 <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">

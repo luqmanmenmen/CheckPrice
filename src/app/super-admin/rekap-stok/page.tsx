@@ -128,7 +128,7 @@ export default function RekapStokPage() {
               data.data.map((product: any) => (
                 <div key={product.id} className="p-4 hover:bg-slate-50 transition-colors flex items-center justify-between gap-4">
                   <div className="flex-1">
-                    <h3 className="font-bold text-slate-800 text-sm leading-tight line-clamp-2">{product.description}</h3>
+                    <h3 className="font-bold text-slate-800 text-sm leading-tight whitespace-normal break-words">{product.description}</h3>
                     <div className="flex items-center gap-2 mt-1.5">
                       <p className="text-xs text-slate-500 font-mono bg-slate-100 px-1.5 py-0.5 rounded">{product.sku}</p>
                       {product.brand && <p className="text-[10px] text-slate-400 uppercase">{product.brand}</p>}

@@ -29,8 +29,10 @@ export interface BrandGroupOption {
   key: BrandGroupKey;
   label: string;
   shortLabel: string;
+  logoUrl?: string;
   activeClass: string;
   idleClass: string;
+  textClass: string;
   badgeClass: string;
 }
 
@@ -46,33 +48,40 @@ export const BRAND_GROUP_OPTIONS: BrandGroupOption[] = [
     key: "ALL",
     label: "Semua Brand",
     shortLabel: "Semua",
-    activeClass: "bg-slate-900 text-white border-slate-900 shadow-xs",
-    idleClass: "bg-white text-slate-600 border-slate-200 hover:bg-slate-50",
+    activeClass: "ring-2 ring-blue-600 bg-blue-50/80 border-blue-500 shadow-md -translate-y-0.5",
+    idleClass: "bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50",
+    textClass: "text-blue-700",
     badgeClass: "bg-slate-100 text-slate-700 border-slate-200",
   },
   {
     key: "SUKO",
     label: "SUKO",
     shortLabel: "SUKO",
-    activeClass: "bg-blue-600 text-white border-blue-700 shadow-xs",
-    idleClass: "bg-blue-50/70 text-blue-700 border-blue-200 hover:bg-blue-100",
-    badgeClass: "bg-blue-600 text-white border-blue-700",
+    logoUrl: "/logos/suko.png",
+    activeClass: "ring-2 ring-[#0E3A5D] bg-[#0E3A5D]/8 border-[#0E3A5D] shadow-md -translate-y-0.5",
+    idleClass: "bg-white border-slate-200 hover:border-[#0E3A5D]/40 hover:bg-[#0E3A5D]/5",
+    textClass: "text-[#0E3A5D]",
+    badgeClass: "bg-[#0E3A5D] text-white border-[#0E3A5D]",
   },
   {
     key: "MUKU",
     label: "Mu+Ku (Multibrand)",
     shortLabel: "Mu+Ku",
-    activeClass: "bg-emerald-600 text-white border-emerald-700 shadow-xs",
-    idleClass: "bg-emerald-50/70 text-emerald-700 border-emerald-200 hover:bg-emerald-100",
-    badgeClass: "bg-emerald-600 text-white border-emerald-700",
+    logoUrl: "/logos/muku.png",
+    activeClass: "ring-2 ring-[#A54F2C] bg-[#A54F2C]/8 border-[#A54F2C] shadow-md -translate-y-0.5",
+    idleClass: "bg-white border-slate-200 hover:border-[#A54F2C]/40 hover:bg-[#A54F2C]/5",
+    textClass: "text-[#A54F2C]",
+    badgeClass: "bg-[#A54F2C] text-white border-[#A54F2C]",
   },
   {
     key: "ZES",
     label: "ZES",
     shortLabel: "ZES",
-    activeClass: "bg-violet-600 text-white border-violet-700 shadow-xs",
-    idleClass: "bg-violet-50/70 text-violet-700 border-violet-200 hover:bg-violet-100",
-    badgeClass: "bg-violet-600 text-white border-violet-700",
+    logoUrl: "/logos/zes.avif",
+    activeClass: "ring-2 ring-slate-900 bg-slate-100 border-slate-900 shadow-md -translate-y-0.5",
+    idleClass: "bg-white border-slate-200 hover:border-slate-400 hover:bg-slate-50",
+    textClass: "text-slate-900",
+    badgeClass: "bg-slate-900 text-white border-slate-900",
   },
 ];
 

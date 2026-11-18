@@ -1016,7 +1016,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
             ) : (
               <Camera className="w-4 h-4 text-emerald-400 shrink-0" />
             )}
-            <span className="text-xs font-medium text-slate-200 truncate">
+            <span className="text-xs font-medium text-slate-200 whitespace-normal break-words">
               {errorMessage || status}
             </span>
           </div>

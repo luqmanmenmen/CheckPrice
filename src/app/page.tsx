@@ -38,6 +38,77 @@ const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
 const TextScanner = dynamic(() => import("@/components/TextScanner"), { ssr: false });
 
+function CategoryVectorIcon({ catKey, className = "w-3.5 h-3.5 shrink-0" }: { catKey: CategoryKey; className?: string }) {
+  const props = { className, fill: "none", stroke: "currentColor", strokeWidth: 2, viewBox: "0 0 24 24" };
+  switch (catKey) {
+    case "ALL":
+      return (
+        <svg {...props}>
+          <rect x="3" y="3" width="7" height="7" rx="1.5" />
+          <rect x="14" y="3" width="7" height="7" rx="1.5" />
+          <rect x="3" y="14" width="7" height="7" rx="1.5" />
+          <rect x="14" y="14" width="7" height="7" rx="1.5" />
+        </svg>
+      );
+    case "JAKET":
+      return (
+        <svg {...props}>
+          <path d="M8 3 4 6v13h4v-7h8v7h4V6l-4-3-4 2-4-2Z" />
+        </svg>
+      );
+    case "ATASAN":
+      return (
+        <svg {...props}>
+          <path d="M6 4 2 8l3 2 2-2v12h10V8l2 2 3-2-4-4-3 2h-6L6 4Z" />
+        </svg>
+      );
+    case "CELANA":
+      return (
+        <svg {...props}>
+          <path d="M7 3h10l1 18h-4l-2-10-2 10H6L7 3Z" />
+        </svg>
+      );
+    case "DRESS_ROK":
+      return (
+        <svg {...props}>
+          <path d="M9 3h6l-1 6 5 12H5l5-12-1-6Z" />
+        </svg>
+      );
+    case "SEPATU_SANDAL":
+      return (
+        <svg {...props}>
+          <path d="M3 16c4 0 6-4 8-7l3 4c2 2 4 2 7 3v3H3v-3Z" />
+        </svg>
+      );
+    case "TAS_AKSESORIS":
+      return (
+        <svg {...props}>
+          <rect x="4" y="8" width="16" height="12" rx="2" />
+          <path d="M8 8V6a4 4 0 0 1 8 0v2" />
+        </svg>
+      );
+    case "BEAUTY":
+      return (
+        <svg {...props}>
+          <path d="M12 3l2 4.5L18.5 9 14 11l-2 4-2-4-4.5-2L10 7.5 12 3Z" />
+        </svg>
+      );
+    case "TIDUR_DALAM":
+      return (
+        <svg {...props}>
+          <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+        </svg>
+      );
+    default:
+      return (
+        <svg {...props}>
+          <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+          <circle cx="7" cy="7" r="1.5" />
+        </svg>
+      );
+  }
+}
+
 type ProductData = {
   id: number;
   sku: string;
@@ -2262,7 +2333,7 @@ export default function Home() {
                   </div>
                   <Link href="/profile" className="group cursor-pointer min-w-0 flex flex-col items-start">
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <h1 className="font-bold text-sm leading-tight group-hover:text-blue-200 transition-colors truncate max-w-[165px] sm:max-w-xs">
+                      <h1 className="font-bold text-sm leading-tight group-hover:text-blue-200 transition-colors whitespace-normal break-words">
                         {user.name.replace(/\s*\(Developer\)/i, '').trim()}
                       </h1>
                       {user.name?.toLowerCase().includes('developer') && (
@@ -2271,7 +2342,7 @@ export default function Home() {
                         </span>
                       )}
                     </div>
-                    <p className="text-[10px] text-blue-200/80 font-medium tracking-wide uppercase truncate">
+                    <p className="text-[10px] text-blue-200/80 font-medium tracking-wide uppercase whitespace-normal break-words">
                       {user.jobTitle || 'Sales Area'} • by luqman org
                     </p>
                   </Link>
@@ -2308,24 +2379,24 @@ export default function Home() {
                 }`}
               >
                 <Package2 className="w-3.5 h-3.5 shrink-0" />
-                <span className="truncate">Facing Out</span>
+                <span className="whitespace-nowrap">Facing Out</span>
               </button>
               <button
                 type="button"
                 onClick={() => setActiveTab("STOCK_CHECK")}
-                className={`py-2 px-2 rounded-lg flex items-center justify-center gap-1.5 text-xs transition-all cursor-pointer ${
+                className={`py-2 px-1.5 sm:px-2 rounded-lg flex items-center justify-center gap-1 sm:gap-1.5 text-[11px] sm:text-xs transition-all cursor-pointer ${
                   activeTab === "STOCK_CHECK"
                     ? "bg-white text-indigo-700 font-bold shadow-sm"
                     : "text-slate-300 font-medium hover:text-white hover:bg-white/5"
                 }`}
               >
                 <MessageSquare className="w-3.5 h-3.5 shrink-0" />
-                <span className="truncate">Tanya Stok</span>
+                <span className="whitespace-nowrap">Tanya Stok</span>
               </button>
               <button
                 type="button"
                 onClick={() => setActiveTab("ORDERS")}
-                className={`py-2 px-2 rounded-lg flex items-center justify-center gap-1.5 text-xs transition-all cursor-pointer ${
+                className={`py-2 px-1.5 sm:px-2 rounded-lg flex items-center justify-center gap-1 sm:gap-1.5 text-[11px] sm:text-xs transition-all cursor-pointer ${
                   activeTab === "ORDERS"
                     ? "bg-white text-amber-700 font-bold shadow-sm"
                     : "text-slate-300 font-medium hover:text-white hover:bg-white/5"
@@ -2340,16 +2411,16 @@ export default function Home() {
                     </span>
                   )}
                 </div>
-                <span className="truncate">Cek Pesanan</span>
+                <span className="whitespace-nowrap">Cek Pesanan</span>
               </button>
             </div>
 
             {/* Row 3: Slim System Status Strip + Info Ukuran Cache HP */}
             <div className="mt-2.5 flex items-center justify-between gap-2 bg-white/10 border border-white/10 rounded-xl px-2.5 py-1.5 text-[10px]">
               <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
-                <span className="inline-flex items-center gap-1.5 text-slate-200 font-semibold shrink-0">
-                  <span className={`w-2 h-2 rounded-full ${lastUpdateDate === 'Memuat...' ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400 shadow-[0_0_6px_#34d399]'}`} />
-                  <span className="truncate max-w-[140px] sm:max-w-none">{lastUpdateDate}</span>
+                <span className="inline-flex items-center gap-1.5 text-slate-200 font-semibold">
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${lastUpdateDate === 'Memuat...' ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400 shadow-[0_0_6px_#34d399]'}`} />
+                  <span className="whitespace-normal break-words">{lastUpdateDate}</span>
                 </span>
                 {localCacheStats?.ready ? (
                   <span
@@ -2659,14 +2730,33 @@ export default function Home() {
               </button>
             </div>
 
-            {/* Bar Filter Pemisah Toko (SUKO, Mu+Ku Multibrand, ZES) & Pengelompokan Kategori */}
+            {/* Bar Filter Pemisah Toko Berlogo (SUKO, Mu+Ku, ZES) & Kategori Modern */}
             {!product && (
-              <div className="bg-white rounded-xl border border-slate-200/80 p-2.5 shadow-2xs flex flex-col gap-2">
-                {/* Bar 1: Pemisah 3 Toko Konsep + Info Model vs Total SKU */}
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
-                  <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider shrink-0 mr-0.5">
-                    Toko:
+              <div className="bg-white rounded-2xl border border-slate-200/80 p-3 shadow-xs flex flex-col gap-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[11px] font-extrabold text-slate-400 uppercase tracking-wider">
+                    Pilih Toko / Konsep
                   </span>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {localCacheStats?.skuCount ? (
+                      <span className="inline-flex items-center text-[10px] font-bold text-blue-700 bg-blue-50/80 border border-blue-100 px-2.5 py-0.5 rounded-full">
+                        Filter per Artikel • {localCacheStats.skuCount.toLocaleString('id-ID')} Total SKU
+                      </span>
+                    ) : null}
+                    {(selectedBrandGroup !== "ALL" || selectedCategory !== "ALL" || selectedSubBrand) && (
+                      <button
+                        type="button"
+                        onClick={handleResetTaxonomyFilters}
+                        className="text-[10px] font-bold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-2.5 py-0.5 rounded-full cursor-pointer"
+                      >
+                        Reset Filter
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Bar 1: 4 Kartu Logo Toko Simetris (SUKO • Mu+Ku • ZES) */}
+                <div className="grid grid-cols-4 gap-2">
                   {BRAND_GROUP_OPTIONS.map((opt) => {
                     const isActive = selectedBrandGroup === opt.key;
                     const countVal = taxonomyBrandCounts?.[opt.key];
@@ -2675,53 +2765,60 @@ export default function Home() {
                         key={opt.key}
                         type="button"
                         onClick={() => handleBrandFilterChange(opt.key)}
-                        className={`text-[11px] font-bold px-2.5 py-1 rounded-lg border transition-all whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1 ${
+                        className={`flex flex-col items-center justify-center gap-1.5 py-2.5 px-1.5 rounded-2xl border transition-all cursor-pointer ${
                           isActive ? opt.activeClass : opt.idleClass
                         }`}
                       >
-                        <span>{opt.shortLabel}</span>
-                        {typeof countVal === "number" && (selectedBrandGroup === "ALL" || isActive) && (
-                          <span className={`text-[9px] px-1 rounded ${isActive ? "bg-white/20 text-white" : "bg-black/5 text-slate-500"}`}>
-                            {countVal.toLocaleString('id-ID')} Artikel
-                          </span>
+                        {opt.logoUrl ? (
+                          <div
+                            className={`w-10 h-10 sm:w-11 sm:h-11 rounded-xl overflow-hidden shadow-xs border shrink-0 flex items-center justify-center ${
+                              opt.key === "ZES" ? "border-slate-200 bg-white" : "border-black/10"
+                            }`}
+                          >
+                            <img
+                              src={opt.logoUrl}
+                              alt={opt.shortLabel}
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                        ) : (
+                          <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 text-white flex items-center justify-center shadow-xs shrink-0">
+                            <CategoryVectorIcon catKey="ALL" className="w-5 h-5" />
+                          </div>
                         )}
+                        <div className="text-center leading-tight min-w-0 w-full">
+                          <div className={`text-[11px] font-black whitespace-normal break-words ${isActive ? opt.textClass : "text-slate-800"}`}>
+                            {opt.shortLabel}
+                          </div>
+                          {typeof countVal === "number" && (
+                            <div className="text-[10px] font-semibold text-slate-400 tabular-nums">
+                              {countVal.toLocaleString('id-ID')} Art.
+                            </div>
+                          )}
+                        </div>
                       </button>
                     );
                   })}
-                  {localCacheStats?.skuCount ? (
-                    <span className="inline-flex items-center text-[10px] font-bold text-blue-700 bg-blue-50/70 border border-blue-100 px-2 py-0.5 rounded-md ml-0.5 whitespace-nowrap shrink-0">
-                      Filter per Artikel • {localCacheStats.skuCount.toLocaleString('id-ID')} Total SKU
-                    </span>
-                  ) : null}
-                  {(selectedBrandGroup !== "ALL" || selectedCategory !== "ALL" || selectedSubBrand) && (
-                    <button
-                      type="button"
-                      onClick={handleResetTaxonomyFilters}
-                      className="ml-auto text-[10px] font-bold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-2 py-1 rounded-lg whitespace-nowrap shrink-0 cursor-pointer"
-                    >
-                      Reset Filter
-                    </button>
-                  )}
                 </div>
 
-                {/* Bar Sub-Brand Khusus Mu+Ku (karena Mu+Ku adalah Toko Multibrand) */}
+                {/* Bar Sub-Brand Khusus Mu+Ku (Tema Hangat Terracotta) */}
                 {selectedBrandGroup === "MUKU" && (
-                  <div className="flex items-center gap-1.5 overflow-x-auto pt-1 border-t border-emerald-100 bg-emerald-50/40 -mx-2.5 px-2.5 pb-1">
-                    <span className="text-[10px] font-extrabold text-emerald-700 uppercase tracking-wider shrink-0 mr-0.5">
+                  <div className="flex items-center gap-1.5 overflow-x-auto rounded-xl border border-[#A54F2C]/20 bg-[#A54F2C]/5 px-2.5 py-2">
+                    <span className="text-[10px] font-black text-[#A54F2C] uppercase tracking-wider shrink-0 mr-0.5">
                       Merk Mu+Ku:
                     </span>
                     <button
                       type="button"
                       onClick={() => handleSubBrandFilterChange("")}
-                      className={`text-[10px] font-bold px-2 py-0.5 rounded-md border transition-all whitespace-nowrap shrink-0 cursor-pointer inline-flex items-center gap-1 ${
+                      className={`text-[10px] font-bold px-2.5 py-1 rounded-full border transition-all whitespace-nowrap shrink-0 cursor-pointer inline-flex items-center gap-1 ${
                         !selectedSubBrand
-                          ? "bg-emerald-600 text-white border-emerald-700"
-                          : "bg-white text-emerald-700 border-emerald-200 hover:bg-emerald-100"
+                          ? "bg-[#A54F2C] text-white border-[#8E3F20]"
+                          : "bg-white text-[#A54F2C] border-[#A54F2C]/25 hover:bg-[#A54F2C]/10"
                       }`}
                     >
                       <span>Semua Merk</span>
                       {taxonomyBrandCounts?.MUKU !== undefined && (
-                        <span className={`text-[9px] tabular-nums ${!selectedSubBrand ? "text-emerald-100" : "text-emerald-600/80"}`}>
+                        <span className={`text-[9px] tabular-nums ${!selectedSubBrand ? "text-amber-100" : "text-[#A54F2C]/75"}`}>
                           ({taxonomyBrandCounts.MUKU.toLocaleString("id-ID")})
                         </span>
                       )}
@@ -2737,15 +2834,15 @@ export default function Home() {
                           key={sb}
                           type="button"
                           onClick={() => handleSubBrandFilterChange(sb)}
-                          className={`text-[10px] font-bold px-2 py-0.5 rounded-md border transition-all whitespace-nowrap shrink-0 cursor-pointer inline-flex items-center gap-1 ${
+                          className={`text-[10px] font-bold px-2.5 py-1 rounded-full border transition-all whitespace-nowrap shrink-0 cursor-pointer inline-flex items-center gap-1 ${
                             isSubActive
-                              ? "bg-emerald-700 text-white border-emerald-800 shadow-2xs"
-                              : "bg-white text-slate-700 border-slate-200 hover:bg-emerald-100 hover:text-emerald-800"
+                              ? "bg-[#A54F2C] text-white border-[#8E3F20] shadow-2xs"
+                              : "bg-white text-slate-700 border-slate-200 hover:bg-[#A54F2C]/10 hover:text-[#A54F2C]"
                           }`}
                         >
                           <span>{sb}</span>
                           {sbItem.count > 0 && (
-                            <span className={`text-[9px] tabular-nums ${isSubActive ? "text-emerald-100" : "text-slate-400"}`}>
+                            <span className={`text-[9px] tabular-nums ${isSubActive ? "text-amber-100" : "text-slate-400"}`}>
                               {sbItem.count.toLocaleString("id-ID")}
                             </span>
                           )}
@@ -2755,10 +2852,10 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* Bar Teknologi Kain Khusus SUKO (SUKO GO, SOFT TOUCH, SUPIMA, CLIMAFLEX, QUICKDRY, COOL TOUCH, FLEX) */}
+                {/* Bar Teknologi Kain Khusus SUKO (Tema Navy SUKO #0E3A5D) */}
                 {selectedBrandGroup === "SUKO" && (
-                  <div className="flex items-center gap-1.5 overflow-x-auto pt-1 border-t border-indigo-100 bg-indigo-50/40 -mx-2.5 px-2.5 pb-1">
-                    <span className="text-[10px] font-extrabold text-indigo-700 uppercase tracking-wider shrink-0 mr-0.5">
+                  <div className="flex items-center gap-1.5 overflow-x-auto rounded-xl border border-[#0E3A5D]/20 bg-[#0E3A5D]/5 px-2.5 py-2">
+                    <span className="text-[10px] font-black text-[#0E3A5D] uppercase tracking-wider shrink-0 mr-0.5">
                       Teknologi Kain:
                     </span>
                     {[
@@ -2784,10 +2881,10 @@ export default function Home() {
                               searchProduct(tech.query, 1, false, "SUKO", "ALL", "", false);
                             }
                           }}
-                          className={`text-[10px] font-bold px-2 py-0.5 rounded-md border transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+                          className={`text-[10px] font-bold px-2.5 py-1 rounded-full border transition-all whitespace-nowrap shrink-0 cursor-pointer ${
                             isTechActive
-                              ? "bg-indigo-700 text-white border-indigo-800 shadow-2xs"
-                              : "bg-white text-indigo-800 border-indigo-200 hover:bg-indigo-100"
+                              ? "bg-[#0E3A5D] text-white border-[#092740] shadow-2xs"
+                              : "bg-white text-[#0E3A5D] border-[#0E3A5D]/25 hover:bg-[#0E3A5D]/10"
                           }`}
                         >
                           {tech.label}
@@ -2797,8 +2894,8 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* Bar 2: Pengelompokan Kategori Produk */}
-                <div className="flex items-center gap-1.5 overflow-x-auto pt-1 border-t border-slate-100">
+                {/* Bar 2: Pengelompokan Kategori Produk (Ikon Vektor SVG Modern) */}
+                <div className="flex items-center gap-1.5 overflow-x-auto pt-1.5 border-t border-slate-100">
                   <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider shrink-0 mr-0.5">
                     Kategori:
                   </span>
@@ -2810,16 +2907,19 @@ export default function Home() {
                         key={cat.key}
                         type="button"
                         onClick={() => handleCategoryFilterChange(cat.key)}
-                        className={`text-[11px] font-bold px-2.5 py-1 rounded-lg border transition-all whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1 ${
+                        className={`text-[11px] font-bold px-2.5 py-1.5 rounded-xl border transition-all whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5 ${
                           isActive
-                            ? "bg-indigo-600 text-white border-indigo-700 shadow-xs"
-                            : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200"
+                            ? "bg-slate-900 text-white border-slate-900 shadow-xs"
+                            : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100 hover:border-slate-300"
                         }`}
                       >
-                        <span>{cat.icon}</span>
+                        <CategoryVectorIcon
+                          catKey={cat.key}
+                          className={`w-3.5 h-3.5 shrink-0 ${isActive ? "text-emerald-300" : "text-slate-500"}`}
+                        />
                         <span>{cat.shortLabel}</span>
                         {typeof countVal === "number" && (selectedCategory === "ALL" || isActive) && countVal > 0 && (
-                          <span className={`text-[9px] px-1 rounded ${isActive ? "bg-white/20 text-white" : "bg-slate-200/70 text-slate-600"}`}>
+                          <span className={`text-[9px] px-1.5 py-0.5 rounded-md tabular-nums ${isActive ? "bg-white/20 text-white" : "bg-slate-200/80 text-slate-600"}`}>
                             {countVal.toLocaleString('id-ID')} Art
                           </span>
                         )}
@@ -2852,7 +2952,7 @@ export default function Home() {
                   </div>
                 )}
 
-                <div className="grid grid-cols-2 gap-2.5">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
                   <Link href="/barang-baru" className="block group">
                     <div className="bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl p-3 text-white shadow-sm hover:shadow-md transition-all flex items-center justify-between gap-2 h-full">
                       <div className="flex items-center gap-2.5 min-w-0">
@@ -2860,8 +2960,8 @@ export default function Home() {
                           <Sparkles className="w-4 h-4 text-yellow-200" />
                         </div>
                         <div className="min-w-0">
-                          <h3 className="font-black text-xs sm:text-sm leading-tight truncate">Barang Baru!</h3>
-                          <p className="text-[10px] text-emerald-50/90 leading-tight truncate mt-0.5">Produk baru masuk</p>
+                          <h3 className="font-black text-xs sm:text-sm leading-tight whitespace-normal break-words">Barang Baru!</h3>
+                          <p className="text-[10px] text-emerald-50/90 leading-tight whitespace-normal break-words mt-0.5">Produk baru masuk</p>
                         </div>
                       </div>
                       <ArrowRight className="w-4 h-4 text-emerald-100 shrink-0 group-hover:translate-x-0.5 transition-transform" />
@@ -2875,11 +2975,26 @@ export default function Home() {
                           <Gift className="w-4 h-4 text-pink-200" />
                         </div>
                         <div className="min-w-0">
-                          <h3 className="font-black text-xs sm:text-sm leading-tight truncate">Promo BOGO</h3>
-                          <p className="text-[10px] text-purple-50/90 leading-tight truncate mt-0.5">BG, diskon &amp; unik</p>
+                          <h3 className="font-black text-xs sm:text-sm leading-tight whitespace-normal break-words">Promo BOGO</h3>
+                          <p className="text-[10px] text-purple-50/90 leading-tight whitespace-normal break-words mt-0.5">BG, diskon &amp; unik</p>
                         </div>
                       </div>
                       <ArrowRight className="w-4 h-4 text-purple-100 shrink-0 group-hover:translate-x-0.5 transition-transform" />
+                    </div>
+                  </Link>
+
+                  <Link href="/promo-mendatang" className="block group col-span-2 sm:col-span-1">
+                    <div className="bg-gradient-to-br from-amber-500 to-orange-600 rounded-xl p-3 text-white shadow-sm hover:shadow-md transition-all flex items-center justify-between gap-2 h-full">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="bg-white/20 p-1.5 rounded-lg backdrop-blur-sm shrink-0">
+                          <CalendarRange className="w-4 h-4 text-amber-100" />
+                        </div>
+                        <div className="min-w-0">
+                          <h3 className="font-black text-xs sm:text-sm leading-tight whitespace-normal break-words">Cek Promo POP (H-2)</h3>
+                          <p className="text-[10px] text-amber-50/95 leading-tight whitespace-normal break-words mt-0.5">Persiapan POP sebelum launching</p>
+                        </div>
+                      </div>
+                      <ArrowRight className="w-4 h-4 text-amber-100 shrink-0 group-hover:translate-x-0.5 transition-transform" />
                     </div>
                   </Link>
                 </div>
@@ -3132,12 +3247,8 @@ export default function Home() {
                       {brandMeta.shortLabel} • {catMeta?.shortLabel || "Produk"}
                     </span>
                     <div className="flex flex-col items-center gap-2">
-                      <div className="w-11 h-11 rounded-2xl bg-white/95 shadow-xs border border-slate-200/80 flex items-center justify-center text-xl">
-                        {catMeta?.icon ? (
-                          <span>{catMeta.icon}</span>
-                        ) : (
-                          <Package2 className="w-5 h-5 text-slate-400" />
-                        )}
+                      <div className="w-11 h-11 rounded-2xl bg-white/95 shadow-xs border border-slate-200/80 flex items-center justify-center text-slate-600">
+                        <CategoryVectorIcon catKey={catKey} className="w-5 h-5" />
                       </div>
                       {swatchColors.length > 0 && (
                         <div className="flex items-center justify-center gap-1 flex-wrap max-w-[110px]">
@@ -3174,11 +3285,18 @@ export default function Home() {
                     <span className="text-[9px] sm:text-[10px] font-mono font-bold bg-slate-900 text-white px-1.5 py-0.5 rounded">
                       {cleanArticle || p.sku}
                     </span>
-                    <span className={`text-[9px] font-black px-1.5 py-0.5 rounded border ${brandMeta.badgeClass}`}>
-                      {brandMeta.shortLabel}
+                    <span className={`inline-flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded border ${brandMeta.badgeClass}`}>
+                      {brandMeta.logoUrl && (
+                        <img
+                          src={brandMeta.logoUrl}
+                          alt={brandMeta.shortLabel}
+                          className="w-3.5 h-3.5 rounded-[3px] object-cover bg-white shrink-0"
+                        />
+                      )}
+                      <span>{brandMeta.shortLabel}</span>
                     </span>
                     {brandGroup === "MUKU" && subBrandLabel && subBrandLabel !== "MUKU" && (
-                      <span className="text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded truncate max-w-[95px]">
+                      <span className="text-[9px] font-bold bg-[#A54F2C]/10 text-[#A54F2C] border border-[#A54F2C]/25 px-1.5 py-0.5 rounded whitespace-normal break-words">
                         {subBrandLabel}
                       </span>
                     )}
@@ -3189,7 +3307,7 @@ export default function Home() {
                     )}
                   </div>
 
-                  <p className="font-bold text-slate-900 text-[11px] sm:text-xs leading-snug line-clamp-2 mt-1.5 group-hover:text-blue-700 transition-colors">
+                  <p className="font-bold text-slate-900 text-[11px] sm:text-xs leading-snug whitespace-normal break-words mt-1.5 group-hover:text-blue-700 transition-colors">
                     {info.name}
                   </p>
 
@@ -3198,7 +3316,7 @@ export default function Home() {
                       {CATEGORY_LABELS[catKey]}
                     </span>
                     {colorsSummary && (
-                      <span className="text-[9px] font-semibold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded truncate max-w-full">
+                      <span className="text-[9px] font-semibold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded whitespace-normal break-words">
                         {colorsSummary}
                       </span>
                     )}
@@ -3212,7 +3330,7 @@ export default function Home() {
 
                 <div className="mt-2 pt-1.5 border-t border-slate-100 flex flex-col gap-1">
                   {hasPromo && promoBadge && (
-                    <span className="inline-block self-start text-[9px] font-black px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 uppercase tracking-tight max-w-full truncate">
+                    <span className="inline-block self-start text-[9px] font-black px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 uppercase tracking-tight whitespace-normal break-words">
                       {promoBadge}
                     </span>
                   )}
@@ -3223,7 +3341,7 @@ export default function Home() {
                           {formatRupiah(p.hargaNormal)}
                         </p>
                       )}
-                      <p className={`text-xs font-black leading-tight truncate ${hasLowerPromoPrice ? 'text-rose-600' : 'text-blue-700'}`}>
+                      <p className={`text-xs font-black leading-tight whitespace-normal break-words ${hasLowerPromoPrice ? 'text-rose-600' : 'text-blue-700'}`}>
                         {formatRupiah(displayPrice)}
                       </p>
                     </div>
@@ -3395,7 +3513,7 @@ export default function Home() {
                     <div className="flex items-center justify-between gap-2 bg-emerald-50/70 border border-emerald-200/80 rounded-xl px-3 py-2">
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="text-sm leading-none">🏷️</span>
-                        <h3 className="text-xs sm:text-sm font-black text-slate-800 uppercase tracking-wide truncate">
+                        <h3 className="text-xs sm:text-sm font-black text-slate-800 uppercase tracking-wide whitespace-normal break-words">
                           {sec.subBrand}
                         </h3>
                         <span className="text-[10px] font-bold bg-white text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full shrink-0 tabular-nums">
@@ -3429,8 +3547,8 @@ export default function Home() {
                   <div key={section.catKey} className="flex flex-col gap-2.5">
                     <div className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-2">
                       <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-sm leading-none">{section.icon}</span>
-                        <h3 className="text-xs sm:text-sm font-black text-slate-800 uppercase tracking-wide truncate">
+                        <CategoryVectorIcon catKey={section.catKey} className="w-4 h-4 text-slate-600 shrink-0" />
+                        <h3 className="text-xs sm:text-sm font-black text-slate-800 uppercase tracking-wide whitespace-normal break-words">
                           {section.label}
                         </h3>
                         <span className="text-[10px] font-bold bg-white text-slate-600 border border-slate-200 px-2 py-0.5 rounded-full shrink-0 tabular-nums">
@@ -3620,11 +3738,18 @@ export default function Home() {
                   <span>Kembali</span>
                 </button>
                 <div className="flex items-center gap-1.5 text-xs text-slate-500 min-w-0">
-                  <span className={`text-[10px] font-black px-2 py-0.5 rounded border shrink-0 ${productBrandMeta.badgeClass}`}>
-                    {productBrandMeta.shortLabel}
+                  <span className={`inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded border shrink-0 ${productBrandMeta.badgeClass}`}>
+                    {productBrandMeta.logoUrl && (
+                      <img
+                        src={productBrandMeta.logoUrl}
+                        alt={productBrandMeta.shortLabel}
+                        className="w-3.5 h-3.5 rounded-[3px] object-cover bg-white shrink-0"
+                      />
+                    )}
+                    <span>{productBrandMeta.shortLabel}</span>
                   </span>
                   {product.dept && (
-                    <span className="font-semibold text-slate-600 truncate hidden sm:inline">
+                    <span className="font-semibold text-slate-600 whitespace-normal break-words hidden sm:inline">
                       {product.dept}
                     </span>
                   )}
@@ -3674,7 +3799,7 @@ export default function Home() {
               <div className="bg-gradient-to-r from-purple-600 via-indigo-600 to-rose-600 px-4 sm:px-5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-white">
                 <div className="flex items-center gap-2 font-bold text-xs sm:text-sm min-w-0">
                   <Tag className="w-4 h-4 shrink-0 text-amber-300" />
-                  <span className="truncate">{product.discountType ? product.discountType : "SPECIAL PRICE"}</span>
+                  <span className="whitespace-normal break-words">{product.discountType ? product.discountType : "SPECIAL PRICE"}</span>
                 </div>
                 {hasHargaPromo ? (
                   <span className="bg-white text-red-600 font-extrabold text-xs px-3 py-0.5 rounded-full shadow-sm shrink-0">
@@ -4131,7 +4256,7 @@ export default function Home() {
               {/* Strip Keranjang Aktif di HP/Desktop agar user bisa langsung Kirim dari bawah */}
               {cart.length > 0 && (
                 <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-700/80 text-xs">
-                  <span className="font-bold text-emerald-300 truncate">
+                  <span className="font-bold text-emerald-300 whitespace-normal break-words">
                     🛒 Keranjang Aktif: {cart.length} Varian ({totalInCartPcs} Pcs)
                   </span>
                   <button
@@ -4234,7 +4359,7 @@ export default function Home() {
                   </div>
 
                   <div className="min-w-0">
-                    <p className={`text-xs font-black tabular-nums truncate ${pendingTotalPcs > 0 ? "text-white" : "text-slate-300"}`}>
+                    <p className={`text-xs font-black tabular-nums whitespace-normal break-words ${pendingTotalPcs > 0 ? "text-white" : "text-slate-300"}`}>
                       {pendingTotalPcs > 0
                         ? `${pendingVariantsCount} Varian • ${pendingTotalPcs} Pcs`
                         : "0 Varian • Pilih ukuran"}

@@ -386,15 +386,15 @@ export default function LaporanPenjualanPage() {
           </Link>
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="font-black text-lg sm:text-xl md:text-2xl text-white tracking-tight truncate">
+              <h1 className="font-black text-lg sm:text-xl md:text-2xl text-white tracking-tight whitespace-normal break-words">
                 Executive Sales & Retail Analytics
               </h1>
               <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 shrink-0">
                 Live POS
               </span>
             </div>
-            <p className="text-[11px] sm:text-xs md:text-sm text-slate-400 font-medium flex items-center gap-1.5 sm:gap-2 mt-1 truncate">
-              <span className="truncate">File: <strong className="text-slate-200">{data?.pqFileName || 'POWER QUERY'}</strong></span>
+            <p className="text-[11px] sm:text-xs md:text-sm text-slate-400 font-medium flex flex-wrap items-center gap-1.5 sm:gap-2 mt-1 whitespace-normal break-words">
+              <span className="whitespace-normal break-words">File: <strong className="text-slate-200">{data?.pqFileName || 'POWER QUERY'}</strong></span>
               <span>•</span>
               <span className="shrink-0">Sync: <strong className="text-slate-200">{data?.pqUploadTime || '-'}</strong></span>
             </p>
@@ -437,7 +437,7 @@ export default function LaporanPenjualanPage() {
             <select 
               value={selectedDate}
               onChange={(e) => setSelectedDate(e.target.value)}
-              className="bg-transparent border-none text-xs sm:text-sm font-bold text-slate-200 focus:ring-0 cursor-pointer outline-none max-w-[150px] sm:max-w-none truncate"
+              className="bg-transparent border-none text-xs sm:text-sm font-bold text-slate-200 focus:ring-0 cursor-pointer outline-none max-w-full"
             >
               {data?.availableDates.map(date => (
                 <option key={date} value={date} className="bg-slate-800 text-slate-100">{formatDate(date)}</option>
@@ -466,12 +466,12 @@ export default function LaporanPenjualanPage() {
                     <TrendingUp className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   </div>
                 </div>
-                <p className="text-xl sm:text-2xl font-black text-white font-mono tracking-tight truncate" title={formatCurrency(spdOmzet)}>
+                <p className="text-xl sm:text-2xl font-black text-white font-mono tracking-tight whitespace-normal break-words" title={formatCurrency(spdOmzet)}>
                   {formatCompactCurrency(spdOmzet)}
                 </p>
               </div>
               <div className="flex items-center justify-between text-[11px] sm:text-xs mt-3 pt-2.5 border-t border-slate-700/60">
-                <span className="text-slate-400 font-medium truncate">Terjual: <strong className="text-slate-200">{spdQty.toLocaleString('id-ID')} pcs</strong></span>
+                <span className="text-slate-400 font-medium whitespace-normal break-words">Terjual: <strong className="text-slate-200">{spdQty.toLocaleString('id-ID')} pcs</strong></span>
                 {yesterdayOmzet > 0 && (
                   <span className={`flex items-center font-bold shrink-0 ${dodGrowth >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                     {dodGrowth >= 0 ? <ArrowUpRight className="w-3.5 h-3.5 mr-0.5" /> : <ArrowDownRight className="w-3.5 h-3.5 mr-0.5" />}
@@ -490,12 +490,12 @@ export default function LaporanPenjualanPage() {
                     <Layers className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   </div>
                 </div>
-                <p className="text-xl sm:text-2xl font-black text-white font-mono tracking-tight truncate" title={formatCurrency(wtdOmzet)}>
+                <p className="text-xl sm:text-2xl font-black text-white font-mono tracking-tight whitespace-normal break-words" title={formatCurrency(wtdOmzet)}>
                   {formatCompactCurrency(wtdOmzet)}
                 </p>
               </div>
               <div className="flex items-center justify-between text-[11px] sm:text-xs mt-3 pt-2.5 border-t border-slate-700/60">
-                <span className="text-slate-400 font-medium truncate">Terjual: <strong className="text-slate-200">{wtdQty.toLocaleString('id-ID')} pcs</strong></span>
+                <span className="text-slate-400 font-medium whitespace-normal break-words">Terjual: <strong className="text-slate-200">{wtdQty.toLocaleString('id-ID')} pcs</strong></span>
                 <span className="text-blue-400 font-bold shrink-0">Week-to-Date</span>
               </div>
             </div>
@@ -509,7 +509,7 @@ export default function LaporanPenjualanPage() {
                     <ShoppingBag className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   </div>
                 </div>
-                <p className="text-xl sm:text-2xl font-black text-white font-mono tracking-tight truncate" title={formatCurrency(mtdOmzet)}>
+                <p className="text-xl sm:text-2xl font-black text-white font-mono tracking-tight whitespace-normal break-words" title={formatCurrency(mtdOmzet)}>
                   {formatCompactCurrency(mtdOmzet)}
                 </p>
                 
@@ -522,7 +522,7 @@ export default function LaporanPenjualanPage() {
                 </div>
               </div>
               <div className="flex items-center justify-between text-[10px] sm:text-[11px] text-slate-400 mt-2 pt-2 border-t border-slate-700/60">
-                <span className="truncate">Target: {formatCompactCurrency(targetMtd)}</span>
+                <span className="whitespace-normal break-words">Target: {formatCompactCurrency(targetMtd)}</span>
                 <span className="font-bold text-emerald-400 shrink-0">{mtdProgress.toFixed(1)}%</span>
               </div>
             </div>
@@ -536,12 +536,12 @@ export default function LaporanPenjualanPage() {
                     <BarChart3 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   </div>
                 </div>
-                <p className="text-xl sm:text-2xl font-black text-white font-mono tracking-tight truncate" title={formatCurrency(ytdOmzet)}>
+                <p className="text-xl sm:text-2xl font-black text-white font-mono tracking-tight whitespace-normal break-words" title={formatCurrency(ytdOmzet)}>
                   {formatCompactCurrency(ytdOmzet)}
                 </p>
               </div>
               <div className="flex items-center justify-between text-[11px] sm:text-xs mt-3 pt-2.5 border-t border-slate-700/60">
-                <span className="text-slate-400 font-medium truncate">Terjual: <strong className="text-slate-200">{ytdQty.toLocaleString('id-ID')} pcs</strong></span>
+                <span className="text-slate-400 font-medium whitespace-normal break-words">Terjual: <strong className="text-slate-200">{ytdQty.toLocaleString('id-ID')} pcs</strong></span>
                 <span className="text-purple-400 font-bold shrink-0">Year-to-Date</span>
               </div>
             </div>
@@ -555,12 +555,12 @@ export default function LaporanPenjualanPage() {
                     <Box className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   </div>
                 </div>
-                <p className="text-xl sm:text-2xl font-black text-white font-mono tracking-tight truncate" title={formatCurrency(nilaiInventori)}>
+                <p className="text-xl sm:text-2xl font-black text-white font-mono tracking-tight whitespace-normal break-words" title={formatCurrency(nilaiInventori)}>
                   {formatCompactCurrency(nilaiInventori)}
                 </p>
               </div>
               <div className="flex items-center justify-between text-[11px] sm:text-xs mt-3 pt-2.5 border-t border-slate-700/60">
-                <span className="text-slate-400 font-medium truncate">Stok Fisik: <strong className="text-slate-200">{totalStok.toLocaleString('id-ID')} pcs</strong></span>
+                <span className="text-slate-400 font-medium whitespace-normal break-words">Stok Fisik: <strong className="text-slate-200">{totalStok.toLocaleString('id-ID')} pcs</strong></span>
                 <span className="text-cyan-400 font-bold shrink-0">In-Stock</span>
               </div>
             </div>
@@ -917,9 +917,9 @@ export default function LaporanPenjualanPage() {
                             {idx + 1}
                           </div>
                           
-                          {/* Deskripsi Barang: line-clamp-2 agar rapi dan tidak offside */}
+                          {/* Deskripsi Barang: tampil utuh tanpa terpotong */}
                           <div className="flex-1 min-w-0">
-                            <p className="text-xs sm:text-sm font-bold text-white leading-snug line-clamp-2 break-words" title={item.description}>
+                            <p className="text-xs sm:text-sm font-bold text-white leading-snug whitespace-normal break-words" title={item.description}>
                               {item.description}
                             </p>
                             <p className="text-[10px] sm:text-xs text-slate-400 font-mono mt-0.5">
@@ -932,7 +932,7 @@ export default function LaporanPenjualanPage() {
                         <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-800/80 bg-slate-950/40 px-2.5 py-1.5 rounded-xl">
                           <div className="flex items-center gap-1.5 min-w-0">
                             <span className="text-[10px] text-slate-400 font-semibold uppercase">Omzet:</span>
-                            <span className="text-xs sm:text-sm font-black text-emerald-400 font-mono tracking-tight truncate">
+                            <span className="text-xs sm:text-sm font-black text-emerald-400 font-mono tracking-tight whitespace-normal break-words">
                               {formatCurrency(item.omzet_total)}
                             </span>
                           </div>
@@ -983,7 +983,7 @@ export default function LaporanPenjualanPage() {
                               <AlertTriangle className="w-3.5 h-3.5" />
                             </div>
                             <div className="flex-1 min-w-0">
-                              <p className="text-xs sm:text-sm font-bold text-white leading-snug line-clamp-2 break-words" title={item.description}>
+                              <p className="text-xs sm:text-sm font-bold text-white leading-snug whitespace-normal break-words" title={item.description}>
                                 {item.description}
                               </p>
                               <p className="text-[10px] sm:text-xs text-slate-400 font-mono mt-0.5">
@@ -1052,7 +1052,7 @@ export default function LaporanPenjualanPage() {
                               <Box className="w-3.5 h-3.5" />
                             </div>
                             <div className="flex-1 min-w-0">
-                              <p className="text-xs sm:text-sm font-bold text-white leading-snug line-clamp-2 break-words" title={item.description}>
+                              <p className="text-xs sm:text-sm font-bold text-white leading-snug whitespace-normal break-words" title={item.description}>
                                 {item.description}
                               </p>
                               <p className="text-[10px] sm:text-xs text-slate-400 font-mono mt-0.5">
@@ -1143,7 +1143,7 @@ export default function LaporanPenjualanPage() {
                         <td className="p-4">
                           <div className="flex flex-col gap-0.5">
                             <span className="font-bold text-white font-mono">{item.sku}</span>
-                            <span className="text-xs text-slate-300 max-w-[340px] truncate">{item.description}</span>
+                            <span className="text-xs text-slate-300 max-w-[340px] whitespace-normal break-words">{item.description}</span>
                           </div>
                         </td>
                         <td className="p-4 text-center font-bold text-slate-200">{item.qtySold}</td>

@@ -319,7 +319,7 @@ export default function ImageLightboxModal({
                 </span>
               )}
             </div>
-            <h3 className="text-sm font-bold truncate text-white mt-1 leading-tight">
+            <h3 className="text-sm font-bold whitespace-normal break-words text-white mt-1 leading-tight">
               {title}
             </h3>
           </div>

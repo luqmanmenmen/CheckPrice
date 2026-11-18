@@ -22,6 +22,7 @@ on:
           - photos
           - stock-only
           - promo
+          - upcoming-promo
           - catalog
           - analytics
           - all
@@ -42,7 +43,7 @@ on:
         type: string
 
   repository_dispatch:
-    types: [trigger-sync-engine, trigger-scrab, trigger-mds-bisa, trigger-stock-only, trigger-photos, trigger-promo, trigger-catalog, trigger-analytics]
+    types: [trigger-sync-engine, trigger-scrab, trigger-mds-bisa, trigger-stock-only, trigger-photos, trigger-promo, trigger-upcoming-promo, trigger-catalog, trigger-analytics]
 
 concurrency:
   group: retail-sync-group
@@ -128,8 +129,20 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
+      - name: 🏷️ [KATEGORI 6 - PERSIAPAN POP H-2/H-1] Compile Draft upcoming-promo.json (Read-Only DB Berjalan)
+        if: ${{ github.event.inputs.action == 'upcoming-promo' || github.event.action == 'trigger-upcoming-promo' }}
+        run: |
+          PROMO_FLAG="${{ github.event.inputs.promo_url != '' && format('--file={0}', github.event.inputs.promo_url) || '' }}"
+          python python-engine/run_promo_sync.py --upcoming $PROMO_FLAG
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
       - name: 🧠 [KATEGORI 4 - CATALOG BRAIN & OFFLINE SNAPSHOT v2.7] Susun CatalogArticle + Kompilasi DB Offline .json.gz
-        if: ${{ (success() && github.event.inputs.action != 'analytics' && github.event.action != 'trigger-analytics') || github.event.inputs.action == 'catalog' || github.event.action == 'trigger-catalog' }}
+        if: ${{ (success() && github.event.inputs.action != 'analytics' && github.event.action != 'trigger-analytics' && github.event.inputs.action != 'upcoming-promo' && github.event.action != 'trigger-upcoming-promo') || github.event.inputs.action == 'catalog' || github.event.action == 'trigger-catalog' }}
         run: |
           if [ -n "$DATABASE_URL" ]; then
             STOCK_ONLY_FLAG=""

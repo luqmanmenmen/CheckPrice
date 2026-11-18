@@ -31,7 +31,7 @@ export default function ClientPromoCard({ item }: { item: any }) {
       className="bg-white rounded-[2rem] p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-100 hover:shadow-xl hover:-translate-y-1 transition-all group flex flex-col justify-between relative overflow-hidden cursor-pointer"
     >
       {/* Badge Tipe Diskon di Pojok Kanan Atas */}
-      <div className="absolute top-0 right-0 bg-purple-600 text-white font-black text-xs px-4 py-2 rounded-bl-2xl shadow-sm z-10 max-w-[75%] truncate" title={item.discountType || 'PROMO'}>
+      <div className="absolute top-0 right-0 bg-purple-600 text-white font-black text-xs px-4 py-2 rounded-bl-2xl shadow-sm z-10 max-w-[75%] whitespace-normal break-words text-right leading-snug" title={item.discountType || 'PROMO'}>
         {item.discountType || 'PROMO'}
       </div>
 
@@ -42,7 +42,7 @@ export default function ClientPromoCard({ item }: { item: any }) {
           </span>
         </div>
         
-        <h3 className="text-xl font-black text-slate-800 leading-tight mb-2 group-hover:text-purple-600 transition-colors line-clamp-2 pr-10">
+        <h3 className="text-xl font-black text-slate-800 leading-tight mb-2 group-hover:text-purple-600 transition-colors whitespace-normal break-words pr-10">
           {item.description}
         </h3>
         

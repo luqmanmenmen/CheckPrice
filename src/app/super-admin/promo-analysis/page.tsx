@@ -226,7 +226,7 @@ export default function PromoAnalysisPage() {
                       {data.itemLevel.filter((i: any) => i.sku.includes(search) || i.description.toLowerCase().includes(search.toLowerCase())).map((item: any, idx: number) => (
                         <tr key={item.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
                           <td className="px-4 py-3 min-w-[250px]">
-                            <div className="font-bold text-slate-800 line-clamp-2 leading-tight">{item.description}</div>
+                            <div className="font-bold text-slate-800 whitespace-normal break-words leading-tight">{item.description}</div>
                             <div className="text-[10px] text-slate-500 font-mono mt-1 mb-1">{item.sku}</div>
                             <span className="text-[9px] px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded uppercase font-bold">{item.acara}</span>
                           </td>

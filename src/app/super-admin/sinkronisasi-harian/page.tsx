@@ -543,7 +543,7 @@ export default function UpdateProdukPage() {
           {/* Progress Bar & Durasi */}
           <div>
             <div className="flex items-center justify-between text-xs mb-1.5">
-              <span className="font-bold text-slate-700 flex items-center gap-1.5 truncate">
+              <span className="font-bold text-slate-700 flex items-center gap-1.5 whitespace-normal break-words">
                 {isRunning ? (
                   <>
                     <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-500 shrink-0" />
@@ -659,7 +659,7 @@ export default function UpdateProdukPage() {
                             -
                           </span>
                         )}
-                        <span className="truncate">{step.name}</span>
+                        <span className="whitespace-normal break-words">{step.name}</span>
                       </div>
 
                       <div className="shrink-0 flex items-center gap-2 text-[11px]">
@@ -727,7 +727,7 @@ export default function UpdateProdukPage() {
                     <Database className="w-3 h-3 text-cyan-400" /> Riwayat Data Masuk ke Database Supabase:
                   </div>
                   {cloudStatus.syncHistory.slice(0, 3).map((item) => (
-                    <div key={item.id} className="text-cyan-300 text-[11px] truncate">
+                    <div key={item.id} className="text-cyan-300 text-[11px] whitespace-normal break-words">
                       • {item.type}: {item.fileName} ➔ {item.records.toLocaleString("id-ID")} produk ({item.status})
                     </div>
                   ))}
@@ -826,7 +826,7 @@ export default function UpdateProdukPage() {
                   ? `${cloudStatus.syncHistory.find((h) => h.type === "UPDATE_PROMO")?.records.toLocaleString("id-ID")} SKU Promo`
                   : "Python Promo Parser"}
               </p>
-              <p className="text-[11px] text-slate-500 mt-0.5 truncate">
+              <p className="text-[11px] text-slate-500 mt-0.5 whitespace-normal break-words">
                 {cloudStatus.syncHistory.find((h) => h.type === "UPDATE_PROMO")
                   ? new Date(cloudStatus.syncHistory.find((h) => h.type === "UPDATE_PROMO")!.createdAt).toLocaleString(
                       "id-ID",
@@ -882,7 +882,7 @@ export default function UpdateProdukPage() {
                           {item.type.replace(/MDS_BISA/gi, "BY_LUQMAN_ORG")}
                         </span>
                       </td>
-                      <td className="px-3.5 py-2.5 text-slate-600 truncate max-w-xs">{item.fileName?.replace(/MDS\s*BISA/gi, "by luqman org")}</td>
+                      <td className="px-3.5 py-2.5 text-slate-600 whitespace-normal break-words max-w-md">{item.fileName?.replace(/MDS\s*BISA/gi, "by luqman org")}</td>
                       <td className="px-3.5 py-2.5 text-right font-mono font-bold text-slate-700 whitespace-nowrap">
                         {item.records.toLocaleString("id-ID")} item
                       </td>

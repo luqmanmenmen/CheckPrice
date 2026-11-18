@@ -754,7 +754,7 @@ export default function CekHargaPage() {
                         ) : (
                           <Tag className="w-4 h-4 fill-white shrink-0" />
                         )}
-                        <span className="font-black tracking-wider text-xs sm:text-sm uppercase line-clamp-1">
+                        <span className="font-black tracking-wider text-xs sm:text-sm uppercase whitespace-normal break-words">
                           {promoTitle}
                         </span>
                       </div>
