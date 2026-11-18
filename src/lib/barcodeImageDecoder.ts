@@ -35,18 +35,239 @@ interface DecodeVariant {
   maxDim: number;
   cropRatio: number;
   boostContrast: boolean;
+  yCenterRatio?: number;
+  ySpanRatio?: number;
+  upscaleSmall?: boolean;
 }
 
 const IMAGE_DECODE_VARIANTS: DecodeVariant[] = [
-  { angleDeg: 0, maxDim: 1600, cropRatio: 1.0, boostContrast: false },
-  { angleDeg: 90, maxDim: 1600, cropRatio: 1.0, boostContrast: false },
-  { angleDeg: 270, maxDim: 1600, cropRatio: 1.0, boostContrast: false },
-  { angleDeg: 0, maxDim: 1600, cropRatio: 1.0, boostContrast: true },
-  { angleDeg: 90, maxDim: 1600, cropRatio: 1.0, boostContrast: true },
+  { angleDeg: 0, maxDim: 1600, cropRatio: 1.0, boostContrast: false, upscaleSmall: true },
+  { angleDeg: 0, maxDim: 1500, cropRatio: 0.92, yCenterRatio: 0.72, ySpanRatio: 0.45, boostContrast: false, upscaleSmall: true },
+  { angleDeg: 0, maxDim: 1500, cropRatio: 0.92, yCenterRatio: 0.30, ySpanRatio: 0.45, boostContrast: false, upscaleSmall: true },
+  { angleDeg: 90, maxDim: 1600, cropRatio: 1.0, boostContrast: false, upscaleSmall: true },
+  { angleDeg: 270, maxDim: 1600, cropRatio: 1.0, boostContrast: false, upscaleSmall: true },
+  { angleDeg: 0, maxDim: 1600, cropRatio: 1.0, boostContrast: true, upscaleSmall: true },
+  { angleDeg: 0, maxDim: 1400, cropRatio: 0.62, boostContrast: false, upscaleSmall: true },
+  { angleDeg: 90, maxDim: 1400, cropRatio: 0.62, boostContrast: false, upscaleSmall: true },
+  { angleDeg: -7, maxDim: 1500, cropRatio: 0.95, boostContrast: false },
+  { angleDeg: 7, maxDim: 1500, cropRatio: 0.95, boostContrast: false },
   { angleDeg: 180, maxDim: 1600, cropRatio: 1.0, boostContrast: false },
-  { angleDeg: 0, maxDim: 1400, cropRatio: 0.62, boostContrast: false },
-  { angleDeg: 90, maxDim: 1400, cropRatio: 0.62, boostContrast: false },
 ];
+
+// Tabel Standar EAN-13 untuk Dekoder Sub-Pixel Soft-Edge (Anti-Blur & Anti-Kompresi WA/Safari)
+const EAN_L_CODES = [
+  [3, 2, 1, 1],
+  [2, 2, 2, 1],
+  [2, 1, 2, 2],
+  [1, 4, 1, 1],
+  [1, 1, 3, 2],
+  [1, 2, 3, 1],
+  [1, 1, 1, 4],
+  [1, 3, 1, 2],
+  [1, 2, 1, 3],
+  [3, 1, 1, 2],
+];
+const EAN_G_CODES = EAN_L_CODES.map((c) => [...c].reverse());
+const EAN_FIRST_DIGIT_PARITIES = [
+  "LLLLLL",
+  "LLGLGG",
+  "LLGGLG",
+  "LLGGGL",
+  "LGLLGG",
+  "LGGLLG",
+  "LGGGLL",
+  "LGLGLG",
+  "LGLGGL",
+  "LGGLGL",
+];
+
+function matchEanDigitRuns(
+  r0: number,
+  r1: number,
+  r2: number,
+  r3: number,
+  table: number[][]
+): { digit: number; err: number } {
+  const total = r0 + r1 + r2 + r3;
+  if (total <= 0) return { digit: -1, err: 999 };
+  let bestDigit = -1;
+  let bestErr = 999;
+  for (let d = 0; d < 10; d++) {
+    const pat = table[d];
+    const e0 = Math.abs((r0 / total) * 7 - pat[0]);
+    const e1 = Math.abs((r1 / total) * 7 - pat[1]);
+    const e2 = Math.abs((r2 / total) * 7 - pat[2]);
+    const e3 = Math.abs((r3 / total) * 7 - pat[3]);
+    const maxSingle = Math.max(e0, e1, e2, e3);
+    const err = e0 + e1 + e2 + e3;
+    if (maxSingle < 0.72 && err < bestErr) {
+      bestErr = err;
+      bestDigit = d;
+    }
+  }
+  return { digit: bestDigit, err: bestErr };
+}
+
+function decodeEan13Scanline(rowLum: Float32Array, w: number): string | null {
+  const win = Math.max(7, Math.min(16, Math.round(w / 70)));
+  const thresh = new Float32Array(w);
+  for (let x = 0; x < w; x++) {
+    let mn = 255;
+    let mx = 0;
+    const x0 = x - win > 0 ? x - win : 0;
+    const x1 = x + win < w ? x + win : w - 1;
+    for (let j = x0; j <= x1; j++) {
+      const v = rowLum[j];
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+    }
+    // Bias +4% ke arah putih mengompensasi pelebaran tinta/kompresi pada celah putih tipis
+    thresh[x] = mx - mn > 22 ? mn + (mx - mn) * 0.54 : 128;
+  }
+
+  const posList: number[] = [];
+  const runBlack: number[] = [];
+  let curBlack = rowLum[0] < thresh[0];
+  for (let x = 1; x < w; x++) {
+    const d0 = rowLum[x - 1] - thresh[x - 1];
+    const d1 = rowLum[x] - thresh[x];
+    const nb = d1 < 0;
+    if (nb !== curBlack) {
+      const denom = d0 - d1;
+      const frac = Math.abs(denom) > 0.001 ? d0 / denom : 0.5;
+      posList.push(x - 1 + Math.max(0, Math.min(1, frac)));
+      runBlack.push(nb ? 1 : 0);
+      curBlack = nb;
+    }
+  }
+
+  const numRuns = posList.length - 1;
+  if (numRuns < 59) return null;
+
+  const runs = new Float32Array(numRuns);
+  for (let i = 0; i < numRuns; i++) {
+    runs[i] = posList[i + 1] - posList[i];
+  }
+
+  for (let s = 0; s <= numRuns - 59; s++) {
+    // Left Guard 1:1:1 (Bar, Space, Bar)
+    if (!runBlack[s] || runBlack[s + 1] || !runBlack[s + 2]) continue;
+    const gL = (runs[s] + runs[s + 1] + runs[s + 2]) / 3;
+    if (gL < 0.72) continue;
+    if (
+      Math.abs(runs[s] / gL - 1) > 0.65 ||
+      Math.abs(runs[s + 1] / gL - 1) > 0.65 ||
+      Math.abs(runs[s + 2] / gL - 1) > 0.65
+    ) {
+      continue;
+    }
+    // Center Guard (S B S B S) & Right Guard (B S B)
+    if (runBlack[s + 27] || !runBlack[s + 28] || runBlack[s + 29] || !runBlack[s + 30] || runBlack[s + 31]) continue;
+    if (!runBlack[s + 56] || runBlack[s + 57] || !runBlack[s + 58]) continue;
+
+    let parityStr = "";
+    const digits: number[] = [];
+    let ok = true;
+
+    for (let i = 0; i < 6; i++) {
+      const idx = s + 3 + i * 4;
+      const mL = matchEanDigitRuns(runs[idx], runs[idx + 1], runs[idx + 2], runs[idx + 3], EAN_L_CODES);
+      const mG = matchEanDigitRuns(runs[idx], runs[idx + 1], runs[idx + 2], runs[idx + 3], EAN_G_CODES);
+      if (mL.digit < 0 && mG.digit < 0) {
+        ok = false;
+        break;
+      }
+      if (mL.err <= mG.err) {
+        digits.push(mL.digit);
+        parityStr += "L";
+      } else {
+        digits.push(mG.digit);
+        parityStr += "G";
+      }
+    }
+    if (!ok) continue;
+
+    const firstDigit = EAN_FIRST_DIGIT_PARITIES.indexOf(parityStr);
+    if (firstDigit < 0) continue;
+
+    for (let i = 0; i < 6; i++) {
+      const idx = s + 32 + i * 4;
+      const mR = matchEanDigitRuns(runs[idx], runs[idx + 1], runs[idx + 2], runs[idx + 3], EAN_L_CODES);
+      if (mR.digit < 0) {
+        ok = false;
+        break;
+      }
+      digits.push(mR.digit);
+    }
+    if (!ok) continue;
+
+    const candidate = `${firstDigit}${digits.join("")}`;
+    if (isValidGs1CheckDigit(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * Dekoder EAN-13 Sub-Pixel Soft-Edge: sangat toleran pada foto WhatsApp terkompresi,
+ * pantulan cahaya, maupun buram kamera iPhone Safari yang sering gagal di ZXing standar.
+ */
+export function decodeEan13SoftEdgeFromCanvas(
+  canvas: HTMLCanvasElement,
+  minMajorityHits = 2
+): string | null {
+  const w = canvas.width;
+  const h = canvas.height;
+  if (w < 95 || h < 8) return null;
+
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+
+  try {
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const data = imgData.data;
+    const avgLum = new Float32Array(w);
+    const stepY = Math.max(2, Math.floor(h / 160));
+    const hits = new Map<string, number>();
+
+    for (let y = 3; y < h - 3; y += stepY) {
+      const rPrev = (y - 2) * w;
+      const rMid = y * w;
+      const rNext = (y + 2) * w;
+      for (let x = 0; x < w; x++) {
+        const i0 = (rPrev + x) * 4;
+        const i1 = (rMid + x) * 4;
+        const i2 = (rNext + x) * 4;
+        const l0 = (77 * data[i0] + 150 * data[i0 + 1] + 29 * data[i0 + 2]) >> 8;
+        const l1 = (77 * data[i1] + 150 * data[i1 + 1] + 29 * data[i1 + 2]) >> 8;
+        const l2 = (77 * data[i2] + 150 * data[i2 + 1] + 29 * data[i2 + 2]) >> 8;
+        avgLum[x] = (l0 + l1 + l2) / 3;
+      }
+      const found = decodeEan13Scanline(avgLum, w);
+      if (found) {
+        const nextCount = (hits.get(found) || 0) + 1;
+        hits.set(found, nextCount);
+        // Mayoritas cukup kuat langsung kembalikan tanpa membuang CPU ekstra
+        if (nextCount >= Math.max(4, minMajorityHits * 2)) {
+          return found;
+        }
+      }
+    }
+
+    let bestCode: string | null = null;
+    let bestCount = 0;
+    for (const [code, cnt] of hits.entries()) {
+      if (cnt > bestCount) {
+        bestCode = code;
+        bestCount = cnt;
+      }
+    }
+    return bestCount >= minMajorityHits ? bestCode : null;
+  } catch {
+    return null;
+  }
+}
 
 async function pickBestDecodedCandidate(rawCandidates: string[]): Promise<string | null> {
   const unique = Array.from(
@@ -76,7 +297,21 @@ function loadImageFromFile(file: File): Promise<{ img: HTMLImageElement; cleanup
     img.onload = () => resolve({ img, cleanup: () => URL.revokeObjectURL(objectUrl) });
     img.onerror = () => {
       URL.revokeObjectURL(objectUrl);
-      reject(new Error("File bukan gambar yang valid."));
+      // Fallback DataURL bila Blob URL gagal dibaca oleh WebKit galeri HP tertentu
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = typeof reader.result === "string" ? reader.result : "";
+        if (!dataUrl) {
+          reject(new Error("File bukan gambar yang valid."));
+          return;
+        }
+        const img2 = new Image();
+        img2.onload = () => resolve({ img: img2, cleanup: () => {} });
+        img2.onerror = () => reject(new Error("File bukan gambar yang valid."));
+        img2.src = dataUrl;
+      };
+      reader.onerror = () => reject(new Error("Gagal membaca file gambar."));
+      reader.readAsDataURL(file);
     };
     img.src = objectUrl;
   });
@@ -172,11 +407,19 @@ function renderVariantToCanvas(
   if (!srcW || !srcH) return false;
 
   const cropW = Math.max(1, Math.floor(srcW * variant.cropRatio));
-  const cropH = Math.max(1, Math.floor(srcH * variant.cropRatio));
+  const cropH = Math.max(
+    1,
+    Math.floor(srcH * (variant.ySpanRatio ?? variant.cropRatio))
+  );
   const sx = Math.floor((srcW - cropW) / 2);
-  const sy = Math.floor((srcH - cropH) / 2);
+  const rawSy =
+    variant.yCenterRatio !== undefined
+      ? Math.floor(srcH * variant.yCenterRatio - cropH / 2)
+      : Math.floor((srcH - cropH) / 2);
+  const sy = Math.max(0, Math.min(srcH - cropH, rawSy));
 
-  const scale = Math.min(1, variant.maxDim / Math.max(cropW, cropH));
+  const maxUpscale = variant.upscaleSmall ? 2 : 1;
+  const scale = Math.min(maxUpscale, variant.maxDim / Math.max(cropW, cropH));
   const drawW = Math.max(1, Math.round(cropW * scale));
   const drawH = Math.max(1, Math.round(cropH * scale));
 
@@ -212,6 +455,11 @@ async function decodeCanvasWithEngines(
   nativeDetector: any,
   zxingShim: any
 ): Promise<string | null> {
+  // 1. Sub-Pixel Soft-Edge EAN-13 Reader (~15ms): menembus foto WhatsApp/iPhone yang terlalu rapat/blur bagi ZXing
+  const softEan = decodeEan13SoftEdgeFromCanvas(canvas, 2);
+  if (softEan) return softEan;
+
+  // 2. Native BarcodeDetector jika tersedia di browser
   if (nativeDetector && typeof nativeDetector.detect === "function") {
     try {
       const detected = await nativeDetector.detect(canvas);
@@ -224,6 +472,7 @@ async function decodeCanvasWithEngines(
     } catch {}
   }
 
+  // 3. ZXing MultiFormatReader (Code-128, QR, Code-39, EAN-8, ITF, dll)
   if (zxingShim && typeof zxingShim.decodeRobustlyAsync === "function") {
     try {
       const result = await zxingShim.decodeRobustlyAsync(canvas);

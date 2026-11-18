@@ -23,6 +23,7 @@ import {
   applyPixelContrastBoost,
   decodeBarcodeFromCanvas,
   decodeBarcodeFromFile,
+  decodeEan13SoftEdgeFromCanvas,
   enableZxingTryHarder,
   isValidGs1CheckDigit,
   isValidMdsSku8,
@@ -497,6 +498,12 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
           ctx.rotate(Math.PI / 2);
           ctx.drawImage(video, sx, sy, cropW, cropH, -drawW / 2, -drawH / 2, drawW, drawH);
           ctx.restore();
+
+          const softRotated = decodeEan13SoftEdgeFromCanvas(canvas, 2);
+          if (softRotated) {
+            await handleBarcodeDetected(softRotated);
+            if (isHandlingResult.current) return;
+          }
           applyPixelContrastBoost(ctx, drawH, drawW);
         } else {
           // Pass 0 & 1: fokus pita horizontal tengah (kotak barcode); Pass 2: area tengah lebih luas
@@ -516,7 +523,14 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
 
           ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, targetW, targetH);
 
-          // Pass 1 & 2 mengaktifkan kontras pixel-buffer (membuat barcode agak blur / kena cahaya lebih terbaca di Safari iOS)
+          // Dekoder Sub-Pixel Soft-Edge EAN-13 (~4ms) sebelum hard-contrast boost agar transisi piksel akurat
+          const softEan = decodeEan13SoftEdgeFromCanvas(canvas, 2);
+          if (softEan) {
+            await handleBarcodeDetected(softEan);
+            if (isHandlingResult.current) return;
+          }
+
+          // Pass 1 & 2 mengaktifkan kontras pixel-buffer untuk ZXing fallback (Code-128 / QR / dll)
           if (passMode === 1 || passMode === 2) {
             applyPixelContrastBoost(ctx, targetW, targetH);
           }
@@ -693,8 +707,8 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
   const processImageFile = useCallback(
     async (file: File) => {
       if (isHandlingResult.current || isDecodingImageRef.current) return;
-      if (!file.type.startsWith("image/") && !/\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name)) {
-        setUploadNotice("Pilih file gambar (JPG, PNG, WEBP) yang berisi barcode.");
+      if (!file.type.startsWith("image/") && !/\.(png|jpe?g|webp|gif|bmp|heic|heif)$/i.test(file.name)) {
+        setUploadNotice("Pilih file gambar (JPG, PNG, WEBP, HEIC) yang berisi barcode.");
         return;
       }
 
