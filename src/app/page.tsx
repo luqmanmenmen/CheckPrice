@@ -1683,15 +1683,62 @@ export default function Home() {
     }
     if (searchCounterRef.current !== currentSearch) return;
 
+    // Jika ini pencarian SKU / barcode dan DB offline (~310rb SKU) SUDAH ada tapi kode tidak ketemu,
+    // JANGAN buat kasir menunggu spinner 6.5–12 detik! Langsung tampilkan tombol Scrap MDS BISA & Matahari,
+    // sambil verifikasi kilat max 1.8 detik di background ke server barangkali baru masuk DB setelah snapshot.
+    if (isCodeSearch && localDbReady && page === 1 && !hasTaxonomyFilter) {
+      setLoading(false);
+      if (isScanning) setIsScanning(false);
+      setProduct(null);
+      setSiblings([]);
+      setProductsList([]);
+      setNotFoundCode(trimmed);
+      setError(
+        `Kode "${trimmed}" belum ada di database offline (${(localSkuCount || 310526).toLocaleString("id-ID")} SKU). Klik tombol di bawah untuk langsung cari & scrap di MDS BISA + Matahari.com.`
+      );
+
+      const fastCtrl = new AbortController();
+      const fastTimer = setTimeout(() => fastCtrl.abort(), 1800);
+      const fastUrl = endpointUrl + (endpointUrl.includes("?") ? "&fast=1" : "?fast=1");
+      fetch(fastUrl, { cache: "no-store", signal: fastCtrl.signal })
+        .then(async (r) => {
+          if (!r.ok) return null;
+          return r.json().catch(() => null);
+        })
+        .then((fastJson) => {
+          if (searchCounterRef.current !== currentSearch || !fastJson?.data) return;
+          setError("");
+          setNotFoundCode("");
+          if (Array.isArray(fastJson.data)) {
+            if (fastJson.data.length === 1) {
+              applySelectedProductFamily(fastJson.data[0], [fastJson.data[0]]);
+              syncServerProductToLocal(fastJson.data[0], [fastJson.data[0]]);
+            } else if (fastJson.data.length > 1) {
+              setProductsList(fastJson.data);
+              setTotalModelsCount(fastJson.meta?.total ?? fastJson.data.length);
+            }
+          } else {
+            const srvSibs = fastJson.siblings || [fastJson.data];
+            applySelectedProductFamily(fastJson.data, srvSibs);
+            preloadProductImages([fastJson.data?.imageUrl, ...srvSibs.map((s: ProductData) => s.imageUrl)], 400);
+            syncServerProductToLocal(fastJson.data, srvSibs);
+          }
+        })
+        .catch(() => {})
+        .finally(() => clearTimeout(fastTimer));
+      return;
+    }
+
     setLoading(true);
 
     let netTimer: ReturnType<typeof setTimeout> | null = null;
     try {
-      // 1. Minta data live ke server dengan timeout memadai (cukup untuk cold-start Vercel + DB tanpa abort prematur)
-      const timeoutMs = localDbReady ? 6500 : 12000;
+      // 1. Untuk scan/pencarian kode saat DB lokal belum terisi, pakai ?fast=1 + timeout pendek 2.8s agar cepat muncul tombol Scrap!
+      const timeoutMs = isCodeSearch ? 2800 : (localDbReady ? 6500 : 10000);
+      const requestUrl = isCodeSearch ? `${endpointUrl}${endpointUrl.includes("?") ? "&fast=1" : "?fast=1"}` : endpointUrl;
       const netCtrl = new AbortController();
       netTimer = setTimeout(() => netCtrl.abort(), timeoutMs);
-      const res = await fetch(endpointUrl, {
+      const res = await fetch(requestUrl, {
         cache: 'no-store',
         signal: netCtrl.signal,
       });
@@ -2870,10 +2917,10 @@ export default function Home() {
         </div>
       )}
 
-      {/* Error + Trigger Scrap Server Langsung (SKU Spesifik Cepat vs 1 Keluarga Artikel + Foto) */}
+      {/* Not Found + Trigger Langsung Scrap MDS BISA & Matahari.com */}
       {error && (
-        <div className="bg-red-50 text-red-700 p-4 rounded-xl text-center border border-red-200 text-sm font-medium animate-in zoom-in duration-200 flex flex-col items-center gap-3">
-          <p>{error}</p>
+        <div className="bg-rose-50 text-rose-800 p-4 rounded-2xl text-center border border-rose-200 text-sm font-medium animate-in zoom-in duration-200 flex flex-col items-center gap-3 shadow-xs">
+          <p className="font-semibold leading-snug">{error}</p>
           {(notFoundCode || manualInput.trim()) && (
             <div className="flex flex-col sm:flex-row items-center justify-center gap-2 w-full sm:w-auto">
               <button
@@ -2885,12 +2932,12 @@ export default function Home() {
                 {discoveringServer ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin text-amber-200 shrink-0" />
-                    <span>Menarik SKU, Barcode &amp; Gambar Spesifik...</span>
+                    <span>Menarik dari MDS BISA &amp; Matahari.com...</span>
                   </>
                 ) : (
                   <>
                     <Search className="w-4 h-4 text-white shrink-0" />
-                    <span>Cari &amp; Gambar SKU &ldquo;{(notFoundCode || manualInput).trim()}&rdquo; Saja (Cepat)</span>
+                    <span>Scrap MDS BISA &amp; Matahari: SKU &ldquo;{(notFoundCode || manualInput).trim()}&rdquo; + Gambar</span>
                   </>
                 )}
               </button>
@@ -2901,7 +2948,7 @@ export default function Home() {
                 className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white font-black text-xs shadow-md active:scale-95 transition-all cursor-pointer disabled:opacity-60"
               >
                 <Zap className="w-4 h-4 text-amber-300 fill-amber-300 shrink-0" />
-                <span>Tarik 1 Keluarga Artikel Lengkap + Foto</span>
+                <span>Scrap 1 Keluarga Artikel Lengkap + Foto</span>
               </button>
             </div>
           )}

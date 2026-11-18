@@ -1368,3 +1368,13 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
    - Menyamakan `APP_VERSION = "2.7.0"` di Portal Kasir maupun Pusat Trigger Super Admin (`Kategori 3 Update Promo`, `Kategori 4 Build Catalog & Snapshot`, dan `All Trigger Kat 1–4` di `.github/workflows/retail-sync-engine.yml`).
 
 - **Verifikasi:** `npx tsc --noEmit` (`0`), `npm run build` (`53/53` route, `exit code 0`), `run_promo_sync.py` memperbarui `8,563` SKU dari `15 file` folder `PROMO 19 25 NOV 2026` (`68182107` menjadi `Rp 299.000`, `SP299`, `2026-11-19` s/d `2026-11-25`, `5,577` promo aktif & `0` expired), serta `build_catalog_index.py` membangun `57,367 CatalogArticle` & mengunggah snapshot CDN `310,526 SKU` / `8.50 MB` (`reason=PROMO_CHANGED`, `promoAktif=5,744`, `catalogVersion=1795027206662`).
+
+---
+
+### 86. Deteksi 0ms Barcode/SKU Tidak Terdaftar + Tombol Instan Scrap MDS BISA & Matahari.com (19 November 2026)
+
+- **Masalah:** Ketika kasir men-scan/mencari barcode atau SKU yang memang belum ada di database, [`GET /api/product/[identifier]`](file:///c:/Max%20Display/price-checker/src/app/api/product/%5Bidentifier%5D/route.ts) sempat melakukan `OR` prefix scan + `article ILIKE` pada 310rb+ baris dan [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx) menunggu timeout fetch `6.500–12.000ms` dengan spinner loading sebelum menampilkan tombol trigger scrap.
+- **Perbaikan:**
+  1. **`GET /api/product/[identifier]` (`?fast=1` & kode 8–20 digit):** Setelah cek exact match B-tree (`sku`, `barcode`, `BarcodeAlias`), prefix scan hanya dipakai jika panjang digit `<= 7` dan bukan mode `fast=1`, serta tanpa `article ILIKE` di blok numerik; kode yang tidak ditemukan langsung mengembalikan `404` tanpa jatuh ke query teks berat atau Gemini AI.
+  2. **UI 0ms Instan di [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx):** Bila DB offline sudah siap (`localDbReady`) dan `findOfflineProductByCode` tidak menemukan kode tersebut, UI langsung (`0ms`) menampilkan panel aksi dengan tombol **`Scrap MDS BISA & Matahari: SKU "<kode>" + Gambar`** (dan opsi **`Scrap 1 Keluarga Artikel Lengkap + Foto`**), sementara verifikasi server ringan (`?fast=1`, batas `1.800ms`) berjalan di latar untuk menangkap barang super baru tanpa menahan layar. Jika DB lokal kosong, timeout pencarian kode dipersingkat menjadi `2.800ms` dengan `?fast=1`.
+- **Verifikasi:** `npx tsc --noEmit` (`0`) dan `npm run build` (`53/53` halaman) lulus exit code `0`.

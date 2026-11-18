@@ -178,18 +178,21 @@ export async function GET(
     }
 
     // JALUR KILAT KODE NUMERIK MURNI (5-20 digit: SKU 7-9 digit, EAN-8, UPC-12, EAN-13, ITF-14+)
-    // Serta fallback Live MDS untuk kode alfanumerik bila belum ditemukan di artikel DB
+    // Serta fallback cepat untuk kode vendor/artikel bila belum ditemukan di DB
+    const fastMode = searchParams.get('fast') === '1';
     const isPureDigitCode = /^\d{5,20}$/.test(rawInput);
     const isAlphaVendorCode = !isPureDigitCode && /^(?=.*[\d\-._/])[A-Za-z0-9._\-/]{4,32}$/.test(rawInput);
 
-    if (isPureDigitCode) {
+    // Tahap 1 sudah mengecek exact match sku/barcode/BarcodeAlias (B-tree <5ms).
+    // Hanya lakukan prefix search bila panjang digit <= 7 (pencarian potongan SKU),
+    // agar barcode 8-20 digit yang tidak ada langsung mengembalikan 404 instan (<15ms)!
+    if (isPureDigitCode && rawInput.length <= 7 && !fastMode) {
       const numericMatches = await db.product.findMany({
         where: {
           OR: [
             buildBtreePrefixWhere('sku', rawInput),
             buildBtreePrefixWhere('barcode', rawInput),
-            ...(rawInput.length <= 7 ? [buildBtreePrefixWhere('barcode', `234000${rawInput}`)] : []),
-            ...(rawInput.length <= 10 ? [{ article: { contains: rawInput, mode: 'insensitive' as const } }] : []),
+            buildBtreePrefixWhere('barcode', `234000${rawInput}`),
           ]
         },
         take: 30
@@ -256,11 +259,11 @@ export async function GET(
         }
       }
 
-      if (isPureDigitCode) {
+      if (isPureDigitCode || fastMode) {
         return NextResponse.json(
           {
             error: `Produk tidak ditemukan untuk: "${rawInput}"`,
-            hint: "Pastikan garis barcode fokus di tengah kotak kamera, atau tekan tombol Cari & Scrap Server."
+            hint: "Ketuk tombol Scrap MDS BISA & Matahari di bawah untuk menarik SKU, barcode, dan foto secara langsung."
           },
           { status: 404 }
         );
