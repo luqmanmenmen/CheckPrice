@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { ArrowLeft, UploadCloud, FileType, CheckCircle2, AlertTriangle, Loader2, Trash2, Zap, Play, ExternalLink, AlertCircle, RefreshCw } from "lucide-react";
 import Link from "next/link";
+import { APP_VERSION } from "@/lib/version";
 import { PinModal } from "@/components/PinModal";
 import { AlertModal } from "@/components/AlertModal";
 import * as xlsx from "xlsx";
@@ -458,14 +459,14 @@ export default function UpdateHargaPage() {
       <div className="bg-gradient-to-r from-slate-900 to-indigo-950 rounded-2xl p-4 text-white shadow-md border border-slate-800">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="px-2 py-0.5 text-[10px] font-extrabold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full flex items-center gap-1">
-                <Zap className="w-2.5 h-2.5 text-emerald-400" /> MESIN CLOUD PYTHON
+                <Zap className="w-2.5 h-2.5 text-emerald-400" /> MESIN CLOUD PYTHON v{APP_VERSION}
               </span>
-              <h2 className="text-sm font-bold text-slate-100">Trigger Update Promo (Cloud Engine)</h2>
+              <h2 className="text-sm font-bold text-slate-100">Trigger Update Promo + Snapshot CDN</h2>
             </div>
             <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-              Jalankan mesin Python di GitHub Actions untuk menyedot file promo terbaru, membedah diskon/acara promo, dan mengupdate Supabase tanpa menyentuh stok fisik/barcode.
+              Menggunakan mesin Python v{APP_VERSION} di GitHub Actions (<code className="text-slate-200">run_promo_sync.py</code> + <code className="text-slate-200">build_catalog_index.py</code>) — sinkron penuh dengan Pusat Trigger 4 Kategori.
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">

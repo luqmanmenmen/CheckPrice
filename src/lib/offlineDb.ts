@@ -1073,6 +1073,7 @@ export interface LocalQueryResponse {
   singleMatch?: CachedArticleModel | null;
   total: number;
   totalSkus: number;
+  promoCount?: number;
   page: number;
   totalPages: number;
   brandCounts: Record<BrandGroupKey, number>;
@@ -1081,6 +1082,22 @@ export interface LocalQueryResponse {
   brandShowcaseSections?: LocalBrandShowcaseSection[];
   categoryShowcaseSections?: LocalCategoryShowcaseSection[];
   sectionMode?: "BRAND_PAGES" | "CATEGORY_PAGES" | "LIST";
+}
+
+function getTodayWibDateStr(): string {
+  return new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+export function isLocalPromoActive(m: Pick<CachedArticleModel, "articleHasPromo" | "hargaPromo" | "hargaNormal" | "diskon" | "discountType" | "acara" | "toDate">): boolean {
+  if (!m) return false;
+  if (m.toDate) {
+    const dp = String(m.toDate).trim().slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dp) && getTodayWibDateStr() > dp) {
+      return false;
+    }
+  }
+  const hasPrice = Boolean(m.hargaPromo && m.hargaPromo > 0 && (!m.hargaNormal || m.hargaPromo < m.hargaNormal));
+  return Boolean(m.articleHasPromo || hasPrice || m.diskon || m.discountType || m.acara);
 }
 
 /**
@@ -1095,6 +1112,7 @@ export async function queryLocalModelsInstant({
   page = 1,
   limit = 20,
   groupSections = true,
+  onlyPromo = false,
 }: {
   query?: string;
   brandGroup?: BrandGroupKey;
@@ -1103,6 +1121,7 @@ export async function queryLocalModelsInstant({
   page?: number;
   limit?: number;
   groupSections?: boolean;
+  onlyPromo?: boolean;
 }): Promise<LocalQueryResponse | null> {
   const models = await ensureModelsIndexReady();
   if (!models || models.length < 1000) return null;
@@ -1226,17 +1245,40 @@ export async function queryLocalModelsInstant({
     }
   }
 
-  const subBrandCounts = sortSubBrandStats(Array.from(mukuSubBrandTotals.values()), (x) => x.name);
+  const promoCount = finalMatched.reduce((acc, item) => (isLocalPromoActive(item) ? acc + 1 : acc), 0);
+  const workingList = onlyPromo ? finalMatched.filter((item) => isLocalPromoActive(item)) : finalMatched;
+  const workingTotalSkus = onlyPromo
+    ? workingList.reduce((acc, item) => acc + (item.articleGroupCount || 1), 0)
+    : totalSkus;
+  const workingSubBrandCounts = onlyPromo
+    ? sortSubBrandStats(
+        Array.from(
+          workingList.reduce((mp, m) => {
+            if (m.brandGroup === "MUKU") {
+              const sb = m.subBrand || getNormalizedSubBrand(m);
+              const prev = mp.get(sb) || { name: sb, count: 0, photoCount: 0 };
+              prev.count += 1;
+              if (m.imageUrl) prev.photoCount += 1;
+              mp.set(sb, prev);
+            }
+            return mp;
+          }, new Map<string, LocalSubBrandCount>()).values()
+        ),
+        (x) => x.name
+      )
+    : sortSubBrandStats(Array.from(mukuSubBrandTotals.values()), (x) => x.name);
 
-  const total = finalMatched.length;
+  const subBrandCounts = workingSubBrandCounts;
+  const total = workingList.length;
 
   // Mode 1: Toko Multibrand Mu+Ku (tanpa merk spesifik): paginasi STRICT PER BRAND (8 brand/halaman, anti-dobel lintas page!)
-  if (brandGroup === "MUKU" && !subBrandUpper && groupSections && finalMatched.length > 0) {
-    const brandPages = paginateBrandSections(finalMatched, page, 8, 5);
+  if (brandGroup === "MUKU" && !subBrandUpper && groupSections && workingList.length > 0) {
+    const brandPages = paginateBrandSections(workingList, page, 8, 5);
     return {
       data: brandPages.sections.flatMap((s) => s.items),
       total,
-      totalSkus,
+      totalSkus: workingTotalSkus,
+      promoCount,
       page: brandPages.page,
       totalPages: brandPages.totalPages,
       brandCounts,
@@ -1254,13 +1296,14 @@ export async function queryLocalModelsInstant({
     category === "ALL" &&
     !trimmed &&
     groupSections &&
-    finalMatched.length > 0
+    workingList.length > 0
   ) {
-    const catPages = paginateCategorySections(finalMatched, page, 5, 5);
+    const catPages = paginateCategorySections(workingList, page, 5, 5);
     return {
       data: catPages.sections.flatMap((s) => s.items),
       total,
-      totalSkus,
+      totalSkus: workingTotalSkus,
+      promoCount,
       page: catPages.page,
       totalPages: catPages.totalPages,
       brandCounts,
@@ -1277,9 +1320,10 @@ export async function queryLocalModelsInstant({
   const skip = (safePage - 1) * limit;
 
   return {
-    data: finalMatched.slice(skip, skip + limit),
+    data: workingList.slice(skip, skip + limit),
     total,
-    totalSkus,
+    totalSkus: workingTotalSkus,
+    promoCount,
     page: safePage,
     totalPages,
     brandCounts,

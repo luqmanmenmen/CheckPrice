@@ -202,8 +202,9 @@ export async function GET(request: NextRequest) {
     const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
     const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "20", 10)));
     const groupSections = searchParams.get("groupSections") !== "0";
+    const onlyPromo = searchParams.get("onlyPromo") === "1";
 
-    const cacheKey = `b=${brandGroup}::c=${category}::s=${subBrand}::p=${page}::l=${limit}::g=${groupSections ? 1 : 0}`;
+    const cacheKey = `b=${brandGroup}::c=${category}::s=${subBrand}::p=${page}::l=${limit}::g=${groupSections ? 1 : 0}::pr=${onlyPromo ? 1 : 0}`;
     const cached = catalogCache.get(cacheKey);
     if (cached && Date.now() <= cached.expiresAt) {
       return NextResponse.json({
@@ -232,6 +233,48 @@ export async function GET(request: NextRequest) {
       if (brandGroup !== "ALL") baseWhere.brandGroup = brandGroup;
       if (category !== "ALL") baseWhere.categoryKey = category;
       if (subBrand) baseWhere.subBrand = subBrand;
+
+      const todayWib = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const activePromoWhere: any = {
+        ...baseWhere,
+        articleHasPromo: true,
+        OR: [{ toDate: null }, { toDate: { gte: todayWib } }],
+      };
+
+      const promoArticlesCount = await db.catalogArticle.count({ where: activePromoWhere }).catch(() => 0);
+
+      if (onlyPromo) {
+        const promoPages = Math.max(1, Math.ceil(promoArticlesCount / limit));
+        const safePromoPage = Math.min(Math.max(1, page), promoPages);
+        const promoRows = promoArticlesCount > 0
+          ? await db.catalogArticle.findMany({
+              where: activePromoWhere,
+              orderBy: { sortRank: "asc" },
+              skip: (safePromoPage - 1) * limit,
+              take: limit,
+            })
+          : [];
+        const promoPayload = {
+          data: promoRows,
+          meta: {
+            page: safePromoPage,
+            limit,
+            total: promoArticlesCount,
+            totalSkus: promoRows.reduce((s, r) => s + (r.articleGroupCount || 1), 0),
+            promoCount: promoArticlesCount,
+            totalPages: promoPages,
+            brandGroup,
+            category,
+            subBrand,
+            brandCounts,
+            categoryCounts,
+            subBrandCounts,
+            sectionMode: "LIST",
+          },
+        };
+        cacheCatalogPayload(cacheKey, promoPayload);
+        return NextResponse.json(promoPayload);
+      }
 
       let responsePayload: { data: any[]; meta: Record<string, any> };
 
@@ -262,6 +305,7 @@ export async function GET(request: NextRequest) {
             limit,
             total: totalArticles,
             totalSkus,
+            promoCount: promoArticlesCount,
             totalPages,
             brandGroup,
             category,
@@ -307,6 +351,7 @@ export async function GET(request: NextRequest) {
             limit,
             total: totalArticles,
             totalSkus,
+            promoCount: promoArticlesCount,
             totalPages,
             brandGroup,
             category,
@@ -337,6 +382,7 @@ export async function GET(request: NextRequest) {
             limit,
             total: totalArticles,
             totalSkus,
+            promoCount: promoArticlesCount,
             totalPages,
             brandGroup,
             category,
@@ -396,6 +442,7 @@ export async function GET(request: NextRequest) {
       isBrowseMode: true,
       brandCounts,
       categoryCounts,
+      onlyPromo,
     });
     cacheCatalogPayload(cacheKey, fallbackPayload);
 

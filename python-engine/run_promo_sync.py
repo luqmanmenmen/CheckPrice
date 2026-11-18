@@ -50,31 +50,54 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 def parse_folder_date_score(folder_name: str) -> int:
-    """Mengekstrak skor tanggal dari nama folder promo agar urutan kronologis tepat."""
-    name_upper = folder_name.upper()
+    """
+    Mengekstrak skor kronologis dari nama folder promo (mendukung pemisah '-'/'_',
+    atau spasi seperti 'PROMO 19 25 NOV 2026', serta rentang lintas bulan mis. '29 OCT-04 NOV').
+    Menghasilkan integer `YYYYMM * 10000 + end_day * 100 + start_day`.
+    """
+    name_upper = folder_name.upper().strip()
     month_map = {
-        'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MEI': 5, 'MAY': 5,
-        'JUN': 6, 'JUL': 7, 'AGU': 8, 'AUG': 8, 'SEP': 9, 'OKT': 10,
-        'OCT': 10, 'NOV': 11, 'DES': 12, 'DEC': 12
+        'JANUARI': 1, 'JANUARY': 1, 'JAN': 1,
+        'FEBRUARI': 2, 'FEBRUARY': 2, 'FEB': 2,
+        'MARET': 3, 'MARCH': 3, 'MAR': 3,
+        'APRIL': 4, 'APR': 4,
+        'MEI': 5, 'MAY': 5,
+        'JUNI': 6, 'JUNE': 6, 'JUN': 6,
+        'JULI': 7, 'JULY': 7, 'JUL': 7,
+        'AGUSTUS': 8, 'AUGUST': 8, 'AGU': 8, 'AUG': 8,
+        'SEPTEMBER': 9, 'SEP': 9,
+        'OKTOBER': 10, 'OCTOBER': 10, 'OKT': 10, 'OCT': 10,
+        'NOVEMBER': 11, 'NOV': 11,
+        'DESEMBER': 12, 'DECEMBER': 12, 'DES': 12, 'DEC': 12,
     }
-    
+
     year = 2026
     year_match = re.search(r'202\d', name_upper)
     if year_match:
         year = int(year_match.group())
 
-    month = 1
-    for m_str, m_num in month_map.items():
-        if m_str in name_upper:
-            month = m_num
-            break
+    # Bila nama folder menyebut 2 bulan (mis. "29 OCT - 04 NOV"), ambil bulan TERAKHIR (akhir periode)
+    found_months = []
+    for m_str in sorted(month_map.keys(), key=len, reverse=True):
+        for match in re.finditer(rf'\b{re.escape(m_str)}\b', name_upper):
+            found_months.append((match.start(), month_map[m_str]))
+    month = sorted(found_months, key=lambda x: x[0])[-1][1] if found_months else 1
 
-    day = 1
-    day_match = re.search(r'(\d{1,2})\s*[-_]\s*(\d{1,2})?', name_upper)
-    if day_match:
-        day = int(day_match.group(1))
+    # Ekstrak angka tanggal (buang tahun 202x & angka minggu W46 / WK46 terlebih dahulu)
+    cleaned = re.sub(r'202\d', ' ', name_upper)
+    cleaned = re.sub(r'\bW(?:EEK|K)?\s*\d+\b', ' ', cleaned)
+    nums = [int(n) for n in re.findall(r'\b(\d{1,2})\b', cleaned) if 1 <= int(n) <= 31]
 
-    return year * 10000 + month * 100 + day
+    if len(nums) >= 2:
+        start_day, end_day = nums[0], nums[-1]
+        # Jika rentang tanggal wajar dalam bulan yang sama atau lintas bulan (end_day bisa kecil)
+        score_day = end_day if not found_months or len(found_months) > 1 or end_day >= start_day else start_day
+    elif len(nums) == 1:
+        start_day, score_day = nums[0], nums[0]
+    else:
+        start_day, score_day = 1, 1
+
+    return (year * 1000000) + (month * 10000) + (score_day * 100) + start_day
 
 
 def get_latest_promo_files_from_storage():
@@ -323,6 +346,31 @@ def run_promo_sync(target_file_or_url: str = None, explicit_name: str = None):
     print("=" * 60)
     print(f"🎉 [SUKSES BATCH] Total {grand_total} produk berhasil diperbarui dari {len(files_to_process)} file!")
     print("=" * 60)
+
+    # Bersihkan promo lama di PostgreSQL yang toDate-nya sudah lewat dari hari ini WIB
+    try:
+        import time as _t
+        today_wib = datetime.fromtimestamp(_t.time() + 7 * 3600, tz=timezone.utc).strftime("%Y-%m-%d")
+        cleanup_res = (
+            supabase.table("Product")
+            .update({
+                "hargaPromo": None,
+                "diskon": None,
+                "discountType": None,
+                "acara": None,
+                "fromDate": None,
+                "toDate": None,
+            })
+            .lt("toDate", today_wib)
+            .not_.is_("hargaPromo", "null")
+            .execute()
+        )
+        cleaned_cnt = len(cleanup_res.data) if cleanup_res and getattr(cleanup_res, "data", None) else 0
+        if cleaned_cnt > 0:
+            print(f"🧹 Membersihkan {cleaned_cnt} produk promo kedaluwarsa (< {today_wib}).")
+    except Exception as cln_err:
+        print(f"⚠️ Lewati pembersihan promo kedaluwarsa: {cln_err}")
+
     if grand_total > 0:
         log_sync_history(f"Batch Promo ({len(files_to_process)} file)", grand_total)
     else:

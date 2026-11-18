@@ -36,10 +36,33 @@ export const PRODUCT_LIST_SELECT = {
 
 export function isPromoExpired(toDate: string | null | undefined): boolean {
   if (!toDate) return false;
-  const toDateObj = new Date(toDate);
+  const raw = String(toDate).trim();
+  if (!raw) return false;
+  const datePart = raw.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+    const todayWib = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    return todayWib > datePart;
+  }
+  const toDateObj = new Date(raw);
   if (isNaN(toDateObj.getTime())) return false;
   toDateObj.setHours(23, 59, 59, 999);
   return new Date() > toDateObj;
+}
+
+export function isItemPromoActive(item: any): boolean {
+  if (!item || isPromoExpired(item.toDate)) return false;
+  const hasPromoPrice = Boolean(
+    item.hargaPromo &&
+      item.hargaPromo > 0 &&
+      (!item.hargaNormal || item.hargaPromo < item.hargaNormal)
+  );
+  return Boolean(
+    hasPromoPrice ||
+      item.diskon ||
+      item.discountType ||
+      item.acara ||
+      item.articleHasPromo
+  );
 }
 
 /**
@@ -234,6 +257,8 @@ export function buildTaxonomyListPayload({
   isBrowseMode = true,
   brandCounts,
   categoryCounts,
+  promoCount,
+  onlyPromo = false,
 }: {
   groupedList: any[];
   totalSkus: number;
@@ -246,12 +271,19 @@ export function buildTaxonomyListPayload({
   isBrowseMode?: boolean;
   brandCounts: Record<BrandGroupKey, number>;
   categoryCounts: Record<CategoryKey, number>;
+  promoCount?: number;
+  onlyPromo?: boolean;
 }) {
-  const total = groupedList.length;
-  const { subBrandCounts } = summarizeTaxonomyCounts(groupedList);
+  const computedPromoCount =
+    typeof promoCount === "number"
+      ? promoCount
+      : groupedList.reduce((acc, item) => (isItemPromoActive(item) ? acc + 1 : acc), 0);
+  const workingList = onlyPromo ? groupedList.filter((item) => isItemPromoActive(item)) : groupedList;
+  const total = workingList.length;
+  const { subBrandCounts } = summarizeTaxonomyCounts(workingList);
 
-  if (brandGroup === "MUKU" && !subBrand && groupSections && groupedList.length > 0) {
-    const brandPages = paginateBrandSections(groupedList, page, 8, 5);
+  if (brandGroup === "MUKU" && !subBrand && groupSections && workingList.length > 0) {
+    const brandPages = paginateBrandSections(workingList, page, 8, 5);
     return {
       data: brandPages.sections.flatMap((s) => s.items),
       meta: {
@@ -259,6 +291,7 @@ export function buildTaxonomyListPayload({
         limit,
         total,
         totalSkus,
+        promoCount: computedPromoCount,
         totalPages: brandPages.totalPages,
         brandGroup,
         category,
@@ -277,9 +310,9 @@ export function buildTaxonomyListPayload({
     (brandGroup === "SUKO" || brandGroup === "ZES" || (brandGroup === "MUKU" && Boolean(subBrand))) &&
     category === "ALL" &&
     groupSections &&
-    groupedList.length > 0
+    workingList.length > 0
   ) {
-    const catPages = paginateCategorySections(groupedList, page, 5, 5);
+    const catPages = paginateCategorySections(workingList, page, 5, 5);
     return {
       data: catPages.sections.flatMap((s) => s.items),
       meta: {
@@ -287,6 +320,7 @@ export function buildTaxonomyListPayload({
         limit,
         total,
         totalSkus,
+        promoCount: computedPromoCount,
         totalPages: catPages.totalPages,
         brandGroup,
         category,
@@ -305,12 +339,13 @@ export function buildTaxonomyListPayload({
   const safeSkip = (safePage - 1) * limit;
 
   return {
-    data: groupedList.slice(safeSkip, safeSkip + limit),
+    data: workingList.slice(safeSkip, safeSkip + limit),
     meta: {
       page: safePage,
       limit,
       total,
       totalSkus,
+      promoCount: computedPromoCount,
       totalPages,
       brandGroup,
       category,

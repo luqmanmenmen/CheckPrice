@@ -22,6 +22,7 @@ on:
           - photos
           - stock-only
           - promo
+          - catalog
           - all
       promo_url:
         description: 'URL file promo (opsional, jika kosong akan ambil semua file di folder terbaru Storage PROMO/)'
@@ -40,7 +41,7 @@ on:
         type: string
 
   repository_dispatch:
-    types: [trigger-sync-engine, trigger-scrab, trigger-mds-bisa, trigger-stock-only, trigger-photos, trigger-promo]
+    types: [trigger-sync-engine, trigger-scrab, trigger-mds-bisa, trigger-stock-only, trigger-photos, trigger-promo, trigger-catalog]
 
 concurrency:
   group: retail-sync-group
@@ -91,11 +92,15 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           MDS_SESSION_COOKIE: ${{ github.event.inputs.session_cookie || secrets.MDS_SESSION_COOKIE }}
 
-      - name: 📸 [KATEGORI 1C - SCRAB GAMBAR] Brutal Image Scraper Matahari.com (4-Jalur Pure Product Photos)
+      - name: 📸 [KATEGORI 1C - SCRAB GAMBAR & HEAL 404] Brutal Image Scraper + Pemulih URL Foto Matahari.com
         if: ${{ github.event.inputs.action == 'scrab' || github.event.inputs.action == 'photos' || github.event.inputs.action == 'all' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-photos' || github.event.action == 'trigger-sync-engine' }}
         run: |
           python python-engine/brutal_image_scraper.py
+          if [ -n "$DATABASE_URL" ]; then
+            python python-engine/repair_broken_images.py --scan-limit 350 --workers 32 || true
+          fi
         env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
@@ -110,19 +115,20 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
 
-      - name: 🏷️ [KATEGORI 3 - UPDATE PROMO EMAIL] Python Promo Email Parser Engine (Excel Storage + Gemini AI)
+      - name: 🏷️ [KATEGORI 3 - UPDATE PROMO EMAIL v2.7] Python Promo Parser Engine (Storage PROMO/ + Gemini AI)
         if: ${{ github.event.inputs.action == 'promo' || github.event.inputs.action == 'all' || github.event.action == 'trigger-promo' || github.event.action == 'trigger-sync-engine' }}
         run: |
           PROMO_FLAG="${{ github.event.inputs.promo_url != '' && format('--file={0}', github.event.inputs.promo_url) || '' }}"
           python python-engine/run_promo_sync.py $PROMO_FLAG
         env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
-      - name: 🧠 [KATEGORI 4 - CATALOG BRAIN INDEX & OFFLINE SNAPSHOT] Susun CatalogArticle + Kompilasi DB Offline .json.gz
-        if: ${{ success() }}
+      - name: 🧠 [KATEGORI 4 - CATALOG BRAIN & OFFLINE SNAPSHOT v2.7] Susun CatalogArticle + Kompilasi DB Offline .json.gz
+        if: ${{ success() || github.event.inputs.action == 'catalog' || github.event.action == 'trigger-catalog' }}
         run: |
           if [ -n "$DATABASE_URL" ]; then
             STOCK_ONLY_FLAG=""

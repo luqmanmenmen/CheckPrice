@@ -22,7 +22,8 @@ import os
 import re
 import sys
 import time
-from datetime import datetime, timezone
+import urllib.parse
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -313,11 +314,14 @@ def classify_product_category(brand: Optional[str], dept: Optional[str], desc: O
     return "OTHER"
 
 
+WIB_TZ = timezone(timedelta(hours=7))
+
+
 def is_promo_active(harga_normal: float, harga_promo: Optional[float], discount_type: Optional[str], to_date: Optional[str], now_ts: float) -> bool:
     if to_date:
         try:
             date_part = str(to_date).strip()[:10]
-            dt = datetime.strptime(date_part, "%Y-%m-%d").replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
+            dt = datetime.strptime(date_part, "%Y-%m-%d").replace(hour=23, minute=59, second=59, tzinfo=WIB_TZ)
             if now_ts > dt.timestamp():
                 return False
         except Exception:
@@ -342,11 +346,14 @@ def resolve_db_url() -> str:
     load_dotenv(os.path.join(base_dir, ".env"))
     load_dotenv(os.path.join(base_dir, ".env.local"))
     load_dotenv(os.path.join(base_dir, ".env.production"))
-    url = os.getenv("DIRECT_URL") or os.getenv("DATABASE_URL")
-    if not url:
+    raw = os.getenv("DATABASE_URL") or os.getenv("DIRECT_URL")
+    if not raw:
         raise RuntimeError("DATABASE_URL / DIRECT_URL tidak ditemukan di environment.")
-    # Hapus parameter khusus PgBouncer jika pakai DIRECT/Session
-    return url.split("?")[0] + "?sslmode=require" if "sslmode=" not in url else url.replace("&pgbouncer=true", "").replace("?pgbouncer=true&", "?").replace("?pgbouncer=true", "")
+    parsed = urllib.parse.urlparse(raw)
+    qs = urllib.parse.parse_qs(parsed.query)
+    for k in ("pgbouncer", "connection_limit", "pool_timeout"):
+        qs.pop(k, None)
+    return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(qs, doseq=True)))
 
 
 def build_and_verify_catalog(stock_only: bool = False, upload_snapshot: bool = True) -> Dict[str, Any]:

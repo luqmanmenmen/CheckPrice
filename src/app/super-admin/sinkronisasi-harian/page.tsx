@@ -24,6 +24,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import Link from "next/link";
+import { APP_VERSION } from "@/lib/version";
 
 interface StepItem {
   number: number;
@@ -72,7 +73,7 @@ interface RecentRun {
   htmlUrl: string;
 }
 
-type TriggerAction = "scrab" | "mds-bisa" | "photos" | "stock-only" | "promo" | "all";
+type TriggerAction = "scrab" | "mds-bisa" | "photos" | "stock-only" | "promo" | "catalog" | "all";
 
 export default function UpdateProdukPage() {
   const [isGhDispatching, setIsGhDispatching] = useState(false);
@@ -220,9 +221,14 @@ export default function UpdateProdukPage() {
             <ArrowLeft className="w-5 h-5 text-slate-700" />
           </Link>
           <div>
-            <h1 className="font-bold text-xl text-slate-800">Pusat Trigger 3 Kategori (GitHub Python)</h1>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="font-bold text-xl text-slate-800">Pusat Trigger 4 Kategori (GitHub Python)</h1>
+              <span className="px-2 py-0.5 text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-full">
+                Engine &amp; UI v{APP_VERSION}
+              </span>
+            </div>
             <p className="text-xs text-slate-500">
-              100% Dijalankan oleh Mesin Python di GitHub Actions • 0% Beban Komputasi Vercel
+              100% Dijalankan oleh Mesin Python di GitHub Actions • Satu Sistem &amp; Versi Seragam dengan Portal Kasir
             </p>
           </div>
         </div>
@@ -353,7 +359,7 @@ export default function UpdateProdukPage() {
           </div>
 
           {/* ------------------------------------------------------------ */}
-          {/* KATEGORI 3: UPDATE PROMO EMAIL (PYTHON PROMO ENGINE)         */}
+          {/* KATEGORI 3: UPDATE PROMO EMAIL (PYTHON PROMO ENGINE v2.7)    */}
           {/* ------------------------------------------------------------ */}
           <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 bg-gradient-to-br from-sky-50/90 to-white rounded-xl border border-sky-200 shadow-2xs">
             <div className="flex-1 min-w-0">
@@ -362,56 +368,87 @@ export default function UpdateProdukPage() {
                   KATEGORI 3 • UPDATE PROMO
                 </span>
                 <p className="font-bold text-sky-950 text-sm flex items-center gap-1.5">
-                  🏷️ Update Promo Email (Mesin Python & Gemini AI)
+                  🏷️ Update Promo Email (Parser v{APP_VERSION} + Gemini 2.5 + Snapshot CDN)
                 </p>
               </div>
               <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                Membedah seluruh file Excel promo terbaru dari email (<code className="text-[11px] bg-white px-1 py-0.5 rounded border border-sky-100">run_promo_sync.py</code> di GitHub Actions) untuk memperbarui Harga Promo, Diskon, dan Periode Acara. Stok fisik, Barcode UPC, dan Foto Studio tetap 100% terlindungi.
+                Membaca folder promo terbaru (<code className="text-[11px] bg-white px-1 py-0.5 rounded border border-sky-100">run_promo_sync.py</code>), membersihkan promo kedaluwarsa, lalu langsung memperbarui <code className="text-[11px]">CatalogArticle</code> &amp; Snapshot Offline agar notif &amp; harga promo kasir langsung berubah.
               </p>
             </div>
             <button
               onClick={() => handleGitHubDispatch("promo")}
               disabled={isGhDispatching || isRunning}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-sky-600 hover:bg-sky-700 text-white text-xs font-extrabold rounded-xl transition-colors disabled:opacity-50 shrink-0 shadow-sm"
+              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-sky-600 hover:bg-sky-700 text-white text-xs font-extrabold rounded-xl transition-colors disabled:opacity-50 shrink-0 shadow-sm cursor-pointer"
             >
               {isGhDispatching && activeAction === "promo" ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 <Tag className="w-4 h-4" />
               )}
-              {isGhDispatching && activeAction === "promo" ? "Menyalakan..." : "Update Promo Email"}
+              {isGhDispatching && activeAction === "promo" ? "Menyalakan..." : "Update Promo + Snapshot"}
             </button>
           </div>
 
           {/* ------------------------------------------------------------ */}
-          {/* TOMBOL KOMPLIT: JALANKAN 3 KATEGORI SEKALIGUS                */}
+          {/* KATEGORI 4: REBUILD CATALOG BRAIN & SNAPSHOT DB OFFLINE      */}
+          {/* ------------------------------------------------------------ */}
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 bg-gradient-to-br from-violet-50/90 to-white rounded-xl border border-violet-200 shadow-2xs">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="px-2 py-0.5 text-[10px] font-black bg-violet-600 text-white rounded-md uppercase tracking-wider">
+                  KATEGORI 4 • CATALOG &amp; DB OFFLINE
+                </span>
+                <p className="font-bold text-violet-950 text-sm flex items-center gap-1.5">
+                  🧠 Build Catalog Brain &amp; Compressed Snapshot (.json.gz v{APP_VERSION})
+                </p>
+              </div>
+              <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                Menyusun ulang <code className="text-[11px] bg-white px-1 py-0.5 rounded border border-violet-100">CatalogArticle</code> + mengompres 310rb+ SKU ke 1 file CDN <code className="text-[11px]">.json.gz</code> (~8,5 MB). Notif <em>Update Sekarang</em> hanya menyala bila ada produk baru atau promo berubah.
+              </p>
+            </div>
+            <button
+              onClick={() => handleGitHubDispatch("catalog")}
+              disabled={isGhDispatching || isRunning}
+              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-violet-600 hover:bg-violet-700 text-white text-xs font-extrabold rounded-xl transition-colors disabled:opacity-50 shrink-0 shadow-sm cursor-pointer"
+            >
+              {isGhDispatching && activeAction === "catalog" ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Database className="w-4 h-4" />
+              )}
+              {isGhDispatching && activeAction === "catalog" ? "Menyalakan..." : "Build Catalog & Snapshot"}
+            </button>
+          </div>
+
+          {/* ------------------------------------------------------------ */}
+          {/* ALL TRIGGER: JALANKAN SEMUA 4 KATEGORI TERPADU               */}
           {/* ------------------------------------------------------------ */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-xl shadow-md border border-slate-800 mt-0.5">
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="px-2 py-0.5 text-[10px] font-extrabold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full flex items-center gap-1">
-                  <Zap className="w-2.5 h-2.5 text-emerald-400" /> ALL-IN-ONE CLOUD
+                  <Zap className="w-2.5 h-2.5 text-emerald-400" /> ALL TRIGGER v{APP_VERSION}
                 </span>
                 <p className="font-bold text-sm text-slate-100">
-                  Jalankan 3 Kategori Sekaligus (Scrab + Update Stock + Promo Email)
+                  Jalankan Semua (Kategori 1 + 2 + 3 + 4 Terpadu)
                 </p>
               </div>
               <p className="text-xs text-slate-400 mt-1">
-                Dieksekusi berurutan 100% di GitHub Actions Python Runner tanpa membebani Vercel.
+                Scrab StoreHub &amp; Foto 404 Heal → Update Stock Live → Update Promo Terbaru → Build Catalog &amp; Snapshot CDN (.json.gz).
               </p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <button
                 onClick={() => handleGitHubDispatch("all")}
                 disabled={isGhDispatching || isRunning}
-                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-400 hover:to-green-400 text-slate-950 text-xs font-black rounded-xl transition-all disabled:opacity-50 shadow-md shadow-emerald-500/20"
+                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-400 hover:to-green-400 text-slate-950 text-xs font-black rounded-xl transition-all disabled:opacity-50 shadow-md shadow-emerald-500/20 cursor-pointer"
               >
                 {isGhDispatching && activeAction === "all" ? (
                   <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
                 ) : (
                   <Play className="w-4 h-4 fill-current" />
                 )}
-                {isGhDispatching && activeAction === "all" ? "Menyalakan..." : "Jalankan Semua (3 Kategori)"}
+                {isGhDispatching && activeAction === "all" ? "Menyalakan..." : "All Trigger (Kat 1–4)"}
               </button>
             </div>
           </div>

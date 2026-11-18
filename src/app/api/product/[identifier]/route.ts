@@ -116,6 +116,7 @@ export async function GET(
     const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
     const limit = Math.min(50, Math.max(1, parseInt(searchParams.get('limit') || '20', 10)));
     const groupSections = searchParams.get('groupSections') !== '0';
+    const onlyPromo = searchParams.get('onlyPromo') === '1';
 
     const rawBrand = (searchParams.get('brandGroup') || 'ALL').toUpperCase() as BrandGroupKey;
     const rawCategory = (searchParams.get('category') || 'ALL').toUpperCase() as CategoryKey;
@@ -273,7 +274,7 @@ export async function GET(
     const cachedList = getCachedSearchResult(cacheKey);
     if (cachedList) {
       const total = cachedList.groupedArticles.length;
-      if (total === 1 && page === 1 && !hasTaxonomyFilter) {
+      if (total === 1 && page === 1 && !hasTaxonomyFilter && !onlyPromo) {
         const topProduct = cachedList.groupedArticles[0];
         const siblings = await getProductSiblings(topProduct);
         return NextResponse.json({ data: topProduct, siblings, aiAssisted: cachedList.aiAssisted });
@@ -290,6 +291,7 @@ export async function GET(
         isBrowseMode: false,
         brandCounts: cachedList.brandCounts,
         categoryCounts: cachedList.categoryCounts,
+        onlyPromo,
       });
       return NextResponse.json({
         data: payload.data,
@@ -486,7 +488,7 @@ export async function GET(
       categoryCounts,
     });
 
-    if (groupedArticles.length === 1 && page === 1 && !hasTaxonomyFilter) {
+    if (groupedArticles.length === 1 && page === 1 && !hasTaxonomyFilter && !onlyPromo) {
       const topProduct = groupedArticles[0];
       const siblings = await getProductSiblings(topProduct);
       return NextResponse.json({ data: topProduct, siblings, aiAssisted: aiExpandedTerms.length > 0 });
@@ -504,6 +506,7 @@ export async function GET(
       isBrowseMode: false,
       brandCounts,
       categoryCounts,
+      onlyPromo,
     });
 
     return NextResponse.json({

@@ -15,6 +15,7 @@ export async function POST(req: NextRequest) {
     const result = await checkSingleItemStock(String(sku), {
       discoverFamily: body.discoverFamily !== false,
       withImages: body.withImages !== false,
+      syncAllSizes: body.syncAllSizes !== false,
     });
     return NextResponse.json(result);
   } catch (err: any) {

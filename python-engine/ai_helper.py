@@ -9,22 +9,30 @@ from dotenv import load_dotenv
 load_dotenv()
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
+# Circuit breaker & cache per-skema kolom agar proses 16 file (120+ sheet) tidak macet oleh 503/timeout Gemini
+_AI_CONSECUTIVE_FAILURES = 0
+_AI_CIRCUIT_OPEN = False
+_AI_SCHEMA_CACHE: Dict[Tuple[str, ...], Optional[Dict[str, Any]]] = {}
+
+
 def is_gemini_available() -> bool:
     """Periksa apakah GEMINI_API_KEY sudah disetel."""
+    if _AI_CIRCUIT_OPEN:
+        return False
     key = os.getenv("GEMINI_API_KEY", "").strip()
     return bool(key) and len(key) > 10
 
-def call_gemini(prompt: str, model: str = "gemini-1.5-flash") -> Optional[str]:
+
+def call_gemini(prompt: str, model: str = "gemini-2.5-flash") -> Optional[str]:
     """
-    Panggil Google Gemini REST API secara langsung.
-    Menggunakan response_mime_type='application/json' agar output terjamin JSON valid.
+    Panggil Google Gemini REST API secara langsung dengan circuit breaker & timeout cepat (4.5s).
     """
+    global _AI_CONSECUTIVE_FAILURES, _AI_CIRCUIT_OPEN
+    if _AI_CIRCUIT_OPEN:
+        return None
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
         return None
-
-    # URL endpoint Google Gemini Generative Language API
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
 
     payload = {
         "contents": [
@@ -38,22 +46,44 @@ def call_gemini(prompt: str, model: str = "gemini-1.5-flash") -> Optional[str]:
         }
     }
 
+    candidates_models = [model]
+    for fb in ("gemini-2.5-flash", "gemini-2.0-flash"):
+        if fb not in candidates_models:
+            candidates_models.append(fb)
+
     try:
-        with httpx.Client(timeout=10.0) as client:
-            response = client.post(url, json=payload)
-            if response.status_code == 200:
-                data = response.json()
-                candidates = data.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if parts:
-                        return parts[0].get("text", "")
-            else:
-                print(f"[GEMINI-AI ERROR] Status {response.status_code}: {response.text[:200]}")
+        with httpx.Client(timeout=4.5) as client:
+            for candidate_model in candidates_models:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{candidate_model}:generateContent?key={api_key}"
+                response = client.post(url, json=payload)
+                if response.status_code == 200:
+                    data = response.json()
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        if parts:
+                            _AI_CONSECUTIVE_FAILURES = 0
+                            return parts[0].get("text", "")
+                elif response.status_code == 404:
+                    continue
+                else:
+                    print(f"[GEMINI-AI ERROR] Status {response.status_code} ({candidate_model}): {response.text[:160]}")
+                    break
     except Exception as e:
         print(f"[GEMINI-AI ERROR] Gagal menghubungi Gemini API: {e}")
 
+    _AI_CONSECUTIVE_FAILURES += 1
+    if _AI_CONSECUTIVE_FAILURES >= 2:
+        _AI_CIRCUIT_OPEN = True
+        print("[GEMINI-AI] API sibuk/timeout — aktifkan fast rule-based parser otomatis untuk sisa sheet.")
     return None
+
+
+def _has_standard_promo_columns(detected_columns: List[str]) -> bool:
+    cols_up = {str(c).strip().upper() for c in detected_columns}
+    has_sku = any("SKU" in c or "BARCODE" in c or "UPC" in c or "ITEM" in c for c in cols_up)
+    has_price = any("HARGA" in c or "PRICE" in c or "DISKON" in c or "DISCOUNT" in c or "PROMO" in c for c in cols_up)
+    return has_sku and has_price
 
 
 def consult_gemini_inquisitive(
@@ -64,11 +94,17 @@ def consult_gemini_inquisitive(
 ) -> Optional[Dict[str, Any]]:
     """
     Paradigma 'Mahasiswa Kritis & Dosen Ahli' Berorientasi Frontend Web Vercel:
-    Pandas Engine (mahasiswa kritis) mengajukan pertanyaan spesifik seputar apa yang akan ditampilkan
-    di layar web Vercel (Price Checker, Promo Unik, Barang Baru, Laporan Sales SPD/MTD, Rekap Stok).
+    Otomatis memakai fast rule-based parser jika kolom standar promo/ERP sudah terbaca 100%,
+    atau cache per-skema agar ratusan sheet selesai dalam hitungan detik.
     """
     if not is_gemini_available():
         return None
+    if folder.upper() == "PROMO" and _has_standard_promo_columns(detected_columns):
+        return None
+
+    schema_key = (folder.upper(),) + tuple(str(c).strip().upper() for c in detected_columns)
+    if schema_key in _AI_SCHEMA_CACHE:
+        return _AI_SCHEMA_CACHE[schema_key]
 
     try:
         sample_records = sample_df.head(8).fillna("").to_dict(orient="records")
@@ -152,10 +188,12 @@ PENTING:
 
     raw_response = call_gemini(prompt)
     if not raw_response:
+        _AI_SCHEMA_CACHE[schema_key] = None
         return None
 
     try:
         result = json.loads(raw_response)
+        _AI_SCHEMA_CACHE[schema_key] = result
         advice = result.get("dialogue", {}).get("advisor_advice", "")
 
         # Cetak Dialog Konsultasi ke Terminal Console dengan Format Estetis

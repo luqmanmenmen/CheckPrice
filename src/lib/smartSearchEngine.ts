@@ -176,6 +176,39 @@ const RETAIL_SYNONYM_DICTIONARY: Record<string, string[]> = {
   "DTL": ["DETAILS"],
   "CRD": ["CARDINAL"],
   "DSN": ["DISNEY"],
+
+  // Teknologi Kain & Seri Khusus SUKO
+  "SUKOGO": ["SUKO GO", "SUKOGO", "SUKO SPORTS", "QUICK DRY", "4-WAY STRETCH", "CLIMA TECH", "PARASUT", "WINDBREAKER"],
+  "SOFTTOUCH": ["SOFT TOUCH", "SOFTTOUCH", "CLOUD SOFT", "CUPRO", "SUPIMA"],
+  "SOFT": ["SOFT TOUCH", "CLOUD SOFT", "CUPRO", "SUPIMA"],
+  "SUPIMA": ["SUPIMA", "SOFT TOUCH", "CLOUD SOFT"],
+  "CLIMAFLEX": ["CLIMAFLEX", "CLIMA FLEX", "CLIMA TECH", "CLIMATECH", "CLIMA", "QUICK DRY"],
+  "CLIMATECH": ["CLIMA TECH", "CLIMATECH", "CLIMAFLEX", "CLIMA"],
+  "CLIMA": ["CLIMA", "CLIMA TECH", "CLIMATECH", "CLIMAFLEX"],
+  "QUICKDRY": ["QUICKDRY", "QUICK DRY", "EASY DRY", "QUICK-DRY"],
+  "EASYDRY": ["EASY DRY", "QUICK DRY", "QUICKDRY"],
+  "COOLTOUCH": ["COOL TOUCH", "COOLTOUCH", "COOL TECH", "CLIMA TECH", "QUICK DRY", "EASY DRY"],
+  "COOL": ["COOL TOUCH", "COOLTOUCH", "CLIMA TECH", "QUICK DRY", "EASY DRY"],
+  "FLEX": ["FLEX", "FLEXIBLE", "4-WAY STRETCH", "4 WAY STRETCH", "STRETCH", "RELAX", "RILEKS"],
+  "FLEXIBLE": ["FLEXIBLE", "FLEX", "4-WAY STRETCH", "4 WAY STRETCH", "STRETCH", "RILEKS"],
+  "FLEKSIBEL": ["FLEXIBLE", "FLEX", "4-WAY STRETCH", "4 WAY STRETCH", "STRETCH", "RILEKS"],
+  "FLEXSIBEL": ["FLEXIBLE", "FLEX", "4-WAY STRETCH", "4 WAY STRETCH", "STRETCH", "RILEKS"],
+  "FLEXFIT": ["FLEXFIT", "FLEX", "4-WAY STRETCH", "STRETCH"],
+  "STRETCH": ["STRETCH", "4-WAY STRETCH", "4 WAY STRETCH", "FLEX", "RILEKS", "RELAX"],
+  "4WAY": ["4-WAY STRETCH", "4 WAY STRETCH", "STRETCH", "FLEX"],
+};
+
+const MULTI_WORD_TECH_PHRASES: Record<string, string[]> = {
+  "SUKO GO": ["SUKO GO", "SUKOGO", "SUKO SPORTS", "QUICK DRY", "4-WAY STRETCH", "CLIMA TECH", "PARASUT", "WINDBREAKER"],
+  "SOFT TOUCH": ["SOFT TOUCH", "SOFTTOUCH", "CLOUD SOFT", "CUPRO", "SUPIMA"],
+  "CLOUD SOFT": ["CLOUD SOFT", "SOFT TOUCH", "CUPRO", "SUPIMA"],
+  "CLIMA FLEX": ["CLIMAFLEX", "CLIMA FLEX", "CLIMA TECH", "CLIMATECH", "CLIMA"],
+  "CLIMA TECH": ["CLIMA TECH", "CLIMATECH", "CLIMAFLEX", "CLIMA"],
+  "QUICK DRY": ["QUICK DRY", "QUICKDRY", "EASY DRY", "QUICK-DRY"],
+  "EASY DRY": ["EASY DRY", "QUICK DRY", "QUICKDRY"],
+  "COOL TOUCH": ["COOL TOUCH", "COOLTOUCH", "COOL TECH", "CLIMA TECH", "QUICK DRY", "EASY DRY"],
+  "4 WAY STRETCH": ["4-WAY STRETCH", "4 WAY STRETCH", "STRETCH", "FLEX", "RILEKS"],
+  "4 WAY": ["4-WAY STRETCH", "4 WAY STRETCH", "STRETCH", "FLEX"],
 };
 
 /**
@@ -199,7 +232,24 @@ export function expandRetailQuery(rawInput: string): ExpandedRetailQuery {
   const tokenGroups: string[][] = [];
   const allSet = new Set<string>();
 
-  for (const tok of tokens) {
+  // Tangkap frasa teknologi kain SUKO (2-3 kata seperti "SUKO GO", "SOFT TOUCH", "CLIMA FLEX", "QUICK DRY", "COOL TOUCH")
+  const normUpperPhrase = upper.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
+  const consumedTokenIndices = new Set<number>();
+  for (const [phrase, syns] of Object.entries(MULTI_WORD_TECH_PHRASES)) {
+    if (normUpperPhrase.includes(phrase) || (phrase.replace(/\s+/g, "") === spaceless && spaceless.length >= 4)) {
+      const grp = Array.from(new Set([phrase, ...syns]));
+      tokenGroups.push(grp);
+      for (const s of grp) allSet.add(s);
+      const phraseWords = phrase.split(" ");
+      tokens.forEach((tk, idx) => {
+        if (phraseWords.includes(tk.replace(/[^A-Z0-9]/g, ""))) consumedTokenIndices.add(idx);
+      });
+    }
+  }
+
+  for (let tokIdx = 0; tokIdx < tokens.length; tokIdx++) {
+    if (consumedTokenIndices.has(tokIdx)) continue;
+    const tok = tokens[tokIdx];
     const group = new Set<string>();
     group.add(tok);
     const cleanTok = tok.replace(/[^A-Z0-9]/g, "");

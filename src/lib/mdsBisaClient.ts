@@ -37,6 +37,7 @@ export type LiveStockVariantSummary = {
 export type CheckSingleItemOptions = {
   discoverFamily?: boolean;
   withImages?: boolean;
+  syncAllSizes?: boolean;
 };
 
 export type CheckSingleItemResult = {
@@ -815,6 +816,20 @@ async function finalizeProductFamilyResponse(params: {
     images: mainImages,
   };
 
+  // Perbarui CatalogArticle.articleTotalStok agar katalog utama sinkron dengan stok Live terbaru
+  if (cleanArticle && params.freshStockBySku && params.freshStockBySku.size > 0 && !params.storeOffline) {
+    const updatedTotalStok = enrichedSiblings.reduce((sum, s) => sum + Math.max(0, Number(s.stok ?? 0)), 0);
+    await prisma.catalogArticle
+      .updateMany({
+        where: { article: cleanArticle },
+        data: {
+          articleTotalStok: updatedTotalStok,
+          updatedAt: new Date(),
+        },
+      })
+      .catch(() => {});
+  }
+
   return {
     success: true,
     sku: enrichedMain.sku,
@@ -843,6 +858,7 @@ export async function checkSingleItemStock(
   const cleanSku = String(sku).trim();
   const discoverFamily = options.discoverFamily !== false;
   const withImages = options.withImages !== false;
+  const syncAllSizes = options.syncAllSizes !== false;
   const emptyMata: MatahariFamilyImages = {
     variantSkus: [],
     imagesBySku: new Map(),
@@ -1265,22 +1281,37 @@ export async function checkSingleItemStock(
           where: { article: articleToSearch },
           select: { id: true, sku: true, color: true, size: true, stok: true },
         });
-        const norm = (s: any) => String(s || '').trim().toUpperCase();
+        const normColor = (s: any) =>
+          String(s || '')
+            .trim()
+            .toUpperCase()
+            .replace(/\bMED\b|\bMDM\b/g, 'MEDIUM')
+            .replace(/\bDRK\b/g, 'DARK')
+            .replace(/\bLGT\b/g, 'LIGHT')
+            .replace(/\bBLK\b/g, 'BLACK')
+            .replace(/\bWHT\b/g, 'WHITE')
+            .replace(/\bNVY\b/g, 'NAVY')
+            .replace(/\bGRY\b/g, 'GREY')
+            .replace(/[\s\-_./]+/g, '');
+        const normSize = (s: any) => String(s || '').trim().toUpperCase().replace(/[\s\-_.]+/g, '');
         const idsByStock = new Map<number, number[]>();
 
         for (const sib of siblings) {
           if (seenUpdatedSkus.has(sib.sku)) continue;
-          const sibColor = norm(sib.color);
-          const sibSize = norm(sib.size);
+          const sibColor = normColor(sib.color);
+          const sibSize = normSize(sib.size);
           let foundQty: number | null = null;
 
           for (const [relColorKey, sizesObj] of Object.entries(itemData.relatedStock)) {
-            const relColor = norm(relColorKey);
-            if (relColor === sibColor || relColor.includes(sibColor) || sibColor.includes(relColor)) {
+            const relColor = normColor(relColorKey);
+            const colorMatched =
+              relColor === sibColor ||
+              (relColor.length >= 3 && sibColor.length >= 3 && (relColor.includes(sibColor) || sibColor.includes(relColor)));
+            if (colorMatched) {
               if (sizesObj && typeof sizesObj === 'object') {
                 for (const [relSizeKey, qtyVal] of Object.entries(sizesObj as Record<string, any>)) {
-                  const relSize = norm(relSizeKey);
-                  if (relSize === sibSize || relSize.includes(sibSize) || sibSize.includes(relSize)) {
+                  const relSize = normSize(relSizeKey);
+                  if (relSize === sibSize) {
                     foundQty = parseInt(String(qtyVal), 10) || 0;
                     break;
                   }
@@ -1311,6 +1342,56 @@ export async function checkSingleItemStock(
         }
       } catch (sibErr) {
         console.warn('[MDS-CLIENT] Gagal update sibling variants:', sibErr);
+      }
+    }
+
+    // 4. Pastikan 100% SELURUH warna & size eksisting dalam artikel ini terupdate langsung di 1 klik!
+    // Bila masih ada SKU di artikel DB yang belum terjangkau `allItems` atau `relatedStock`, probe paralel serentak ke StoreHub.
+    if (syncAllSizes && cookie) {
+      const remainingFamilySkus = Array.from(existingFamilySkus).filter((s) => s && !seenUpdatedSkus.has(s));
+      if (remainingFamilySkus.length > 0) {
+        const directProbeStart = Date.now();
+        const DIRECT_BATCH = 12;
+        for (let i = 0; i < remainingFamilySkus.length; i += DIRECT_BATCH) {
+          if (Date.now() - directProbeStart >= 5500) break;
+          const batch = remainingFamilySkus.slice(i, i + DIRECT_BATCH);
+          const batchRes = await Promise.all(
+            batch.map(async (targetSibSku) => ({
+              targetSibSku,
+              res: await queryStoreHubDetail('sku', targetSibSku, cookie!, 3000),
+            }))
+          );
+          let abortedOffline = false;
+          for (const { res } of batchRes) {
+            if (res.offline) {
+              abortedOffline = true;
+              continue;
+            }
+            const foundList = res.allItems.length > 0 ? res.allItems : (res.itemData ? [res.itemData] : []);
+            for (const foundRaw of foundList) {
+              const rawSku = String(foundRaw?.SKU ?? foundRaw?.sku ?? '').trim();
+              const rawDirectStok = foundRaw?.StockOnHand ?? foundRaw?.stockOnHand ?? foundRaw?.stock_on_hand ?? foundRaw?.soh;
+              if (rawSku && rawDirectStok !== undefined && rawDirectStok !== null) {
+                freshStockBySku.set(rawSku, parseInt(String(rawDirectStok), 10) || 0);
+              }
+              const saved = await upsertStoreHubItemToDb(foundRaw, {
+                queriedCode: rawSku || queriedCode,
+                queriedKind: 'sku',
+                mataImages,
+                siblingImgByColor,
+                fallbackArticle: articleToSearch,
+                fallbackArticleImg,
+              });
+              if (!saved) continue;
+              freshStockBySku.set(saved.sku, saved.stok);
+              if (!seenUpdatedSkus.has(saved.sku)) {
+                seenUpdatedSkus.add(saved.sku);
+                updatedVariants.push({ sku: saved.sku, color: saved.color, size: saved.size, stok: saved.stok });
+              }
+            }
+          }
+          if (abortedOffline) break;
+        }
       }
     }
 

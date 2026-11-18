@@ -235,6 +235,9 @@ export default function Home() {
   const [siblings, setSiblings] = useState<ProductData[]>([]);
   const [productsList, setProductsList] = useState<ProductData[]>([]);
   const [resultFilter, setResultFilter] = useState<"ALL" | "STOCK" | "PROMO">("ALL");
+  const [totalPromoCount, setTotalPromoCount] = useState(0);
+  const [promoFocusOnly, setPromoFocusOnly] = useState(false);
+  const pendingPromoFocusRef = useRef(false);
   const [selectedBrandGroup, setSelectedBrandGroup] = useState<BrandGroupKey>("ALL");
   const [selectedSubBrand, setSelectedSubBrand] = useState<string>("");
   const [selectedCategory, setSelectedCategory] = useState<CategoryKey>("ALL");
@@ -312,9 +315,11 @@ export default function Home() {
           sku: targetSku,
           discoverFamily: needsDiscovery,
           withImages: needsDiscovery,
+          syncAllSizes: true,
         }),
       });
       const data = await res.json();
+      if (liveStockEpochRef.current !== requestEpoch) return;
       if (data.success && (data.data || data.stok !== undefined)) {
         const variantStockMap = new Map<string, number>();
         if (Array.isArray(data.variants)) {
@@ -336,10 +341,24 @@ export default function Home() {
           const nextSiblings: ProductData[] = rawSiblings.map((s) =>
             variantStockMap.has(s.sku) ? { ...s, stok: variantStockMap.get(s.sku)! } : s
           );
-          setProduct(updatedMain);
+          setProduct((cur) => {
+            if (cur && cur.sku !== updatedMain.sku) {
+              const curMatch = nextSiblings.find((s) => s.sku === cur.sku);
+              return curMatch || updatedMain;
+            }
+            return updatedMain;
+          });
           setSiblings(nextSiblings);
+          sessionCacheRef.current.set(targetSku.toLowerCase(), { product: updatedMain, siblings: nextSiblings });
+          nextSiblings.forEach((s) => {
+            if (s.sku) sessionCacheRef.current.set(s.sku.toLowerCase(), { product: s, siblings: nextSiblings });
+            if (s.barcode) sessionCacheRef.current.set(s.barcode.toLowerCase(), { product: s, siblings: nextSiblings });
+          });
           preloadProductImages([updatedMain.imageUrl, ...nextSiblings.map((s: ProductData) => s.imageUrl)], 400);
           persistServerFamilyToLocal(updatedMain, nextSiblings, targetSku);
+          import("@/lib/offlineDb")
+            .then(({ updateLocalFamilyStockInMemory }) => updateLocalFamilyStockInMemory(nextSiblings))
+            .catch(() => {});
         } else {
           setProduct((prev) => (prev ? { ...prev, stok: data.stok } : null));
           // Update seluruh siblings (varian warna & ukuran dalam 1 artikel yang sama)
@@ -355,20 +374,24 @@ export default function Home() {
                 if (s.sku) sessionCacheRef.current.set(s.sku.toLowerCase(), { product: s, siblings: updated });
                 if (s.barcode) sessionCacheRef.current.set(s.barcode.toLowerCase(), { product: s, siblings: updated });
               });
+              import("@/lib/offlineDb")
+                .then(({ updateLocalFamilyStockInMemory }) => updateLocalFamilyStockInMemory(updated))
+                .catch(() => {});
               return updated;
             });
           }
         }
 
         const resolvedStok = data.stok ?? data.data?.stok ?? 0;
+        const totalUpdatedCount = data.totalVariantsUpdated || (Array.isArray(data.siblings) ? data.siblings.length : variantStockMap.size) || 1;
         if (data.storeOffline) {
           const imgNote = data.imagesMatched > 0 ? ` + ${data.imagesMatched} foto studio` : '';
           setLiveStockVerified(`Tersimpan: ${resolvedStok} pcs${imgNote}`);
           showToast(data.message || `Toko tutup (malam). Menampilkan stok tersimpan: ${resolvedStok} pcs${imgNote}`, "info");
         } else {
-          const countText = data.totalVariantsUpdated > 1 ? ` (${data.totalVariantsUpdated} varian sekeluarga)` : '';
+          const countText = totalUpdatedCount > 1 ? ` (${totalUpdatedCount} warna/size)` : '';
           setLiveStockVerified(`Live: ${resolvedStok} pcs${countText}`);
-          showToast(`Stok & foto 1 keluarga artikel ${data.article || product.article || ''} terverifikasi live by luqman org!`, "success");
+          showToast(`⚡ Live Stok 1 klik sukses: ${totalUpdatedCount} varian (${data.article || product.article || 'artikel'}) terupdate serentak!`, "success");
         }
       } else {
         showToast(data.message || "Menampilkan stok tersimpan di sistem", "info");
@@ -1065,8 +1088,8 @@ export default function Home() {
     });
   };
 
-  /** Trigger manual: paksa cari & scrap StoreHub + foto studio Matahari + 1 keluarga artikel saat barang belum ketemu */
-  const handleDiscoverProductOnServer = async (targetCode?: string) => {
+  /** Trigger manual: cari & scrap SKU/barcode spesifik (+ foto) atau 1 keluarga artikel saat barang belum ketemu */
+  const handleDiscoverProductOnServer = async (targetCode?: string, includeFamily: boolean = true) => {
     const codeToSearch = (targetCode ?? (notFoundCode || manualInput)).trim();
     if (!codeToSearch || discoveringServer) return;
     setDiscoveringServer(true);
@@ -1076,8 +1099,9 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sku: codeToSearch,
-          discoverFamily: true,
+          discoverFamily: includeFamily,
           withImages: true,
+          syncAllSizes: includeFamily,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -1172,7 +1196,7 @@ export default function Home() {
   const handlePageChange = (nextPage: number) => {
     if (nextPage < 1 || nextPage > totalPages || loading) return;
     scrollPageToTop();
-    searchProduct(manualInput, nextPage, true);
+    searchProduct(manualInput, nextPage, true, selectedBrandGroup, selectedCategory, selectedSubBrand, groupByCategory, resultFilter);
   };
 
   const buildSearchEndpointUrl = (
@@ -1181,7 +1205,8 @@ export default function Home() {
     brandGroup: BrandGroupKey,
     category: CategoryKey,
     subBrand: string = "",
-    useGroupSections: boolean = groupByCategory
+    useGroupSections: boolean = groupByCategory,
+    onlyPromo: boolean = false
   ) => {
     if (!trimmedQuery) {
       const params = new URLSearchParams({
@@ -1191,6 +1216,7 @@ export default function Home() {
         groupSections: useGroupSections ? "1" : "0",
       });
       if (subBrand) params.set("subBrand", subBrand);
+      if (onlyPromo) params.set("onlyPromo", "1");
       return `/api/catalog?${params.toString()}`;
     }
     const params = new URLSearchParams({
@@ -1200,11 +1226,14 @@ export default function Home() {
     if (brandGroup !== "ALL") params.set("brandGroup", brandGroup);
     if (category !== "ALL") params.set("category", category);
     if (subBrand) params.set("subBrand", subBrand);
+    if (onlyPromo) params.set("onlyPromo", "1");
     return `/api/product/${encodeURIComponent(trimmedQuery)}?${params.toString()}`;
   };
 
   const clearListToIdle = () => {
     setProductsList([]);
+    setResultFilter("ALL");
+    setTotalPromoCount(0);
     setBrandShowcaseSections(null);
     setCategoryShowcaseSections(null);
     setProduct(null);
@@ -1283,6 +1312,35 @@ export default function Home() {
     searchProduct(manualInput, 1, false, selectedBrandGroup, selectedCategory, selectedSubBrand, nextGroup);
   };
 
+  const isVariantPromoActiveClient = (item: Pick<ProductData, "hargaPromo" | "hargaNormal" | "diskon" | "discountType" | "acara" | "toDate" | "articleHasPromo">) => {
+    if (!item) return false;
+    if (item.toDate) {
+      const dp = String(item.toDate).trim().slice(0, 10);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dp)) {
+        const todayWib = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
+        if (todayWib > dp) return false;
+      }
+    }
+    const hasPrice = Boolean(item.hargaPromo && item.hargaPromo > 0 && (!item.hargaNormal || item.hargaPromo < item.hargaNormal));
+    return Boolean(hasPrice || item.diskon || item.discountType || item.acara || item.articleHasPromo);
+  };
+
+  const applySelectedProductFamily = (mainProd: ProductData, familySiblings: ProductData[]) => {
+    const preferPromo = pendingPromoFocusRef.current;
+    pendingPromoFocusRef.current = false;
+    const list = familySiblings && familySiblings.length > 0 ? familySiblings : [mainProd];
+    const promoSiblings = list.filter((s) => isVariantPromoActiveClient(s));
+    if (preferPromo && promoSiblings.length > 0) {
+      const targetPromoProd = isVariantPromoActiveClient(mainProd) ? mainProd : promoSiblings[0];
+      setProduct(targetPromoProd);
+      setPromoFocusOnly(promoSiblings.length < list.length);
+    } else {
+      setProduct(mainProd);
+      setPromoFocusOnly(false);
+    }
+    setSiblings(list);
+  };
+
   const searchProduct = async (
     identifier: string,
     page: number = 1,
@@ -1290,13 +1348,16 @@ export default function Home() {
     overrideBrandGroup?: BrandGroupKey,
     overrideCategory?: CategoryKey,
     overrideSubBrand?: string,
-    overrideGroupSections?: boolean
+    overrideGroupSections?: boolean,
+    overrideResultFilter?: "ALL" | "STOCK" | "PROMO"
   ) => {
     const trimmed = identifier.trim();
     const activeBrand = overrideBrandGroup ?? selectedBrandGroup;
     const activeCategory = overrideCategory ?? selectedCategory;
     const activeSubBrand = overrideSubBrand ?? (activeBrand === "MUKU" ? selectedSubBrand : "");
     const activeGroupSections = overrideGroupSections ?? groupByCategory;
+    const activeResultFilter = overrideResultFilter ?? "ALL";
+    const onlyPromo = activeResultFilter === "PROMO";
     const hasTaxonomyFilter = activeBrand !== "ALL" || activeCategory !== "ALL" || Boolean(activeSubBrand);
 
     if (!trimmed && !hasTaxonomyFilter) return;
@@ -1312,7 +1373,7 @@ export default function Home() {
              (s.barcode && s.barcode.toLowerCase() === trimmed.toLowerCase())
       );
       if (existingSibling) {
-        setProduct(existingSibling);
+        applySelectedProductFamily(existingSibling, siblings);
         setManualInput(existingSibling.sku);
         setProductsList([]);
         setLoading(false);
@@ -1331,15 +1392,14 @@ export default function Home() {
       ? (sessionCacheRef.current.get(trimmed.toLowerCase()) || sessionCacheRef.current.get(trimmed))
       : undefined;
     if (inMemory && page === 1) {
-      setProduct(inMemory.product);
-      setSiblings(inMemory.siblings);
+      applySelectedProductFamily(inMemory.product, inMemory.siblings);
       setProductsList([]);
       setLoading(false);
       if (isScanning) setIsScanning(false);
       return;
     }
 
-    const listCacheKey = `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::s=${activeSubBrand}::c=${activeCategory}::g=${activeGroupSections ? 1 : 0}::p${page}`;
+    const listCacheKey = `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::s=${activeSubBrand}::c=${activeCategory}::g=${activeGroupSections ? 1 : 0}::pr=${onlyPromo ? 1 : 0}::p${page}`;
 
     const prefetchNextPage = (
       currentPageNum: number,
@@ -1350,9 +1410,9 @@ export default function Home() {
       fallbackCats?: Record<string, number> | null
     ) => {
       const nextPageNum = currentPageNum + 1;
-      const nextCacheKey = `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::s=${activeSubBrand}::c=${activeCategory}::g=${activeGroupSections ? 1 : 0}::p${nextPageNum}`;
+      const nextCacheKey = `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::s=${activeSubBrand}::c=${activeCategory}::g=${activeGroupSections ? 1 : 0}::pr=${onlyPromo ? 1 : 0}::p${nextPageNum}`;
       if (currentPageNum < maxPages && !listCacheRef.current.has(nextCacheKey)) {
-        fetch(buildSearchEndpointUrl(trimmed, nextPageNum, activeBrand, activeCategory, activeSubBrand, activeGroupSections), { cache: 'no-store' })
+        fetch(buildSearchEndpointUrl(trimmed, nextPageNum, activeBrand, activeCategory, activeSubBrand, activeGroupSections, onlyPromo), { cache: 'no-store' })
           .then((r) => (r.ok ? r.json() : null))
           .then((nextJson) => {
             if (nextJson && Array.isArray(nextJson.data) && nextJson.data.length > 0) {
@@ -1389,7 +1449,8 @@ export default function Home() {
       setProduct(null);
       setSiblings([]);
       setProductsList(cachedPage.list);
-      setResultFilter("ALL");
+      setResultFilter(activeResultFilter);
+      setTotalPromoCount((cachedPage as any).promoCount ?? cachedPage.list.filter((it: ProductData) => isVariantPromoActiveClient(it)).length);
       setTotalModelsCount(cachedPage.total);
       setTotalSkusCount(cachedPage.totalSkus);
       if (cachedPage.brandCounts !== undefined) setTaxonomyBrandCounts(cachedPage.brandCounts || null);
@@ -1469,7 +1530,8 @@ export default function Home() {
       activeBrand,
       activeCategory,
       activeSubBrand,
-      activeGroupSections
+      activeGroupSections,
+      onlyPromo
     );
 
     const presentLocalProductAndRefreshBg = async (localItem: LocalOfflineCandidate) => {
@@ -1485,8 +1547,7 @@ export default function Home() {
         }
       }
       if (searchCounterRef.current !== currentSearch) return;
-      setProduct(localProduct);
-      setSiblings(currentSiblings);
+      applySelectedProductFamily(localProduct, currentSiblings);
       preloadProductImages([localProduct.imageUrl, ...currentSiblings.map((s) => s.imageUrl)], 400);
       sessionCacheRef.current.set(trimmed.toLowerCase(), { product: localProduct, siblings: currentSiblings });
       currentSiblings.forEach((s) => {
@@ -1508,8 +1569,12 @@ export default function Home() {
           if (liveStockEpochRef.current !== bgStartEpoch) return;
           if (bgJson && bgJson.data && !Array.isArray(bgJson.data)) {
             const bgSibs: ProductData[] = bgJson.siblings || [];
-            setProduct(bgJson.data);
             setSiblings(bgSibs);
+            setProduct((cur) => {
+              if (!cur) return bgJson.data as ProductData;
+              const matched = bgSibs.find((s) => s.sku === cur.sku);
+              return matched || (bgJson.data as ProductData);
+            });
             preloadProductImages([bgJson.data?.imageUrl, ...bgSibs.map((s) => s.imageUrl)], 400);
             syncServerProductToLocal(bgJson.data, bgSibs);
           }
@@ -1550,23 +1615,25 @@ export default function Home() {
             page,
             limit: 20,
             groupSections: activeGroupSections,
+            onlyPromo,
           })
         : null;
       if (searchCounterRef.current !== currentSearch) return;
       if (localRes) {
         const singleModel =
-          localRes.singleMatch || (localRes.data.length === 1 && !hasTaxonomyFilter ? localRes.data[0] : null);
+          localRes.singleMatch || (localRes.data.length === 1 && !hasTaxonomyFilter && !onlyPromo ? localRes.data[0] : null);
         if (singleModel) {
           const hitSku = await findOfflineProductByCode(singleModel.sku).catch(() => null);
           if (searchCounterRef.current !== currentSearch) return;
           await presentLocalProductAndRefreshBg(hitSku || singleModel);
           return;
         }
-        if (localRes.total > 0 || !trimmed) {
+        if (localRes.total > 0 || !trimmed || onlyPromo) {
           setProduct(null);
           setSiblings([]);
           setProductsList(localRes.data as unknown as ProductData[]);
-          setResultFilter("ALL");
+          setResultFilter(activeResultFilter);
+          setTotalPromoCount(localRes.promoCount ?? 0);
           setTotalModelsCount(localRes.total);
           setTotalSkusCount(localRes.totalSkus);
           setTaxonomyBrandCounts(localRes.brandCounts);
@@ -1639,6 +1706,8 @@ export default function Home() {
         if (Array.isArray(data.data)) {
           if (data.data.length === 0) {
             setProductsList([]);
+            setResultFilter(activeResultFilter);
+            if (typeof data.meta?.promoCount === "number") setTotalPromoCount(data.meta.promoCount);
             setBrandShowcaseSections(null);
             setCategoryShowcaseSections(null);
             setProduct(null);
@@ -1647,7 +1716,7 @@ export default function Home() {
             setTotalSkusCount(0);
             setTaxonomyBrandCounts(data.meta?.brandCounts || null);
             setTaxonomyCategoryCounts(data.meta?.categoryCounts || null);
-            if (!hasTaxonomyFilter && trimmed) {
+            if (!hasTaxonomyFilter && trimmed && !onlyPromo) {
               setNotFoundCode(trimmed);
               const isDigitCode = /^\d{8,14}$/.test(trimmed);
               if (isDigitCode && localDbReady) {
@@ -1666,6 +1735,10 @@ export default function Home() {
           const resolvedTotalPages = data.meta?.totalPages || 1;
           const resolvedTotal = data.meta?.total ?? data.data.length;
           const resolvedTotalSkus = data.meta?.totalSkus ?? data.data.length;
+          const resolvedPromoCount =
+            typeof data.meta?.promoCount === "number"
+              ? data.meta.promoCount
+              : data.data.filter((it: ProductData) => isVariantPromoActiveClient(it)).length;
           const resolvedBrandCounts = data.meta?.brandCounts || null;
           const resolvedCategoryCounts = data.meta?.categoryCounts || null;
           const resolvedSubBrandCounts = (data.meta?.subBrandCounts as SubBrandCount[] | undefined) || null;
@@ -1676,7 +1749,8 @@ export default function Home() {
           setProduct(null);
           setSiblings([]);
           setProductsList(data.data);
-          setResultFilter("ALL");
+          setResultFilter(activeResultFilter);
+          setTotalPromoCount(resolvedPromoCount);
           setTotalModelsCount(resolvedTotal);
           setTotalSkusCount(resolvedTotalSkus);
           setTaxonomyBrandCounts(resolvedBrandCounts);
@@ -1698,11 +1772,12 @@ export default function Home() {
           setCurrentPage(resolvedPage);
           setTotalPages(resolvedTotalPages);
           listCacheRef.current.set(
-            `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::s=${activeSubBrand}::c=${activeCategory}::g=${activeGroupSections ? 1 : 0}::p${resolvedPage}`,
+            `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::s=${activeSubBrand}::c=${activeCategory}::g=${activeGroupSections ? 1 : 0}::pr=${onlyPromo ? 1 : 0}::p${resolvedPage}`,
             {
               list: data.data,
               total: resolvedTotal,
               totalSkus: resolvedTotalSkus,
+              promoCount: resolvedPromoCount,
               page: resolvedPage,
               totalPages: resolvedTotalPages,
               brandCounts: resolvedBrandCounts,
@@ -1711,7 +1786,7 @@ export default function Home() {
               brandShowcaseSections: resolvedShowcase,
               categoryShowcaseSections: resolvedCatShowcase,
               cachedAt: Date.now(),
-            }
+            } as any
           );
 
           if (shouldScrollTop && typeof window !== "undefined") {
@@ -1728,10 +1803,9 @@ export default function Home() {
             resolvedCategoryCounts
           );
         } else {
-          setProduct(data.data);
           recordRecentSearch(data.data?.article && !["0", "-", "PRODUK BARU"].includes(String(data.data.article).toUpperCase()) ? data.data.article : trimmed);
           const serverSiblings = data.siblings || [];
-          setSiblings(serverSiblings);
+          applySelectedProductFamily(data.data, serverSiblings);
           setProductsList([]);
           preloadProductImages([data.data?.imageUrl, ...serverSiblings.map((s: ProductData) => s.imageUrl)], 400);
           syncServerProductToLocal(data.data, serverSiblings);
@@ -2035,15 +2109,18 @@ export default function Home() {
     inputRef.current?.focus();
   };
 
-  // Cek apakah promo sudah habis berdasarkan toDate
+  // Cek apakah promo sudah habis berdasarkan toDate (standar tanggal WIB)
   let isPromoExpired = false;
   if (product && product.toDate) {
-    const toDateObj = new Date(product.toDate);
-    if (!isNaN(toDateObj.getTime())) {
-      // Set to end of the day to ensure promo is valid during that entire day
-      toDateObj.setHours(23, 59, 59, 999);
-      if (new Date() > toDateObj) {
-        isPromoExpired = true;
+    const dp = String(product.toDate).trim().slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dp)) {
+      const todayWib = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      if (todayWib > dp) isPromoExpired = true;
+    } else {
+      const toDateObj = new Date(product.toDate);
+      if (!isNaN(toDateObj.getTime())) {
+        toDateObj.setHours(23, 59, 59, 999);
+        if (new Date() > toDateObj) isPromoExpired = true;
       }
     }
   }
@@ -2631,6 +2708,48 @@ export default function Home() {
                   </div>
                 )}
 
+                {/* Bar Teknologi Kain Khusus SUKO (SUKO GO, SOFT TOUCH, SUPIMA, CLIMAFLEX, QUICKDRY, COOL TOUCH, FLEX) */}
+                {selectedBrandGroup === "SUKO" && (
+                  <div className="flex items-center gap-1.5 overflow-x-auto pt-1 border-t border-indigo-100 bg-indigo-50/40 -mx-2.5 px-2.5 pb-1">
+                    <span className="text-[10px] font-extrabold text-indigo-700 uppercase tracking-wider shrink-0 mr-0.5">
+                      Teknologi Kain:
+                    </span>
+                    {[
+                      { label: "SUKO GO", query: "SUKO GO" },
+                      { label: "SOFT TOUCH", query: "SOFT TOUCH" },
+                      { label: "SUPIMA", query: "SUPIMA" },
+                      { label: "CLIMAFLEX", query: "CLIMAFLEX" },
+                      { label: "QUICKDRY", query: "QUICKDRY" },
+                      { label: "COOL TOUCH", query: "COOL TOUCH" },
+                      { label: "FLEX / STRETCH", query: "FLEX" },
+                    ].map((tech) => {
+                      const isTechActive = manualInput.trim().toUpperCase() === tech.query.toUpperCase();
+                      return (
+                        <button
+                          key={tech.label}
+                          type="button"
+                          onClick={() => {
+                            if (isTechActive) {
+                              setManualInput("");
+                              searchProduct("", 1, false, "SUKO", selectedCategory, "", groupByCategory);
+                            } else {
+                              setManualInput(tech.query);
+                              searchProduct(tech.query, 1, false, "SUKO", "ALL", "", false);
+                            }
+                          }}
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-md border transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+                            isTechActive
+                              ? "bg-indigo-700 text-white border-indigo-800 shadow-2xs"
+                              : "bg-white text-indigo-800 border-indigo-200 hover:bg-indigo-100"
+                          }`}
+                        >
+                          {tech.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
                 {/* Bar 2: Pengelompokan Kategori Produk */}
                 <div className="flex items-center gap-1.5 overflow-x-auto pt-1 border-t border-slate-100">
                   <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider shrink-0 mr-0.5">
@@ -2751,46 +2870,52 @@ export default function Home() {
         </div>
       )}
 
-      {/* Error + Trigger Scrap Server Langsung (StoreHub + Foto + 1 Keluarga Artikel) */}
+      {/* Error + Trigger Scrap Server Langsung (SKU Spesifik Cepat vs 1 Keluarga Artikel + Foto) */}
       {error && (
         <div className="bg-red-50 text-red-700 p-4 rounded-xl text-center border border-red-200 text-sm font-medium animate-in zoom-in duration-200 flex flex-col items-center gap-3">
           <p>{error}</p>
           {(notFoundCode || manualInput.trim()) && (
-            <button
-              type="button"
-              onClick={() => handleDiscoverProductOnServer(notFoundCode || manualInput)}
-              disabled={discoveringServer}
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white font-black text-xs shadow-md active:scale-95 transition-all cursor-pointer disabled:opacity-60"
-            >
-              {discoveringServer ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin text-amber-300 shrink-0" />
-                  <span>Menarik data StoreHub + 1 Keluarga Artikel + Foto Studio...</span>
-                </>
-              ) : (
-                <>
-                  <Zap className="w-4 h-4 text-amber-300 fill-amber-300 shrink-0" />
-                  <span>Cari &amp; Scrap Barang Ini di Server (StoreHub + Foto + 1 Keluarga Artikel)</span>
-                </>
-              )}
-            </button>
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-2 w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={() => handleDiscoverProductOnServer(notFoundCode || manualInput, false)}
+                disabled={discoveringServer}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black text-xs shadow-md active:scale-95 transition-all cursor-pointer disabled:opacity-60"
+              >
+                {discoveringServer ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-amber-200 shrink-0" />
+                    <span>Menarik SKU, Barcode &amp; Gambar Spesifik...</span>
+                  </>
+                ) : (
+                  <>
+                    <Search className="w-4 h-4 text-white shrink-0" />
+                    <span>Cari &amp; Gambar SKU &ldquo;{(notFoundCode || manualInput).trim()}&rdquo; Saja (Cepat)</span>
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDiscoverProductOnServer(notFoundCode || manualInput, true)}
+                disabled={discoveringServer}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white font-black text-xs shadow-md active:scale-95 transition-all cursor-pointer disabled:opacity-60"
+              >
+                <Zap className="w-4 h-4 text-amber-300 fill-amber-300 shrink-0" />
+                <span>Tarik 1 Keluarga Artikel Lengkap + Foto</span>
+              </button>
+            </div>
           )}
         </div>
       )}
 
       {/* Konsep 3: Hasil Pencarian / Katalog Brand & Kategori */}
-      {productsList.length > 0 && (() => {
-        const isProductOnPromo = (item: ProductData) =>
-          Boolean(
-            item.articleHasPromo ||
-            (item.hargaPromo && item.hargaPromo > 0 && (!item.hargaNormal || item.hargaPromo < item.hargaNormal)) ||
-            item.diskon ||
-            item.acara
-          );
+      {(productsList.length > 0 || resultFilter === "PROMO") && !product && (() => {
+        const isProductOnPromo = (item: ProductData) => isVariantPromoActiveClient(item);
         const getTotalStock = (item: ProductData) => item.articleTotalStok ?? item.stok ?? 0;
 
         const stockCount = productsList.filter((item) => getTotalStock(item) > 0).length;
-        const promoCount = productsList.filter((item) => isProductOnPromo(item)).length;
+        const pagePromoCount = productsList.filter((item) => isProductOnPromo(item)).length;
+        const displayPromoCount = Math.max(totalPromoCount, pagePromoCount);
         const modelCount = totalModelsCount || productsList.length;
 
         const filteredProducts = productsList.filter((item) => {
@@ -2924,6 +3049,8 @@ export default function Home() {
               type="button"
               onClick={() => {
                 preDetailSearchRef.current = { query: manualInput, page: currentPage };
+                pendingPromoFocusRef.current = resultFilter === "PROMO";
+                setPromoFocusOnly(resultFilter === "PROMO");
                 setProduct(p);
                 setSiblings([p]);
                 setProductsList([]);
@@ -3108,18 +3235,30 @@ export default function Home() {
               <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
                 <button
                   type="button"
-                  onClick={() => setResultFilter("ALL")}
+                  onClick={() => {
+                    if (resultFilter === "PROMO") {
+                      searchProduct(manualInput, 1, false, selectedBrandGroup, selectedCategory, selectedSubBrand, groupByCategory, "ALL");
+                    } else {
+                      setResultFilter("ALL");
+                    }
+                  }}
                   className={`text-[11px] font-bold px-2.5 py-1.5 rounded-lg border transition-colors whitespace-nowrap cursor-pointer ${
                     resultFilter === "ALL"
                       ? "bg-slate-900 text-white border-slate-900 shadow-xs"
                       : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
                   }`}
                 >
-                  Semua ({productsList.length})
+                  Semua ({resultFilter === "PROMO" ? "Reset" : productsList.length})
                 </button>
                 <button
                   type="button"
-                  onClick={() => setResultFilter("STOCK")}
+                  onClick={() => {
+                    if (resultFilter === "PROMO") {
+                      searchProduct(manualInput, 1, false, selectedBrandGroup, selectedCategory, selectedSubBrand, groupByCategory, "STOCK");
+                    } else {
+                      setResultFilter("STOCK");
+                    }
+                  }}
                   className={`text-[11px] font-bold px-2.5 py-1.5 rounded-lg border transition-colors whitespace-nowrap cursor-pointer ${
                     resultFilter === "STOCK"
                       ? "bg-emerald-600 text-white border-emerald-700 shadow-xs"
@@ -3130,14 +3269,20 @@ export default function Home() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setResultFilter("PROMO")}
+                  onClick={() => {
+                    if (resultFilter === "PROMO") {
+                      searchProduct(manualInput, 1, false, selectedBrandGroup, selectedCategory, selectedSubBrand, groupByCategory, "ALL");
+                    } else {
+                      searchProduct(manualInput, 1, false, selectedBrandGroup, selectedCategory, selectedSubBrand, groupByCategory, "PROMO");
+                    }
+                  }}
                   className={`text-[11px] font-bold px-2.5 py-1.5 rounded-lg border transition-colors whitespace-nowrap cursor-pointer ${
                     resultFilter === "PROMO"
                       ? "bg-rose-600 text-white border-rose-700 shadow-xs"
                       : "bg-rose-50/70 text-rose-700 border-rose-200 hover:bg-rose-100"
                   }`}
                 >
-                  Sedang Promo ({promoCount})
+                  Sedang Promo ({displayPromoCount.toLocaleString("id-ID")})
                 </button>
                 {((selectedCategory === "ALL" && !manualInput.trim() && (selectedBrandGroup === "SUKO" || selectedBrandGroup === "ZES" || Boolean(selectedSubBrand))) ||
                   isMukuBrandFirstMode) && (
@@ -3184,7 +3329,13 @@ export default function Home() {
                 <p className="text-xs sm:text-sm font-semibold">Tidak ada artikel di halaman ini untuk filter yang dipilih.</p>
                 <button
                   type="button"
-                  onClick={() => setResultFilter("ALL")}
+                  onClick={() => {
+                    if (resultFilter === "PROMO") {
+                      searchProduct(manualInput, 1, false, selectedBrandGroup, selectedCategory, selectedSubBrand, groupByCategory, "ALL");
+                    } else {
+                      setResultFilter("ALL");
+                    }
+                  }}
                   className="text-xs font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg border border-blue-200 transition-colors cursor-pointer"
                 >
                   Tampilkan Semua
@@ -3298,6 +3449,10 @@ export default function Home() {
       {product && (() => {
         const parsedInfo = parseProductInfo(product);
         const sourceSiblings = (siblings && siblings.length > 0) ? siblings : [product];
+        const promoOnlySiblings = sourceSiblings.filter((s) => isVariantPromoActiveClient(s));
+        const hasMixedPromoVariants = promoOnlySiblings.length > 0 && promoOnlySiblings.length < sourceSiblings.length;
+        const siblingsForDisplay =
+          promoFocusOnly && promoOnlySiblings.length > 0 ? promoOnlySiblings : sourceSiblings;
         const activeColorUpper = (parsedInfo.color || "STANDAR").toUpperCase();
         const productBrandGroup = classifyBrandGroup(product);
         const productBrandMeta = getBrandGroupMeta(productBrandGroup);
@@ -3320,26 +3475,16 @@ export default function Home() {
         let totalArticleStockAllVariants = 0;
 
         sourceSiblings.forEach((s) => {
+          totalArticleStockAllVariants += Math.max(0, s.stok ?? 0);
+        });
+
+        siblingsForDisplay.forEach((s) => {
           const sInfo = parseProductInfo(s);
           const color = (sInfo.color || "STANDAR").trim().toUpperCase();
           const size = (sInfo.size || "ALL SIZE").trim();
           const stokVal = s.stok ?? 0;
-          totalArticleStockAllVariants += Math.max(0, stokVal);
 
-          const isVariantPromoExpired = s.toDate
-            ? (() => {
-                const t = new Date(s.toDate);
-                t.setHours(23, 59, 59, 999);
-                return new Date() > t;
-              })()
-            : false;
-
-          const isVariantOnPromo =
-            !isVariantPromoExpired &&
-            Boolean(
-              (s.hargaPromo && s.hargaPromo > 0 && s.hargaPromo < s.hargaNormal) ||
-                s.discountType
-            );
+          const isVariantOnPromo = isVariantPromoActiveClient(s);
 
           let group = colorMap.get(color);
           if (!group) {
@@ -3367,8 +3512,8 @@ export default function Home() {
               size,
               stok: stokVal,
               hargaNormal: s.hargaNormal,
-              hargaPromo: isVariantPromoExpired ? null : s.hargaPromo,
-              discountType: isVariantPromoExpired ? null : s.discountType,
+              hargaPromo: isVariantOnPromo ? s.hargaPromo : null,
+              discountType: isVariantOnPromo ? s.discountType : null,
               isOnPromo: isVariantOnPromo,
               isCurrent: s.sku === product.sku,
             });
@@ -3691,15 +3836,32 @@ export default function Home() {
                           Ketuk warna untuk lihat foto di atas • Ketuk kotak size untuk cek detail • Gunakan tombol <strong>+</strong> untuk tambah jumlah
                         </p>
                       </div>
-                      {sourceSiblings.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={(e) => addFullArticleSetQty(e)}
-                          className="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-[11px] font-extrabold transition-colors shrink-0 cursor-pointer shadow-2xs"
-                        >
-                          📦 +1 Seluruh Artikel ({sourceSiblings.length} Varian)
-                        </button>
-                      )}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {hasMixedPromoVariants && (
+                          <button
+                            type="button"
+                            onClick={() => setPromoFocusOnly((v) => !v)}
+                            className={`px-3 py-1.5 rounded-xl text-[11px] font-extrabold border transition-colors shrink-0 cursor-pointer shadow-2xs ${
+                              promoFocusOnly
+                                ? "bg-rose-600 text-white border-rose-700"
+                                : "bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200"
+                            }`}
+                          >
+                            {promoFocusOnly
+                              ? `🏷️ Hanya SKU Promo (${promoOnlySiblings.length}) • Lihat Semua (${sourceSiblings.length})`
+                              : `🏷️ Filter SKU Promo (${promoOnlySiblings.length}/${sourceSiblings.length})`}
+                          </button>
+                        )}
+                        {sourceSiblings.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={(e) => addFullArticleSetQty(e)}
+                            className="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-[11px] font-extrabold transition-colors shrink-0 cursor-pointer shadow-2xs"
+                          >
+                            📦 +1 Seluruh Artikel ({sourceSiblings.length} Varian)
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     <div className="flex flex-col gap-2.5">

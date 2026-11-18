@@ -11,12 +11,13 @@
  */
 
 import { prisma } from '@/lib/prisma';
+import { APP_VERSION } from '@/lib/version';
 
 const REPO_OWNER = 'luqmanmenmen';
 const REPO_NAME = 'CheckPrice';
 const WORKFLOW_ID = 'retail-sync-engine.yml';
 
-export type SyncActionType = 'scrab' | 'mds-bisa' | 'photos' | 'stock-only' | 'promo' | 'all';
+export type SyncActionType = 'scrab' | 'mds-bisa' | 'photos' | 'stock-only' | 'promo' | 'catalog' | 'all';
 
 export async function dispatchToGitHubRunner(params: {
   action: SyncActionType;
@@ -108,16 +109,18 @@ export async function dispatchToGitHubRunner(params: {
     'photos': 'PHOTO_SYNC_TRIGGER',
     'stock-only': 'STOCK_SYNC_TRIGGER',
     'promo': 'PROMO_SYNC_TRIGGER',
+    'catalog': 'CATALOG_BUNDLE_TRIGGER',
     'all': 'FULL_SYNC_TRIGGER',
   };
 
   const labelMap: Record<SyncActionType, string> = {
-    'scrab': 'KATEGORI 1: Brutal Scrab (by luqman org + Foto Matahari.com)',
-    'mds-bisa': 'KATEGORI 1A: Brutal Scrab by luqman org (16-Worker Python)',
-    'photos': 'KATEGORI 1B: Brutal Scrab Foto Produk Matahari.com',
-    'stock-only': 'KATEGORI 2: Update Stock Live (Jalur Mapping 84.763 SKU)',
-    'promo': 'KATEGORI 3: Update Promo Email (Python Promo Engine)',
-    'all': 'PAKET KOMPLIT: Scrab + Update Stock + Update Promo Email',
+    'scrab': `KATEGORI 1: Brutal Scrab (by luqman org + Foto Matahari.com) [v${APP_VERSION}]`,
+    'mds-bisa': `KATEGORI 1A: Brutal Scrab by luqman org [v${APP_VERSION}]`,
+    'photos': `KATEGORI 1B: Brutal Scrab Foto & Pulihkan URL 404 [v${APP_VERSION}]`,
+    'stock-only': `KATEGORI 2: Update Stock Live (Mapping 84.763 SKU) [v${APP_VERSION}]`,
+    'promo': `KATEGORI 3: Update Promo Email (Parser v2 + Gemini 2.5) [v${APP_VERSION}]`,
+    'catalog': `KATEGORI 4: Catalog Brain & Offline Snapshot (.json.gz) [v${APP_VERSION}]`,
+    'all': `ALL TRIGGER (Kategori 1 + 2 + 3 + 4 Terpadu) [v${APP_VERSION}]`,
   };
 
   if (userId) {
@@ -142,7 +145,8 @@ export async function dispatchToGitHubRunner(params: {
     payload: {
       success: true,
       action,
-      message: `🚀 Mesin Python di GitHub Actions [${labelMap[action] || action.toUpperCase()}] berhasil dinyalakan! (0% Beban Vercel)`,
+      engineVersion: APP_VERSION,
+      message: `🚀 Engine Python v${APP_VERSION} di GitHub Actions [${labelMap[action] || action.toUpperCase()}] berhasil dinyalakan!`,
       actionsUrl: `https://github.com/${REPO_OWNER}/${REPO_NAME}/actions`,
     },
   };
