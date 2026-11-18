@@ -12,6 +12,37 @@ import {
   paginateCategorySections,
 } from "@/lib/productTaxonomy";
 
+let cachedEstimatedCount: { value: number; fetchedAt: number } | null = null;
+const ESTIMATED_COUNT_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * Mengambil estimasi jumlah baris tabel Product secara O(1) lewat statistik pg_class.reltuples
+ * agar bebas full index scan (menghemat ratusan MB/GB Disk IO Budget Supabase).
+ */
+export async function getEstimatedProductCount(): Promise<number> {
+  const now = Date.now();
+  if (cachedEstimatedCount && now - cachedEstimatedCount.fetchedAt < ESTIMATED_COUNT_TTL_MS) {
+    return cachedEstimatedCount.value;
+  }
+  try {
+    const rows = await db.$queryRawUnsafe<Array<{ approx: bigint | number | null }>>(
+      `SELECT GREATEST(reltuples::bigint, 0) AS approx FROM pg_class WHERE relname = 'Product' LIMIT 1`
+    );
+    const val = Number(rows?.[0]?.approx || 0);
+    if (val > 0) {
+      cachedEstimatedCount = { value: val, fetchedAt: now };
+      return val;
+    }
+  } catch {}
+  try {
+    const exact = await db.product.count();
+    cachedEstimatedCount = { value: exact, fetchedAt: now };
+    return exact;
+  } catch {
+    return cachedEstimatedCount?.value ?? 310000;
+  }
+}
+
 export const PRODUCT_LIST_SELECT = {
   id: true,
   sku: true,

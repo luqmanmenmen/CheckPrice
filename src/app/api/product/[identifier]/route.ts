@@ -22,6 +22,7 @@ import {
   filterByTaxonomy,
   buildSubBrandPrismaClause,
   buildTaxonomyListPayload,
+  getEstimatedProductCount,
 } from "@/lib/productQueryHelpers";
 
 export const dynamic = 'force-dynamic';
@@ -453,7 +454,7 @@ export async function GET(
     const candidateMatches = Array.from(candidateMap.values());
 
     if (candidateMatches.length === 0) {
-      const totalCount = await db.product.count();
+      const totalCount = await getEstimatedProductCount();
       return NextResponse.json(
         {
           error: `Produk tidak ditemukan untuk: "${rawInput}"`,

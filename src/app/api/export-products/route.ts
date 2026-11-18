@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getEstimatedProductCount } from "@/lib/productQueryHelpers";
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -7,7 +8,7 @@ export const revalidate = 0;
 // In-memory cache per chunk agar hemat query Supabase dan bebas limit payload 4.5MB Vercel
 const chunkCache = new Map<string, { data: any[]; hasMore: boolean; nextCursor: { stok: number; sku: string } | null; lastUpdate: number }>();
 let metaCache: { lastUpdate: number; totalCount: number; fetchedAt: number } | null = null;
-const META_TTL_MS = 30000;
+const META_TTL_MS = 300000;
 
 function formatProductRow(p: any) {
   const parts = p.description ? p.description.split(":") : [];
@@ -86,7 +87,7 @@ export async function GET(request: NextRequest) {
           orderBy: { updatedAt: 'desc' },
           select: { updatedAt: true }
         }),
-        prisma.product.count()
+        getEstimatedProductCount()
       ]);
       currentLastUpdate = latestProduct ? latestProduct.updatedAt.getTime() : 0;
       totalCount = counted;
@@ -110,7 +111,7 @@ export async function GET(request: NextRequest) {
         },
         {
           headers: {
-            "Cache-Control": "public, max-age=60, s-maxage=180, stale-while-revalidate=300",
+            "Cache-Control": "public, max-age=120, s-maxage=600, stale-while-revalidate=1800",
           },
         }
       );
@@ -180,7 +181,7 @@ export async function GET(request: NextRequest) {
       },
       {
         headers: {
-          "Cache-Control": "public, max-age=60, s-maxage=180, stale-while-revalidate=300",
+          "Cache-Control": "public, max-age=120, s-maxage=600, stale-while-revalidate=1800",
         },
       }
     );

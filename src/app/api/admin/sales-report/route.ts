@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getEstimatedProductCount } from "@/lib/productQueryHelpers";
 
 // Simple in-memory cache to speed up dashboard loading
 interface CacheEntry {
@@ -237,10 +238,8 @@ export async function GET(request: NextRequest) {
     const lastMonthQty = lastMonthAgg._sum.qtySold || 0;
 
     const [totalProducts, totalWithPromo] = await Promise.all([
-      prisma.product.count(),
-      prisma.product.count({
-        where: { OR: [{ hargaPromo: { not: null } }, { diskon: { not: null } }] }
-      })
+      getEstimatedProductCount(),
+      prisma.catalogArticle.count({ where: { articleHasPromo: true } })
     ]);
 
     // Hitung omzet promo & Siapkan Report Items dari DailySales

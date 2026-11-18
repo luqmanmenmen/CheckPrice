@@ -1,51 +1,61 @@
+import { unstable_cache } from 'next/cache';
 import { prisma } from '@/lib/prisma';
-import { Gift, CalendarDays, ArrowRight, Tag } from 'lucide-react';
+import { Gift, Tag } from 'lucide-react';
 import Link from 'next/link';
-
-function formatRupiah(angka: number) {
-  return new Intl.NumberFormat("id-ID", {
-    style: "currency",
-    currency: "IDR",
-    minimumFractionDigits: 0,
-  }).format(angka);
-}
 
 // Force dynamic rendering to prevent prerender database connection errors at build time
 export const dynamic = "force-dynamic";
-export const revalidate = 60;
+export const revalidate = 300;
 
 // Client component for the card so we can use onClick
 import ClientPromoUnikList from './ClientPromoUnikList';
 import { ArrowLeft } from 'lucide-react';
 
+const getCachedPromoUnik = unstable_cache(
+  async () => {
+    // Query CatalogArticle (23 MB pre-aggregated) + explicit narrow select, bukan full Product 399 MB
+    return prisma.catalogArticle.findMany({
+      where: {
+        articleHasPromo: true,
+        discountType: { not: null },
+        AND: [
+          {
+            OR: [
+              { discountType: { contains: 'B' } },
+              { discountType: { contains: 'G' } },
+              { discountType: { contains: '%' } },
+              { discountType: { contains: 'X' } },
+              { discountType: { contains: 'PERCENTAGE' } },
+            ],
+          },
+          { discountType: { not: 'AMOUNT' } },
+          { discountType: { not: '0' } },
+          { discountType: { not: 'SPECIAL PRICE' } },
+          { discountType: { not: { contains: 'HARGA SPESIAL' } } },
+        ],
+      },
+      orderBy: { sortRank: 'asc' },
+      take: 400,
+      select: {
+        sku: true,
+        description: true,
+        dept: true,
+        color: true,
+        size: true,
+        hargaNormal: true,
+        discountType: true,
+        updatedAt: true,
+      },
+    });
+  },
+  ['promo-unik-catalog-v2'],
+  { revalidate: 300 }
+);
+
 export default async function PromoUnikPage() {
   let promoUnik: any[] = [];
   try {
-    // Ambil promo unik: BXGY atau PERCENTAGE
-    promoUnik = await prisma.product.findMany({
-    where: {
-      AND: [
-        { discountType: { not: null } },
-        { 
-          OR: [
-            { discountType: { contains: 'B' } },
-            { discountType: { contains: 'G' } },
-            { discountType: { contains: '%' } },
-            { discountType: { contains: 'X' } },
-            { discountType: { contains: 'PERCENTAGE' } }
-          ]
-        },
-        { discountType: { not: 'AMOUNT' } },
-        { discountType: { not: '0' } },
-        { discountType: { not: 'SPECIAL PRICE' } },
-        { discountType: { not: { contains: 'HARGA SPESIAL' } } }
-      ]
-    },
-    orderBy: {
-      updatedAt: 'desc',
-    },
-    take: 400, 
-    });
+    promoUnik = await getCachedPromoUnik();
   } catch (err) {
     console.warn("Failed to fetch promo unik items:", err);
   }

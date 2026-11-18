@@ -3,7 +3,10 @@ import { prisma } from "@/lib/prisma";
 
 export async function GET() {
   try {
+    // Endpoint legacy dibatasi ketat (tidak pernah full-dump 310rb baris Postgres agar Disk IO aman)
     const products = await prisma.product.findMany({
+      orderBy: { id: "desc" },
+      take: 2000,
       select: {
         sku: true,
         article: true,
@@ -21,7 +24,14 @@ export async function GET() {
       },
     });
 
-    return NextResponse.json({ success: true, data: products });
+    return NextResponse.json(
+      { success: true, data: products },
+      {
+        headers: {
+          "Cache-Control": "public, max-age=60, s-maxage=300, stale-while-revalidate=600",
+        },
+      }
+    );
   } catch (error: any) {
     console.error("Error fetching all products for sync:", error);
     return NextResponse.json(

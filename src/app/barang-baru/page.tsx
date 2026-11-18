@@ -1,32 +1,44 @@
+import { unstable_cache } from 'next/cache';
 import { prisma } from '@/lib/prisma';
-import { Package, CalendarDays, ArrowRight, Sparkles } from 'lucide-react';
+import { Sparkles } from 'lucide-react';
 import Link from 'next/link';
-
-function formatRupiah(angka: number) {
-  return new Intl.NumberFormat("id-ID", {
-    style: "currency",
-    currency: "IDR",
-    minimumFractionDigits: 0,
-  }).format(angka);
-}
 
 // Force dynamic rendering to prevent prerender database connection errors at build time
 export const dynamic = "force-dynamic";
-export const revalidate = 60;
+export const revalidate = 300;
 
 // Client component for accordion list
 import ClientBarangBaruList from './ClientBarangBaruList';
 
+const getCachedBarangBaru = unstable_cache(
+  async () => {
+    // Order by id DESC memakai Primary Key (0.2ms, 0 sequential scan) + select ramping
+    return prisma.product.findMany({
+      orderBy: { id: 'desc' },
+      take: 150,
+      select: {
+        id: true,
+        sku: true,
+        description: true,
+        color: true,
+        size: true,
+        brand: true,
+        hargaNormal: true,
+        hargaPromo: true,
+        stok: true,
+        imageUrl: true,
+        createdAt: true,
+      },
+    });
+  },
+  ['barang-baru-v2'],
+  { revalidate: 300 }
+);
+
 export default async function BarangBaruPage() {
   let newItems: any[] = [];
   try {
-    // Ambil 150 barang terbaru berdasarkan createdAt
-    newItems = await prisma.product.findMany({
-      orderBy: {
-        createdAt: 'desc',
-      },
-      take: 150,
-    });
+    newItems = await getCachedBarangBaru();
   } catch (err) {
     console.warn("Failed to fetch new items for barang-baru:", err);
   }
