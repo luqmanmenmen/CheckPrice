@@ -1,12 +1,39 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { fetchStorageAnalyticsJson } from '@/lib/productQueryHelpers';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    // 1. Get Active Promos
+    // Opsi A: Prioritaskan baca hasil matang dari Python (`analytics/promo-analysis.json`) = 0 Disk IO Postgres
+    const precomputed = await fetchStorageAnalyticsJson('promo-analysis.json');
+    if (precomputed && precomputed.overallSummary) {
+      return NextResponse.json(precomputed, {
+        headers: {
+          'Cache-Control': 'public, max-age=60, s-maxage=300, stale-while-revalidate=600',
+        },
+      });
+    }
+
+    // Fallback ringan bila JSON Python belum terbit: narrow select + filter fromDate != null
     const activePromos = await prisma.product.findMany({
-      where: { hargaPromo: { not: null } },
-      // take: 200 // removed limit so we can aggregate properly
+      where: {
+        hargaPromo: { not: null },
+        fromDate: { not: null },
+      },
+      select: {
+        id: true,
+        sku: true,
+        description: true,
+        dept: true,
+        acara: true,
+        hargaNormal: true,
+        hargaPromo: true,
+        fromDate: true,
+        toDate: true,
+      },
+      take: 5000,
     });
 
     const productIds = activePromos.map(p => p.id);

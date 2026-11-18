@@ -6,7 +6,6 @@ import Link from "next/link";
 import { APP_VERSION } from "@/lib/version";
 import { PinModal } from "@/components/PinModal";
 import { AlertModal } from "@/components/AlertModal";
-import * as xlsx from "xlsx";
 
 export default function UpdateHargaPage() {
   const [files, setFiles] = useState<File[]>([]);
@@ -194,12 +193,10 @@ export default function UpdateHargaPage() {
 
       setProgress(100);
       setStatus("success");
-      setResultMsg(`Berhasil mengunggah ${files.length} file promo! Sedang memproses data secara otomatis...`);
-      
-      // Langsung jalankan proses sync tanpa perlu klik tombol + picu Python Engine di GitHub Actions
+      setResultMsg(`Berhasil mengunggah ${files.length} file promo! Meneruskan ke Python Engine di GitHub Actions...`);
+
       await fetchBlobFiles();
       await handleFullResync(true);
-      handleGitHubDispatch('promo').catch(() => {});
     } catch (error: any) {
       console.error("Upload error:", error);
       setProgress(100);
@@ -255,120 +252,19 @@ export default function UpdateHargaPage() {
 
   const handleFullResync = async (isAuto = false): Promise<boolean> => {
     setIsFullResyncing(true);
-    setFullResyncMsg("Mengambil daftar file Promo dari server...");
-    
+    setFullResyncMsg("Mengirim sinyal sinkronisasi promo ke Python Engine (GitHub Actions)...");
+
     try {
-      const listRes = await fetch("/api/upload/blob-files?folder=PROMO");
-      const listData = await listRes.json();
-      
-      if (!listRes.ok || !listData.success) {
-        throw new Error(listData.error || "Gagal mengambil list file blob");
+      // Opsi A: Seluruh parsing promo Excel dijalankan 1 pintu di python-engine (0% TS/Browser)
+      await handleGitHubDispatch("promo");
+      if (!isAuto) {
+        setAlertState({
+          isOpen: true,
+          title: "🚀 Python Engine Berjalan",
+          message: "Seluruh file Promo di Cloud Storage sedang diproses oleh Python Engine (`run_promo_sync.py` + `build_catalog_index.py`). Notif & katalog otomatis diperbarui begitu selesai.",
+          type: "success",
+        });
       }
-      
-      const blobs = listData.blobs.filter((b: any) => !b.isSynced);
-      if (blobs.length === 0) {
-        if (!isAuto) setAlertState({ isOpen: true, title: "Selesai", message: "Semua file Promo yang ada di Cloud sudah tersinkronisasi. Silakan klik tombol kuning Bersihkan Blob.", type: "success" });
-        setIsFullResyncing(false);
-        return false;
-      }
-
-      // ============================================================
-      // PROMO: Gabungkan SEMUA file sekaligus dalam 1 batch
-      // Karena folder PROMO selalu bersih (lama dihapus, baru diupload),
-      // semua file di folder = 1 periode promo yang sama → harus digabung.
-      // Jangan loop satu-satu (nanti saling menimpa!).
-      // ============================================================
-      let successCount = 0;
-      for (let i = 0; i < blobs.length; i++) {
-        const b = blobs[i];
-        setFullResyncMsg(`Mendownload file ${i+1}/${blobs.length}: ${b.filename}`);
-        
-        try {
-          // Download blob langsung dari client
-          const fileRes = await fetch(b.url);
-          if (!fileRes.ok) throw new Error("Gagal download blob");
-          const ab = await fileRes.arrayBuffer();
-          const workbook = xlsx.read(ab, { type: "array", cellDates: false });
-
-          setFullResyncMsg(`Menganalisis file ${i+1}/${blobs.length}: ${b.filename}`);
-
-          const findHeaderRowIndex = (ws: any): number => {
-            const rows = xlsx.utils.sheet_to_json(ws, { header: 1, defval: "" }) as any[][];
-            for (let j = 0; j < Math.min(20, rows.length); j++) {
-              const row = rows[j];
-              if (!row) continue;
-              const hasSKU = row.some(cell => {
-                if (typeof cell !== 'string') return false;
-                const c = cell.toUpperCase().trim();
-                return c === "SKU" || c === "KODE PRODUK" || c === "KODE" || c === "ARTICLE" || c === "BARCODE";
-              });
-              if (hasSKU) return j;
-            }
-            return 0;
-          };
-
-          let allRows: any[] = [];
-          for (const sheetName of workbook.SheetNames) {
-            const ws = workbook.Sheets[sheetName];
-            const headerRowIndex = findHeaderRowIndex(ws);
-            const rawRows = xlsx.utils.sheet_to_json(ws, { range: headerRowIndex, defval: "" });
-            for (const raw of rawRows as any[]) {
-              const normalizedRow: any = {};
-              for (const key of Object.keys(raw)) {
-                normalizedRow[key.trim().toUpperCase()] = raw[key];
-              }
-              
-              const r = {
-                ...normalizedRow,
-                __SOURCE_FILE__: b.filename,
-                __SOURCE_SHEET__: sheetName
-              };
-              const firstColValue = String(Object.values(r)[0] || "").toUpperCase();
-              if (firstColValue.includes("GRAND TOTAL")) break;
-              
-              const hasIdentifier = r["SKU"] || r["KODE PRODUK"] || r["KODE"] || r["ARTICLE"] || r["BARCODE"] || r["KODE_PRODUK"];
-              if (!hasIdentifier) continue;
-              
-              allRows.push(r);
-            }
-          }
-
-          if (allRows.length > 0) {
-            const CHUNK_SIZE = 500;
-            const totalChunks = Math.ceil(allRows.length / CHUNK_SIZE);
-            
-            for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
-              const chunk = allRows.slice(chunkIdx * CHUNK_SIZE, (chunkIdx + 1) * CHUNK_SIZE);
-              setFullResyncMsg(`Menyimpan ${b.filename} (${chunkIdx + 1}/${totalChunks})`);
-              
-              const payload = {
-                type: "UPDATE_PROMO",
-                fileName: b.filename,
-                fileUrl: b.url,
-                uploadDate: new Date().toISOString(),
-                isLastChunk: chunkIdx === totalChunks - 1,
-                totalRecords: allRows.length,
-                rows: chunk
-              };
-
-              const chunkRes = await fetch("/api/upload/chunk", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-              });
-
-              if (!chunkRes.ok) {
-                throw new Error("Gagal mengirim chunk");
-              }
-            }
-          }
-          successCount++;
-        } catch (fileErr: any) {
-          console.error(`Gagal memproses file ${b.filename}:`, fileErr);
-        }
-      }
-      
-      setAlertState({ isOpen: true, title: "✅ Berhasil!", message: `Berhasil memproses ${successCount}/${blobs.length} file promo otomatis dari Blob.`, type: "success" });
       fetchSyncHistory();
       fetchBlobFiles();
       return true;

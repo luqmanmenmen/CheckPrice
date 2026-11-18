@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getEstimatedProductCount } from "@/lib/productQueryHelpers";
+import { fetchStorageAnalyticsJson, getEstimatedProductCount } from "@/lib/productQueryHelpers";
 
 // Simple in-memory cache to speed up dashboard loading
 interface CacheEntry {
@@ -40,17 +40,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(routeCache[cacheKey].data);
     }
 
-    // Auto-clean expired promos
+    // Bersih-bersih promo expired dilakukan oleh python-engine/run_admin_analytics.py --clean-promo
     const todayStr = new Date().toISOString().split('T')[0];
-    await prisma.product.updateMany({
-      where: {
-        toDate: { not: null, lt: todayStr },
-        OR: [{ hargaPromo: { not: null } }, { diskon: { not: null } }]
-      },
-      data: {
-        hargaPromo: null, diskon: null, discountType: null, acara: null, fromDate: null, toDate: null
-      }
-    });
 
     // ============================================================
     // SUMBER DATA UTAMA: Product table langsung dari PQ upload
@@ -177,24 +168,27 @@ export async function GET(request: NextRequest) {
 
     const targetYearMonth = mtdMonthObj.toISOString().substring(0, 7);
 
-    // 1. SUMMARY CARDS
-    const agg = await prisma.product.aggregate({
-      _sum: {
-        day_sales_retail: true,
-        day_sales_unit:   true,
-        sales_wtd:        true,
-        sales_wtd_retail: true,
-        sales_mtd:        true,
-        sales_mtd_retail: true,
-        sales_ytd:        true,
-        sales_ytd_retail: true,
-        eoh_retail:       true,
-        stok:             true,
-        boy_unit:         true,
-        boy_retail:       true,
-        bom_unit:         true,
-      }
-    });
+    // 1. SUMMARY CARDS (Prioritaskan pre-computed JSON Python CDN -> 0 full Product aggregate Disk IO)
+    const precomputedSummary = await fetchStorageAnalyticsJson<any>("sales-report-summary.json");
+    const agg = precomputedSummary?.aggSummary
+      ? { _sum: precomputedSummary.aggSummary }
+      : await prisma.product.aggregate({
+          _sum: {
+            day_sales_retail: true,
+            day_sales_unit:   true,
+            sales_wtd:        true,
+            sales_wtd_retail: true,
+            sales_mtd:        true,
+            sales_mtd_retail: true,
+            sales_ytd:        true,
+            sales_ytd_retail: true,
+            eoh_retail:       true,
+            stok:             true,
+            boy_unit:         true,
+            boy_retail:       true,
+            bom_unit:         true,
+          }
+        });
 
     let selectedDateOmzet = 0;
     let selectedDateQty = 0;
@@ -237,10 +231,15 @@ export async function GET(request: NextRequest) {
     const lastMonthOmzet = lastMonthAgg._sum.omzet || 0;
     const lastMonthQty = lastMonthAgg._sum.qtySold || 0;
 
-    const [totalProducts, totalWithPromo] = await Promise.all([
-      getEstimatedProductCount(),
-      prisma.catalogArticle.count({ where: { articleHasPromo: true } })
-    ]);
+    const [totalProducts, totalWithPromo] = precomputedSummary?.aggSummary
+      ? [
+          Number(precomputedSummary.aggSummary.totalProducts || 0),
+          Number(precomputedSummary.aggSummary.totalWithPromo || 0),
+        ]
+      : await Promise.all([
+          getEstimatedProductCount(),
+          prisma.catalogArticle.count({ where: { articleHasPromo: true } }),
+        ]);
 
     // Hitung omzet promo & Siapkan Report Items dari DailySales
     let omzetPromo = 0;
@@ -521,23 +520,27 @@ export async function GET(request: NextRequest) {
           const fastWhere: any = { [qtyCol]: { gt: 0 } };
           if (deptFilter) fastWhere.dept = deptFilter;
 
-          const topFastProducts = await prisma.product.findMany({
-            where: fastWhere,
-            orderBy: [{ [qtyCol]: 'desc' }, { [omzetCol]: 'desc' }],
-            take: 10,
-            select: {
-              sku: true, description: true,
-              sales_wtd: true, sales_wtd_retail: true,
-              sales_mtd: true, sales_mtd_retail: true,
-              sales_ytd: true, sales_ytd_retail: true
-            }
-          });
-          topFast = topFastProducts.map((p: any) => ({
-            sku: p.sku,
-            description: p.description,
-            sales_qty: p[qtyCol],
-            omzet_total: p[omzetCol]
-          }));
+          if (!deptFilter && qtyCol === 'sales_mtd' && Array.isArray(precomputedSummary?.topFastMtd)) {
+            topFast = precomputedSummary.topFastMtd;
+          } else {
+            const topFastProducts = await prisma.product.findMany({
+              where: fastWhere,
+              orderBy: [{ [qtyCol]: 'desc' }, { [omzetCol]: 'desc' }],
+              take: 10,
+              select: {
+                sku: true, description: true,
+                sales_wtd: true, sales_wtd_retail: true,
+                sales_mtd: true, sales_mtd_retail: true,
+                sales_ytd: true, sales_ytd_retail: true
+              }
+            });
+            topFast = topFastProducts.map((p: any) => ({
+              sku: p.sku,
+              description: p.description,
+              sales_qty: p[qtyCol],
+              omzet_total: p[omzetCol]
+            }));
+          }
         }
       }
     } catch (e) {
@@ -548,32 +551,36 @@ export async function GET(request: NextRequest) {
     const slowWhere: any = deptFilter
       ? { dept: deptFilter, stok: { gt: 5 }, sales_mtd: { lte: 2 } }
       : { stok: { gt: 5 }, sales_mtd: { lte: 2 } };
-    const topSlow = await prisma.product.findMany({
-      where: slowWhere,
-      orderBy: [{ stok: 'desc' }, { sales_mtd: 'asc' }],
-      take: 20,
-      select: {
-        sku: true, description: true, article: true, dept: true, brand: true,
-        hargaNormal: true, hargaPromo: true, diskon: true,
-        stok: true, sales_mtd: true, sales_mtd_retail: true,
-        sales_ytd: true, eoh_retail: true, bom_unit: true,
-      }
-    });
+    const topSlow = !deptFilter && Array.isArray(precomputedSummary?.topSlow)
+      ? precomputedSummary.topSlow
+      : await prisma.product.findMany({
+          where: slowWhere,
+          orderBy: [{ stok: 'desc' }, { sales_mtd: 'asc' }],
+          take: 20,
+          select: {
+            sku: true, description: true, article: true, dept: true, brand: true,
+            hargaNormal: true, hargaPromo: true, diskon: true,
+            stok: true, sales_mtd: true, sales_mtd_retail: true,
+            sales_ytd: true, eoh_retail: true, bom_unit: true,
+          }
+        });
 
     // 5. KRITIS (laku tapi stok menipis)
     const kritisWhere: any = deptFilter
       ? { dept: deptFilter, sales_mtd: { gte: 3 }, stok: { gte: 0, lte: 5 } }
       : { sales_mtd: { gte: 3 }, stok: { gte: 0, lte: 5 } };
-    const topKritis = await prisma.product.findMany({
-      where: kritisWhere,
-      orderBy: [{ stok: 'asc' }, { sales_mtd: 'desc' }],
-      take: 20,
-      select: {
-        sku: true, description: true, article: true, dept: true,
-        hargaNormal: true, hargaPromo: true,
-        stok: true, sales_mtd: true, sales_mtd_retail: true, day_sales_unit: true,
-      }
-    });
+    const topKritis = !deptFilter && Array.isArray(precomputedSummary?.topKritis)
+      ? precomputedSummary.topKritis
+      : await prisma.product.findMany({
+          where: kritisWhere,
+          orderBy: [{ stok: 'asc' }, { sales_mtd: 'desc' }],
+          take: 20,
+          select: {
+            sku: true, description: true, article: true, dept: true,
+            hargaNormal: true, hargaPromo: true,
+            stok: true, sales_mtd: true, sales_mtd_retail: true, day_sales_unit: true,
+          }
+        });
 
     // 6. TREND DATA - dari DailySales jika ada, fallback ke 1 titik MTD dari PQ
     let trendData: any[] = [];

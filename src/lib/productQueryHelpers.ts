@@ -43,6 +43,35 @@ export async function getEstimatedProductCount(): Promise<number> {
   }
 }
 
+/**
+ * Membaca pre-computed analytics JSON dari Supabase Storage CDN (`excel-uploads/analytics/<file>`)
+ * yang dihasilkan oleh `python-engine/run_admin_analytics.py` agar dashboard admin 0 Disk IO Postgres.
+ */
+export async function fetchStorageAnalyticsJson<T = any>(
+  fileName: string
+): Promise<T | null> {
+  const supaUrl = (
+    process.env.SUPABASE_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    ""
+  )
+    .trim()
+    .replace(/\/+$/, "");
+  if (!supaUrl) return null;
+  try {
+    const clean = fileName.replace(/^\/+/, "");
+    const res = await fetch(
+      `${supaUrl}/storage/v1/object/public/excel-uploads/analytics/${clean}?t=${Math.floor(Date.now() / 60000)}`,
+      { cache: "no-store", signal: AbortSignal.timeout(2500) }
+    );
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json && typeof json === "object" ? (json as T) : null;
+  } catch {
+    return null;
+  }
+}
+
 export const PRODUCT_LIST_SELECT = {
   id: true,
   sku: true,

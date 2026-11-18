@@ -17,7 +17,7 @@ const REPO_OWNER = 'luqmanmenmen';
 const REPO_NAME = 'CheckPrice';
 const WORKFLOW_ID = 'retail-sync-engine.yml';
 
-export type SyncActionType = 'scrab' | 'mds-bisa' | 'photos' | 'stock-only' | 'promo' | 'catalog' | 'all';
+export type SyncActionType = 'scrab' | 'mds-bisa' | 'photos' | 'stock-only' | 'promo' | 'catalog' | 'analytics' | 'all';
 
 export async function dispatchToGitHubRunner(params: {
   action: SyncActionType;
@@ -110,6 +110,7 @@ export async function dispatchToGitHubRunner(params: {
     'stock-only': 'STOCK_SYNC_TRIGGER',
     'promo': 'PROMO_SYNC_TRIGGER',
     'catalog': 'CATALOG_BUNDLE_TRIGGER',
+    'analytics': 'ANALYTICS_PRECOMPUTE_TRIGGER',
     'all': 'FULL_SYNC_TRIGGER',
   };
 
@@ -120,6 +121,7 @@ export async function dispatchToGitHubRunner(params: {
     'stock-only': `KATEGORI 2: Update Stock Live (Mapping 84.763 SKU) [v${APP_VERSION}]`,
     'promo': `KATEGORI 3: Update Promo Email (Parser v2 + Gemini 2.5) [v${APP_VERSION}]`,
     'catalog': `KATEGORI 4: Catalog Brain & Offline Snapshot (.json.gz) [v${APP_VERSION}]`,
+    'analytics': `KATEGORI 5: Python Admin Analytics, Clean Promo, & Saran PO [v${APP_VERSION}]`,
     'all': `ALL TRIGGER (Kategori 1 + 2 + 3 + 4 Terpadu) [v${APP_VERSION}]`,
   };
 

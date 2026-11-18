@@ -1,63 +1,51 @@
-import { NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
+import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { dispatchToGitHubRunner } from "@/lib/githubDispatcher";
 
-export async function POST(request: Request) {
+export const dynamic = "force-dynamic";
+
+/**
+ * POST /api/admin/po/generate (Opsi A)
+ * Pensiunkan loop N+1 findFirst/create TypeScript; gunakan 1 query INSERT...SELECT atomik
+ * dan sinkronisasi penuh lewat python-engine/run_admin_analytics.py.
+ */
+export async function POST() {
   try {
-    // 1. Get all products with significant sales (MTD > 5)
-    const fastMovingProducts = await prisma.product.findMany({
-      where: {
-        sales_mtd: { gt: 5 }
-      }
-    });
+    const generatedCount = await prisma.$executeRawUnsafe(`
+      INSERT INTO "PoSuggestion" (id, "productId", "suggestedQty", reason, status, "createdAt", "updatedAt")
+      SELECT
+        'po_' || md5(p.id::text || '_' || extract(epoch from now())::text),
+        p.id,
+        GREATEST(0, CEIL((p.sales_mtd::numeric / 14.0) * 24.0)::int - p.stok),
+        'Dalam 14 hari terakhir terjual ' || p.sales_mtd || ' pcs (Rata-rata '
+          || TO_CHAR(p.sales_mtd::numeric / 14.0, 'FM999990.0')
+          || ' pcs/hari). Sisa stok ' || p.stok
+          || ' pcs. Disarankan pesan '
+          || GREATEST(0, CEIL((p.sales_mtd::numeric / 14.0) * 24.0)::int - p.stok)
+          || ' pcs untuk target 14 hari.',
+        'OPEN',
+        NOW(),
+        NOW()
+      FROM "Product" p
+      WHERE p.sales_mtd > 5
+        AND p.stok <= CEIL((p.sales_mtd::numeric / 14.0) * 10.0)
+        AND GREATEST(0, CEIL((p.sales_mtd::numeric / 14.0) * 24.0)::int - p.stok) > 0
+        AND NOT EXISTS (
+          SELECT 1 FROM "PoSuggestion" s
+          WHERE s."productId" = p.id AND s.status = 'OPEN'
+        )
+    `);
 
-    const CYCLE_DAYS = 14;
-    const LEAD_TIME = 7;
-    const SAFETY_DAYS = 3;
-    let generatedCount = 0;
-
-    for (const product of fastMovingProducts) {
-      // ADS based on 14 days assumption
-      const ads = product.sales_mtd / 14; 
-      
-      const safetyStock = Math.ceil(ads * SAFETY_DAYS);
-      const minStock = Math.ceil((ads * LEAD_TIME) + safetyStock);
-      const maxStock = Math.ceil(minStock + (ads * CYCLE_DAYS));
-
-      if (product.stok <= minStock) {
-        const qtyToOrder = Math.max(0, maxStock - product.stok);
-        
-        if (qtyToOrder > 0) {
-          // Check if there's already an open suggestion
-          const existing = await prisma.poSuggestion.findFirst({
-            where: {
-              productId: product.id,
-              status: 'OPEN'
-            }
-          });
-
-          if (!existing) {
-            const reason = `Dalam 14 hari terakhir terjual ${product.sales_mtd} pcs (Rata-rata ${ads.toFixed(1)} pcs/hari). Sisa stok ${product.stok} pcs. Disarankan pesan ${qtyToOrder} pcs untuk target ${CYCLE_DAYS} hari.`;
-            
-            await prisma.poSuggestion.create({
-              data: {
-                productId: product.id,
-                suggestedQty: qtyToOrder,
-                reason: reason,
-              }
-            });
-            generatedCount++;
-          }
-        }
-      }
-    }
+    void dispatchToGitHubRunner({ action: "analytics", force: true }).catch(() => {});
 
     return NextResponse.json({
       success: true,
-      message: `Berhasil men-generate ${generatedCount} saran PO baru.`
+      mode: "SQL_ATOMIC_PLUS_PYTHON",
+      generatedCount: Number(generatedCount || 0),
+      message: `Berhasil men-generate ${Number(generatedCount || 0)} saran PO baru.`,
     });
-
   } catch (error) {
-    console.error('Error generating PO suggestions:', error);
-    return NextResponse.json({ success: false, error: 'Internal Server Error' }, { status: 500 });
+    console.error("Error generating PO suggestions:", error);
+    return NextResponse.json({ success: false, error: "Internal Server Error" }, { status: 500 });
   }
 }

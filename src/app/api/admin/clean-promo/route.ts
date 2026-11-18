@@ -1,62 +1,48 @@
-import { NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
+import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { dispatchToGitHubRunner } from "@/lib/githubDispatcher";
 
+export const dynamic = "force-dynamic";
+
+/**
+ * POST /api/admin/clean-promo (Opsi A)
+ * Membersihkan promo expired berbasis WIB dengan 1 query SQL atomik tanpa menarik
+ * puluhan ribu baris ke memori TypeScript, lalu menjadwalkan Python analytics refresh.
+ */
 export async function POST() {
   try {
-    const today = new Date();
-    // Start of today so anything before today is expired
-    today.setHours(0, 0, 0, 0);
-    
-    // Find how many products have expired promos
-    // We check toDate < today and hargaPromo is not null
-    // But since the format of toDate is text (yyyy-mm-dd) or Date, wait, let's check schema.
-    // In schema, toDate is String!
-    // If it's a string like "2026-09-23", we can just compare string lexicographically if it's ISO format,
-    // but the DB stores it as YYYY-MM-DD. So string comparison works!
-    
-    // Let's just fetch all promos, and filter them in JS to be safe, then update
-    const activePromos = await prisma.product.findMany({
-      where: { hargaPromo: { not: null } }
-    });
-    
-    const now = new Date();
-    now.setHours(0, 0, 0, 0); // today start
-    
-    const expiredIds: number[] = [];
-    
-    for (const p of activePromos) {
-      if (p.toDate) {
-        const toDateObj = new Date(p.toDate);
-        if (!isNaN(toDateObj.getTime())) {
-          toDateObj.setHours(23, 59, 59, 999);
-          if (new Date() > toDateObj) {
-            expiredIds.push(p.id);
-          }
-        }
-      }
-    }
-    
-    if (expiredIds.length > 0) {
-      await prisma.product.updateMany({
-        where: { id: { in: expiredIds } },
-        data: {
-          hargaPromo: null,
-          diskon: null,
-          discountType: null,
-          acara: null,
-          fromDate: null,
-          toDate: null
-        }
-      });
+    const todayWib = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+    const cleanedCount = await prisma.$executeRawUnsafe(
+      `
+      UPDATE "Product"
+      SET "hargaPromo" = NULL,
+          diskon = NULL,
+          "discountType" = NULL,
+          acara = NULL,
+          "fromDate" = NULL,
+          "toDate" = NULL
+      WHERE ("hargaPromo" IS NOT NULL OR diskon IS NOT NULL OR acara IS NOT NULL)
+        AND "toDate" IS NOT NULL
+        AND SUBSTRING(TRIM("toDate"), 1, 10) ~ '^\\d{4}-\\d{2}-\\d{2}$'
+        AND SUBSTRING(TRIM("toDate"), 1, 10) < $1
+      `,
+      todayWib
+    );
+
+    if (cleanedCount > 0) {
+      // Refresh CatalogArticle, snapshot CDN, & analytics JSON lewat Python runner
+      void dispatchToGitHubRunner({ action: "analytics", force: true }).catch(() => {});
     }
 
     return NextResponse.json({
       success: true,
-      cleanedCount: expiredIds.length,
-      message: `Berhasil membersihkan ${expiredIds.length} promo kadaluarsa.`
+      mode: "SQL_ATOMIC_PLUS_PYTHON",
+      cleanedCount: Number(cleanedCount || 0),
+      message: `Berhasil membersihkan ${Number(cleanedCount || 0)} promo kadaluarsa (< ${todayWib} WIB).`,
     });
   } catch (error) {
-    console.error('Error cleaning promos:', error);
-    return NextResponse.json({ success: false, error: 'Internal Server Error' }, { status: 500 });
+    console.error("Error cleaning promos:", error);
+    return NextResponse.json({ success: false, error: "Internal Server Error" }, { status: 500 });
   }
 }

@@ -23,6 +23,7 @@ on:
           - stock-only
           - promo
           - catalog
+          - analytics
           - all
       promo_url:
         description: 'URL file promo (opsional, jika kosong akan ambil semua file di folder terbaru Storage PROMO/)'
@@ -41,7 +42,7 @@ on:
         type: string
 
   repository_dispatch:
-    types: [trigger-sync-engine, trigger-scrab, trigger-mds-bisa, trigger-stock-only, trigger-photos, trigger-promo, trigger-catalog]
+    types: [trigger-sync-engine, trigger-scrab, trigger-mds-bisa, trigger-stock-only, trigger-photos, trigger-promo, trigger-catalog, trigger-analytics]
 
 concurrency:
   group: retail-sync-group
@@ -128,7 +129,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
       - name: 🧠 [KATEGORI 4 - CATALOG BRAIN & OFFLINE SNAPSHOT v2.7] Susun CatalogArticle + Kompilasi DB Offline .json.gz
-        if: ${{ success() || github.event.inputs.action == 'catalog' || github.event.action == 'trigger-catalog' }}
+        if: ${{ (success() && github.event.inputs.action != 'analytics' && github.event.action != 'trigger-analytics') || github.event.inputs.action == 'catalog' || github.event.action == 'trigger-catalog' }}
         run: |
           if [ -n "$DATABASE_URL" ]; then
             STOCK_ONLY_FLAG=""
@@ -138,6 +139,20 @@ jobs:
             python python-engine/build_catalog_index.py $STOCK_ONLY_FLAG
           else
             echo "DATABASE_URL belum dikonfigurasi di GitHub Secrets, lewati rebuild CatalogArticle."
+          fi
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
+
+      - name: 📊 [KATEGORI 5 - ADMIN ANALYTICS & CLEANUP] Clean Promo, Generate PO, & Precompute CDN JSON
+        if: ${{ github.event.inputs.action == 'analytics' || github.event.inputs.action == 'promo' || github.event.inputs.action == 'stock-only' || github.event.inputs.action == 'catalog' || github.event.inputs.action == 'all' || github.event.action == 'trigger-analytics' || github.event.action == 'trigger-promo' || github.event.action == 'trigger-sync-engine' }}
+        run: |
+          if [ -n "$DATABASE_URL" ]; then
+            python python-engine/run_admin_analytics.py --clean-promo --generate-po --analytics
+          else
+            echo "DATABASE_URL belum dikonfigurasi, lewati admin analytics precompute."
           fi
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
