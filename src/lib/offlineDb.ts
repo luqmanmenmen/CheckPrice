@@ -313,8 +313,21 @@ function isLocalPromoExpired(toDate: string | null | undefined): boolean {
   return Date.now() > d.getTime();
 }
 
+export function isNormalPriceTerm(val?: string | null): boolean {
+  if (!val) return false;
+  const s = String(val).trim().toUpperCase();
+  return s.includes("NORMAL") || s === "REGULAR" || s === "HARGA NORMAL";
+}
+
 function sanitizeAndIndexModel(m: CachedArticleModel): CachedArticleModel {
-  const cleanM = isLocalPromoExpired(m.toDate)
+  const isExpired = isLocalPromoExpired(m.toDate);
+  const isFakeNormal = Boolean(
+    (m.acara && isNormalPriceTerm(m.acara)) ||
+    (m.discountType && isNormalPriceTerm(m.discountType)) ||
+    (m.hargaPromo && m.hargaNormal && Number(m.hargaPromo) >= Number(m.hargaNormal))
+  );
+
+  const cleanM = (isExpired || isFakeNormal)
     ? {
         ...m,
         hargaPromo: null,
@@ -1264,8 +1277,20 @@ export function isLocalPromoActive(m: Pick<CachedArticleModel, "articleHasPromo"
       return false;
     }
   }
-  const hasPrice = Boolean(m.hargaPromo && m.hargaPromo > 0 && (!m.hargaNormal || m.hargaPromo < m.hargaNormal));
-  return Boolean(m.articleHasPromo || hasPrice || m.diskon || m.discountType || m.acara);
+  const hasPrice = Boolean(m.hargaPromo && Number(m.hargaPromo) > 0 && (!m.hargaNormal || Number(m.hargaPromo) < Number(m.hargaNormal)));
+  const hasDiskon = Boolean(
+    m.diskon &&
+      String(m.diskon).trim() !== "" &&
+      String(m.diskon).trim() !== "0" &&
+      String(m.diskon).trim() !== "0%" &&
+      !isNormalPriceTerm(m.diskon)
+  );
+  const hasDiscountType = Boolean(
+    m.discountType &&
+      !isNormalPriceTerm(m.discountType)
+  );
+  const hasRealPromo = hasPrice || hasDiskon || hasDiscountType;
+  return Boolean(m.articleHasPromo || hasRealPromo);
 }
 
 /**

@@ -1677,3 +1677,51 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   - `npm run build`: `47/47` rute terkompilasi sempurna (`BUILD_OK`).
   - Uji `scripts/verify_alias_fix.mjs`: terverifikasi `BarcodeAlias` untuk `2340002272943` dan `27` barcode alias keluarga `T1KT1351` 100% cocok dan terindeks di Supabase.
   - Zero-truncate audit: `0` pelanggaran kelas pemotong teks.
+
+---
+
+### 100. Eliminasi Total Badge "PROMO" Palsu pada Varian Harga Normal (`NORMAL PRICE`), Pembersihan 2.822 Baris DB, & Proteksi Lintas Pipeline (19 November 2026)
+
+- **Masalah dari Laporan & Screenshot Pengguna (`T1KT1351`):**
+  Pengguna mengunggah tangkapan layar artikel `T1KT1351` dan memberi instruksi: *"Tolong dong ini kalau normal ya jangan ada promonya"*.
+  Pada varian warna **AQUA**, sistem menampilkan harga promo `Rp 59.000` (SP59 - benar). Namun pada varian warna **BLACK**, sistem menampilkan stok dengan badge merah **`PROMO`**, padahal warna BLACK adalah barang harga normal (`Rp 129.900`) tanpa diskon apapun.
+
+- **Akar Masalah Nyata (Forensik Multi-Lapisan):**
+  1. **Kebocoran Nama Sheet Excel di Pipeline Ingesti Python ([`python-engine/run_promo_sync.py`](file:///c:/Max%20Display/price-checker/python-engine/run_promo_sync.py)):**
+     - File promo Excel sering memiliki sheet bernama `"NORMAL PRICE"` atau `"NORMAL"`. Parser (`parser.py`) menandai `is_promo = False`.
+     - Namun di `run_promo_sync.py` (baris 591 lama): `"acara": item.get("acara") or item.get("sumber_sheet")`. Nilai `sumber_sheet` (`"NORMAL PRICE"`) tetap ditulis ke kolom `acara` meskipun barang bukan promo!
+     - Akibatnya sebanyak **2.822 produk** di tabel `Product` Supabase terisi `acara = "NORMAL PRICE"` dengan `hargaPromo = null` / `0`.
+  2. **Pengecekan Promo Varian Tercampur dengan Flag Artikel & Teks Acara ([`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx)):**
+     - Fungsi `isVariantPromoActiveClient` sebelumnya memeriksa: `Boolean(hasPrice || item.diskon || item.discountType || item.acara || item.articleHasPromo)`.
+     - Karena `item.acara` berisi string `"NORMAL PRICE"`, nilainya truthy!
+     - Lebih dari itu, `item.articleHasPromo` adalah flag level artikel/keluarga. Karena ada varian saudara (AQUA) yang promo, maka seluruh varian saudara (termasuk BLACK) ikut terimbas menjadi promo aktif!
+     - Pada kartu ukuran warna, jika varian aktif promo tapi tidak memiliki `hargaPromo` lebih murah (`hasPromoPrice = false`), sistem menampilkan fallback teks badge **`PROMO`** berwarna merah!
+  3. **Ketidaksinkronan di Offline DB & Server Query Helpers ([`src/lib/offlineDb.ts`](file:///c:/Max%20Display/price-checker/src/lib/offlineDb.ts), [`src/lib/productQueryHelpers.ts`](file:///c:/Max%20Display/price-checker/src/lib/productQueryHelpers.ts), [`src/lib/smartSearchEngine.ts`](file:///c:/Max%20Display/price-checker/src/lib/smartSearchEngine.ts)):**
+     - `isLocalPromoActive` dan `isItemPromoActive` juga mengecek `m.acara` dan `m.articleHasPromo` tanpa memfilter istilah "NORMAL".
+
+- **Perbaikan yang Diterapkan:**
+  1. **Pembersihan Database PostgreSQL Supabase (2.822 Baris Dinormalkan):**
+     - Mengeksekusi SQL update untuk menolkan/menullkan `hargaPromo`, `diskon`, `discountType`, `acara`, `fromDate`, `toDate` pada 2.822 produk yang memiliki `acara` mengandung kata "NORMAL" tanpa potongan harga riil.
+     - Hasil pada artikel `T1KT1351`: 20 SKU promo asli (AQUA, SUNSHINE YELLOW, CERAMIC, BLUSH, SALMON - SP59 Rp 59.000) tetap promo, 58 SKU lainnya berstatus murni harga normal.
+  2. **Sanitasi Ketat Pipeline Python Ingestion ([`python-engine/run_promo_sync.py`](file:///c:/Max%20Display/price-checker/python-engine/run_promo_sync.py)):**
+     - Menyaring `acara`, `tipe_diskon`, `diskon`, dan `harga_promo`:
+       - Jika `not item.get("is_promo")`, seluruh field promo diset `None`.
+       - Istilah yang mengandung `"NORMAL"` atau `"REGULAR"` tidak pernah ditulis ke `acara` atau `discountType`.
+       - Jika `harga_promo >= harga_normal`, harga promo otomatis dibatalkan (`None`).
+       - Diterapkan pada `process_single_promo_file` dan `compile_upcoming_promo_draft`.
+  3. **Pemisahan Tegas Deteksi Promo Varian vs Katalog ([`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx)):**
+     - Menambahkan fungsi `isNormalPriceText` (menangkap "NORMAL", "REGULAR", "HARGA NORMAL").
+     - `isVariantPromoActiveClient`: Khusus mengecek varian individual. HANYA bernilai true jika tanggal berlaku aktif DAN memiliki promo riil (`hargaPromo < hargaNormal`, ATAU diskon riil > 0, ATAU tipe promo khusus riil). Pengecekan `articleHasPromo` dan `acara` murni dihapus dari varian.
+     - `isCatalogPromoActiveClient`: Dibuat khusus untuk level katalog (`item.articleHasPromo || isVariantPromoActiveClient(item)`).
+     - Hasilnya: varian normal (seperti BLACK) bersih dari badge `PROMO`, kartu ukuran hanya menampilkan stok murni (`Stok 3`, `Stok 7`, dst.), sementara varian promo (seperti AQUA) tetap menampilkan badge `Rp 59.000`.
+  4. **Proteksi Mandiri di IndexedDB Klien & Server Helpers ([`src/lib/offlineDb.ts`](file:///c:/Max%20Display/price-checker/src/lib/offlineDb.ts), [`src/lib/productQueryHelpers.ts`](file:///c:/Max%20Display/price-checker/src/lib/productQueryHelpers.ts), [`src/lib/smartSearchEngine.ts`](file:///c:/Max%20Display/price-checker/src/lib/smartSearchEngine.ts)):**
+     - `isNormalPriceTerm` diterapkan di seluruh helper.
+     - `sanitizeAndIndexModel` di IndexedDB Dexie seketika membersihkan cache lokal klien jika ada produk lama yang membawa istilah NORMAL palsu.
+     - `cleanPromoList` di server membersihkan fake promo lama secara background ke Supabase.
+     - `isPromoActiveForProduct` dan `groupProductsByArticle` di smart search engine memblokir label promo jika tipe diskon berlabel NORMAL.
+
+- **Verifikasi Nyata:**
+  - `python -m py_compile python-engine/run_promo_sync.py`: Lulus (`PY_COMPILE_OK`).
+  - `npx tsc --noEmit`: Lulus `0` error (`TSC_OK`).
+  - `npm run build`: `47/47` rute terkompilasi sempurna (`BUILD_OK`).
+  - Zero-truncate audit: `0` pelanggaran kelas pemotong teks (`whitespace-normal break-words`).

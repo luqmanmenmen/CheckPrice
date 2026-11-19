@@ -1456,6 +1456,22 @@ export default function Home() {
     searchProduct(manualInput, 1, false, selectedBrandGroup, selectedCategory, selectedSubBrand, nextGroup);
   };
 
+  const isNormalPriceText = (val?: string | null): boolean => {
+    if (!val) return false;
+    const s = String(val).trim().toUpperCase();
+    return s.includes("NORMAL") || s === "REGULAR" || s === "HARGA NORMAL";
+  };
+
+  /**
+   * Pengecekan ketat khusus untuk VARIAN produk individual:
+   * Sebuah varian HANYA dianggap promo jika memiliki:
+   * 1. Tanggal promo belum kedaluwarsa
+   * 2. Harga promo riil yang lebih murah dari harga normal (hargaPromo > 0 && hargaPromo < hargaNormal)
+   * 3. ATAU diskon riil (bukan 0/NORMAL)
+   * 4. ATAU tipe diskon promo riil (bukan NORMAL/REGULAR)
+   * TIDAK BOLEH mengecek articleHasPromo (karena itu flag artikel, bukan varian ini)
+   * dan TIDAK BOLEH menganggap teks "NORMAL" / "NORMAL PRICE" sebagai promo.
+   */
   const isVariantPromoActiveClient = (item: Pick<ProductData, "hargaPromo" | "hargaNormal" | "diskon" | "discountType" | "acara" | "toDate" | "articleHasPromo">) => {
     if (!item) return false;
     if (item.toDate) {
@@ -1465,8 +1481,32 @@ export default function Home() {
         if (todayWib > dp) return false;
       }
     }
-    const hasPrice = Boolean(item.hargaPromo && item.hargaPromo > 0 && (!item.hargaNormal || item.hargaPromo < item.hargaNormal));
-    return Boolean(hasPrice || item.diskon || item.discountType || item.acara || item.articleHasPromo);
+    const hasPrice = Boolean(
+      item.hargaPromo &&
+      Number(item.hargaPromo) > 0 &&
+      (!item.hargaNormal || Number(item.hargaPromo) < Number(item.hargaNormal))
+    );
+    const hasDiskon = Boolean(
+      item.diskon &&
+      String(item.diskon).trim() !== "" &&
+      String(item.diskon).trim() !== "0" &&
+      String(item.diskon).trim() !== "0%" &&
+      !isNormalPriceText(item.diskon)
+    );
+    const hasDiscountType = Boolean(
+      item.discountType &&
+      !isNormalPriceText(item.discountType)
+    );
+    return Boolean(hasPrice || hasDiskon || hasDiscountType);
+  };
+
+  /**
+   * Pengecekan promo untuk item di level KATALOG (kartu ringkasan artikel/model):
+   * Aktif jika varian ini sendiri promo ATAU keluarga artikel memiliki varian promo aktif.
+   */
+  const isCatalogPromoActiveClient = (item: ProductData) => {
+    if (!item) return false;
+    return Boolean(item.articleHasPromo || isVariantPromoActiveClient(item));
   };
 
   const applySelectedProductFamily = (mainProd: ProductData, familySiblings: ProductData[]) => {
@@ -1603,7 +1643,7 @@ export default function Home() {
       setSiblings([]);
       setProductsList(cachedPage.list);
       setResultFilter(activeResultFilter);
-      setTotalPromoCount((cachedPage as any).promoCount ?? cachedPage.list.filter((it: ProductData) => isVariantPromoActiveClient(it)).length);
+      setTotalPromoCount((cachedPage as any).promoCount ?? cachedPage.list.filter((it: ProductData) => isCatalogPromoActiveClient(it)).length);
       setTotalModelsCount(cachedPage.total);
       setTotalSkusCount(cachedPage.totalSkus);
       if (cachedPage.brandCounts !== undefined) setTaxonomyBrandCounts(cachedPage.brandCounts || null);
@@ -1973,7 +2013,7 @@ export default function Home() {
           const resolvedPromoCount =
             typeof data.meta?.promoCount === "number"
               ? data.meta.promoCount
-              : data.data.filter((it: ProductData) => isVariantPromoActiveClient(it)).length;
+              : data.data.filter((it: ProductData) => isCatalogPromoActiveClient(it)).length;
           const resolvedBrandCounts = data.meta?.brandCounts || null;
           const resolvedCategoryCounts = data.meta?.categoryCounts || null;
           const resolvedSubBrandCounts = (data.meta?.subBrandCounts as SubBrandCount[] | undefined) || null;
@@ -3206,7 +3246,7 @@ export default function Home() {
 
       {/* Konsep 3: Hasil Pencarian / Katalog Brand & Kategori */}
       {(productsList.length > 0 || resultFilter === "PROMO") && !product && (() => {
-        const isProductOnPromo = (item: ProductData) => isVariantPromoActiveClient(item);
+        const isProductOnPromo = (item: ProductData) => isCatalogPromoActiveClient(item);
         const getTotalStock = (item: ProductData) => item.articleTotalStok ?? item.stok ?? 0;
 
         const stockCount = productsList.filter((item) => getTotalStock(item) > 0).length;

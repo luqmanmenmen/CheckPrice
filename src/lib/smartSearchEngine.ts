@@ -586,10 +586,28 @@ function isPromoActiveForProduct(p: any): boolean {
       if (new Date() > t) return false;
     }
   }
-  return Boolean(
-    (p?.hargaPromo && Number(p.hargaPromo) > 0 && Number(p.hargaPromo) < Number(p.hargaNormal || 0)) ||
-    p?.discountType
+  const isNormalText = (val?: string | null) => {
+    if (!val) return false;
+    const s = String(val).trim().toUpperCase();
+    return s.includes("NORMAL") || s === "REGULAR" || s === "HARGA NORMAL";
+  };
+  const hasPrice = Boolean(
+    p?.hargaPromo &&
+      Number(p.hargaPromo) > 0 &&
+      (!p?.hargaNormal || Number(p.hargaPromo) < Number(p.hargaNormal))
   );
+  const hasDiskon = Boolean(
+    p?.diskon &&
+      String(p.diskon).trim() !== "" &&
+      String(p.diskon).trim() !== "0" &&
+      String(p.diskon).trim() !== "0%" &&
+      !isNormalText(p.diskon)
+  );
+  const hasDiscountType = Boolean(
+    p?.discountType &&
+      !isNormalText(p.discountType)
+  );
+  return Boolean(hasPrice || hasDiskon || hasDiscountType);
 }
 
 /**
@@ -685,10 +703,11 @@ export function groupProductsByArticle<T extends Record<string, any>>(items: T[]
 
     let promoLabel: string | null = null;
     if (promoVariant) {
+      const isNormal = (s?: string | null) => Boolean(s && /NORMAL|REGULAR/i.test(s));
       const dt = String(promoVariant.discountType || "").trim();
       const dsk = String(promoVariant.diskon || "").trim();
-      if (dt) promoLabel = dt;
-      else if (dsk) promoLabel = dsk;
+      if (dt && !isNormal(dt)) promoLabel = dt;
+      else if (dsk && !isNormal(dsk)) promoLabel = dsk;
       else if (promoVariant.hargaPromo && promoVariant.hargaNormal > promoVariant.hargaPromo) {
         const pct = Math.round(((promoVariant.hargaNormal - promoVariant.hargaPromo) / promoVariant.hargaNormal) * 100);
         promoLabel = pct >= 5 ? `DISKON ${pct}%` : "PROMO";

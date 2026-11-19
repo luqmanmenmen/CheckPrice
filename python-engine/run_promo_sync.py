@@ -572,6 +572,29 @@ def process_single_promo_file(
                 if item_dept == "DEPARTEMEN LAINNYA":
                     item_dept = None
 
+                is_row_promo = bool(item.get("is_promo"))
+                raw_acara = item.get("acara") or (item.get("sumber_sheet") if is_row_promo else None)
+                if raw_acara and any(k in str(raw_acara).upper() for k in ["NORMAL", "REGULAR"]):
+                    raw_acara = None
+
+                raw_tipe_diskon = item.get("tipe_diskon") if is_row_promo else None
+                if raw_tipe_diskon and any(k in str(raw_tipe_diskon).upper() for k in ["NORMAL", "REGULAR"]):
+                    raw_tipe_diskon = None
+
+                raw_diskon = item.get("diskon") if is_row_promo else None
+                if raw_diskon and any(k in str(raw_diskon).upper() for k in ["NORMAL", "REGULAR"]):
+                    raw_diskon = None
+
+                promo_price = item.get("harga_promo") if is_row_promo else None
+                normal_price = float(item.get("harga_normal") or ex.get("hargaNormal") or 0)
+                if promo_price is not None and normal_price > 0 and float(promo_price) >= normal_price:
+                    promo_price = None
+
+                if not raw_diskon and is_row_promo and promo_price:
+                    raw_diskon = f"SP {promo_price}"
+
+                has_real_promo = bool(promo_price or raw_diskon or raw_tipe_diskon or raw_acara)
+
                 p_item = {
                     "sku": sku_str,
                     "barcode": ex.get("barcode") or item.get("barcode"),
@@ -583,14 +606,14 @@ def process_single_promo_file(
                     "size": ex.get("size") or item.get("size"),
                     "imageUrl": ex.get("imageUrl"),
                     "images": ex.get("images") or [],
-                    "hargaNormal": item.get("harga_normal") or ex.get("hargaNormal") or 0,
+                    "hargaNormal": normal_price,
                     "hargaNormalSource": "PROMO",
-                    "hargaPromo": item.get("harga_promo") if item.get("is_promo") else None,
-                    "diskon": item.get("diskon") or (f"SP {item.get('harga_promo')}" if item.get("is_promo") else None),
-                    "discountType": item.get("tipe_diskon"),
-                    "acara": item.get("acara") or item.get("sumber_sheet"),
-                    "fromDate": item.get("tgl_mulai"),
-                    "toDate": item.get("tgl_akhir"),
+                    "hargaPromo": promo_price if has_real_promo else None,
+                    "diskon": raw_diskon if has_real_promo else None,
+                    "discountType": raw_tipe_diskon if has_real_promo else None,
+                    "acara": raw_acara if has_real_promo else None,
+                    "fromDate": item.get("tgl_mulai") if has_real_promo else None,
+                    "toDate": item.get("tgl_akhir") if has_real_promo else None,
                     "promoFileName": file_name or os.path.basename(unquote(file_url)),
                     "stok": ex.get("stok", 0),
                     "updatedAt": now_iso,
@@ -780,6 +803,26 @@ def build_upcoming_promo_preview(
 
         desc = (ex.get("description") or item.get("description") or f"Produk {sku_str}").strip()
         art = (ex.get("article") or item.get("article") or desc.split(":")[0].strip() or sku_str).strip()
+        is_row_promo = bool(item.get("is_promo"))
+        raw_acara = item.get("acara") or (item.get("sumber_sheet") if is_row_promo else None)
+        if raw_acara and any(k in str(raw_acara).upper() for k in ["NORMAL", "REGULAR"]):
+            raw_acara = None
+
+        raw_tipe_diskon = item.get("tipe_diskon") if is_row_promo else None
+        if raw_tipe_diskon and any(k in str(raw_tipe_diskon).upper() for k in ["NORMAL", "REGULAR"]):
+            raw_tipe_diskon = None
+
+        raw_diskon = next_diskon if is_row_promo else None
+        if raw_diskon and any(k in str(raw_diskon).upper() for k in ["NORMAL", "REGULAR"]):
+            raw_diskon = None
+
+        promo_price = float(next_promo) if (next_promo is not None and is_row_promo) else None
+        normal_price = float(item.get("harga_normal") or ex.get("hargaNormal") or 0)
+        if promo_price is not None and normal_price > 0 and promo_price >= normal_price:
+            promo_price = None
+
+        has_real_promo = bool(promo_price or raw_diskon or raw_tipe_diskon or raw_acara)
+
         variant_by_sku[sku_str] = {
             "sku": sku_str,
             "barcode": ex.get("barcode") or item.get("barcode"),
@@ -791,17 +834,17 @@ def build_upcoming_promo_preview(
             "size": ex.get("size") or item.get("size") or "",
             "stok": int(ex.get("stok") or 0),
             "imageUrl": ex.get("imageUrl"),
-            "hargaNormal": float(item.get("harga_normal") or ex.get("hargaNormal") or 0),
+            "hargaNormal": normal_price,
             "currentPromo": float(cur_promo) if cur_promo is not None else None,
             "currentDiskon": cur_diskon,
-            "nextHargaPromo": float(next_promo) if next_promo is not None else None,
-            "nextDiskon": next_diskon,
-            "nextDiscountType": item.get("tipe_diskon"),
-            "nextAcara": item.get("acara") or item.get("sumber_sheet"),
-            "nextFromDate": f_dt,
-            "nextToDate": t_dt,
+            "nextHargaPromo": promo_price if has_real_promo else None,
+            "nextDiskon": raw_diskon if has_real_promo else None,
+            "nextDiscountType": raw_tipe_diskon if has_real_promo else None,
+            "nextAcara": raw_acara if has_real_promo else None,
+            "nextFromDate": f_dt if has_real_promo else None,
+            "nextToDate": t_dt if has_real_promo else None,
             "sourceFile": item.get("_source_file"),
-            "statusChange": status_change,
+            "statusChange": status_change if has_real_promo else "NORMAL",
         }
 
     # Kelompokkan per Parent Artikel agar crew mudah cek & cetak POP

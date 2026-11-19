@@ -109,31 +109,54 @@ export function isPromoExpired(toDate: string | null | undefined): boolean {
   return new Date() > toDateObj;
 }
 
+export function isNormalPriceTerm(val?: string | null): boolean {
+  if (!val) return false;
+  const s = String(val).trim().toUpperCase();
+  return s.includes("NORMAL") || s === "REGULAR" || s === "HARGA NORMAL";
+}
+
 export function isItemPromoActive(item: any): boolean {
   if (!item || isPromoExpired(item.toDate)) return false;
   const hasPromoPrice = Boolean(
     item.hargaPromo &&
-      item.hargaPromo > 0 &&
-      (!item.hargaNormal || item.hargaPromo < item.hargaNormal)
+      Number(item.hargaPromo) > 0 &&
+      (!item.hargaNormal || Number(item.hargaPromo) < Number(item.hargaNormal))
   );
-  return Boolean(
-    hasPromoPrice ||
-      item.diskon ||
-      item.discountType ||
-      item.acara ||
-      item.articleHasPromo
+  const hasDiskon = Boolean(
+    item.diskon &&
+      String(item.diskon).trim() !== "" &&
+      String(item.diskon).trim() !== "0" &&
+      String(item.diskon).trim() !== "0%" &&
+      !isNormalPriceTerm(item.diskon)
   );
+  const hasDiscountType = Boolean(
+    item.discountType &&
+      !isNormalPriceTerm(item.discountType)
+  );
+  return Boolean(hasPromoPrice || hasDiskon || hasDiscountType);
 }
 
 /**
- * Membersihkan promo kedaluwarsa di memori tanpa spam koneksi DB per-baris,
- * lalu menjadwalkan 1 updateMany asinkron ke PostgreSQL bila ada promo expired.
+ * Membersihkan promo kedaluwarsa & label promo palsu (NORMAL PRICE) di memori tanpa spam koneksi DB per-baris,
+ * lalu menjadwalkan 1 updateMany asinkron ke PostgreSQL bila ada promo expired atau fake promo.
  */
 export function cleanPromoList(rows: any[]): any[] {
   const expiredIds: number[] = [];
+  const fakePromoIds: number[] = [];
   const cleaned = rows.map((p) => {
-    if (p && isPromoExpired(p.toDate)) {
-      if (typeof p.id === "number" && p.id > 0) expiredIds.push(p.id);
+    if (!p) return p;
+    const isExpired = isPromoExpired(p.toDate);
+    const isFakeNormal = Boolean(
+      (p.acara && isNormalPriceTerm(p.acara)) ||
+      (p.discountType && isNormalPriceTerm(p.discountType)) ||
+      (p.hargaPromo && p.hargaNormal && Number(p.hargaPromo) >= Number(p.hargaNormal))
+    );
+
+    if (isExpired || isFakeNormal) {
+      if (typeof p.id === "number" && p.id > 0) {
+        if (isExpired) expiredIds.push(p.id);
+        if (isFakeNormal) fakePromoIds.push(p.id);
+      }
       return {
         ...p,
         hargaPromo: null,
@@ -147,10 +170,11 @@ export function cleanPromoList(rows: any[]): any[] {
     return p;
   });
 
-  if (expiredIds.length > 0) {
+  const idsToClean = Array.from(new Set([...expiredIds, ...fakePromoIds]));
+  if (idsToClean.length > 0) {
     db.product
       .updateMany({
-        where: { id: { in: expiredIds } },
+        where: { id: { in: idsToClean } },
         data: {
           hargaPromo: null,
           diskon: null,
