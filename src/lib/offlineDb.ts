@@ -337,6 +337,160 @@ function sanitizeAndIndexModel(m: CachedArticleModel): CachedArticleModel {
   return withSubBrand;
 }
 
+/** Normalisasi kunci barcode/kode (hilangkan spasi, strip, titik, garis miring) */
+export function normalizeCodeKey(val: string): string {
+  return String(val || "").replace(/[\s\-_./]/g, "").toUpperCase();
+}
+
+/** Pastikan model artikel tersimpan di db.models dan memoryModelsCache (RAM) */
+export function ensureFamilyInLocalModels(mainProd: CachedProduct, familyList: CachedProduct[]) {
+  try {
+    const allItems = [mainProd, ...familyList].filter((p) => p && p.sku);
+    if (allItems.length === 0) return;
+
+    const cleaned = allItems.map((p) => {
+      if (isLocalPromoExpired(p.toDate)) {
+        return { ...p, hargaPromo: null, diskon: null, discountType: null, acara: null, toDate: null };
+      }
+      return p;
+    });
+
+    const grouped = groupProductsByArticle(cleaned as any);
+    for (const g of grouped) {
+      const key = getProductArticleGroupKey(g as any);
+      const row: CachedArticleModel = {
+        key,
+        sku: g.sku,
+        barcode: g.barcode || null,
+        article: g.article || null,
+        description: g.description || g.name || "",
+        brand: g.brand || null,
+        dept: g.dept || null,
+        color: g.color || null,
+        size: g.size || null,
+        stok: g.stok ?? 0,
+        hargaNormal: g.hargaNormal ?? 0,
+        hargaPromo: g.hargaPromo ?? null,
+        diskon: g.diskon || null,
+        discountType: g.discountType || null,
+        acara: g.acara || null,
+        toDate: g.toDate || null,
+        imageUrl: g.imageUrl || null,
+        articleGroupCount: g.articleGroupCount,
+        articleTotalStok: g.articleTotalStok,
+        articleColors: g.articleColors,
+        articleSizes: g.articleSizes,
+        articleHasPromo: g.articleHasPromo,
+        articlePromoLabel: g.articlePromoLabel,
+        brandGroup: g.brandGroup,
+        categoryKey: g.categoryKey,
+        subBrand: getNormalizedSubBrand(g as any),
+      };
+      const indexedRow = sanitizeAndIndexModel(row);
+      const { _searchHay, ...dbRow } = indexedRow;
+      db.models.put(dbRow as CachedArticleModel).catch(() => {});
+
+      if (memoryModelsCache) {
+        const existingIdx = memoryModelsCache.findIndex((m) => m.key === key);
+        if (existingIdx >= 0) {
+          memoryModelsCache[existingIdx] = indexedRow;
+        } else {
+          memoryModelsCache.push(indexedRow);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("[OFFLINE-DB] Gagal ensureFamilyInLocalModels:", err);
+  }
+}
+
+/**
+ * Simpan seluruh keluarga artikel (produk + alias barcode + model artikel) ke IndexedDB Dexie lokal
+ * Menjamin pencarian berikutnya (baik SKU, Barcode, Barcode Alias hangtag, maupun nama artikel)
+ * selalu instan (0ms) secara offline tanpa 404!
+ */
+export async function persistFamilyToLocalDb(
+  mainProd: CachedProduct,
+  siblings: CachedProduct[],
+  serverAliases?: Array<{ barcode: string; sku: string; barcodeNorm?: string }>,
+  searchedCode?: string
+): Promise<void> {
+  try {
+    await ensureDbOpenSafe();
+    const familyList = Array.isArray(siblings) && siblings.length > 0 ? siblings : [mainProd];
+
+    // 1. Simpan semua varian ke db.products
+    const dedupedProducts = new Map<string, CachedProduct>();
+    for (const item of [mainProd, ...familyList]) {
+      if (!item?.sku || dedupedProducts.has(item.sku)) continue;
+      dedupedProducts.set(item.sku, {
+        sku: item.sku,
+        barcode: item.barcode || null,
+        article: item.article || null,
+        name: item.description?.split(':')[0]?.trim() || item.name || item.description || "",
+        description: item.description,
+        brand: item.brand || null,
+        dept: item.dept || null,
+        color: item.color || "",
+        size: item.size || "",
+        hargaNormal: item.hargaNormal,
+        hargaPromo: item.hargaPromo || null,
+        diskon: item.diskon || null,
+        discountType: item.discountType || null,
+        acara: item.acara || null,
+        stok: item.stok ?? 0,
+        toDate: item.toDate || null,
+        imageUrl: item.imageUrl || null,
+        images: item.images && item.images.length > 0 ? item.images : (item.imageUrl ? [item.imageUrl] : []),
+      });
+    }
+    if (dedupedProducts.size > 0) {
+      await db.products.bulkPut(Array.from(dedupedProducts.values())).catch(() => {});
+    }
+
+    // 2. Simpan barcode aliases ke db.aliases
+    const aliasesToSave = new Map<string, CachedBarcodeAlias>();
+
+    // A. Dari alias server
+    if (Array.isArray(serverAliases)) {
+      for (const a of serverAliases) {
+        if (!a?.barcode || !a?.sku) continue;
+        const norm = a.barcodeNorm || normalizeCodeKey(a.barcode);
+        aliasesToSave.set(a.barcode, { barcode: a.barcode, barcodeNorm: norm, sku: a.sku });
+      }
+    }
+
+    // B. Dari searchedCode jika berupa barcode/kode dan berbeda dari SKU
+    if (searchedCode && searchedCode.trim()) {
+      const trimmedCode = searchedCode.trim();
+      const norm = normalizeCodeKey(trimmedCode);
+      if (trimmedCode !== mainProd.sku) {
+        aliasesToSave.set(trimmedCode, { barcode: trimmedCode, barcodeNorm: norm, sku: mainProd.sku });
+      }
+    }
+
+    // C. Dari setiap varian barcode
+    for (const item of familyList) {
+      if (item.barcode && item.sku && item.barcode !== item.sku) {
+        const norm = normalizeCodeKey(item.barcode);
+        if (!aliasesToSave.has(item.barcode)) {
+          aliasesToSave.set(item.barcode, { barcode: item.barcode, barcodeNorm: norm, sku: item.sku });
+        }
+      }
+    }
+
+    if (aliasesToSave.size > 0) {
+      await db.aliases.bulkPut(Array.from(aliasesToSave.values())).catch(() => {});
+    }
+
+    // 3. Perbarui stok dan model di RAM & db.models
+    updateLocalFamilyStockInMemory(familyList, mainProd.article);
+    ensureFamilyInLocalModels(mainProd, familyList);
+  } catch (err) {
+    console.warn("[OFFLINE-DB] Gagal persistFamilyToLocalDb:", err);
+  }
+}
+
 /**
  * Membangun tabel `db.models` (~19.881 model per artikel) sekali saja dari `db.products` (~97k SKU)
  * sehingga seluruh pencarian teks, filter brand/kategori, dan klik Selanjutnya jalan < 10ms di HP!

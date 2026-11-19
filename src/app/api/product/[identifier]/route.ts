@@ -172,9 +172,19 @@ export async function GET(
       }
 
       if (directProduct) {
-        directProduct = checkAndCleanPromo(directProduct);
-        const siblings = await getProductSiblings(directProduct);
-        return NextResponse.json({ data: directProduct, siblings });
+        const cleanedProduct = checkAndCleanPromo(directProduct);
+        const siblings = await getProductSiblings(cleanedProduct);
+        const allFamilySkus = Array.from(new Set([directProduct.sku, ...siblings.map(s => s.sku)].filter(Boolean)));
+        const familyAliases: Array<{ barcode: string; barcodeNorm: string; sku: string }> = await db.barcodeAlias.findMany({
+          where: { sku: { in: allFamilySkus } },
+          select: { barcode: true, barcodeNorm: true, sku: true }
+        }).catch(() => [] as Array<{ barcode: string; barcodeNorm: string; sku: string }>);
+        if (mayBeCode && !familyAliases.some(a => candidateCodes.includes(a.barcode) || candidateCodes.includes(a.barcodeNorm))) {
+          if (rawInput !== directProduct.sku && rawInput !== directProduct.barcode) {
+            familyAliases.push({ barcode: rawInput, barcodeNorm: normNoSep, sku: directProduct.sku });
+          }
+        }
+        return NextResponse.json({ data: cleanedProduct, siblings, aliases: familyAliases });
       }
     }
 
@@ -203,7 +213,12 @@ export async function GET(
       if (numericMatches.length === 1) {
         const top = checkAndCleanPromo(numericMatches[0]);
         const siblings = await getProductSiblings(top);
-        return NextResponse.json({ data: top, siblings });
+        const allFamilySkus = Array.from(new Set([top.sku, ...siblings.map(s => s.sku)].filter(Boolean)));
+        const familyAliases = await db.barcodeAlias.findMany({
+          where: { sku: { in: allFamilySkus } },
+          select: { barcode: true, barcodeNorm: true, sku: true }
+        }).catch(() => []);
+        return NextResponse.json({ data: top, siblings, aliases: familyAliases });
       }
       if (numericMatches.length > 1) {
         const cleaned = cleanPromoList(numericMatches);
@@ -281,7 +296,12 @@ export async function GET(
       if (total === 1 && page === 1 && !hasTaxonomyFilter && !onlyPromo) {
         const topProduct = cachedList.groupedArticles[0];
         const siblings = await getProductSiblings(topProduct);
-        return NextResponse.json({ data: topProduct, siblings, aiAssisted: cachedList.aiAssisted });
+        const allFamilySkus = Array.from(new Set([topProduct.sku, ...siblings.map(s => s.sku)].filter(Boolean)));
+        const familyAliases = await db.barcodeAlias.findMany({
+          where: { sku: { in: allFamilySkus } },
+          select: { barcode: true, barcodeNorm: true, sku: true }
+        }).catch(() => []);
+        return NextResponse.json({ data: topProduct, siblings, aliases: familyAliases, aiAssisted: cachedList.aiAssisted });
       }
       const payload = buildTaxonomyListPayload({
         groupedList: cachedList.groupedArticles,
@@ -495,7 +515,12 @@ export async function GET(
     if (groupedArticles.length === 1 && page === 1 && !hasTaxonomyFilter && !onlyPromo) {
       const topProduct = groupedArticles[0];
       const siblings = await getProductSiblings(topProduct);
-      return NextResponse.json({ data: topProduct, siblings, aiAssisted: aiExpandedTerms.length > 0 });
+      const allFamilySkus = Array.from(new Set([topProduct.sku, ...siblings.map(s => s.sku)].filter(Boolean)));
+      const familyAliases = await db.barcodeAlias.findMany({
+        where: { sku: { in: allFamilySkus } },
+        select: { barcode: true, barcodeNorm: true, sku: true }
+      }).catch(() => []);
+      return NextResponse.json({ data: topProduct, siblings, aliases: familyAliases, aiAssisted: aiExpandedTerms.length > 0 });
     }
 
     const payload = buildTaxonomyListPayload({

@@ -1206,7 +1206,8 @@ export default function Home() {
   const persistServerFamilyToLocal = (
     srvProduct: ProductData,
     srvSiblings: ProductData[],
-    queryKey?: string
+    queryKey?: string,
+    aliases?: Array<{ barcode: string; sku: string; barcodeNorm?: string }>
   ) => {
     const familyList = Array.isArray(srvSiblings) && srvSiblings.length > 0 ? srvSiblings : [srvProduct];
     if (queryKey && queryKey.trim()) {
@@ -1216,36 +1217,14 @@ export default function Home() {
       if (s.sku) sessionCacheRef.current.set(s.sku.toLowerCase(), { product: s, siblings: familyList });
       if (s.barcode) sessionCacheRef.current.set(s.barcode.toLowerCase(), { product: s, siblings: familyList });
     });
-    import('@/lib/offlineDb').then(({ db, updateLocalFamilyStockInMemory }) => {
-      updateLocalFamilyStockInMemory(familyList);
-      const deduped = new Map<string, CachedProduct>();
-      for (const item of [srvProduct, ...familyList]) {
-        if (!item?.sku || deduped.has(item.sku)) continue;
-        deduped.set(item.sku, {
-          sku: item.sku,
-          barcode: item.barcode || null,
-          article: item.article || null,
-          name: item.description?.split(':')[0]?.trim() || item.description,
-          description: item.description,
-          brand: item.brand || null,
-          dept: item.dept || null,
-          color: item.color || "",
-          size: item.size || "",
-          hargaNormal: item.hargaNormal,
-          hargaPromo: item.hargaPromo || null,
-          diskon: item.diskon || null,
-          discountType: item.discountType || null,
-          acara: item.acara || null,
-          stok: item.stok ?? 0,
-          toDate: item.toDate || null,
-          imageUrl: item.imageUrl || null,
-          images: item.images && item.images.length > 0 ? item.images : (item.imageUrl ? [item.imageUrl] : []),
-        });
-      }
-      if (deduped.size > 0) {
-        db.products.bulkPut(Array.from(deduped.values())).catch(() => {});
-      }
-    });
+    if (Array.isArray(aliases)) {
+      aliases.forEach((a) => {
+        if (a?.barcode) sessionCacheRef.current.set(a.barcode.toLowerCase(), { product: srvProduct, siblings: familyList });
+      });
+    }
+    import('@/lib/offlineDb').then(({ persistFamilyToLocalDb }) => {
+      persistFamilyToLocalDb(srvProduct as any, familyList as any, aliases, queryKey);
+    }).catch(() => {});
   };
 
   /** Trigger manual: cari & scrap SKU/barcode spesifik (+ foto) atau 1 keluarga artikel saat barang belum ketemu */
@@ -1282,7 +1261,7 @@ export default function Home() {
           [data.data?.imageUrl, ...resolvedSibs.map((s: ProductData) => s.imageUrl)],
           400
         );
-        persistServerFamilyToLocal(data.data, resolvedSibs, codeToSearch);
+        persistServerFamilyToLocal(data.data, resolvedSibs, codeToSearch, data.aliases);
         if (data.storeOffline) {
           setLiveStockVerified(`Tersimpan + Foto: ${data.stok ?? data.data.stok ?? 0} pcs`);
         } else {
@@ -1531,11 +1510,12 @@ export default function Home() {
     setError("");
     setNotFoundCode("");
 
-    // 0A. CEK SIBLING LANGSUNG (0ms INSTAN!):
+    // 0A. CEK SIBLING LANGSUNG & ALIAS AKTIF (0ms INSTAN!):
     if (trimmed && !hasTaxonomyFilter && page === 1 && siblings && siblings.length > 0) {
+      const lowerTrimmed = trimmed.toLowerCase();
       const existingSibling = siblings.find(
-        s => (s.sku && s.sku.toLowerCase() === trimmed.toLowerCase()) ||
-             (s.barcode && s.barcode.toLowerCase() === trimmed.toLowerCase())
+        s => (s.sku && s.sku.toLowerCase() === lowerTrimmed) ||
+             (s.barcode && s.barcode.toLowerCase() === lowerTrimmed)
       );
       if (existingSibling) {
         applySelectedProductFamily(existingSibling, siblings);
@@ -1543,11 +1523,19 @@ export default function Home() {
         setProductsList([]);
         setLoading(false);
         if (isScanning) setIsScanning(false);
-        sessionCacheRef.current.set(trimmed.toLowerCase(), { product: existingSibling, siblings });
+        sessionCacheRef.current.set(lowerTrimmed, { product: existingSibling, siblings });
         sessionCacheRef.current.set(existingSibling.sku.toLowerCase(), { product: existingSibling, siblings });
         if (existingSibling.barcode) {
           sessionCacheRef.current.set(existingSibling.barcode.toLowerCase(), { product: existingSibling, siblings });
         }
+        return;
+      }
+      const cachedFamily = sessionCacheRef.current.get(lowerTrimmed);
+      if (cachedFamily) {
+        applySelectedProductFamily(cachedFamily.product, cachedFamily.siblings);
+        setProductsList([]);
+        setLoading(false);
+        if (isScanning) setIsScanning(false);
         return;
       }
     }
@@ -1685,8 +1673,12 @@ export default function Home() {
       };
     };
 
-    const syncServerProductToLocal = (srvProduct: ProductData, srvSiblings: ProductData[]) => {
-      persistServerFamilyToLocal(srvProduct, srvSiblings, trimmed);
+    const syncServerProductToLocal = (
+      srvProduct: ProductData,
+      srvSiblings: ProductData[],
+      aliases?: Array<{ barcode: string; sku: string; barcodeNorm?: string }>
+    ) => {
+      persistServerFamilyToLocal(srvProduct, srvSiblings, trimmed, aliases);
     };
 
     const endpointUrl = buildSearchEndpointUrl(
@@ -1741,7 +1733,7 @@ export default function Home() {
               return matched || (bgJson.data as ProductData);
             });
             preloadProductImages([bgJson.data?.imageUrl, ...bgSibs.map((s) => s.imageUrl)], 400);
-            syncServerProductToLocal(bgJson.data, bgSibs);
+            syncServerProductToLocal(bgJson.data, bgSibs, (bgJson as any).aliases);
           }
         })
         .catch(() => {})
@@ -1869,47 +1861,63 @@ export default function Home() {
     }
     if (searchCounterRef.current !== currentSearch) return;
 
-    // Jika ini pencarian SKU / barcode dan DB offline (~310rb SKU) SUDAH ada tapi kode tidak ketemu,
-    // langsung tampilkan notifikasi + kartu Notice & tombol Scrap MDS BISA & Matahari,
-    // sambil verifikasi kilat max 1.8 detik di background ke server barangkali baru masuk DB setelah snapshot.
+    // Jika ini pencarian SKU / barcode dan DB offline (~310rb SKU) SUDAH ada tapi kode belum ketemu lokal:
+    // Cek kilat ke server (max 4.5 detik) barangkali produk baru di-scrap atau terdaftar via BarcodeAlias di database.
+    // Jika server ada: tampilkan seketika dan simpan permanen ke offline DB + aliases (sehingga scan berikutnya 0ms!).
+    // Jika server tidak ada (404/timeout): baru tampilkan notifikasi + kartu Notice & tombol Scrap MDS BISA.
     if (isCodeSearch && localDbReady && page === 1 && !hasTaxonomyFilter) {
-      setLoading(false);
-      if (isScanning) setIsScanning(false);
-      showBarcodeNotFoundNotice(
-        trimmed,
-        `Barcode / kode "${trimmed}" tidak ditemukan di database offline (${(localSkuCount || 310526).toLocaleString("id-ID")} SKU). Tekan tombol di bawah untuk langsung mencari di MDS BISA dan mengambil foto dari Matahari.com.`,
-        true
-      );
+      setLoading(true);
+      setError("");
+      setNotFoundCode("");
 
       const fastCtrl = new AbortController();
-      const fastTimer = setTimeout(() => fastCtrl.abort(), 1800);
+      const fastTimer = setTimeout(() => fastCtrl.abort(), 4500);
       const fastUrl = endpointUrl + (endpointUrl.includes("?") ? "&fast=1" : "?fast=1");
-      fetch(fastUrl, { cache: "no-store", signal: fastCtrl.signal })
-        .then(async (r) => {
-          if (!r.ok) return null;
-          return r.json().catch(() => null);
-        })
-        .then((fastJson) => {
-          if (searchCounterRef.current !== currentSearch || !fastJson?.data) return;
-          setError("");
-          setNotFoundCode("");
-          if (Array.isArray(fastJson.data)) {
-            if (fastJson.data.length === 1) {
-              applySelectedProductFamily(fastJson.data[0], [fastJson.data[0]]);
-              syncServerProductToLocal(fastJson.data[0], [fastJson.data[0]]);
-            } else if (fastJson.data.length > 1) {
-              setProductsList(fastJson.data);
-              setTotalModelsCount(fastJson.meta?.total ?? fastJson.data.length);
+      let foundOnServer = false;
+
+      try {
+        const res = await fetch(fastUrl, { cache: "no-store", signal: fastCtrl.signal });
+        if (res.ok) {
+          const fastJson = await res.json().catch(() => null);
+          if (fastJson?.data && searchCounterRef.current === currentSearch) {
+            foundOnServer = true;
+            setError("");
+            setNotFoundCode("");
+            setLoading(false);
+            if (isScanning) setIsScanning(false);
+            if (Array.isArray(fastJson.data)) {
+              if (fastJson.data.length === 1) {
+                applySelectedProductFamily(fastJson.data[0], [fastJson.data[0]]);
+                syncServerProductToLocal(fastJson.data[0], [fastJson.data[0]], fastJson.aliases);
+              } else if (fastJson.data.length > 1) {
+                setProductsList(fastJson.data);
+                setTotalModelsCount(fastJson.meta?.total ?? fastJson.data.length);
+              }
+            } else {
+              const srvSibs = fastJson.siblings || [fastJson.data];
+              applySelectedProductFamily(fastJson.data, srvSibs);
+              preloadProductImages([fastJson.data?.imageUrl, ...srvSibs.map((s: ProductData) => s.imageUrl)], 400);
+              syncServerProductToLocal(fastJson.data, srvSibs, fastJson.aliases);
             }
-          } else {
-            const srvSibs = fastJson.siblings || [fastJson.data];
-            applySelectedProductFamily(fastJson.data, srvSibs);
-            preloadProductImages([fastJson.data?.imageUrl, ...srvSibs.map((s: ProductData) => s.imageUrl)], 400);
-            syncServerProductToLocal(fastJson.data, srvSibs);
+            return;
           }
-        })
-        .catch(() => {})
-        .finally(() => clearTimeout(fastTimer));
+        }
+      } catch {
+        // Aborted or network error, fallback to showBarcodeNotFoundNotice below
+      } finally {
+        clearTimeout(fastTimer);
+      }
+
+      if (searchCounterRef.current !== currentSearch) return;
+      if (!foundOnServer) {
+        setLoading(false);
+        if (isScanning) setIsScanning(false);
+        showBarcodeNotFoundNotice(
+          trimmed,
+          `Barcode / kode "${trimmed}" belum ada di database offline (${(localSkuCount || 310526).toLocaleString("id-ID")} SKU) maupun server. Ketuk tombol di bawah untuk langsung mencari di MDS BISA dan mengambil foto dari Matahari.com.`,
+          true
+        );
+      }
       return;
     }
 
@@ -2035,7 +2043,7 @@ export default function Home() {
           applySelectedProductFamily(data.data, serverSiblings);
           setProductsList([]);
           preloadProductImages([data.data?.imageUrl, ...serverSiblings.map((s: ProductData) => s.imageUrl)], 400);
-          syncServerProductToLocal(data.data, serverSiblings);
+          syncServerProductToLocal(data.data, serverSiblings, (data as any).aliases);
         }
         if (isScanning) setIsScanning(false);
       } else {

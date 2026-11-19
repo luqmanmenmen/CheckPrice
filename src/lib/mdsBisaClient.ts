@@ -56,6 +56,7 @@ export type CheckSingleItemResult = {
   variants?: LiveStockVariantSummary[];
   data?: any;
   siblings?: any[];
+  aliases?: Array<{ barcode: string; barcodeNorm: string; sku: string }>;
   storeOffline?: boolean;
   message?: string;
 };
@@ -1064,6 +1065,12 @@ async function finalizeProductFamilyResponse(params: {
       .catch(() => {});
   }
 
+  const allFamilySkus = Array.from(new Set([enrichedMain.sku, ...enrichedSiblings.map((s) => s.sku)].filter(Boolean)));
+  const familyAliases = await prisma.barcodeAlias.findMany({
+    where: { sku: { in: allFamilySkus } },
+    select: { barcode: true, barcodeNorm: true, sku: true },
+  }).catch(() => []);
+
   return {
     success: true,
     sku: enrichedMain.sku,
@@ -1082,6 +1089,7 @@ async function finalizeProductFamilyResponse(params: {
         : enrichedSiblings.map((s) => ({ sku: s.sku, color: s.color, size: s.size, stok: s.stok ?? 0 })),
     data: enrichedMain,
     siblings: enrichedSiblings,
+    aliases: familyAliases,
     storeOffline: params.storeOffline,
     ...(params.message ? { message: params.message } : {}),
   };

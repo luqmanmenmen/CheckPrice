@@ -1635,3 +1635,45 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   - **Uji HTTP Live Server Lokal (`port 3198`):**
     - Sebelum scrap: `GET /api/product/2340002272943?fast=1` maupun tanpa `?fast=1` keduanya mengembalikan **HTTP `404`** (bukan `755` artikel).
     - **Uji Scrap Langsung `POST /api/live-stock` (`2340002272943`):** Berhasil ditemukan live di StoreHub Toko 719 sebagai **SKU `13472861`** (`T1KT1351`, `T-SHIRT SS ROUND NECK KERAH BU`, `PASTEL GREEN` / `S`, `stok: 26 pcs`, `hargaNormal: 129.900`, `78` varian artikel), menyedot penuh **`5` foto studio Shopify CDN** (`13472861-1..5_*.jpg`), dan otomatis menyimpan alias baru **`BarcodeAlias` `2340002272943 -> sku 13472861` (`source: MDS_LIVE`)** ke PostgreSQL Supabase (semua kode tetap lokal menunggu instruksi `"push github"`).
+
+
+---
+
+### 99. Persistensi Penuh Barcode Alias Hangtag ke IndexedDB Dexie (`db.aliases`), Resolusi 0ms Offline, & Eliminasi Abort Timeout Server (19 November 2026)
+
+- **Masalah dari Laporan & Screenshot Pengguna (`2340002272943`):**
+  Pengguna menanyakan: *"ini sudah bisa muncul. terus aku cari lagi malah ga nemu lagi hmmm. loh kan muncul terus ga nyimpan apa di data base dan db offline ? ini aku lewat upload foto untuk mencarinya. lanjutkan"*.
+  Setelah foto diupload dan barang berhasil tersedot (SKU `13472861`, `T-SHIRT SS ROUND NECK KERAH BU`, `78` varian, `26 pcs`, 8 foto studio), saat dicari ulang via ketik barcode hangtag `2340002272943`, sistem kembali menampilkan *"Barcode tidak ditemukan di database offline"*.
+
+- **Akar Masalah Nyata (Forensik Teliti):**
+  1. **Tabel IndexedDB `db.aliases` di Browser Klien Tidak Pernah Disimpan oleh `persistServerFamilyToLocal`:**
+     - `persistServerFamilyToLocal` sebelumnya hanya melakukan `db.products.bulkPut(deduped)` ke tabel `products`.
+     - Barcode hangtag fisik `2340002272943` adalah barcode alias sekunder untuk SKU `13472861` (barcode primer di katalog adalah `2340000762811`).
+     - Karena tabel `db.aliases` tidak pernah diisi saat produk baru tersimpan, maka pencarian berikutnya di HP (`findOfflineProductByCode("2340002272943")`) mengembalikan `null`!
+  2. **False Abort `1800ms` & Banner "Tidak Ditemukan" Prematur:**
+     - Di `src/app/page.tsx`, ketika HP kasir sudah memegang data offline (`localDbReady = true`), sistem langsung memanggil `showBarcodeNotFoundNotice` di depan (sebelum server merespon).
+     - Kemudian sistem menembak `/api/product/2340002272943?fast=1` dengan timeout `1.800ms`.
+     - Karena artikel memiliki `78` varian (`116 KB` JSON), waktu transmisi jaringan toko membutuhkan `~2.700ms`. Akibatnya `fastCtrl.abort()` langsung memutus koneksi di detik ke `1.8`, sehingga respon sukses dari server terbuang dan banner not found tetap menempel di layar!
+  3. **Respon Server Belum Mengirim Seluruh BarcodeAlias Keluarga:**
+     - Endpoint `GET /api/product/[identifier]` dan `POST /api/live-stock` sebelumnya belum mengembalikan field `aliases: [...]`, sehingga browser tidak mengetahui ada 27 barcode hangtag fisik lain milik keluarga artikel tersebut.
+
+- **Perbaikan yang Diterapkan:**
+  1. **Mesin Persistensi Terpadu Offline DB ([`src/lib/offlineDb.ts`](file:///c:/Max%20Display/price-checker/src/lib/offlineDb.ts)):**
+     - Menambahkan fungsi `persistFamilyToLocalDb` & `ensureFamilyInLocalModels`:
+       - Menyimpan seluruh varian ke `db.products`.
+       - Menyimpan seluruh barcode alias (dari `searchedCode`, `serverAliases`, dan seluruh barcode varian saudara) ke `db.aliases`.
+       - Membangun model artikel via `sanitizeAndIndexModel` ke `db.models` dan memperbarui `memoryModelsCache` di RAM secara instan.
+     - `findOfflineProductByCode` kini seketika menemukan alias hangtag (`aliasHit.sku -> aliasedProd`) dalam **`0ms` secara offline**.
+  2. **Penyertaan Lengkap BarcodeAlias Keluarga di Server ([`src/app/api/product/[identifier]/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/product/%5Bidentifier%5D/route.ts), [`src/lib/mdsBisaClient.ts`](file:///c:/Max%20Display/price-checker/src/lib/mdsBisaClient.ts)):**
+     - `GET /api/product/[identifier]` dan `POST /api/live-stock` kini mengambil seluruh `BarcodeAlias` keluarga artikel dari Supabase dan menyertakannya di payload respon (`aliases: familyAliases`).
+  3. **Eliminasi Abort Prematur & Auto-Save di Klien ([`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx)):**
+     - Memperbarui `persistServerFamilyToLocal` untuk menerima `aliases` dan memanggil `persistFamilyToLocalDb`.
+     - Pada `searchProduct`:
+       - `0A. Cek Sibling Langsung`: jika barcode atau alias cocok dengan produk aktif / `sessionCacheRef`, langsung tampil seketika (`0ms`).
+       - Pencarian kode yang belum ada di offline DB kini menampilkan loading cepat dan memberi waktu `4.500ms` ke server. Jika server menemukan data, langsung ditampilkan dan otomatis di-cache permanen ke `db.aliases` + `db.products`. Banner "Belum Ada di Database" hanya muncul jika server benar-benar merespon 404.
+
+- **Verifikasi Nyata:**
+  - `npx tsc --noEmit`: Lulus `0` error (`TSC_OK`).
+  - `npm run build`: `47/47` rute terkompilasi sempurna (`BUILD_OK`).
+  - Uji `scripts/verify_alias_fix.mjs`: terverifikasi `BarcodeAlias` untuk `2340002272943` dan `27` barcode alias keluarga `T1KT1351` 100% cocok dan terindeks di Supabase.
+  - Zero-truncate audit: `0` pelanggaran kelas pemotong teks.
