@@ -2,7 +2,7 @@
 import { useState } from "react";
 import useSWR from "swr";
 import Link from "next/link";
-import { ChevronLeft, KeyRound, Save } from "lucide-react";
+import { ChevronLeft, KeyRound, Save, LogOut, ShieldAlert, Smartphone } from "lucide-react";
 import { AlertModal } from "@/components/AlertModal";
 
 const fetcher = (url: string) => fetch(url).then(res => res.json());
@@ -14,16 +14,62 @@ export default function ProfilePage() {
   const [newPin, setNewPin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loggingOutScope, setLoggingOutScope] = useState<"self" | "all" | null>(null);
 
-  const [alert, setAlert] = useState<{ isOpen: boolean; title: string; message: string; type: "success" | "error" | "warning" }>({
+  const [alert, setAlert] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    type: "success" | "error" | "warning";
+    onConfirm?: () => void;
+  }>({
     isOpen: false,
     title: "",
     message: "",
     type: "success"
   });
 
-  const showAlert = (title: string, message: string, type: "success" | "error" | "warning") => {
-    setAlert({ isOpen: true, title, message, type });
+  const showAlert = (
+    title: string,
+    message: string,
+    type: "success" | "error" | "warning",
+    onConfirm?: () => void
+  ) => {
+    setAlert({ isOpen: true, title, message, type, onConfirm });
+  };
+
+  const triggerLogoutAll = (scope: "self" | "all") => {
+    const isAllScope = scope === "all";
+    showAlert(
+      isAllScope ? "Logout All Device (Semua + Developer)?" : "Logout Semua Perangkat (Akun Ini)?",
+      isAllScope
+        ? "Semua pengguna yang sedang login (Crew Store, Supervisor, TERMASUK Developer 22054178) akan dikeluarkan dari seluruh perangkat dan shift aktif ditutup.\n\nPerangkat ini juga akan kembali ke halaman Login."
+        : "Sesi akun Anda saat ini akan diakhiri dan kunci perangkat akan dibuka agar Anda bisa login kembali dari perangkat lain.",
+      isAllScope ? "error" : "warning",
+      async () => {
+        setLoggingOutScope(scope);
+        try {
+          const res = await fetch("/api/auth/logout-all", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ scope }),
+          });
+          const data = await res.json();
+          if (res.ok && data.success) {
+            if (typeof window !== "undefined") {
+              localStorage.removeItem("suko_user");
+              window.location.href = "/login?reason=logged_out_all";
+            }
+          } else {
+            setLoggingOutScope(null);
+            showAlert("Gagal", data.error || "Gagal memproses Logout All Device.", "error");
+          }
+        } catch {
+          setLoggingOutScope(null);
+          showAlert("Error", "Terjadi kesalahan jaringan.", "error");
+        }
+      }
+    );
   };
 
   const handleChangePin = async (e: React.FormEvent) => {
@@ -154,6 +200,47 @@ export default function ProfilePage() {
                 )}
               </button>
             </form>
+
+            {/* Keamanan Sesi & Logout All Device */}
+            <div className="mt-8 pt-6 border-t border-slate-100 space-y-4">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-full bg-rose-100 flex items-center justify-center text-rose-600 shrink-0">
+                  <Smartphone className="w-5 h-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h2 className="text-base font-bold text-slate-800 whitespace-normal break-words">
+                    Keamanan Sesi & Perangkat (1 Akun = 1 Device)
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5 leading-relaxed whitespace-normal break-words">
+                    Demi mencegah akun dipakai bersamaan di banyak perangkat, satu akun hanya bisa aktif pada 1 perangkat dalam satu waktu. Gunakan tombol di bawah untuk mengakhiri sesi dengan aman sebelum berpindah perangkat.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2.5">
+                <button
+                  type="button"
+                  disabled={loggingOutScope !== null}
+                  onClick={() => triggerLogoutAll("self")}
+                  className="w-full py-3.5 px-4 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 font-bold text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-60 whitespace-normal break-words text-center"
+                >
+                  <LogOut className="w-4 h-4 shrink-0" />
+                  <span>{loggingOutScope === "self" ? "Memproses Logout..." : "Logout Semua Perangkat (Akun Saya)"}</span>
+                </button>
+
+                {(user?.role === "SUPERVISOR" || user?.nik === "22054178") && (
+                  <button
+                    type="button"
+                    disabled={loggingOutScope !== null}
+                    onClick={() => triggerLogoutAll("all")}
+                    className="w-full py-3.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-sm shadow-md shadow-rose-200 transition-all flex items-center justify-center gap-2 disabled:opacity-60 whitespace-normal break-words text-center"
+                  >
+                    <ShieldAlert className="w-4 h-4 shrink-0" />
+                    <span>{loggingOutScope === "all" ? "Mengeluarkan Semua..." : "Logout All Device (Semua Akun + Developer)"}</span>
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -163,7 +250,8 @@ export default function ProfilePage() {
         title={alert.title}
         message={alert.message}
         type={alert.type}
-        onClose={() => setAlert(prev => ({ ...prev, isOpen: false }))}
+        onConfirm={alert.onConfirm}
+        onClose={() => setAlert(prev => ({ ...prev, isOpen: false, onConfirm: undefined }))}
       />
     </div>
   );

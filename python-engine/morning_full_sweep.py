@@ -80,7 +80,7 @@ sb: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 STOREHUB_BASE = "https://storehub.mdsretailing.id"
 LOGIN_URL = f"{STOREHUB_BASE}/login?next=%2F"
 ITEM_CHECKER_URL = f"{STOREHUB_BASE}/item-checker"
-ACTION_LOGIN = "6071833df0be708d73972db0a7dc0c7c83eb3d41f3"
+ACTION_LOGIN = "603f9b4dfafaa0e65eec411a818c1ebcaa476b889f"
 ACTION_DETAIL = "608e569ea77f8871817d11afae932ecea7d0fcbd09"
 
 CREDENTIALS = {
@@ -262,12 +262,13 @@ def auto_login_storehub() -> str:
             "Referer": LOGIN_URL,
             "Origin": STOREHUB_BASE,
         }
+        # KRUSIAL (React 19 decodeReplyFromBusboy): field `_1_*` WAJIB dikirim SEBELUM `'0'` (`[{},"$K1"]`)!
         files = [
-            ("0", (None, '[{},"$K1"]')),
             ("_1_next", (None, "/")),
             ("_1_username", (None, CREDENTIALS["username"])),
             ("_1_password", (None, CREDENTIALS["password"])),
             ("_1_tz", (None, CREDENTIALS["tz"])),
+            ("0", (None, '[{},"$K1"]')),
         ]
         res = http_session.post(LOGIN_URL, headers=headers, files=files, allow_redirects=False, timeout=12)
         cookies_dict = res.cookies.get_dict()

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { checkSingleItemStock } from '@/lib/mdsBisaClient';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   try {

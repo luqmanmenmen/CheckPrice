@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyToken } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(req: NextRequest) {
   try {
     const token = req.cookies.get("token")?.value;
@@ -41,12 +43,14 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ user: null, reason: "unauthenticated" });
     }
 
-    // Khusus Developer (22054178) atau SUPERVISOR: izinkan akses multi-device (HP & Laptop bersamaan) tanpa kick/wipe session
-    const isSuperOrDev = dbUser.role === "SUPERVISOR" || session.nik === "22054178";
-    if (!isSuperOrDev && dbUser.sessionId != session.sessionId) {
-      console.log("[AUTH ME] Session ID mismatch! DB:", dbUser.sessionId, "JWT:", session.sessionId);
-      const response = NextResponse.json({ user: null, kickedOut: true, reason: "device_switched" });
+    // ATURAN KETAT 1 AKUN = 1 DEVICE untuk SEMUA user (termasuk SUPERVISOR & Developer 22054178)
+    // Jika sesi di DB sudah dihapus (Logout All Device / Paksa Logout) atau tidak cocok dengan JWT -> tendang keluar.
+    if (!dbUser.sessionId || dbUser.status === "OFFLINE" || dbUser.sessionId !== session.sessionId) {
+      const reason = !dbUser.sessionId || dbUser.status === "OFFLINE" ? "logged_out_all" : "device_switched";
+      console.log("[AUTH ME] Session invalidated! DB:", dbUser.sessionId, "Status:", dbUser.status, "JWT:", session.sessionId);
+      const response = NextResponse.json({ user: null, kickedOut: true, reason });
       response.cookies.set("token", "", { maxAge: 0, path: "/" });
+      response.cookies.set("sessionId", "", { maxAge: 0, path: "/" });
       return response;
     }
 

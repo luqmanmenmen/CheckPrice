@@ -58,8 +58,16 @@ export async function middleware(request: NextRequest) {
 
   const isSuperOrDev = userRole === 'SUPERVISOR' || userNik === '22054178';
 
-  // 1. Redirect logged-in users away from /login
+  // 1. Redirect logged-in users away from /login (kecuali sedang diarahkan karena logout/kick/shift berakhir)
   if (isAuthPage) {
+    const authReason = request.nextUrl.searchParams.get('reason') || '';
+    const forceStayReasons = ['logged_out_all', 'device_switched', 'session_expired_cart_saved', 'shift_ended'];
+    if (forceStayReasons.includes(authReason)) {
+      const response = NextResponse.next();
+      response.cookies.set('token', '', { maxAge: 0, path: '/' });
+      response.cookies.set('sessionId', '', { maxAge: 0, path: '/' });
+      return response;
+    }
     if (isValidSession) {
       if (isSuperOrDev) return NextResponse.redirect(new URL('/spv-gateway', request.url));
       if (userJobTitle === 'Gudang Stock') return NextResponse.redirect(new URL('/warehouse', request.url));
@@ -105,5 +113,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|assets|favicon.ico|suko-logo.png|api/auth/login|api/auth/check-nik).*)'],
+  matcher: ['/((?!_next/static|_next/image|assets|favicon.ico|suko-logo.png|api/auth/login|api/auth/check-nik|api/auth/logout-all).*)'],
 };

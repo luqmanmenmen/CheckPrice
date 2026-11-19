@@ -8,26 +8,19 @@ export async function POST(req: NextRequest) {
     if (token) {
       const session = await verifyToken(token);
       if (session) {
-        // Find active shift and end it
-        const activeShift = await prisma.shift.findFirst({
-          where: { userId: session.userId, endTime: null }
+        // Tutup semua shift terbuka milik user agar data shift akurat
+        await prisma.shift.updateMany({
+          where: { userId: session.userId, endTime: null },
+          data: { endTime: new Date() },
         });
-        
-        if (activeShift) {
-          await prisma.shift.update({
-            where: { id: activeShift.id },
-            data: { endTime: new Date() }
-          });
+        // PERMINTAAN USER: Tiket request facing out JANGAN langsung ditutup saat logout!
+        // Tahan selama 24 jam agar jika tidak sengaja logout, data request facing out tetap utuh.
 
-          // PERMINTAAN USER: Tiket request facing out JANGAN langsung ditutup saat logout!
-          // Tahan selama 24 jam agar jika tidak sengaja logout, data request facing out tetap utuh.
-        }
-        
         // Update user status to OFFLINE when logging out
         await prisma.user.update({
           where: { id: session.userId },
           // @ts-ignore - Prisma generate EPERM on Windows
-          data: { status: "OFFLINE", sessionId: null }
+          data: { status: "OFFLINE", sessionId: null },
         });
       }
     }
@@ -38,7 +31,14 @@ export async function POST(req: NextRequest) {
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       maxAge: 0,
-      path: "/"
+      path: "/",
+    });
+    response.cookies.set("sessionId", "", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 0,
+      path: "/",
     });
 
     return response;
@@ -46,6 +46,7 @@ export async function POST(req: NextRequest) {
     console.error("Logout error:", error);
     const response = NextResponse.json({ error: "Terjadi kesalahan" }, { status: 500 });
     response.cookies.set("token", "", { maxAge: 0, path: "/" });
+    response.cookies.set("sessionId", "", { maxAge: 0, path: "/" });
     return response;
   }
 }

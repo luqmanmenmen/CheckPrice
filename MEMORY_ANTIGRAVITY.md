@@ -1472,3 +1472,166 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   3. **Sapu Bersih Anti-Truncate Lintas Halaman (`whitespace-normal break-words`):**
      - Menghilangkan seluruh kelas pemotong teks (`truncate` / `line-clamp-*`) pada nama produk, judul promo, label warna/brand, ringkasan KPI, nama file, dan status di [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx), [`src/app/promo-mendatang/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/promo-mendatang/page.tsx), [`src/app/promo-unik/ClientPromoCard.tsx`](file:///c:/Max%20Display/price-checker/src/app/promo-unik/ClientPromoCard.tsx), [`src/app/cek-harga/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/cek-harga/page.tsx), [`src/components/ProductImageSlider.tsx`](file:///c:/Max%20Display/price-checker/src/components/ProductImageSlider.tsx), [`src/components/ImageLightboxModal.tsx`](file:///c:/Max%20Display/price-checker/src/components/ImageLightboxModal.tsx), [`src/components/TextScanner.tsx`](file:///c:/Max%20Display/price-checker/src/components/TextScanner.tsx), [`src/app/super-admin/laporan-penjualan/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/laporan-penjualan/page.tsx), [`src/app/super-admin/promo-analysis/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/promo-analysis/page.tsx), [`src/app/super-admin/rekap-stok/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/rekap-stok/page.tsx), [`src/app/super-admin/saran-po/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/saran-po/page.tsx), [`src/app/super-admin/sinkronisasi-harian/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/sinkronisasi-harian/page.tsx), dan [`src/app/super-admin/update-promo/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/update-promo/page.tsx).
 - **Verifikasi:** Audit scan `src/` (0 sisa kelas `truncate`/`line-clamp-*`), `npx tsc --noEmit` (`exit code 0`), dan `npm run build` (`exit code 0`) — seluruh perubahan **masih disimpan lokal (belum di-push ke GitHub)** menunggu instruksi user.
+
+---
+
+### 93. Perbaikan Total Live Stok MDS BISA StoreHub (`Auto-Login React 19 FormData`, Deteksi `HTTP 200` RSC Shell, & Turbo Bulk `All Warna & Size` 60/60 Varian) (19 November 2026)
+
+- **Akar Masalah:**
+  1. **Auto-Login StoreHub Gagal Diam-Diam & Deadlock Cookie Storage (`src/lib/mdsBisaClient.ts`, `python-engine/morning_full_sweep.py`):**
+     - `FormData` menaruh `'0' = '[{},"$K1"]'` **sebelum** `_1_username` / `_1_password`. Parser streaming multipart React 19 (`decodeReplyFromBusboy`) memproses part `0` lebih dulu sehingga StoreHub menolak login dengan `"Username dan password wajib diisi."`.
+     - Fallback `ACTION_LOGIN` usang (`6071833df0be708d73972db0a7dc0c7c83eb3d41f3` -> terbaru `603f9b4dfafaa0e65eec411a818c1ebcaa476b889f`).
+     - Saat `forceRefresh = true`, `getStoreHubCookie` mengunduh cookie kedaluwarsa yang sama dari `secrets/mds_cookie.txt` Storage dan langsung me-return tanpa auto-login, serta tidak mengunggah cookie baru hasil auto-login kembali ke Storage.
+  2. **`HTTP 200` RSC Shell Tidak Terdeteksi `authFailed`:** Ketika sesi ditolak tanpa HTTP 307, StoreHub dapat merender shell Next.js RSC (`$Sreact.fragment`, `ToastProvider`, `LoginForm`), sehingga dianggap item kosong lalu jatuh diam-diam ke `fallbackToDb()` (menampilkan stok lama).
+  3. **Bottleneck 20+ Detik & Terpotong 13 SKU pada `syncAllSizes`:** StoreHub `item-checker` tidak lagi mengirim field `relatedStock`, sehingga semua sibling melalui Step 4 (`syncAllSizes`) yang memanggil `upsertStoreHubItemToDb()` (`4` round-trip Prisma per SKU = `~20 detik` untuk Batch 1 berisi 12 SKU) dan terhenti di budget `5.500ms`. Akibatnya artikel `20 SKU` (`W2L935G4`) & `60 SKU` (`P1M34353`) terpotong di **13 SKU** (`7`–`47` varian sisanya tidak tersinkron!), sementara `/api/live-stock` belum memasang `export const maxDuration = 60;`.
+  4. **Sinkronisasi Cache UI Lokal (`src/lib/offlineDb.ts`, `src/app/page.tsx`):** `updateLocalFamilyStockInMemory` belum memperbarui `articleTotalStok` pada `memoryModelsCache`/`db.models`, `handleCheckLiveStock()` belum memperbarui `productsList` + `listCacheRef`, dan `catch` error menampilkan pesan seolah-olah normal (`"Menampilkan stok tersimpan di sistem"`).
+
+- **Perbaikan yang Diterapkan:**
+  1. [`src/app/api/live-stock/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/live-stock/route.ts): Menambahkan `export const maxDuration = 60;` agar serverless Vercel tidak timeout pada artikel besar (`20–60` varian).
+  2. [`src/lib/mdsBisaClient.ts`](file:///c:/Max%20Display/price-checker/src/lib/mdsBisaClient.ts) & [`python-engine/morning_full_sweep.py`](file:///c:/Max%20Display/price-checker/python-engine/morning_full_sweep.py):
+     - Memperbarui `ACTION_LOGIN` default ke `603f9b4dfafaa0e65eec411a818c1ebcaa476b889f` dan memindahkan field `_1_*` **sebelum** `'0'` di `FormData` multipart.
+     - `getStoreHubCookie(forceRefresh, previousCookie)` melewatkan cookie Storage jika sama dengan `previousCookie`, mengeksekusi auto-login StoreHub, serta langsung mengunggah cookie `mso_session=` baru ke `excel-uploads/secrets/mds_cookie.txt`.
+     - Menambahkan `resolveDetailActionHash()` + deteksi RSC shell / error auth pada `queryStoreHubDetail()` + pemulihan retry otomatis.
+     - **Turbo Bulk `syncAllSizes` (`DIRECT_BATCH = 20`, budget `15.000ms`):** Memprioritaskan warna aktif terlebih dahulu, me-refresh cookie sekali jika terkena `authFailed` di tengah batch, serta langsung mengeksekusi `prisma.product.updateMany` paralel per kelompok nilai stok **hanya untuk SKU yang stoknya benar-benar berubah** + menghitung metrik akurat `liveCheckedCount` dan `changedCount`.
+  3. [`src/lib/offlineDb.ts`](file:///c:/Max%20Display/price-checker/src/lib/offlineDb.ts) & [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx): Memperbarui `articleTotalStok` di `memoryModelsCache` + `db.models`, `productsList`, mengosongkan `listCacheRef`, dan menampilkan jumlah varian dicek (`liveCheckedCount`) serta yang berubah (`changedCount`) maupun error jaringan secara jujur.
+
+- **Verifikasi Nyata (Lokal sebelum push):**
+  - **Tes Auto-Login StoreHub (`getStoreHubCookie(true, 'mso_session=expired_dummy_test_000')`):** Berhasil dalam **`1.877 ms`** (`len=1339`, `hasMsoSession=true`) dan tersimpan ke Supabase Storage.
+  - **Tes Full-Article `W2L935G4` (SKU `77997729`, `20` SKU):** `liveCheckedCount = 20/20`, `changedCount = 5` SKU diperbarui langsung di Postgres, `storeOffline = false`, durasi `19.252 ms`.
+  - **Tes Full-Article `P1M34353` (SKU `18721216`, `60` SKU):** `liveCheckedCount = 60/60`, `changedCount = 25` SKU diperbarui langsung di Postgres, `storeOffline = false`, durasi `24.348 ms`.
+  - `py_compile` (`morning_full_sweep.py`), `npx tsc --noEmit` (`0`), dan `npm run build` lulus `exit code 0` (disimpan lokal — menunggu konfirmasi user untuk push GitHub/deploy Vercel).
+
+---
+
+### 94. Python Guardian Live Console Stream, Audit Produk Baru Ter-Add ke DB, & Sistem Auto-Diagnostik + Self-Healing Auto-Retry (19 November 2026)
+
+- **Kebutuhan Pengguna:**
+  1. Menampilkan jumlah **produk baru yang benar-benar ter-add ke database** saat menjalankan scrab/sinkronisasi.
+  2. Menghadirkan **Console Log Output asli baris per baris** pembacaan eksekusi Python/GitHub Actions di [`/super-admin/sinkronisasi-harian`](file:///c:/Max%20Display/price-checker/src/app/super-admin/sinkronisasi-harian/page.tsx), bukan sekadar 4 baris ringkasan statis.
+  3. Membangun **sistem deteksi bug/error + Self-Healing + Auto-Retry otomatis** yang mampu memperbaiki kendala (seperti sesi cookie kedaluwarsa, modul hilang, rate-limit Gemini AI, atau gangguan koneksi DB/jaringan) dan mengulang program trigger sampai sukses.
+
+- **Implementasi Terpadu:**
+  1. **Python Guardian Engine ([`python-engine/runner_guardian.py`](file:///c:/Max%20Display/price-checker/python-engine/runner_guardian.py), [`python-engine/ai_helper.py`](file:///c:/Max%20Display/price-checker/python-engine/ai_helper.py), [`.github/workflows/retail-sync-engine.yml`](file:///c:/Max%20Display/price-checker/.github/workflows/retail-sync-engine.yml)):**
+     - `--init-run` & `--track-new-products` mencatat baseline `MAX(id)` B-Tree primary key pada tabel `"Product"` di awal workflow lalu menghitung tepat berapa `+SKU Baru` & `+Artikel Baru` (`WHERE id > baseline_max_id`, nol full-table scan) beserta 12 sampel produk terbaru.
+     - Menjalankan skrip Python melalui `subprocess.Popen` (`PYTHONUNBUFFERED=1`), menyaring kredensial (`sanitize_log_line`), mengklasifikasikan level warna (`error`, `warn`, `heal`, `db`, `success`, `info`), dan mengunggah stream log real ke Supabase Storage `excel-uploads/logs/live-runner-log.json` setiap `3.5s`.
+     - **Mesin Diagnostik & Self-Healing (`diagnose_output` + `attempt_self_heal`):** Mendeteksi `Traceback` Python (`file:line`, `exceptionType`, `exceptionMsg`) serta mengklasifikasikan `AUTH_EXPIRED` (auto-login ulang React 19 `_1_*`-sebelum-`'0'` ke StoreHub + upload ke `secrets/mds_cookie.txt`), `MISSING_DEPENDENCY` (`pip install -r requirements.txt`), `GEMINI_QUOTA_OR_503` (set `SKIP_GEMINI_AI=1` bypass ke fast-path deterministik di `ai_helper.py`), `DB_OR_NETWORK_TRANSIENT` (exponential backoff + uji `SELECT 1`), `STORAGE_OR_FILE_CORRUPT`, `STORE_OFFLINE`, dan `CODE_EXCEPTION` — lalu otomatis mengulang step hingga `--max-retries 3`.
+  2. **Backend Monitoring & Self-Heal API ([`src/app/api/admin/trigger/github-status/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/github-status/route.ts), [`src/app/api/admin/trigger/self-heal/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/self-heal/route.ts)):**
+     - `/api/admin/trigger/github-status` membaca `logs/live-runner-log.json` saat run aktif/baru, atau fallback ke GitHub Job Raw Logs API (cached `5` menit) + ekstraksi diagnostik & `newSkusAdded`/`newArticlesAdded` pada `SyncHistory` + hitungan DB O(1) via `pg_class.reltuples`.
+     - `POST /api/admin/trigger/self-heal` memaksa pembaruan cookie StoreHub (`getStoreHubCookie(true)`) jika diperlukan oleh `action` lalu men-dispatch ulang GitHub Actions secara aman.
+  3. **UI Real Console, Audit Produk Baru, & Auto-Ulang Frontend ([`src/app/super-admin/sinkronisasi-harian/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/sinkronisasi-harian/page.tsx)):**
+     - Banner **Audit Produk Baru Ter-Add di Database** (`+SKU Baru`, `+Artikel Baru`, `Total DB`, dan drawer sampel produk baru) + Card 1 terhubung ke `dbMetrics.totalProducts` real.
+     - Tabel **Riwayat Eksekusi** dilengkapi kolom khusus **`Produk Baru (+Add)`**.
+     - Panel **Guardian Auto-Diagnostik, Self-Heal & Auto-Ulang Trigger** (`Auto-Ulang Saat Error ON/OFF` maks `3x`, hitung mundur 8 detik dengan tombol `Batalkan`, tombol 1-klik `Benahi & Ulangi`, daftar `Self-Healing` yang diterapkan, serta detail error & snippet `Traceback`).
+     - Terminal **Console Log Output Asli** menampilkan stream baris demi baris dengan tab filter (`Semua`, `Error / Bug`, `Self-Heal`, `DB / Produk Baru`), pencarian teks, `Auto-Scroll ON/OFF`, `Salin Log`, dan anti-truncate penuh (`whitespace-pre-wrap break-words`).
+
+- **Verifikasi Nyata (Lokal sebelum push):**
+  - `py_compile` (`runner_guardian.py`, `ai_helper.py`, `morning_full_sweep.py`) lulus (`PY_COMPILE_OK`).
+  - **Smoke Test Langsung `runner_guardian.py` (`Run #991`):**
+    - `Smoke Step 1` mencatat baseline DB real (`309,956 SKU`, `MAX id=700,621`), menyiarkan stream ke Storage JSON (`HTTP 200`), dan melaporkan hasil DB Audit.
+    - `Smoke Step 2 Retry` mensimulasikan `ConnectionError: temporary network glitch` di percobaan #1 -> terdiagnosa `DB_OR_NETWORK_TRANSIENT` -> `[SELF-HEAL] Cooldown jaringan 12s selesai (Koneksi DB terverifikasi pulih)` -> `[AUTO-RETRY #2]` -> sukses (`exit code 0`, `diagnosticsCount=1`, `healsAppliedCount=1`), dan file smoke test dibersihkan dari Storage (`HTTP 200`).
+  - Audit zero-truncate pada `sinkronisasi-harian/page.tsx` bersih (`0` temuan), `npx tsc --noEmit` (`0`), dan `npm run build` lulus `exit code 0` (disimpan lokal — menunggu konfirmasi user untuk push GitHub/deploy Vercel).
+
+---
+
+### 95. Tombol Trigger Khusus `📸 Update Gambar` & Mesin Sinkronisasi Foto Per-Warna Anti-Salah-Warna (`Matahari.com + Direct CDN Probe`) (19 November 2026)
+
+- **Masalah dari Laporan & Screenshot Pengguna (`W2L935G4` `CELANA PANJANG TWILL PANTS LIP`):**
+  1. Saat klik warna atau menekan `Live Stok`, jika salah satu SKU warna sudah terisi foto fallback dari warna lain (misal `VANILLA S/M/XL` di `W2L935G4` berisi foto `OFF WHITE` `54714282-1.jpg` padahal `54714344-1..5.jpg` milik `VANILLA` tersedia di CDN Shopify), sistem lama hanya memeriksa `!sib.imageUrl` sehingga menganggap foto sudah lengkap dan **tidak mencari ulang foto yang benar sesuai warna**.
+  2. `fetchMatahariFamilyAndImages()` hanya menanyakan 1 `seedSku` / `article` / `seedBarcode` ke `matahari.com/search/suggest.json` (yang gagal bila SKU batch lama tidak diindeks oleh predictive search Matahari, tanpa mencoba SKU warna lain atau kata kunci `brand + nama produk` maupun `HEAD` langsung ke `${sku}-1..5.jpg` di Shopify CDN), serta belum ada tombol manual khusus **`📸 Update Gambar`** untuk memaksa perbaikan foto kapan saja.
+
+- **Perbaikan yang Diterapkan:**
+  1. **Mesin Foto Per-Warna + Proteksi Kepemilikan SKU ([`src/lib/mdsBisaClient.ts`](file:///c:/Max%20Display/price-checker/src/lib/mdsBisaClient.ts)):**
+     - Menambahkan `normalizeRetailColorKey()`, `extractSkuFromShopifyUrl()` (mendeteksi prefix SKU `7–9` digit pada nama file URL Shopify), dan `buildMatahariKeywordQueries()`.
+     - **Jalur 1 (`fetchMatahariFamilyAndImages`):** Multi-query hingga `4` SKU perwakilan warna berbeda + keyword `brand + nama produk`, mencocokkan variasi terhadap seluruh SKU/barcode keluarga, memetakan galeri multi-angle (`-1..8`) ke setiap varian & warna ternormalisasi (`normalizeRetailColorKey`), serta ikut dipanggil oleh `Live Stok` (`finalizeProductFamilyResponse`).
+     - **Jalur 2 (Direct Shopify CDN `HEAD` Probe):** Mem-probe langsung `cdn.shopify.com/.../files/${sku}-1..5.jpg` dengan prioritas `targetColor` untuk warna-warna yang belum tertangkap `suggest.json`.
+     - **Pemulihan Ketat `healProductImagesInDb()`:** Memvalidasi pemilik SKU pada setiap URL foto (`existingTrueColorGalleries`), **menolak URL yang milik SKU warna berbeda**, memperbarui seluruh size warna yang sama secara serentak, memperbarui `CatalogArticle`, serta melaporkan secara jujur `updatedCount`, `matchedColors`, `unmatchedColors`, dan `activeColorMatched`.
+  2. **API & UI Tombol Trigger Khusus `📸 Update Gambar` ([`src/app/api/product/heal-image/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/product/heal-image/route.ts), [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx)):**
+     - Endpoint `POST /api/product/heal-image` (`maxDuration = 30`) mendukung `{ targetColor, force }`.
+     - Halaman detail produk kini mendeteksi **ketidakcocokan warna foto** (`mismatchedOwnerColor`: contoh saat membuka `COBALT BLUE` tetapi foto yang tampil masih milik SKU `OFF WHITE`), memprioritaskan galeri saudara se-warna di `heroImages`, menampilkan banner informasi **`Foto tampil milik warna ... (belum sinkron dengan ...)`** dengan tombol cepat **`📸 Cari & Sinkron Foto`**, serta menempatkan tombol trigger khusus **`📸 Update Gambar`** tepat di samping **`⚡ Live Stok`**.
+
+- **Verifikasi Nyata (Lokal sebelum push):**
+  - **Uji Kasus Nyata `W2L935G4` (`sku: '54714335'`, `targetColor: 'VANILLA'`):**
+    - Berhasil memulihkan **`6` varian** dalam `13.122 ms`: seluruh size `VANILLA` (`S/M/L/XL`) kini memakai foto `VANILLA` resmi (`54714344-1.jpg`, `5` angle), seluruh size `OFF WHITE` (`S/M/L/XL`) memakai `54714282-1.jpg` (`5` angle), serta jujur melaporkan `unmatchedColors: ['COBALT BLUE', 'DARK BROWN', 'DARK GREY']` karena ketiga warna tersebut belum diunggah ke Shopify CDN Matahari.com (`mismatchedOwnerColor` terdeteksi otomatis di UI).
+  - **Uji Artikel Multi-Warna Live `W2L374G3` (`sku: '22433190'`):** `matchedColors` memetakan penuh `6/6` warna (`BLACK`, `CACTUS GREEN`, `CHARCOAL`, `COBALT BLUE`, `SAND`, `VANILLA`, `unmatchedColors: []`) dalam `2.859 ms`.
+  - Audit zero-truncate pada `src/app/page.tsx` bersih (`0`), `npx tsc --noEmit` (`0`), dan `npm run build` lulus `exit code 0` (semua perubahan masih disimpan lokal — menunggu konfirmasi user untuk push GitHub).
+
+---
+
+### 96. Kunci Ketat Login `1 Akun = 1 Device` & Fitur **Logout All Device** (Termasuk Akun Developer `22054178`) (19 November 2026)
+
+- **Kebutuhan Pengguna:**
+  1. Memastikan jika sebuah akun sudah login di satu perangkat, akun tersebut **tidak dapat dipakai login di perangkat lain** sebelum benar-benar logout (mencegah pemakaian 1 akun di banyak perangkat secara bersamaan maupun bypass *force-login*), berlaku menyeluruh untuk `CREW_STORE`, `SUPERVISOR`, hingga akun Developer (`22054178`).
+  2. Menyediakan fitur **Logout All Device** yang sanggup mengeluarkan seluruh perangkat aktif **termasuk akun Developer (`22054178`)**.
+
+- **Perubahan Arsitektur & Endpoint:**
+  1. **Kunci Ketat Login `1 Akun = 1 Device` ([`src/app/api/auth/login/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/auth/login/route.ts)):**
+     - Menghapus bypass `force: true` serta pengecualian `user.nik !== "22054178"`.
+     - Jika akun memiliki `sessionId` aktif (`status !== "OFFLINE"`, usia sesi `< 24 jam`, dan shift belum kedaluwarsa untuk non-Supervisor/non-Dev), login hanya diizinkan jika request membawa cookie `token` dari **perangkat yang sama** (`existingSession.userId === user.id && existingSession.sessionId === user.sessionId`). Selain itu ditolak **HTTP `409`** (`isAlreadyLoggedIn: true, strictLocked: true, lastActive, canDeveloperLogoutAll: user.nik === "22054178"`).
+     - Menambahkan `path: "/"` eksplisit pada penulisan cookie `token`.
+  2. **Validasi Sesi Global Tanpa Pengecualian ([`src/app/api/auth/me/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/auth/me/route.ts), [`src/app/api/auth/status/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/auth/status/route.ts), [`src/app/api/auth/logout/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/auth/logout/route.ts)):**
+     - Menghapus pengecualian `isSuperOrDev` di `/api/auth/me` sehingga apabila `sessionId` dihapus/diganti atau `status === "OFFLINE"`, **seluruh role termasuk `SUPERVISOR` dan Developer (`22054178`)** langsung ditendang (`kickedOut: true`, `reason: "logged_out_all"` atau `"device_switched"`, cookie dibersihkan).
+     - `/api/auth/status` menolak perangkat yang sesinya sudah dihentikan dengan HTTP `401`; `/api/auth/logout` menutup semua shift terbuka via `updateMany` dan menghapus cookie `token` + `sessionId`.
+  3. **Endpoint Terpadu `POST /api/auth/logout-all` ([`src/app/api/auth/logout-all/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/auth/logout-all/route.ts)):**
+     - `scope: "self"`: mengeluarkan seluruh perangkat milik akun sendiri (tersedia untuk semua role).
+     - `scope: "user"`: `SUPERVISOR` / Developer memaksa logout pengguna tertentu (`targetUserId`) untuk membuka kunci perangkat yang tertinggal.
+     - `scope: "all"`: `SUPERVISOR` / Developer mengeluarkan **seluruh user tanpa pengecualian termasuk Developer `22054178`** (`prisma.shift.updateMany` + `prisma.user.updateMany({ data: { sessionId: null, status: "OFFLINE" } })`) beserta pencatatan `LoginLog`.
+     - `scope: "developer_recovery"`: katup pengaman darurat pada `/login` khusus NIK `22054178` dengan PIN valid (menolak NIK lain dengan HTTP `403`).
+  4. **Penegakan Sesi Lintas Halaman & Guard Anti-Loop ([`src/middleware.ts`](file:///c:/Max%20Display/price-checker/src/middleware.ts), [`src/components/LayoutWrapper.tsx`](file:///c:/Max%20Display/price-checker/src/components/LayoutWrapper.tsx), [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx)):**
+     - `middleware.ts` mengecualikan `/api/auth/logout-all` dan membersihkan cookie jika user menuju `/login?reason=logged_out_all|device_switched|session_expired_cart_saved|shift_ended` agar tidak terjadi redirect loop.
+     - `LayoutWrapper.tsx` mengecek `/api/auth/me` tiap `20s`, saat tab kembali `visible`/fokus, dan saat `reconnect` — menendang seluruh halaman (`/super-admin/*`, `/warehouse`, `/profile`, `/spv-gateway`, `/promo-mendatang`, dll.) jika `kickedOut` atau `reason === "logged_out_all"`.
+  5. **Antarmuka UI Tanpa Pemotongan Teks ([`src/app/login/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/login/page.tsx), [`src/app/super-admin/users/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/users/page.tsx), [`src/app/profile/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/profile/page.tsx), [`src/components/Sidebar.tsx`](file:///c:/Max%20Display/price-checker/src/components/Sidebar.tsx)):**
+     - `/login`: mengganti modal bypass `Ya, Lanjutkan` menjadi modal kunci ketat **`Akun Aktif di Perangkat Lain (1 Akun = 1 Device)`** + opsi pemulihan 2-langkah khusus Developer `22054178`.
+     - `/super-admin/users`: tombol merah **`Logout All Device`** di header, badge **`Sesi Terkunci (Belum Logout)`** saat offline namun masih memegang `sessionId`, serta tombol **`Paksa Logout`** per baris.
+     - `/profile` & `Sidebar.tsx`: akses langsung ke **`Profil & Keamanan Akun`** (`Logout Semua Perangkat (Akun Saya)`) serta **`Logout All Device (Semua + Dev)`** bagi `SUPERVISOR` & Developer.
+
+- **Verifikasi Nyata (Lokal sebelum push):**
+  - **Audit Zero-Truncate** pada 6 file TSX termodifikasi: `0` temuan (`ZERO_TRUNCATE_OK`).
+  - **`npx tsc --noEmit`** & **`npm run build`**: `47/47` rute (termasuk `ƒ /api/auth/logout-all`) lulus `exit code 0`.
+  - **Uji E2E HTTP Live (`verify_auth_lock.mjs` terhadap Next production server port `3199` & PostgreSQL menggunakan akun uji sementara):** seluruh 7 skenario lulus (`ALL_AUTH_E2E_CHECKS_PASSED`: login 200, penolakan perangkat ke-2 meski `force: true` dengan HTTP 409, same-device login 200, lock & tendang `SUPERVISOR` via `/api/auth/me`, `logout-all` `user` & `self` menutup shift + menolak `/api/auth/status` 401 + mengizinkan re-login, penolakan HTTP 403 `developer_recovery` untuk non-Dev, dan guard anti-loop middleware di `/login?reason=logged_out_all`), dan seluruh data uji dibersihkan kembali (belum di-push ke GitHub).
+
+---
+
+### 97. Upgrade Auto-Guard Promo H-2 / H-1 Menjadi Deteksi Otomatis 3 Lapis (Termasuk Jalur Single-File Gmail GAS) (19 November 2026)
+
+- **Kebutuhan & Temuan Audit:**
+  - Google Apps Script ([`scripts/gas_supabase_uploader.js`](file:///c:/Max%20Display/price-checker/scripts/gas_supabase_uploader.js)) memanggil `/api/upload/sync-latest-blob` satu per satu per lampiran email (jalur `--file=<url>`), sedangkan Auto-Guard lama hanya membaca tanggal dari Subject email (nama folder) pada jalur batch sehingga berisiko membocorkan promo H-2 ke harga kasir apabila Subject email tidak mencantumkan tanggal atau dikirim lewat webhook single-file.
+
+- **Perbaikan yang Diterapkan:**
+  1. **Deteksi Otomatis 3 Lapis & Proteksi Baris Campuran ([`python-engine/run_promo_sync.py`](file:///c:/Max%20Display/price-checker/python-engine/run_promo_sync.py)):**
+     - Menambahkan `_safe_encode_url()`, `_sanitize_temp_filename()`, `_normalize_iso_date()` (mendukung `YYYY-MM-DD` dan `DD/MM/YYYY` ritel Indonesia), `_extract_storage_folder_from_url()`, `_list_files_in_promo_folder()`, serta `_preload_files_for_guard()` / `_cleanup_expired_promos_wib()`.
+     - Memperkuat `extract_folder_date_info()` agar mengenali tanggal periode kompak tanpa spasi pada nama file Excel (mis. `05-11NOV2026`, `26NOV-02DES2026`) sekaligus mengabaikan angka nomor urut depan (`18. PROMO ...`), kode departemen (`3366`), dan `WEEK45` / `W47`.
+     - Memperkenalkan **`detect_promo_launch_window()`** (3 Lapis): **Lapis 1** membaca kolom `tgl_mulai` pada baris promo di dalam isi Excel; **Lapis 2** membaca periode pada nama file Excel; **Lapis 3** membaca tanggal/tag pada Subject email (nama folder Storage). Diterapkan ke **kedua jalur**: single-file `--file=<url>` dari GAS maupun batch folder + fallback `PROMO/`, dilengkapi guard baris campuran pada `process_single_promo_file()` (melewati baris `tgl_mulai > today_wib` kecuali `--force-apply`).
+     - Saat jalur `--file=<url>` mendeteksi promo masa depan, sistem otomatis mengumpulkan seluruh file di folder `PROMO/<Subject>/` yang sama dan mengompilasi draf POP terpadu ke `analytics/upcoming-promo.json` tanpa menyentuh tabel `Product` berjalan.
+  2. **Perbaikan Encoding URL Berspasi & Quoting Workflow ([`src/app/api/upload/sync-latest-blob/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/upload/sync-latest-blob/route.ts), [`.github/workflows/retail-sync-engine.yml`](file:///c:/Max%20Display/price-checker/.github/workflows/retail-sync-engine.yml)):**
+     - Menormalisasi `promoUrl` (`safeNormalizeUrl`) dan meng-quote `"--file=$PROMO_URL"` di Kategori 3 (`promo`) serta Kategori 6 (`upcoming-promo`) agar URL Storage yang mengandung spasi dari Subject email tidak pernah terpecah oleh shell runner.
+     - Skrip Google Apps Script (`Kode.gs`) **tidak perlu diubah**.
+
+- **Verifikasi Nyata (Lokal sebelum push):**
+  - `python-engine\.venv\Scripts\python.exe -m py_compile python-engine\run_promo_sync.py`: lulus (`PY_COMPILE_OK`).
+  - Uji otomatis `test_promo_guard_3layer.py`: seluruh kasus lolos (`ALL_AUTO_GUARD_3LAYER_TESTS_PASSED`), termasuk `05-11NOV2026`, `26NOV-02DES2026`, `26/11/2026`–`02/12/2026`, Subject tanpa tanggal, folder `MANUAL_2026-11-19`, serta pembacaan read-only file Excel nyata `18. PROMO 3366 SUKO CHILDREN BOYS 19-25 NOV 2026 W47 ALLSTORE.xlsx` (`814` SKU).
+  - `npx tsc --noEmit` (`TSC_OK`) dan `npm run build` (`47/47` rute, `BUILD_OK`) lulus `exit code 0` (disimpan lokal — menunggu konfirmasi `"push github"` dari user).
+
+---
+
+### 98. Perbaikan Bug `755 Artikel` Saat Barcode Belum Ada, Notice Notifikasi Instan, & Trigger Langsung Scrap MDS BISA + Matahari.com (`2340002272943`) (19 November 2026)
+
+- **Akar Masalah dari Laporan & Screenshot Pengguna (Barcode `2340002272943` menampilkan `HASIL PENCARIAN: 755 ARTIKEL`):**
+  1. Di [`src/lib/smartSearchEngine.ts`](file:///c:/Max%20Display/price-checker/src/lib/smartSearchEngine.ts) (`computeProductRelevanceScore`), bonus unconditional **`+25` (stok > 0), `+12` (`imageUrl`), dan `+10` (`hargaNormal >= 5000`)** menghasilkan skor minimum `47` (`>= 35`) meski query sama sekali tidak cocok (`score` awal = `0`), lalu di [`src/lib/offlineDb.ts`](file:///c:/Max%20Display/price-checker/src/lib/offlineDb.ts) (`queryLocalModelsInstant`) angka `"2340002272943"` jatuh ke pengecekan awalan `sub3 = "234"` dan menyeret `755` artikel yang memiliki `stok > 0`, foto, & harga normal.
+  2. Akibatnya alur tidak pernah mencapai status `Not Found` dan menyembunyikan kartu Notice & tombol **Scrap MDS BISA & Matahari.com**.
+
+- **Perbaikan yang Diterapkan:**
+  1. **Eliminasi Skor Palsu & Fuzzy Barcode ([`src/lib/smartSearchEngine.ts`](file:///c:/Max%20Display/price-checker/src/lib/smartSearchEngine.ts), [`src/lib/offlineDb.ts`](file:///c:/Max%20Display/price-checker/src/lib/offlineDb.ts)):**
+     - `computeProductRelevanceScore` langsung mengembalikan `0` apabila kecocokan teks/kode `<= 0` sebelum menghitung tie-breaker stok/foto/harga.
+     - `queryLocalModelsInstant` menambahkan pemeriksaan kandidat normalisasi nol-depan serta menghentikan *fallback* substring `sub3`/bigram untuk kode digit panjang `^\d{8,20}$` (mengembalikan `baseMatched = []` bila tidak ada *exact match*).
+  2. **Notice Notifikasi + Kartu Aksi 1-Klik Tanpa Truncate ([`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx)):**
+     - Mengabaikan query model fuzzy lokal pada pencarian barcode `8–20` digit (`shouldQueryModels = !isPureLongDigitCode && ...`).
+     - Saat kode belum ada di DB offline/server, otomatis mengosongkan daftar hasil lama (`showBarcodeNotFoundNotice`), memunculkan toast notifikasi (`showToast(..., "info")`), serta menampilkan kartu Notice **`Barcode / Kode "..." Belum Ada di Database`** lengkap dengan tombol utama **`Cari Barcode & Gambar Sekarang (Scrap MDS BISA + Matahari)`** (`includeFamily = true`) dan **`Scrap Cepat Kode "..." + Foto`** (`includeFamily = false`), seluruh teks bebas pemotongan (`whitespace-normal break-words`).
+  3. **Pengayaan Foto Saat Discovery Produk Baru ([`src/lib/mdsBisaClient.ts`](file:///c:/Max%20Display/price-checker/src/lib/mdsBisaClient.ts)):**
+     - `checkSingleItemStock` langsung meneruskan `{ brand, description, targetColor, probeDirectCdn: true }` ke `fetchMatahariFamilyAndImages`, dan `finalizeProductFamilyResponse` mengecek warna saudara yang belum memiliki foto (`hasUncoveredColor`) untuk menarik galeri per warna dari Matahari.com / Shopify CDN.
+
+- **Verifikasi Nyata (Lokal sebelum push):**
+  - Audit zero-truncate `src/app/page.tsx` (`0`), `npx tsc --noEmit` (`TSC_OK`), dan `npm run build` (`47/47` rute, `BUILD_OK`) lulus `exit code 0`.
+  - **Uji Unit `computeProductRelevanceScore`:** `'2340002272943'` terhadap produk tidak cocok (`stok: 14`, berfoto) mengembalikan **`0`** (bukan `47`), sementara query valid `'kaos'` mengembalikan `132`.
+  - **Uji HTTP Live Server Lokal (`port 3198`):**
+    - Sebelum scrap: `GET /api/product/2340002272943?fast=1` maupun tanpa `?fast=1` keduanya mengembalikan **HTTP `404`** (bukan `755` artikel).
+    - **Uji Scrap Langsung `POST /api/live-stock` (`2340002272943`):** Berhasil ditemukan live di StoreHub Toko 719 sebagai **SKU `13472861`** (`T1KT1351`, `T-SHIRT SS ROUND NECK KERAH BU`, `PASTEL GREEN` / `S`, `stok: 26 pcs`, `hargaNormal: 129.900`, `78` varian artikel), menyedot penuh **`5` foto studio Shopify CDN** (`13472861-1..5_*.jpg`), dan otomatis menyimpan alias baru **`BarcodeAlias` `2340002272943 -> sku 13472861` (`source: MDS_LIVE`)** ke PostgreSQL Supabase (semua kode tetap lokal menunggu instruksi `"push github"`).

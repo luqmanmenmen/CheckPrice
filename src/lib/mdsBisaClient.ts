@@ -10,7 +10,8 @@ const STOREHUB_BASE = 'https://storehub.mdsretailing.id';
 const LOGIN_URL = `${STOREHUB_BASE}/login?next=%2F`;
 const ITEM_CHECKER_URL = `${STOREHUB_BASE}/item-checker`;
 
-const ACTION_LOGIN = '6071833df0be708d73972db0a7dc0c7c83eb3d41f3';
+const ACTION_LOGIN_DEFAULT = '603f9b4dfafaa0e65eec411a818c1ebcaa476b889f';
+let ACTION_LOGIN = ACTION_LOGIN_DEFAULT;
 let ACTION_DETAIL = '608e569ea77f8871817d11afae932ecea7d0fcbd09';
 
 const CREDENTIALS = {
@@ -48,6 +49,8 @@ export type CheckSingleItemResult = {
   article?: string | null;
   hargaNormal?: number | null;
   totalVariantsUpdated?: number;
+  liveCheckedCount?: number;
+  changedCount?: number;
   newVariantsDiscovered?: number;
   imagesMatched?: number;
   variants?: LiveStockVariantSummary[];
@@ -107,6 +110,58 @@ function normalizeCodeKey(val: string): string {
   return val.replace(/[\s\-_./]/g, '').toUpperCase();
 }
 
+function normalizeRetailColorKey(raw: any): string {
+  return String(raw || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\bMED\b|\bMDM\b/g, 'MEDIUM')
+    .replace(/\bDRK\b/g, 'DARK')
+    .replace(/\bLGT\b/g, 'LIGHT')
+    .replace(/\bBLK\b/g, 'BLACK')
+    .replace(/\bWHT\b/g, 'WHITE')
+    .replace(/\bNVY\b/g, 'NAVY')
+    .replace(/\bGRY\b/g, 'GREY')
+    .replace(/[\s\-_./]+/g, '');
+}
+
+function extractSkuFromShopifyUrl(rawUrl: string | null | undefined): string | null {
+  if (!rawUrl) return null;
+  const filename = String(rawUrl).split('?')[0].split('/').pop() || '';
+  const m = filename.match(/^(\d{7,9})(?:[-_.]|$)/);
+  return m?.[1] || null;
+}
+
+function buildMatahariKeywordQueries(
+  brand: string | null | undefined,
+  description: string | null | undefined,
+  article: string | null | undefined
+): string[] {
+  const out: string[] = [];
+  const rawDesc = String(description || '').split(':')[0].trim();
+  const cleanBrand = String(brand || '').trim().toUpperCase();
+  const cleanArt = sanitizeArticleCode(article)?.toUpperCase() || '';
+
+  const words = rawDesc
+    .toUpperCase()
+    .replace(/[^A-Z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length >= 2 && w !== cleanArt);
+
+  if (words.length === 0) return out;
+  const filteredWords = words.filter((w) => w !== cleanBrand && !['WO', 'WA', 'LP', 'LIP', 'PR', 'ALL'].includes(w));
+  const prefix = cleanBrand && !['MDS RETAIL', 'SUKO CASUAL', 'RETAIL'].includes(cleanBrand) ? `${cleanBrand} ` : '';
+
+  if (filteredWords.length > 0) {
+    const q1 = `${prefix}${filteredWords.slice(0, 5).join(' ')}`.trim();
+    if (q1.length >= 5) out.push(q1);
+    if (filteredWords.length >= 3) {
+      const q2 = `${prefix}${filteredWords.slice(0, 3).join(' ')}`.trim();
+      if (q2.length >= 5 && !out.includes(q2)) out.push(q2);
+    }
+  }
+  return out;
+}
+
 function normalizeMatahariImageUrl(rawUrl: any): string | null {
   let url = String(rawUrl || '').trim();
   if (!url) return null;
@@ -123,13 +178,22 @@ function pushUniqueUrl(list: string[], url: string | null | undefined, maxCount:
 }
 
 /**
- * Cari foto studio resmi & daftar SKU keluarga artikel di Matahari.com
- * dengan verifikasi kepemilikan ketat agar tidak tertukar foto merk lain.
+ * Cari foto studio resmi & daftar SKU keluarga artikel di Matahari.com + direct Shopify CDN
+ * dengan verifikasi kepemilikan ketat agar foto antar-warna tidak tertukar.
  */
 async function fetchMatahariFamilyAndImages(
   seedSku: string,
   article: string | null,
-  seedBarcode: string | null
+  seedBarcode: string | null,
+  extraOpts?: {
+    familySkus?: string[];
+    familyBarcodes?: string[];
+    familyColorBySku?: Map<string, string>;
+    brand?: string | null;
+    description?: string | null;
+    targetColor?: string | null;
+    probeDirectCdn?: boolean;
+  }
 ): Promise<MatahariFamilyImages> {
   const emptyResult: MatahariFamilyImages = {
     variantSkus: [],
@@ -138,153 +202,261 @@ async function fetchMatahariFamilyAndImages(
     defaultImages: [],
   };
 
+  const allFamilySkuSet = new Set<string>();
+  const allFamilyBarcodeSet = new Set<string>();
+  if (seedSku) allFamilySkuSet.add(seedSku.trim());
+  if (seedBarcode) allFamilyBarcodeSet.add(seedBarcode.trim());
+  for (const fs of extraOpts?.familySkus || []) {
+    const s = String(fs || '').trim();
+    if (s) allFamilySkuSet.add(s);
+  }
+  for (const fb of extraOpts?.familyBarcodes || []) {
+    const b = String(fb || '').trim();
+    if (b) allFamilyBarcodeSet.add(b);
+  }
+
   const queries: string[] = [];
   const addQ = (q: string | null | undefined) => {
     const clean = String(q || '').trim();
-    if (clean && !queries.includes(clean)) queries.push(clean);
+    if (clean && !queries.includes(clean) && queries.length < 8) queries.push(clean);
   };
   addQ(seedSku);
   if (article && article.length >= 4) addQ(article);
   if (seedBarcode && seedBarcode !== seedSku) addQ(seedBarcode);
-  if (queries.length === 0) return emptyResult;
 
-  const handles: string[] = [];
-  try {
-    const suggestResponses = await Promise.all(
-      queries.map(async (q) => {
-        try {
-          const res = await fetch(
-            `https://www.matahari.com/search/suggest.json?q=${encodeURIComponent(q)}&resources[type]=product`,
-            {
-              headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0' },
-              signal: AbortSignal.timeout(3500),
-            }
-          );
-          if (!res.ok) return [];
-          const json: any = await res.json().catch(() => null);
-          return (json?.resources?.results?.products || []) as any[];
-        } catch {
-          return [];
-        }
-      })
-    );
-
-    for (const prodList of suggestResponses) {
-      for (const p of prodList) {
-        const h = String(p?.handle || '').trim();
-        if (h && !handles.includes(h)) {
-          handles.push(h);
-          if (handles.length >= 4) break;
+  // Tambahkan 1 SKU representatif dari setiap warna berbeda (maks 4 SKU) agar varian multi-batch terdeteksi di Matahari
+  if (extraOpts?.familyColorBySku && extraOpts.familyColorBySku.size > 0) {
+    const seenRepColors = new Set<string>();
+    const targetNorm = normalizeRetailColorKey(extraOpts.targetColor);
+    if (targetNorm) {
+      for (const [fSku, fNormColor] of extraOpts.familyColorBySku.entries()) {
+        if (fNormColor === targetNorm && !seenRepColors.has(fNormColor)) {
+          seenRepColors.add(fNormColor);
+          addQ(fSku);
+          break;
         }
       }
-      if (handles.length >= 4) break;
     }
-  } catch {
-    return emptyResult;
+    for (const [fSku, fNormColor] of extraOpts.familyColorBySku.entries()) {
+      if (fNormColor && !seenRepColors.has(fNormColor)) {
+        seenRepColors.add(fNormColor);
+        addQ(fSku);
+        if (seenRepColors.size >= 4) break;
+      }
+    }
   }
 
-  if (handles.length === 0) return emptyResult;
+  for (const kw of buildMatahariKeywordQueries(extraOpts?.brand, extraOpts?.description, article)) {
+    addQ(kw);
+  }
 
   const variantSkusSet = new Set<string>();
   const imagesBySku = new Map<string, string[]>();
   const imagesByColor = new Map<string, string[]>();
   const defaultImages: string[] = [];
 
-  const seedLower = seedSku.trim().toLowerCase();
-  const articleClean = sanitizeArticleCode(article);
-  const isAlphaNumArticle = Boolean(articleClean && /^(?=.*[A-Za-z])(?=.*\d).{5,}$/.test(articleClean));
-  const articleLower = articleClean ? articleClean.toLowerCase() : '';
+  // Jalur 1: Multi-Query Matahari Predictive Search
+  if (queries.length > 0) {
+    const handles: string[] = [];
+    try {
+      const suggestResponses = await Promise.all(
+        queries.map(async (q) => {
+          try {
+            const res = await fetch(
+              `https://www.matahari.com/search/suggest.json?q=${encodeURIComponent(q)}&resources[type]=product&resources[limit]=8`,
+              {
+                headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0' },
+                signal: AbortSignal.timeout(3500),
+              }
+            );
+            if (!res.ok) return [];
+            const json: any = await res.json().catch(() => null);
+            return (json?.resources?.results?.products || []) as any[];
+          } catch {
+            return [];
+          }
+        })
+      );
 
-  const productJsons = await Promise.all(
-    handles.map(async (handle) => {
-      try {
-        const res = await fetch(`https://www.matahari.com/products/${encodeURIComponent(handle)}.js`, {
-          headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0' },
-          signal: AbortSignal.timeout(3500),
+      for (const prodList of suggestResponses) {
+        for (const p of prodList) {
+          const h = String(p?.handle || '').trim();
+          if (h && !handles.includes(h)) {
+            handles.push(h);
+            if (handles.length >= 10) break;
+          }
+        }
+        if (handles.length >= 10) break;
+      }
+    } catch {}
+
+    if (handles.length > 0) {
+      const articleClean = sanitizeArticleCode(article);
+      const isAlphaNumArticle = Boolean(articleClean && /^(?=.*[A-Za-z])(?=.*\d).{5,}$/.test(articleClean));
+      const articleLower = articleClean ? articleClean.toLowerCase() : '';
+      const familyLowerSet = new Set(Array.from(allFamilySkuSet).map((s) => s.toLowerCase()));
+
+      const productJsons = await Promise.all(
+        handles.map(async (handle) => {
+          try {
+            const res = await fetch(`https://www.matahari.com/products/${encodeURIComponent(handle)}.js`, {
+              headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0' },
+              signal: AbortSignal.timeout(3500),
+            });
+            if (!res.ok) return null;
+            return await res.json().catch(() => null);
+          } catch {
+            return null;
+          }
+        })
+      );
+
+      for (const pj of productJsons) {
+        if (!pj || typeof pj !== 'object') continue;
+        const variants: any[] = Array.isArray(pj.variants) ? pj.variants : [];
+        const rawImages: any[] = Array.isArray(pj.images) ? pj.images : [];
+        const validImgs: string[] = [];
+        for (const imgRaw of rawImages) {
+          pushUniqueUrl(validImgs, normalizeMatahariImageUrl(imgRaw), 50);
+        }
+
+        // Cek kepemilikan ketat (cocokkan ke SALAH SATU SKU/barcode keluarga atau artikel alfanumerik)
+        const variantMatch = variants.some((v) => {
+          const vSku = String(v?.sku || '').trim();
+          const vBc = String(v?.barcode || '').trim();
+          return (vSku && allFamilySkuSet.has(vSku)) || (vBc && allFamilyBarcodeSet.has(vBc));
         });
-        if (!res.ok) return null;
-        return await res.json().catch(() => null);
-      } catch {
-        return null;
-      }
-    })
-  );
+        const imageFilenameMatch = validImgs.some((u) => {
+          const fn = u.split('?')[0].split('/').pop()?.toLowerCase() || '';
+          const skuPrefix = extractSkuFromShopifyUrl(u)?.toLowerCase();
+          if (skuPrefix && familyLowerSet.has(skuPrefix)) return true;
+          for (const sl of familyLowerSet) {
+            if (fn.includes(`${sl}-`) || fn.includes(`${sl}_`) || fn.includes(`${sl}.`)) return true;
+          }
+          return false;
+        });
+        const haystack = [
+          pj.title,
+          pj.handle,
+          Array.isArray(pj.tags) ? pj.tags.join(' ') : pj.tags,
+          pj.body_html,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        const articleMatch = Boolean(isAlphaNumArticle && articleLower && haystack.includes(articleLower));
 
-  for (const pj of productJsons) {
-    if (!pj || typeof pj !== 'object') continue;
-    const variants: any[] = Array.isArray(pj.variants) ? pj.variants : [];
-    const rawImages: any[] = Array.isArray(pj.images) ? pj.images : [];
-    const validImgs: string[] = [];
-    for (const imgRaw of rawImages) {
-      pushUniqueUrl(validImgs, normalizeMatahariImageUrl(imgRaw), 40);
+        if (!variantMatch && !imageFilenameMatch && !articleMatch) {
+          continue;
+        }
+
+        for (const u of validImgs) {
+          pushUniqueUrl(defaultImages, u, 8);
+        }
+
+        let colorOptionKey: 'option1' | 'option2' | 'option3' = 'option1';
+        if (Array.isArray(pj.options)) {
+          const idx = pj.options.findIndex((o: any) => /color|warna/i.test(String(o?.name || o || '')));
+          if (idx === 1) colorOptionKey = 'option2';
+          else if (idx === 2) colorOptionKey = 'option3';
+        }
+
+        for (const v of variants) {
+          const vSku = String(v?.sku || '').trim();
+          if (!vSku) continue;
+          variantSkusSet.add(vSku);
+
+          const vSkuLower = vSku.toLowerCase();
+          const rawColorUp = String(v?.[colorOptionKey] || v?.option1 || '')
+            .trim()
+            .toUpperCase();
+          const normColor = normalizeRetailColorKey(rawColorUp);
+
+          const skuImgs = imagesBySku.get(vSku) || [];
+          const featUrl = normalizeMatahariImageUrl(v?.featured_image?.src || v?.featured_image);
+          pushUniqueUrl(skuImgs, featUrl, 8);
+
+          const repSkuPrefix = extractSkuFromShopifyUrl(featUrl)?.toLowerCase();
+          for (const u of validImgs) {
+            const fn = u.split('?')[0].split('/').pop()?.toLowerCase() || '';
+            const matchSelf = fn.includes(`${vSkuLower}-`) || fn.includes(`${vSkuLower}_`) || fn.includes(`${vSkuLower}.`);
+            const matchFeat = Boolean(
+              repSkuPrefix && (fn.includes(`${repSkuPrefix}-`) || fn.includes(`${repSkuPrefix}_`) || fn.includes(`${repSkuPrefix}.`))
+            );
+            if (matchSelf || matchFeat) {
+              pushUniqueUrl(skuImgs, u, 8);
+            }
+          }
+
+          if (skuImgs.length > 0) {
+            imagesBySku.set(vSku, skuImgs);
+            if (normColor && !INVALID_ARTICLE_CODES.has(rawColorUp)) {
+              const colorImgs = imagesByColor.get(normColor) || [];
+              for (const u of skuImgs) pushUniqueUrl(colorImgs, u, 8);
+              imagesByColor.set(normColor, colorImgs);
+              if (rawColorUp && rawColorUp !== normColor) {
+                imagesByColor.set(rawColorUp, colorImgs);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Jalur 2: Direct Shopify CDN HEAD Probe per-warna yang belum memiliki foto dari Jalur 1
+  if (extraOpts?.probeDirectCdn && extraOpts.familyColorBySku && extraOpts.familyColorBySku.size > 0) {
+    const targetNorm = normalizeRetailColorKey(extraOpts.targetColor);
+    const probeTargets: Array<{ sku: string; normColor: string }> = [];
+    for (const [fSku, fNormColor] of extraOpts.familyColorBySku.entries()) {
+      if (!/^\d{7,9}$/.test(fSku)) continue;
+      if (imagesBySku.has(fSku)) continue;
+      if (fNormColor && (imagesByColor.get(fNormColor)?.length || 0) > 0) continue;
+      probeTargets.push({ sku: fSku, normColor: fNormColor });
     }
 
-    // Cek kepemilikan ketat (anti foto merk lain)
-    const variantMatch = variants.some((v) => {
-      const vSku = String(v?.sku || '').trim();
-      const vBc = String(v?.barcode || '').trim();
-      return (seedSku && vSku === seedSku) || (seedBarcode && vBc === seedBarcode);
+    // Prioritaskan warna yang sedang dibuka/dipilih terlebih dahulu
+    probeTargets.sort((a, b) => {
+      const aPrio = targetNorm && a.normColor === targetNorm ? 0 : 1;
+      const bPrio = targetNorm && b.normColor === targetNorm ? 0 : 1;
+      return aPrio - bPrio;
     });
-    const imageFilenameMatch =
-      Boolean(seedLower) &&
-      validImgs.some((u) => {
-        const fn = u.split('?')[0].split('/').pop()?.toLowerCase() || '';
-        return fn.includes(`${seedLower}-`) || fn.includes(`${seedLower}_`) || fn.includes(`${seedLower}.`);
-      });
-    const haystack = [
-      pj.title,
-      pj.handle,
-      Array.isArray(pj.tags) ? pj.tags.join(' ') : pj.tags,
-      pj.body_html,
-    ]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase();
-    const articleMatch = Boolean(isAlphaNumArticle && articleLower && haystack.includes(articleLower));
 
-    if (!variantMatch && !imageFilenameMatch && !articleMatch) {
-      continue;
-    }
+    const cappedTargets = probeTargets.slice(0, 24);
+    if (cappedTargets.length > 0) {
+      const headHits = await Promise.all(
+        cappedTargets.map(async (t) => {
+          const url1 = `https://cdn.shopify.com/s/files/1/0666/9212/0727/files/${t.sku}-1.jpg`;
+          try {
+            const res = await fetch(url1, { method: 'HEAD', signal: AbortSignal.timeout(2500) });
+            return res.ok ? { ...t, url1 } : null;
+          } catch {
+            return null;
+          }
+        })
+      );
 
-    for (const u of validImgs) {
-      pushUniqueUrl(defaultImages, u, 8);
-    }
-
-    let colorOptionKey: 'option1' | 'option2' | 'option3' = 'option1';
-    if (Array.isArray(pj.options)) {
-      const idx = pj.options.findIndex((o: any) => /color|warna/i.test(String(o?.name || o || '')));
-      if (idx === 1) colorOptionKey = 'option2';
-      else if (idx === 2) colorOptionKey = 'option3';
-    }
-
-    for (const v of variants) {
-      const vSku = String(v?.sku || '').trim();
-      if (!vSku) continue;
-      variantSkusSet.add(vSku);
-
-      const vSkuLower = vSku.toLowerCase();
-      const colorUp = String(v?.[colorOptionKey] || v?.option1 || '')
-        .trim()
-        .toUpperCase();
-
-      const skuImgs = imagesBySku.get(vSku) || [];
-      const featUrl = normalizeMatahariImageUrl(v?.featured_image?.src || v?.featured_image);
-      pushUniqueUrl(skuImgs, featUrl, 6);
-
-      for (const u of validImgs) {
-        const fn = u.split('?')[0].split('/').pop()?.toLowerCase() || '';
-        if (fn.includes(`${vSkuLower}-`) || fn.includes(`${vSkuLower}_`) || fn.includes(`${vSkuLower}.`)) {
-          pushUniqueUrl(skuImgs, u, 6);
+      const matchedHeads = headHits.filter(Boolean) as Array<{ sku: string; normColor: string; url1: string }>;
+      for (const hit of matchedHeads) {
+        const extraUrls = await Promise.all(
+          [2, 3, 4, 5].map(async (idx) => {
+            const u = `https://cdn.shopify.com/s/files/1/0666/9212/0727/files/${hit.sku}-${idx}.jpg`;
+            try {
+              const r = await fetch(u, { method: 'HEAD', signal: AbortSignal.timeout(2200) });
+              return r.ok ? u : null;
+            } catch {
+              return null;
+            }
+          })
+        );
+        const gallery = [hit.url1, ...(extraUrls.filter(Boolean) as string[])];
+        imagesBySku.set(hit.sku, gallery);
+        if (hit.normColor) {
+          const colorImgs = imagesByColor.get(hit.normColor) || [];
+          for (const u of gallery) pushUniqueUrl(colorImgs, u, 8);
+          imagesByColor.set(hit.normColor, colorImgs);
         }
-      }
-
-      if (skuImgs.length > 0) {
-        imagesBySku.set(vSku, skuImgs);
-        if (colorUp && !INVALID_ARTICLE_CODES.has(colorUp)) {
-          const colorImgs = imagesByColor.get(colorUp) || [];
-          for (const u of skuImgs) pushUniqueUrl(colorImgs, u, 6);
-          imagesByColor.set(colorUp, colorImgs);
-        }
+        for (const u of gallery) pushUniqueUrl(defaultImages, u, 8);
       }
     }
   }
@@ -371,9 +543,15 @@ async function persistRefreshedSessionIfAny(res: Response, currentCookie: string
   }
 }
 
-export async function getStoreHubCookie(forceRefresh: boolean = false): Promise<string> {
+export async function getStoreHubCookie(
+  forceRefresh: boolean = false,
+  previousCookie?: string | null
+): Promise<string> {
   const now = Date.now();
-  if (!forceRefresh && cachedCookie && cachedCookie.includes('mso_session') && (now - cookieCachedAt) < COOKIE_TTL_MS) {
+  if (forceRefresh) {
+    cachedCookie = null;
+    cookieCachedAt = 0;
+  } else if (cachedCookie && cachedCookie.includes('mso_session') && (now - cookieCachedAt) < COOKIE_TTL_MS) {
     return cachedCookie;
   }
 
@@ -385,12 +563,14 @@ export async function getStoreHubCookie(forceRefresh: boolean = false): Promise<
   }
 
   // 2. Ambil dari Supabase Storage (secrets/mds_cookie.txt) — WAJIB berisi mso_session!
+  // Saat forceRefresh, hanya pakai ulang jika sudah diperbarui instance lain (berbeda dari previousCookie).
   try {
     const { supabase } = await import('@/lib/supabaseClient');
     const { data, error } = await supabase.storage.from('excel-uploads').download('secrets/mds_cookie.txt');
     if (data && !error) {
       const cookie = (await data.text()).trim();
-      if (cookie && cookie.includes('mso_session')) {
+      const prevClean = String(previousCookie || '').trim();
+      if (cookie && cookie.includes('mso_session') && (!forceRefresh || (prevClean && cookie !== prevClean))) {
         cachedCookie = cookie;
         cookieCachedAt = now;
         return cachedCookie;
@@ -409,20 +589,22 @@ export async function getStoreHubCookie(forceRefresh: boolean = false): Promise<
       const scriptMatches = [...loginHtml.matchAll(/src="(\/_next\/static\/chunks\/[^"]+\.js)"/g)];
       for (const m of scriptMatches.slice(0, 12)) {
         const jsText = await fetch(`${STOREHUB_BASE}${m[1]}`, { signal: AbortSignal.timeout(4000) }).then(r => r.text()).catch(() => '');
-        const actMatch = jsText.match(/createServerReference\)?\("([a-f0-9]{40,44})"[^)]*"login"/);
+        const actMatch = jsText.match(/createServerReference\)?\("([a-f0-9]{40,44})"[^)]{0,160}"login"/);
         if (actMatch?.[1]) {
           loginActionHash = actMatch[1];
+          ACTION_LOGIN = actMatch[1];
           break;
         }
       }
     } catch {}
 
+    // KRUSIAL (React 19 decodeReplyFromBusboy): field `_1_*` WAJIB ditempatkan SEBELUM `'0'` (`[{},"$K1"]`).
     const fd = new FormData();
-    fd.append('0', '[{},"$K1"]');
     fd.append('_1_next', '/');
     fd.append('_1_username', CREDENTIALS.username);
     fd.append('_1_password', CREDENTIALS.password);
     fd.append('_1_tz', CREDENTIALS.tz);
+    fd.append('0', '[{},"$K1"]');
 
     const res = await fetch(LOGIN_URL, {
       method: 'POST',
@@ -435,7 +617,7 @@ export async function getStoreHubCookie(forceRefresh: boolean = false): Promise<
       },
       body: fd,
       redirect: 'manual',
-      signal: AbortSignal.timeout(6000),
+      signal: AbortSignal.timeout(8000),
     });
 
     const getSetCookie = (res.headers as any).getSetCookie;
@@ -447,7 +629,17 @@ export async function getStoreHubCookie(forceRefresh: boolean = false): Promise<
     // HANYA terima cookie yang benar-benar memiliki mso_session (JANGAN pernah simpan db76d-only!)
     if (sessionCookie && sessionCookie.includes('mso_session=')) {
       cachedCookie = sessionCookie;
-      cookieCachedAt = now;
+      cookieCachedAt = Date.now();
+      try {
+        const { supabase } = await import('@/lib/supabaseClient');
+        await supabase.storage.from('excel-uploads').upload(
+          'secrets/mds_cookie.txt',
+          Buffer.from(sessionCookie, 'utf-8'),
+          { contentType: 'text/plain', upsert: true }
+        );
+      } catch (uploadErr) {
+        console.warn('[MDS-CLIENT] Gagal menyimpan cookie baru ke Storage:', uploadErr);
+      }
       return sessionCookie;
     }
   } catch (e) {
@@ -501,12 +693,19 @@ function resolveProductGallery(
   const gallery: string[] = [];
   const sku = String(product?.sku || '').trim();
   const colorUp = String(product?.color || '').trim().toUpperCase();
+  const normColor = normalizeRetailColorKey(colorUp);
 
   pushUniqueUrl(gallery, product?.imageUrl, 8);
   for (const u of mataImages.imagesBySku.get(sku) || []) pushUniqueUrl(gallery, u, 8);
+  if (normColor) {
+    for (const u of mataImages.imagesByColor.get(normColor) || []) pushUniqueUrl(gallery, u, 8);
+  }
   if (colorUp) {
     for (const u of mataImages.imagesByColor.get(colorUp) || []) pushUniqueUrl(gallery, u, 8);
     pushUniqueUrl(gallery, siblingImgByColor.get(colorUp), 8);
+  }
+  if (normColor && normColor !== colorUp) {
+    pushUniqueUrl(gallery, siblingImgByColor.get(normColor), 8);
   }
   for (const u of mataImages.defaultImages) pushUniqueUrl(gallery, u, 8);
   pushUniqueUrl(gallery, fallbackArticleImg, 8);
@@ -714,6 +913,8 @@ async function finalizeProductFamilyResponse(params: {
   withImages: boolean;
   updatedVariants: LiveStockVariantSummary[];
   freshStockBySku?: Map<string, number>;
+  liveCheckedCount?: number;
+  changedCount?: number;
   newVariantsDiscovered: number;
   imagesMatched: number;
   storeOffline: boolean;
@@ -751,15 +952,47 @@ async function finalizeProductFamilyResponse(params: {
   let mataImages = params.mataImages;
   const anyMissingImg = !cleanedMain.imageUrl || siblings.some((s) => !s.imageUrl);
   const cleanArticle = sanitizeArticleCode(cleanedMain.article);
+  const hasUncoveredColor = siblings.some((s) => {
+    if (s.imageUrl) return false;
+    const normC = normalizeRetailColorKey(s.color);
+    return !mataImages.imagesBySku.has(s.sku) && (!normC || !mataImages.imagesByColor.has(normC));
+  });
   if (
     params.withImages &&
     anyMissingImg &&
-    mataImages.defaultImages.length === 0 &&
-    mataImages.imagesBySku.size === 0
+    (hasUncoveredColor || (mataImages.defaultImages.length === 0 && mataImages.imagesBySku.size === 0))
   ) {
-    mataImages = await fetchMatahariFamilyAndImages(cleanedMain.sku, cleanArticle, cleanedMain.barcode).catch(
-      () => mataImages
-    );
+    const familyColorBySku = new Map<string, string>();
+    const familySkus: string[] = [];
+    const familyBarcodes: string[] = [];
+    for (const sib of siblings) {
+      if (sib.sku) {
+        familySkus.push(sib.sku);
+        const normC = normalizeRetailColorKey(sib.color);
+        if (normC) familyColorBySku.set(sib.sku, normC);
+      }
+      if (sib.barcode) familyBarcodes.push(sib.barcode);
+    }
+    const fetchedMata = await fetchMatahariFamilyAndImages(cleanedMain.sku, cleanArticle, cleanedMain.barcode, {
+      familySkus,
+      familyBarcodes,
+      familyColorBySku,
+      brand: cleanedMain.brand,
+      description: cleanedMain.description,
+      targetColor: cleanedMain.color,
+      probeDirectCdn: true,
+    }).catch(() => null);
+    if (fetchedMata) {
+      for (const [k, v] of fetchedMata.imagesBySku) {
+        if (!mataImages.imagesBySku.has(k) && v.length > 0) mataImages.imagesBySku.set(k, v);
+      }
+      for (const [k, v] of fetchedMata.imagesByColor) {
+        if (!mataImages.imagesByColor.has(k) && v.length > 0) mataImages.imagesByColor.set(k, v);
+      }
+      if (mataImages.defaultImages.length === 0 && fetchedMata.defaultImages.length > 0) {
+        mataImages = { ...mataImages, defaultImages: fetchedMata.defaultImages };
+      }
+    }
   }
 
   // Petakan foto yang sudah ada di database antar-sibling dalam artikel yang sama
@@ -781,12 +1014,13 @@ async function finalizeProductFamilyResponse(params: {
         const sibGal = resolveProductGallery(sib, mataImages, siblingImgByColor, fallbackArticleImg);
         if (sibGal.length > 0) {
           sib.imageUrl = sibGal[0];
+          sib.images = sibGal;
           extraImagesMatched++;
           dbBackfillUpdates.push(
             prisma.product
               .update({
                 where: { sku: sib.sku },
-                data: { imageUrl: sibGal[0], updatedAt: new Date() },
+                data: { imageUrl: sibGal[0], images: sibGal, updatedAt: new Date() },
               })
               .catch(() => {})
           );
@@ -838,6 +1072,8 @@ async function finalizeProductFamilyResponse(params: {
     barcode: enrichedMain.barcode,
     hargaNormal: enrichedMain.hargaNormal,
     totalVariantsUpdated: params.updatedVariants.length > 0 ? params.updatedVariants.length : enrichedSiblings.length,
+    liveCheckedCount: params.liveCheckedCount,
+    changedCount: params.changedCount,
     newVariantsDiscovered: params.newVariantsDiscovered,
     imagesMatched: extraImagesMatched,
     variants:
@@ -849,6 +1085,29 @@ async function finalizeProductFamilyResponse(params: {
     storeOffline: params.storeOffline,
     ...(params.message ? { message: params.message } : {}),
   };
+}
+
+async function resolveDetailActionHash(activeCookie: string): Promise<boolean> {
+  try {
+    const html = await fetch(ITEM_CHECKER_URL, {
+      headers: { Cookie: activeCookie },
+      signal: AbortSignal.timeout(4000),
+    }).then((r) => r.text());
+    const matches = [...html.matchAll(/src="(\/_next\/static\/chunks\/[^"]+\.js)"/g)];
+    for (const m of matches.slice(0, 12)) {
+      const jsText = await fetch(`${STOREHUB_BASE}${m[1]}`, {
+        signal: AbortSignal.timeout(3500),
+      })
+        .then((r) => r.text())
+        .catch(() => '');
+      const actMatch = jsText.match(/createServerReference\)?\("([a-f0-9]{40,44})"[^)]{0,160}"checkItemDetail"/);
+      if (actMatch?.[1]) {
+        ACTION_DETAIL = actMatch[1];
+        return true;
+      }
+    }
+  } catch {}
+  return false;
 }
 
 export async function checkSingleItemStock(
@@ -998,6 +1257,9 @@ export async function checkSingleItemStock(
             if (errStr.includes('no route to host') || errStr.includes('tcp connection')) {
               return { itemData: null, allItems: [], authFailed: false, offline: true, actionExpired: false, cookie: updatedCookie };
             }
+            if (/unauth|login|session|expired/i.test(errStr)) {
+              return { itemData: null, allItems: [], authFailed: true, offline: false, actionExpired: false, cookie: updatedCookie };
+            }
           }
           if (parsed?.result?.data && typeof parsed.result.data === 'object') {
             const entries = Object.entries(parsed.result.data);
@@ -1032,6 +1294,20 @@ export async function checkSingleItemStock(
       }
     }
 
+    // Jika cookie expired/ditolak tanpa HTTP 307, Next.js RSC sering merender shell halaman (/login / ToastProvider / $Sreact.fragment)
+    if (
+      !parsedItem &&
+      allItems.length === 0 &&
+      !text.includes('"result"') &&
+      (text.includes('$Sreact.fragment') ||
+        text.includes('ToastProvider') ||
+        text.includes('LoginForm') ||
+        text.includes('/_next/static/chunks/') ||
+        text.includes('/login'))
+    ) {
+      return { itemData: null, allItems: [], authFailed: true, offline: false, actionExpired: false, cookie: updatedCookie };
+    }
+
     return { itemData: parsedItem, allItems, authFailed: false, offline: false, actionExpired: false, cookie: updatedCookie };
   };
 
@@ -1050,27 +1326,25 @@ export async function checkSingleItemStock(
 
     // Jika Next-Action hash berubah di StoreHub, resolve dinamis lalu retry 1x
     if (queryRes.actionExpired) {
-      try {
-        const html = await fetch(ITEM_CHECKER_URL, { headers: { Cookie: cookie }, signal: AbortSignal.timeout(4000) }).then(r => r.text());
-        const matches = [...html.matchAll(/src="(\/_next\/static\/chunks\/[^"]+\.js)"/g)];
-        for (const m of matches.slice(0, 12)) {
-          const jsText = await fetch(`${STOREHUB_BASE}${m[1]}`, { signal: AbortSignal.timeout(3500) }).then(r => r.text()).catch(() => '');
-          const actMatch = jsText.match(/createServerReference\)?\("([a-f0-9]{40,44})"[^)]*"checkItemDetail"/);
-          if (actMatch?.[1]) {
-            ACTION_DETAIL = actMatch[1];
-            queryRes = await queryStoreHubDetail(activeKind, queriedCode, cookie);
-            break;
-          }
-        }
-      } catch {}
+      if (await resolveDetailActionHash(cookie)) {
+        queryRes = await queryStoreHubDetail(activeKind, queriedCode, cookie);
+      }
     }
 
-    // Jika cookie expired (401 / redirect), muat ulang paksa lalu retry 1x
+    // Jika cookie expired (401 / redirect / HTTP 200 RSC shell), paksa auto-login lalu retry 1x
     if (queryRes.authFailed) {
-      const freshCookie = await getStoreHubCookie(true).catch(() => null);
-      if (freshCookie && freshCookie !== cookie) {
+      const freshCookie: string | null = await getStoreHubCookie(true, cookie).catch(() => null);
+      if (freshCookie) {
         cookie = freshCookie;
         queryRes = await queryStoreHubDetail(activeKind, queriedCode, cookie);
+      }
+      if (queryRes.authFailed || queryRes.actionExpired) {
+        if (await resolveDetailActionHash(cookie)) {
+          queryRes = await queryStoreHubDetail(activeKind, queriedCode, cookie);
+        }
+      }
+      if (queryRes.authFailed) {
+        return await fallbackToDb('Sesi login StoreHub MDS BISA gagal diperbarui. Menampilkan stok tersimpan.');
       }
     }
 
@@ -1106,29 +1380,39 @@ export async function checkSingleItemStock(
 
     const existingMain = await prisma.product.findUnique({
       where: { sku: seedSku },
-      select: { article: true, barcode: true, imageUrl: true },
+      select: { article: true, barcode: true, imageUrl: true, stok: true },
     });
     if (!articleToSearch) {
       articleToSearch = sanitizeArticleCode(existingMain?.article);
     }
 
-    // Tarik foto studio & daftar SKU varian dari Matahari.com bila diminta
+    // Tarik foto studio & daftar SKU varian dari Matahari.com + direct Shopify CDN bila diminta
+    const seedBrand = String(itemData.Brand ?? itemData.brand ?? '').trim() || null;
+    const seedDesc = String(itemData.Description ?? itemData.description ?? itemData.ItemName ?? itemData.itemName ?? '').trim() || null;
+    const seedColor = String(itemData.Color ?? itemData.color ?? '').trim() || null;
     const mataImages = (discoverFamily || withImages)
-      ? await fetchMatahariFamilyAndImages(seedSku, articleToSearch, seedBarcode || existingMain?.barcode || null).catch(() => emptyMata)
+      ? await fetchMatahariFamilyAndImages(seedSku, articleToSearch, seedBarcode || existingMain?.barcode || null, {
+          brand: seedBrand,
+          description: seedDesc,
+          targetColor: seedColor,
+          probeDirectCdn: true,
+        }).catch(() => emptyMata)
       : emptyMata;
 
-    // Peta foto sibling eksisting di database Supabase
+    // Peta foto sibling eksisting & stok DB Supabase saat ini (untuk deteksi perubahan 1x scan)
     const siblingImgByColor = new Map<string, string>();
     const existingFamilySkus = new Set<string>();
+    const existingFamilyMap = new Map<string, { id: number; sku: string; color: string | null; size: string | null; stok: number }>();
     const existingFamilyBarcodes = new Set<string>();
     let fallbackArticleImg: string | null = existingMain?.imageUrl || mataImages.defaultImages[0] || null;
     if (articleToSearch) {
       const dbSibs = await prisma.product.findMany({
         where: { article: articleToSearch },
-        select: { sku: true, barcode: true, color: true, imageUrl: true },
+        select: { id: true, sku: true, barcode: true, color: true, size: true, stok: true, imageUrl: true },
       });
       for (const s of dbSibs) {
         existingFamilySkus.add(s.sku);
+        existingFamilyMap.set(s.sku, { id: s.id, sku: s.sku, color: s.color, size: s.size, stok: s.stok });
         if (s.barcode) existingFamilyBarcodes.add(s.barcode);
         if (s.imageUrl) {
           if (!fallbackArticleImg) fallbackArticleImg = s.imageUrl;
@@ -1143,9 +1427,11 @@ export async function checkSingleItemStock(
     const updatedVariants: LiveStockVariantSummary[] = [];
     const freshStockBySku = new Map<string, number>();
     const seenUpdatedSkus = new Set<string>();
+    const liveCheckedSkus = new Set<string>();
     const probedKeys = new Set<string>([`sku:${seedSku}`, ...(seedBarcode ? [`upc:${seedBarcode}`] : [])]);
     let newVariantsDiscovered = 0;
     let imagesMatched = 0;
+    let changedCount = 0;
 
     for (const rawIt of itemsToUpsert) {
       const rawSku = String(rawIt?.SKU ?? rawIt?.sku ?? '').trim();
@@ -1163,6 +1449,11 @@ export async function checkSingleItemStock(
       });
       if (!saved) continue;
       freshStockBySku.set(saved.sku, saved.stok);
+      liveCheckedSkus.add(saved.sku);
+      const prevStok = existingFamilyMap.get(saved.sku)?.stok ?? (saved.sku === seedSku ? existingMain?.stok : undefined);
+      if (saved.wasNewSku || (prevStok !== undefined && prevStok !== saved.stok)) {
+        changedCount++;
+      }
       probedKeys.add(`sku:${saved.sku}`);
       if (saved.barcode) probedKeys.add(`upc:${saved.barcode}`);
       if (saved.wasNewSku) newVariantsDiscovered++;
@@ -1263,7 +1554,14 @@ export async function checkSingleItemStock(
             });
             if (!saved) continue;
             freshStockBySku.set(saved.sku, saved.stok);
-            if (saved.wasNewSku) newVariantsDiscovered++;
+            liveCheckedSkus.add(saved.sku);
+            const prevStok = existingFamilyMap.get(saved.sku)?.stok;
+            if (saved.wasNewSku) {
+              newVariantsDiscovered++;
+              changedCount++;
+            } else if (prevStok !== undefined && prevStok !== saved.stok) {
+              changedCount++;
+            }
             if (saved.imageUpdated) imagesMatched++;
             if (!seenUpdatedSkus.has(saved.sku)) {
               seenUpdatedSkus.add(saved.sku);
@@ -1323,7 +1621,9 @@ export async function checkSingleItemStock(
 
           if (foundQty !== null) {
             freshStockBySku.set(sib.sku, foundQty);
+            liveCheckedSkus.add(sib.sku);
             if (sib.stok !== foundQty) {
+              changedCount++;
               const list = idsByStock.get(foundQty) || [];
               list.push(sib.id);
               idsByStock.set(foundQty, list);
@@ -1333,36 +1633,74 @@ export async function checkSingleItemStock(
           }
         }
         if (idsByStock.size > 0) {
-          for (const [qtyVal, idList] of idsByStock.entries()) {
-            await prisma.product.updateMany({
-              where: { id: { in: idList } },
-              data: { stok: qtyVal },
-            }).catch(() => {});
-          }
+          const nowTs = new Date();
+          await Promise.allSettled(
+            Array.from(idsByStock.entries()).map(([qtyVal, idList]) =>
+              prisma.product.updateMany({
+                where: { id: { in: idList } },
+                data: { stok: qtyVal, updatedAt: nowTs },
+              })
+            )
+          );
         }
       } catch (sibErr) {
         console.warn('[MDS-CLIENT] Gagal update sibling variants:', sibErr);
       }
     }
 
-    // 4. Pastikan 100% SELURUH warna & size eksisting dalam artikel ini terupdate langsung di 1 klik!
-    // Bila masih ada SKU di artikel DB yang belum terjangkau `allItems` atau `relatedStock`, probe paralel serentak ke StoreHub.
+    // 4. Pastikan SELURUH warna & size eksisting dalam artikel ini terupdate cepat di 1 klik!
+    // Probe StoreHub secara paralel (batch 20) lalu batch-update ke PostgreSQL hanya yang stoknya berubah (bebas bottleneck upsert berulang).
     if (syncAllSizes && cookie) {
-      const remainingFamilySkus = Array.from(existingFamilySkus).filter((s) => s && !seenUpdatedSkus.has(s));
+      const activeColorUp = String(itemData.COLOR ?? itemData.Color ?? itemData.color ?? '').trim().toUpperCase();
+      const remainingFamilySkus = Array.from(existingFamilySkus)
+        .filter((s) => s && !seenUpdatedSkus.has(s))
+        .sort((a, b) => {
+          const aSame = activeColorUp && String(existingFamilyMap.get(a)?.color || '').trim().toUpperCase() === activeColorUp ? 0 : 1;
+          const bSame = activeColorUp && String(existingFamilyMap.get(b)?.color || '').trim().toUpperCase() === activeColorUp ? 0 : 1;
+          return aSame - bSame;
+        });
+
       if (remainingFamilySkus.length > 0) {
         const directProbeStart = Date.now();
-        const DIRECT_BATCH = 12;
+        const DIRECT_BATCH = 20;
+        const changedIdsByStock = new Map<number, number[]>();
+        const newItemsToUpsert: Array<{ raw: any; code: string }> = [];
+        let refreshedMidLoop = false;
+
         for (let i = 0; i < remainingFamilySkus.length; i += DIRECT_BATCH) {
-          if (Date.now() - directProbeStart >= 5500) break;
+          if (Date.now() - directProbeStart >= 15000) break;
           const batch = remainingFamilySkus.slice(i, i + DIRECT_BATCH);
-          const batchRes = await Promise.all(
+          let batchRes = await Promise.all(
             batch.map(async (targetSibSku) => ({
               targetSibSku,
-              res: await queryStoreHubDetail('sku', targetSibSku, cookie!, 3000),
+              res: await queryStoreHubDetail('sku', targetSibSku, cookie!, 3500),
             }))
           );
+
+          const authFailedIndices: number[] = [];
+          batchRes.forEach((entry, idx) => {
+            if (entry.res.authFailed) authFailedIndices.push(idx);
+          });
+          if (authFailedIndices.length > 0 && !refreshedMidLoop) {
+            refreshedMidLoop = true;
+            const freshCookie: string | null = await getStoreHubCookie(true, cookie).catch(() => null);
+            if (freshCookie) {
+              cookie = freshCookie;
+              const retried = await Promise.all(
+                authFailedIndices.map(async (idx) => ({
+                  idx,
+                  res: await queryStoreHubDetail('sku', batch[idx], cookie!, 3500),
+                }))
+              );
+              for (const { idx, res } of retried) {
+                batchRes[idx] = { targetSibSku: batch[idx], res };
+              }
+            }
+          }
+
           let abortedOffline = false;
-          for (const { res } of batchRes) {
+          for (const { targetSibSku, res } of batchRes) {
+            if (res.cookie && !res.authFailed) cookie = res.cookie;
             if (res.offline) {
               abortedOffline = true;
               continue;
@@ -1371,26 +1709,79 @@ export async function checkSingleItemStock(
             for (const foundRaw of foundList) {
               const rawSku = String(foundRaw?.SKU ?? foundRaw?.sku ?? '').trim();
               const rawDirectStok = foundRaw?.StockOnHand ?? foundRaw?.stockOnHand ?? foundRaw?.stock_on_hand ?? foundRaw?.soh;
-              if (rawSku && rawDirectStok !== undefined && rawDirectStok !== null) {
-                freshStockBySku.set(rawSku, parseInt(String(rawDirectStok), 10) || 0);
+              if (!rawSku || rawDirectStok === undefined || rawDirectStok === null) continue;
+              const liveStok = parseInt(String(rawDirectStok), 10);
+              if (Number.isNaN(liveStok)) continue;
+
+              freshStockBySku.set(rawSku, liveStok);
+              liveCheckedSkus.add(rawSku);
+
+              const existingSib = existingFamilyMap.get(rawSku);
+              if (existingSib) {
+                if (existingSib.stok !== liveStok) {
+                  changedCount++;
+                  const list = changedIdsByStock.get(liveStok) || [];
+                  list.push(existingSib.id);
+                  changedIdsByStock.set(liveStok, list);
+                }
+                if (!seenUpdatedSkus.has(rawSku)) {
+                  seenUpdatedSkus.add(rawSku);
+                  updatedVariants.push({
+                    sku: rawSku,
+                    color: existingSib.color,
+                    size: existingSib.size,
+                    stok: liveStok,
+                  });
+                }
+              } else {
+                newItemsToUpsert.push({ raw: foundRaw, code: rawSku || targetSibSku });
               }
-              const saved = await upsertStoreHubItemToDb(foundRaw, {
-                queriedCode: rawSku || queriedCode,
-                queriedKind: 'sku',
-                mataImages,
-                siblingImgByColor,
-                fallbackArticle: articleToSearch,
-                fallbackArticleImg,
-              });
+            }
+          }
+          if (abortedOffline) break;
+        }
+
+        if (changedIdsByStock.size > 0) {
+          const nowTs = new Date();
+          await Promise.allSettled(
+            Array.from(changedIdsByStock.entries()).map(([qtyVal, idList]) =>
+              prisma.product.updateMany({
+                where: { id: { in: idList } },
+                data: { stok: qtyVal, updatedAt: nowTs },
+              })
+            )
+          );
+        }
+
+        if (newItemsToUpsert.length > 0) {
+          for (let i = 0; i < newItemsToUpsert.length; i += 5) {
+            const upBatch = newItemsToUpsert.slice(i, i + 5);
+            const savedList = await Promise.all(
+              upBatch.map((it) =>
+                upsertStoreHubItemToDb(it.raw, {
+                  queriedCode: it.code,
+                  queriedKind: 'sku',
+                  mataImages,
+                  siblingImgByColor,
+                  fallbackArticle: articleToSearch,
+                  fallbackArticleImg,
+                })
+              )
+            );
+            for (const saved of savedList) {
               if (!saved) continue;
               freshStockBySku.set(saved.sku, saved.stok);
+              liveCheckedSkus.add(saved.sku);
+              if (saved.wasNewSku) {
+                newVariantsDiscovered++;
+                changedCount++;
+              }
               if (!seenUpdatedSkus.has(saved.sku)) {
                 seenUpdatedSkus.add(saved.sku);
                 updatedVariants.push({ sku: saved.sku, color: saved.color, size: saved.size, stok: saved.stok });
               }
             }
           }
-          if (abortedOffline) break;
         }
       }
     }
@@ -1402,6 +1793,8 @@ export async function checkSingleItemStock(
       withImages,
       updatedVariants,
       freshStockBySku,
+      liveCheckedCount: liveCheckedSkus.size,
+      changedCount,
       newVariantsDiscovered,
       imagesMatched,
       storeOffline: false,
@@ -1423,9 +1816,16 @@ export async function healProductImagesInDb(params: {
   sku?: string | null;
   article?: string | null;
   barcode?: string | null;
+  targetColor?: string | null;
+  force?: boolean;
 }): Promise<{
   success: boolean;
   healed: boolean;
+  updatedCount: number;
+  matchedColors: string[];
+  unmatchedColors: string[];
+  activeColorMatched: boolean;
+  message: string;
   data?: any;
   siblings?: any[];
 }> {
@@ -1441,23 +1841,15 @@ export async function healProductImagesInDb(params: {
     dbMain = await prisma.product.findFirst({ where: { barcode: cleanBarcode } });
   }
   if (!dbMain) {
-    return { success: false, healed: false };
-  }
-
-  const artToUse = sanitizeArticleCode(dbMain.article) || cleanArticle;
-  const mataImages = await fetchMatahariFamilyAndImages(
-    dbMain.sku,
-    artToUse,
-    dbMain.barcode || cleanBarcode
-  );
-
-  const hasFreshMata =
-    mataImages.defaultImages.length > 0 ||
-    mataImages.imagesBySku.size > 0 ||
-    mataImages.imagesByColor.size > 0;
-
-  if (!hasFreshMata) {
-    return { success: false, healed: false };
+    return {
+      success: false,
+      healed: false,
+      updatedCount: 0,
+      matchedColors: [],
+      unmatchedColors: [],
+      activeColorMatched: false,
+      message: 'Produk tidak ditemukan di database.',
+    };
   }
 
   let siblings = await getProductSiblings(checkAndCleanPromo(dbMain));
@@ -1465,37 +1857,127 @@ export async function healProductImagesInDb(params: {
     siblings = [checkAndCleanPromo(dbMain)];
   }
 
+  const skuToNormColor = new Map<string, string>();
+  const normColorToDisplay = new Map<string, string>();
+  const familySkus: string[] = [];
+  const familyBarcodes: string[] = [];
+  for (const sib of siblings) {
+    const s = String(sib.sku || '').trim();
+    if (!s) continue;
+    familySkus.push(s);
+    if (sib.barcode) familyBarcodes.push(String(sib.barcode).trim());
+    const disp = String(sib.color || '').trim().toUpperCase();
+    const norm = normalizeRetailColorKey(disp);
+    if (norm) {
+      skuToNormColor.set(s, norm);
+      if (!normColorToDisplay.has(norm) && disp) normColorToDisplay.set(norm, disp);
+    }
+  }
+
+  // Kumpulkan galeri eksisting per warna dengan proteksi kepemilikan SKU (anti foto beda warna)
+  const existingTrueColorGalleries = new Map<string, string[]>();
+  for (const sib of siblings) {
+    const normColor = normalizeRetailColorKey(sib.color);
+    if (!normColor) continue;
+    const candidates: string[] = [
+      ...(Array.isArray(sib.images) ? sib.images : []),
+      ...(sib.imageUrl ? [sib.imageUrl] : []),
+    ];
+    const validOwned: string[] = [];
+    for (const rawU of candidates) {
+      const normU = normalizeMatahariImageUrl(rawU);
+      if (!normU) continue;
+      const ownerSku = extractSkuFromShopifyUrl(normU);
+      if (ownerSku && skuToNormColor.has(ownerSku) && skuToNormColor.get(ownerSku) !== normColor) {
+        continue; // Tolak foto yang namanya milik SKU warna lain!
+      }
+      pushUniqueUrl(validOwned, normU, 8);
+    }
+    if (validOwned.length > 0) {
+      const existingList = existingTrueColorGalleries.get(normColor) || [];
+      if (validOwned.length > existingList.length) {
+        existingTrueColorGalleries.set(normColor, validOwned);
+      } else {
+        for (const u of validOwned) pushUniqueUrl(existingList, u, 8);
+        existingTrueColorGalleries.set(normColor, existingList);
+      }
+    }
+  }
+
+  const artToUse = sanitizeArticleCode(dbMain.article) || cleanArticle;
+  const activeColorLabel = String(params.targetColor || dbMain.color || '').trim().toUpperCase();
+  const mataImages = await fetchMatahariFamilyAndImages(
+    dbMain.sku,
+    artToUse,
+    dbMain.barcode || cleanBarcode,
+    {
+      familySkus,
+      familyBarcodes,
+      familyColorBySku: skuToNormColor,
+      brand: dbMain.brand,
+      description: dbMain.description,
+      targetColor: activeColorLabel,
+      probeDirectCdn: true,
+    }
+  );
+
+  const matchedNormColors = new Set<string>();
+  const unmatchedNormColors = new Set<string>();
   const dbUpdates: Promise<any>[] = [];
   let healedCount = 0;
 
   const updatedSiblings = siblings.map((sib) => {
     const skuKey = String(sib.sku || '').trim();
     const colorUp = String(sib.color || '').trim().toUpperCase();
-    const freshList: string[] = [];
+    const normColor = normalizeRetailColorKey(colorUp);
+    const trueGallery: string[] = [];
 
-    for (const u of mataImages.imagesBySku.get(skuKey) || []) pushUniqueUrl(freshList, u, 8);
-    if (colorUp) {
-      for (const u of mataImages.imagesByColor.get(colorUp) || []) pushUniqueUrl(freshList, u, 8);
+    for (const u of mataImages.imagesBySku.get(skuKey) || []) pushUniqueUrl(trueGallery, u, 8);
+    if (normColor) {
+      for (const u of mataImages.imagesByColor.get(normColor) || []) pushUniqueUrl(trueGallery, u, 8);
     }
-    for (const u of mataImages.defaultImages) pushUniqueUrl(freshList, u, 8);
+    if (colorUp && colorUp !== normColor) {
+      for (const u of mataImages.imagesByColor.get(colorUp) || []) pushUniqueUrl(trueGallery, u, 8);
+    }
+    if (trueGallery.length === 0 && normColor) {
+      for (const u of existingTrueColorGalleries.get(normColor) || []) pushUniqueUrl(trueGallery, u, 8);
+    }
 
-    if (freshList.length === 0) return sib;
+    if (trueGallery.length > 0) {
+      if (normColor) matchedNormColors.add(normColor);
+    } else if (normColor) {
+      unmatchedNormColors.add(normColor);
+    }
 
-    const samePrimary = sib.imageUrl === freshList[0];
+    // Pertahankan fallback hanya bila belum ada foto true-color sama sekali agar tampilan tidak blank
+    const finalList: string[] =
+      trueGallery.length > 0
+        ? trueGallery
+        : [
+            ...(Array.isArray(sib.images) && sib.images.length > 0 ? sib.images : sib.imageUrl ? [sib.imageUrl] : []),
+            ...mataImages.defaultImages,
+          ].filter((v, idx, arr) => Boolean(v) && arr.indexOf(v) === idx).slice(0, 8);
+
+    if (trueGallery.length === 0 && finalList.length === 0) return sib;
+
+    const targetPrimary = finalList[0];
+    const samePrimary = sib.imageUrl === targetPrimary;
     const sameGallery =
       Array.isArray(sib.images) &&
-      sib.images.length === freshList.length &&
-      sib.images.every((u: string, i: number) => u === freshList[i]);
+      sib.images.length === finalList.length &&
+      sib.images.every((u: string, i: number) => u === finalList[i]);
 
-    if (!samePrimary || !sameGallery) {
+    // Hanya update DB jika ada foto true-color baru/perbaikan, ATAU SKU sebelumnya belum punya foto sama sekali
+    const shouldWriteDb = (trueGallery.length > 0 || !sib.imageUrl) && (!samePrimary || !sameGallery);
+    if (shouldWriteDb && targetPrimary) {
       healedCount++;
       dbUpdates.push(
         prisma.product
           .update({
             where: { sku: skuKey },
             data: {
-              imageUrl: freshList[0],
-              images: freshList,
+              imageUrl: targetPrimary,
+              images: finalList,
             },
           })
           .catch(() => {})
@@ -1504,12 +1986,12 @@ export async function healProductImagesInDb(params: {
 
     return {
       ...sib,
-      imageUrl: freshList[0],
-      images: freshList,
+      imageUrl: targetPrimary || sib.imageUrl,
+      images: finalList.length > 0 ? finalList : sib.images,
     };
   });
 
-  if (artToUse && mataImages.defaultImages.length > 0) {
+  if (artToUse) {
     const mainMatch = updatedSiblings.find((s) => s.sku === dbMain!.sku);
     const catalogImg = mainMatch?.imageUrl || mataImages.defaultImages[0];
     if (catalogImg) {
@@ -1531,9 +2013,33 @@ export async function healProductImagesInDb(params: {
   const enrichedMain =
     updatedSiblings.find((s) => s.sku === dbMain!.sku) || updatedSiblings[0];
 
+  const matchedColors = Array.from(matchedNormColors).map((n) => normColorToDisplay.get(n) || n);
+  const unmatchedColors = Array.from(unmatchedNormColors)
+    .filter((n) => !matchedNormColors.has(n))
+    .map((n) => normColorToDisplay.get(n) || n);
+
+  const activeNormColor = normalizeRetailColorKey(activeColorLabel);
+  const activeColorMatched = activeNormColor ? matchedNormColors.has(activeNormColor) : matchedColors.length > 0;
+
+  let message = '';
+  if (healedCount > 0) {
+    const extraMissing =
+      unmatchedColors.length > 0 ? ` (${unmatchedColors.join(', ')} belum diunggah Matahari.com)` : '';
+    message = `📸 ${healedCount} varian diperbarui foto resminya (${matchedColors.join(', ') || 'tersinkron'}).${extraMissing}`;
+  } else if (activeColorMatched) {
+    message = `Foto warna ${activeColorLabel || 'aktif'} sudah paling baru & sinkron.`;
+  } else {
+    message = `Foto warna ${activeColorLabel || 'terpilih'} belum tersedia di katalog online Matahari.com (${matchedColors.length > 0 ? `warna tersedia: ${matchedColors.join(', ')}` : 'tidak ditemukan'}).`;
+  }
+
   return {
     success: true,
-    healed: healedCount > 0 || Boolean(enrichedMain?.imageUrl),
+    healed: healedCount > 0 || matchedColors.length > 0,
+    updatedCount: healedCount,
+    matchedColors,
+    unmatchedColors,
+    activeColorMatched,
+    message,
     data: enrichedMain,
     siblings: updatedSiblings,
   };

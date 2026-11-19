@@ -17,6 +17,8 @@ _AI_SCHEMA_CACHE: Dict[Tuple[str, ...], Optional[Dict[str, Any]]] = {}
 
 def is_gemini_available() -> bool:
     """Periksa apakah GEMINI_API_KEY sudah disetel."""
+    if os.getenv("SKIP_GEMINI_AI", "").strip() == "1":
+        return False
     if _AI_CIRCUIT_OPEN:
         return False
     key = os.getenv("GEMINI_API_KEY", "").strip()
@@ -28,6 +30,8 @@ def call_gemini(prompt: str, model: str = "gemini-2.5-flash") -> Optional[str]:
     Panggil Google Gemini REST API secara langsung dengan circuit breaker & timeout cepat (4.5s).
     """
     global _AI_CONSECUTIVE_FAILURES, _AI_CIRCUIT_OPEN
+    if os.getenv("SKIP_GEMINI_AI", "").strip() == "1":
+        return None
     if _AI_CIRCUIT_OPEN:
         return None
     api_key = os.getenv("GEMINI_API_KEY", "").strip()

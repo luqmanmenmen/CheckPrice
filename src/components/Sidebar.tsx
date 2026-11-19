@@ -17,7 +17,8 @@ import {
   CheckCircle2,
   RefreshCw,
   UserCircle2,
-  ScanBarcode
+  ScanBarcode,
+  ShieldAlert
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -31,6 +32,8 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
   const [isOpen, setIsOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [isLoggingOutAll, setIsLoggingOutAll] = useState(false);
+  const [showLogoutAllModal, setShowLogoutAllModal] = useState(false);
   const [isClearingCache, setIsClearingCache] = useState(false);
   const [syncProgress, setSyncProgress] = useState<number | undefined>(undefined);
   const [syncDetails, setSyncDetails] = useState<SyncProgressDetails | null>(null);
@@ -151,6 +154,31 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
     // 3. Jeda sejenak agar animasi page loading selesai dengan mulus sebelum pindah ke /login
     setTimeout(() => {
       window.location.href = "/login";
+    }, 700);
+  };
+
+  const handleLogoutAllDevices = async () => {
+    setShowLogoutAllModal(false);
+    setIsOpen(false);
+    setIsLoggingOutAll(true);
+    setIsLoggingOut(true);
+
+    try {
+      await fetch("/api/auth/logout-all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope: "all" }),
+      });
+    } catch (error) {
+      console.error(error);
+    }
+
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("suko_user");
+    }
+
+    setTimeout(() => {
+      window.location.href = "/login?reason=logged_out_all";
     }, 700);
   };
 
@@ -313,6 +341,24 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
                 </Link>
               )}
 
+              {activeUser && (
+                <Link
+                  href="/profile"
+                  onClick={() => setIsOpen(false)}
+                  className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-indigo-50/60 active:bg-indigo-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
+                >
+                  <div className="w-9 h-9 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                    <ShieldCheck className="w-4 h-4" />
+                  </div>
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-sm whitespace-normal break-words">Profil & Keamanan Akun</span>
+                    <span className="text-[10px] text-slate-500 font-semibold whitespace-normal break-words">
+                      Ubah PIN & Logout Perangkat
+                    </span>
+                  </div>
+                </Link>
+              )}
+
               {/* Section Pembaruan & Sinkronisasi */}
               <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 px-1 pt-3">
                 Pembaruan & Sinkronisasi
@@ -363,7 +409,20 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
             </div>
             
             {/* Drawer Footer dengan Safe Area iOS */}
-            <div className="p-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))] border-t border-slate-100 mt-auto bg-slate-50/80 shrink-0">
+            <div className="p-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))] border-t border-slate-100 mt-auto bg-slate-50/80 shrink-0 space-y-2">
+              {activeUser && (activeUser.role === "SUPERVISOR" || activeUser.nik === "22054178") && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsOpen(false);
+                    setShowLogoutAllModal(true);
+                  }}
+                  className="w-full py-2.5 px-3 flex items-center justify-center gap-2 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs transition-colors whitespace-normal break-words text-center"
+                >
+                  <ShieldAlert className="w-4 h-4 shrink-0" />
+                  <span>Logout All Device (Semua + Dev)</span>
+                </button>
+              )}
               {activeUser ? (
                 <AnimatedLogoutButton onLogout={handleLogout} />
               ) : (
@@ -387,12 +446,47 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
               <div className="bg-white/95 backdrop-blur-xl border border-white/50 rounded-3xl p-8 sm:p-10 shadow-2xl flex flex-col items-center max-w-xs w-full text-center">
                 <ShiftLoader />
                 <div className="mt-8 flex flex-col items-center gap-1.5">
-                  <h3 className="text-base sm:text-lg font-black text-slate-800 tracking-wider">
-                    MENGAKHIRI SHIFT
+                  <h3 className="text-base sm:text-lg font-black text-slate-800 tracking-wider whitespace-normal break-words">
+                    {isLoggingOutAll ? "LOGOUT ALL DEVICE" : "MENGAKHIRI SHIFT"}
                   </h3>
-                  <p className="text-xs text-slate-500 font-medium leading-relaxed">
-                    Menyimpan sesi & keluar dengan aman...
+                  <p className="text-xs text-slate-500 font-medium leading-relaxed whitespace-normal break-words">
+                    {isLoggingOutAll
+                      ? "Mengeluarkan seluruh perangkat termasuk Developer..."
+                      : "Menyimpan sesi & keluar dengan aman..."}
                   </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Konfirmasi Logout All Device Modal */}
+          {showLogoutAllModal && (
+            <div className="fixed inset-0 z-[99995] bg-slate-900/65 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-white rounded-3xl p-6 shadow-2xl max-w-sm w-full animate-in zoom-in-95 duration-200 border border-slate-100">
+                <div className="w-14 h-14 bg-rose-100 text-rose-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                  <ShieldAlert className="w-7 h-7" />
+                </div>
+                <h2 className="text-lg font-black text-slate-800 mb-2 text-center whitespace-normal break-words">
+                  Logout All Device (Semua + Developer)?
+                </h2>
+                <p className="text-sm text-slate-600 mb-6 leading-relaxed text-center whitespace-normal break-words">
+                  Semua akun yang sedang aktif di perangkat mana pun (Crew Store, Supervisor, <strong>termasuk Developer 22054178</strong>) akan langsung dikeluarkan dan shift ditutup.
+                </p>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowLogoutAllModal(false)}
+                    className="flex-1 py-3 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-all text-sm"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleLogoutAllDevices}
+                    className="flex-1 py-3 px-4 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl shadow-md shadow-rose-200 transition-all text-sm whitespace-normal break-words"
+                  >
+                    Ya, Keluarkan Semua
+                  </button>
                 </div>
               </div>
             </div>

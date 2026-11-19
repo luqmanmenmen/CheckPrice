@@ -16,6 +16,22 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid status" }, { status: 400 });
     }
 
+    const dbUser = await prisma.user.findUnique({
+      where: { id: session.userId },
+      select: { sessionId: true, status: true },
+    });
+
+    if (!dbUser || !dbUser.sessionId || dbUser.status === "OFFLINE" || dbUser.sessionId !== session.sessionId) {
+      const reason = !dbUser || !dbUser.sessionId || dbUser.status === "OFFLINE" ? "logged_out_all" : "device_switched";
+      const response = NextResponse.json(
+        { error: "Sesi sudah tidak aktif", kickedOut: true, reason },
+        { status: 401 }
+      );
+      response.cookies.set("token", "", { maxAge: 0, path: "/" });
+      response.cookies.set("sessionId", "", { maxAge: 0, path: "/" });
+      return response;
+    }
+
     const updatedUser = await prisma.user.update({
       where: { id: session.userId },
       data: { status, lastActive: new Date() }

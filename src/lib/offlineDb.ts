@@ -160,21 +160,35 @@ export function getLoadedModelsMemoryCache(): CachedArticleModel[] | null {
 
 /** Sinkronkan stok terbaru (hasil Live Stok) ke RAM cache model + IndexedDB lokal */
 export function updateLocalFamilyStockInMemory(
-  items: Array<{ sku: string; stok?: number; imageUrl?: string | null }>
+  items: Array<{ sku: string; stok?: number; imageUrl?: string | null; article?: string | null }>,
+  articleCode?: string | null
 ) {
   if (!items || items.length === 0) return;
   const map = new Map<string, { stok?: number; imageUrl?: string | null }>();
+  let articleTotal = 0;
   for (const it of items) {
     if (it?.sku) map.set(it.sku, it);
+    articleTotal += Math.max(0, Number(it?.stok ?? 0));
   }
+  const normArt = String(articleCode || items.find((i) => i?.article)?.article || '')
+    .trim()
+    .toUpperCase();
+
   if (memoryModelsCache) {
+    const modelsToPersist: CachedArticleModel[] = [];
     for (let i = 0; i < memoryModelsCache.length; i++) {
       const m = memoryModelsCache[i];
       const upd = map.get(m.sku);
-      if (upd) {
-        if (typeof upd.stok === "number") m.stok = upd.stok;
-        if (upd.imageUrl && !m.imageUrl) m.imageUrl = upd.imageUrl;
+      const sameArticle = Boolean(normArt && String(m.article || '').trim().toUpperCase() === normArt);
+      if (upd || sameArticle) {
+        if (upd && typeof upd.stok === "number") m.stok = upd.stok;
+        if (upd?.imageUrl && !m.imageUrl) m.imageUrl = upd.imageUrl;
+        m.articleTotalStok = articleTotal;
+        modelsToPersist.push(m);
       }
+    }
+    if (modelsToPersist.length > 0) {
+      db.models.bulkPut(modelsToPersist).catch(() => {});
     }
   }
 }
@@ -1134,13 +1148,22 @@ export async function queryLocalModelsInstant({
   let baseMatched: CachedArticleModel[] = [];
 
   if (trimmed) {
-    // 1. Cek exact article / sku match jika tidak sedang memfilter taxonomy
+    const isPureLongDigitCode = /^\d{8,20}$/.test(trimmed);
+
+    // 1. Cek exact article / sku / barcode match jika tidak sedang memfilter taxonomy
     if (brandGroup === "ALL" && category === "ALL" && !subBrandUpper && page === 1 && !/\s/.test(upper)) {
+      const candidateSet = new Set<string>([upper]);
+      if (/^\d+$/.test(upper)) {
+        const stripped = upper.replace(/^0+/, "");
+        if (stripped) candidateSet.add(stripped);
+        if (upper.length === 12) candidateSet.add(`0${upper}`);
+        if (upper.length === 13 && upper.startsWith("0")) candidateSet.add(upper.slice(1));
+      }
       const exactArts = models.filter(
         (m) =>
           (m.article && m.article.toUpperCase() === upper) ||
-          m.sku.toUpperCase() === upper ||
-          (m.barcode && m.barcode.toUpperCase() === upper)
+          candidateSet.has(m.sku.toUpperCase()) ||
+          (m.barcode && candidateSet.has(m.barcode.toUpperCase()))
       );
       if (exactArts.length === 1) {
         const hitSubBrand = exactArts[0].subBrand || getNormalizedSubBrand(exactArts[0]);
@@ -1165,42 +1188,50 @@ export async function queryLocalModelsInstant({
       }
     }
 
-    const expanded = expandRetailQuery(trimmed);
-    const terms = expanded.allExpandedTerms.filter((t) => t.length >= 2);
-    const sub3 = expanded.spaceless.length >= 3 ? expanded.spaceless.slice(0, 3) : "";
+    if (isPureLongDigitCode) {
+      // Barcode 8-20 digit tidak boleh jatuh ke pencocokan substring/fuzzy (misal "234")
+      baseMatched = [];
+    } else {
+      const expanded = expandRetailQuery(trimmed);
+      const terms = expanded.allExpandedTerms.filter((t) => t.length >= 2);
+      const sub3 =
+        expanded.spaceless.length >= 3 && !/^\d+$/.test(expanded.spaceless)
+          ? expanded.spaceless.slice(0, 3)
+          : "";
 
-    const scored: { item: CachedArticleModel; score: number }[] = [];
-    for (let i = 0; i < models.length; i++) {
-      const m = models[i];
-      const hay = m._searchHay || "";
-      if (!isDummy && (hay.includes("SKU DUMMY") || (m.article || "").toUpperCase().includes("DUMMY"))) {
-        continue;
-      }
+      const scored: { item: CachedArticleModel; score: number }[] = [];
+      for (let i = 0; i < models.length; i++) {
+        const m = models[i];
+        const hay = m._searchHay || "";
+        if (!isDummy && (hay.includes("SKU DUMMY") || (m.article || "").toUpperCase().includes("DUMMY"))) {
+          continue;
+        }
 
-      let quickHit = false;
-      for (let t = 0; t < terms.length; t++) {
-        if (hay.includes(terms[t])) {
-          quickHit = true;
-          break;
+        let quickHit = false;
+        for (let t = 0; t < terms.length; t++) {
+          if (hay.includes(terms[t])) {
+            quickHit = true;
+            break;
+          }
+        }
+        if (!quickHit && sub3 && hay.includes(sub3)) quickHit = true;
+        if (!quickHit) continue;
+
+        const s = computeProductRelevanceScore(m, expanded, isDummy);
+        if (s >= 35) {
+          scored.push({ item: m, score: s });
         }
       }
-      if (!quickHit && sub3 && hay.includes(sub3)) quickHit = true;
-      if (!quickHit) continue;
 
-      const s = computeProductRelevanceScore(m, expanded, isDummy);
-      if (s >= 35) {
-        scored.push({ item: m, score: s });
-      }
+      scored.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        if (b.item.articleTotalStok !== a.item.articleTotalStok) {
+          return b.item.articleTotalStok - a.item.articleTotalStok;
+        }
+        return (a.item.description || "").localeCompare(b.item.description || "");
+      });
+      baseMatched = scored.map((x) => x.item);
     }
-
-    scored.sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      if (b.item.articleTotalStok !== a.item.articleTotalStok) {
-        return b.item.articleTotalStok - a.item.articleTotalStok;
-      }
-      return (a.item.description || "").localeCompare(b.item.description || "");
-    });
-    baseMatched = scored.map((x) => x.item);
   } else {
     baseMatched = models.filter((m) => !isIgnoredCatalogProduct(m));
   }

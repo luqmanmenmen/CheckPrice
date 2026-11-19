@@ -22,6 +22,11 @@ import {
   ChevronUp,
   Flame,
   ShieldCheck,
+  Copy,
+  Wrench,
+  Search,
+  RotateCcw,
+  PackagePlus,
 } from "lucide-react";
 import Link from "next/link";
 import { APP_VERSION } from "@/lib/version";
@@ -41,6 +46,7 @@ interface StepItem {
 interface ActiveRun {
   id: number;
   runNumber: number;
+  primaryJobId?: number | null;
   status: "queued" | "in_progress" | "completed";
   conclusion: "success" | "failure" | "cancelled" | null;
   percent: number;
@@ -60,6 +66,8 @@ interface SyncHistoryItem {
   fileName: string;
   status: string;
   records: number;
+  newSkusAdded?: number;
+  newArticlesAdded?: number;
   createdAt: string;
 }
 
@@ -73,7 +81,65 @@ interface RecentRun {
   htmlUrl: string;
 }
 
-type TriggerAction = "scrab" | "mds-bisa" | "photos" | "stock-only" | "promo" | "catalog" | "all";
+interface ConsoleLogLine {
+  ts: string;
+  step: string;
+  level: "info" | "warn" | "error" | "heal" | "db" | "success";
+  text: string;
+}
+
+interface DiagnosticItem {
+  ts?: string;
+  step?: string;
+  attempt?: number;
+  code: string;
+  title: string;
+  detail: string;
+  retryable?: boolean;
+  traceback?: {
+    file?: string;
+    lineNo?: number;
+    exceptionType?: string;
+    exceptionMsg?: string;
+    snippet?: string;
+  } | null;
+}
+
+interface HealRecord {
+  ts?: string;
+  step?: string;
+  attempt?: number;
+  diagnosisCode: string;
+  healed: boolean;
+  message: string;
+}
+
+interface NewProductSample {
+  sku: string;
+  article: string | null;
+  description: string;
+  brand: string | null;
+  color: string | null;
+  size: string | null;
+  stok: number;
+}
+
+interface NewProductsSummary {
+  newSkusAdded: number;
+  newArticlesAdded: number;
+  samples?: NewProductSample[];
+  sourceFileName?: string;
+  sourceTime?: string;
+}
+
+interface DbMetrics {
+  totalProducts: number;
+  totalArticles: number;
+}
+
+type TriggerAction = "scrab" | "mds-bisa" | "photos" | "stock-only" | "promo" | "upcoming-promo" | "catalog" | "analytics" | "all";
+
+const MAX_FRONTEND_AUTO_RETRIES = 3;
 
 export default function UpdateProdukPage() {
   const [isGhDispatching, setIsGhDispatching] = useState(false);
@@ -92,15 +158,65 @@ export default function UpdateProdukPage() {
     steps: StepItem[];
     recentRuns: RecentRun[];
     syncHistory: SyncHistoryItem[];
+    consoleSource: "live-guardian" | "github-raw" | "summary";
+    consoleLines: ConsoleLogLine[];
+    diagnostics: DiagnosticItem[];
+    healsApplied: HealRecord[];
+    newProductsSummary: NewProductsSummary | null;
+    lastAction: TriggerAction;
+    dbMetrics: DbMetrics | null;
   }>({
     activeRun: null,
     steps: [],
     recentRuns: [],
     syncHistory: [],
+    consoleSource: "summary",
+    consoleLines: [],
+    diagnostics: [],
+    healsApplied: [],
+    newProductsSummary: null,
+    lastAction: "all",
+    dbMetrics: null,
   });
   const [isLoadingStatus, setIsLoadingStatus] = useState(false);
-  const [showFullTerminal, setShowFullTerminal] = useState(false);
+  const [showFullTerminal, setShowFullTerminal] = useState(true);
+  const [logFilter, setLogFilter] = useState<"all" | "error" | "heal" | "db">("all");
+  const [logSearch, setLogSearch] = useState("");
+  const [autoScrollLog, setAutoScrollLog] = useState(true);
+  const [copiedLog, setCopiedLog] = useState(false);
+  const [showSamples, setShowSamples] = useState(false);
+
+  // Bug Diagnosis, Self-Healing & Auto-Retry Loop State
+  const [autoRetryEnabled, setAutoRetryEnabled] = useState(true);
+  const [autoRetryCount, setAutoRetryCount] = useState(0);
+  const [autoRetryCountdown, setAutoRetryCountdown] = useState<number | null>(null);
+  const [isSelfHealing, setIsSelfHealing] = useState(false);
+  const [lastTriggerUsed, setLastTriggerUsed] = useState<TriggerAction | null>(null);
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const logContainerRef = useRef<HTMLDivElement | null>(null);
+  const retriedRunIdsRef = useRef<Set<number>>(new Set());
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const savedAuto = localStorage.getItem("guardian_auto_retry");
+        if (savedAuto === "false") setAutoRetryEnabled(false);
+        const savedAction = localStorage.getItem("guardian_last_action") as TriggerAction | null;
+        if (savedAction) setLastTriggerUsed(savedAction);
+      } catch {}
+    }
+  }, []);
+
+  const toggleAutoRetry = () => {
+    setAutoRetryEnabled((prev) => {
+      const next = !prev;
+      if (typeof window !== "undefined") {
+        localStorage.setItem("guardian_auto_retry", String(next));
+      }
+      if (!next) setAutoRetryCountdown(null);
+      return next;
+    });
+  };
 
   // Ambil NIK User
   useEffect(() => {
@@ -125,6 +241,13 @@ export default function UpdateProdukPage() {
             steps: data.steps || [],
             recentRuns: data.recentRuns || [],
             syncHistory: data.syncHistory || [],
+            consoleSource: data.consoleSource || "summary",
+            consoleLines: data.consoleLines || [],
+            diagnostics: data.diagnostics || [],
+            healsApplied: data.healsApplied || [],
+            newProductsSummary: data.newProductsSummary || null,
+            lastAction: data.lastAction || "all",
+            dbMetrics: data.dbMetrics || null,
           });
         }
       }
@@ -147,10 +270,129 @@ export default function UpdateProdukPage() {
     };
   }, []);
 
+  // Auto-scroll console log ke baris paling bawah saat ada baris baru
+  useEffect(() => {
+    if (autoScrollLog && logContainerRef.current) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+    }
+  }, [cloudStatus.consoleLines.length, autoScrollLog]);
+
+  // Reset counter retry otomatis bila run sukses penuh
+  useEffect(() => {
+    if (cloudStatus.activeRun?.status === "completed" && cloudStatus.activeRun.conclusion === "success") {
+      setAutoRetryCount(0);
+      setAutoRetryCountdown(null);
+    }
+  }, [cloudStatus.activeRun?.id, cloudStatus.activeRun?.status, cloudStatus.activeRun?.conclusion]);
+
+  // Self-Heal & Re-Dispatch ke GitHub Actions
+  const handleSelfHealAndRetry = async (targetAction?: TriggerAction, isAuto: boolean = false) => {
+    if (isSelfHealing || isGhDispatching) return;
+    const actionToRun = targetAction || lastTriggerUsed || cloudStatus.lastAction || "all";
+    const nextAttempt = isAuto ? autoRetryCount + 1 : autoRetryCount + 1;
+    setIsSelfHealing(true);
+    setAutoRetryCountdown(null);
+    setGhDispatchResult(null);
+
+    try {
+      const diagSummary = cloudStatus.diagnostics.map((d) => `${d.code}: ${d.title}`).join(" | ");
+      const res = await fetch("/api/admin/trigger/self-heal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: actionToRun,
+          refreshCookie: true,
+          reason: diagSummary || "Auto-Retry setelah kegagalan runner",
+          attempt: nextAttempt,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        if (isAuto) setAutoRetryCount(nextAttempt);
+        setGhDispatchResult({
+          success: true,
+          message: data.message,
+          actionsUrl: data.actionsUrl,
+        });
+        setTimeout(() => fetchCloudStatus(false), 1500);
+      } else {
+        setGhDispatchResult({
+          success: false,
+          message: data.error || data.message || "Gagal menjalankan Self-Heal & Retry.",
+        });
+      }
+    } catch (err: any) {
+      setGhDispatchResult({
+        success: false,
+        message: err.message || "Gagal menghubungi endpoint Self-Heal.",
+      });
+    } finally {
+      setIsSelfHealing(false);
+    }
+  };
+
+  // Auto-Retry countdown bila workflow gagal dan bukan error toko fisik tutup
+  useEffect(() => {
+    const run = cloudStatus.activeRun;
+    const storeOfflineOnly =
+      cloudStatus.diagnostics.length > 0 &&
+      cloudStatus.diagnostics.every((d) => d.code === "STORE_OFFLINE" || d.retryable === false);
+
+    if (
+      !autoRetryEnabled ||
+      !run ||
+      run.status !== "completed" ||
+      run.conclusion !== "failure" ||
+      isGhDispatching ||
+      isSelfHealing ||
+      storeOfflineOnly ||
+      autoRetryCount >= MAX_FRONTEND_AUTO_RETRIES ||
+      retriedRunIdsRef.current.has(run.id)
+    ) {
+      return;
+    }
+
+    setAutoRetryCountdown(8);
+    const interval = setInterval(() => {
+      setAutoRetryCountdown((prev) => {
+        if (prev === null) return null;
+        if (prev <= 1) {
+          clearInterval(interval);
+          if (!retriedRunIdsRef.current.has(run.id)) {
+            retriedRunIdsRef.current.add(run.id);
+            const resolvedAction = lastTriggerUsed || cloudStatus.lastAction || "all";
+            handleSelfHealAndRetry(resolvedAction, true);
+          }
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    autoRetryEnabled,
+    cloudStatus.activeRun?.id,
+    cloudStatus.activeRun?.status,
+    cloudStatus.activeRun?.conclusion,
+    isGhDispatching,
+    isSelfHealing,
+    autoRetryCount,
+  ]);
+
   // DISPATCH ENGINE: Memicu GitHub Actions Python Cloud Runner (0% Eksekusi Vercel)
   const handleGitHubDispatch = async (action: TriggerAction) => {
     setIsGhDispatching(true);
     setActiveAction(action);
+    setLastTriggerUsed(action);
+    setAutoRetryCount(0);
+    setAutoRetryCountdown(null);
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem("guardian_last_action", action);
+      } catch {}
+    }
     setGhDispatchResult(null);
 
     try {
@@ -213,7 +455,7 @@ export default function UpdateProdukPage() {
   const isFailed = activeRun?.hasError || (activeRun?.status === "completed" && activeRun?.conclusion === "failure");
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 pb-24 max-w-2xl mx-auto flex flex-col gap-5">
+    <div className="min-h-screen bg-slate-50 p-4 pb-24 max-w-3xl mx-auto flex flex-col gap-5">
       {/* Header */}
       <div className="flex items-center gap-3 justify-between">
         <div className="flex items-center gap-3">
@@ -596,22 +838,178 @@ export default function UpdateProdukPage() {
             </div>
           </div>
 
-          {/* Alert Error Box Jika Terjadi Kegagalan */}
-          {isFailed && (
-            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5 text-xs text-rose-900 animate-in fade-in">
-              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-              <div className="flex-1">
-                <p className="font-bold">Langkah Terhenti Karena Error:</p>
-                <p className="font-mono text-[11px] text-rose-700 mt-0.5">
-                  {activeRun?.errorStep || "Kegagalan pada salah satu step runner cloud."}
-                </p>
-                <p className="text-[11px] text-rose-600 mt-1">
-                  Silakan periksa log terminal di bawah atau buka tautan GitHub untuk meninjau detail error
-                  selengkapnya.
-                </p>
+          {/* Banner Produk Baru Ter-Add ke Database (Real DB PK id > baseline) */}
+          {(cloudStatus.newProductsSummary || cloudStatus.dbMetrics) && (
+            <div className="p-3.5 rounded-xl border border-emerald-200 bg-gradient-to-r from-emerald-50 via-teal-50/70 to-white flex flex-col gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                    <PackagePlus className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-extrabold text-emerald-950 whitespace-normal break-words">
+                      Audit Produk Baru Ter-Add di Database
+                    </p>
+                    <p className="text-[11px] text-emerald-700 whitespace-normal break-words">
+                      {cloudStatus.newProductsSummary?.sourceFileName
+                        ? `Hasil run terakhir: ${cloudStatus.newProductsSummary.sourceFileName}`
+                        : "Penghitungan real penambahan SKU & artikel baru di tabel Product PostgreSQL"}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-xs font-black tabular-nums shadow-xs">
+                    +{(cloudStatus.newProductsSummary?.newSkusAdded ?? 0).toLocaleString("id-ID")} SKU Baru
+                  </span>
+                  <span className="px-2.5 py-1 rounded-lg bg-teal-100 text-teal-900 border border-teal-200 text-xs font-extrabold tabular-nums">
+                    +{(cloudStatus.newProductsSummary?.newArticlesAdded ?? 0).toLocaleString("id-ID")} Artikel Baru
+                  </span>
+                  {cloudStatus.dbMetrics?.totalProducts ? (
+                    <span className="px-2.5 py-1 rounded-lg bg-white text-slate-700 border border-slate-200 text-xs font-bold tabular-nums">
+                      Total DB: {cloudStatus.dbMetrics.totalProducts.toLocaleString("id-ID")} SKU
+                    </span>
+                  ) : null}
+                </div>
               </div>
+
+              {cloudStatus.newProductsSummary?.samples && cloudStatus.newProductsSummary.samples.length > 0 && (
+                <div className="pt-1.5 border-t border-emerald-200/70">
+                  <button
+                    type="button"
+                    onClick={() => setShowSamples((v) => !v)}
+                    className="text-[11px] font-bold text-emerald-800 hover:underline flex items-center gap-1"
+                  >
+                    {showSamples ? "Sembunyikan" : "Lihat"} {cloudStatus.newProductsSummary.samples.length} sampel produk baru yang masuk DB
+                    {showSamples ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                  </button>
+                  {showSamples && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 mt-2">
+                      {cloudStatus.newProductsSummary.samples.map((sp) => (
+                        <div
+                          key={sp.sku}
+                          className="p-2 rounded-lg bg-white border border-emerald-100 text-[11px] text-slate-700 whitespace-normal break-words"
+                        >
+                          <div className="flex items-center justify-between gap-1 font-bold text-slate-900">
+                            <span className="font-mono">{sp.sku}</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">
+                              Stok {sp.stok}
+                            </span>
+                          </div>
+                          <p className="text-[10px] font-semibold text-indigo-700">
+                            {sp.article || "-"} • {sp.brand || "RETAIL"} ({sp.color || "-"}/{sp.size || "-"})
+                          </p>
+                          <p className="text-[10px] text-slate-500 whitespace-normal break-words">{sp.description}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
+
+          {/* Panel Diagnosa Bug, Self-Healing & Auto-Ulang Sampai Sukses */}
+          <div className="p-3 rounded-xl border border-slate-200 bg-slate-50/80 flex flex-col gap-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Wrench className={`w-4 h-4 ${isFailed ? "text-rose-600" : "text-indigo-600"} shrink-0`} />
+                <span className="text-xs font-extrabold text-slate-800 whitespace-normal break-words">
+                  Guardian Auto-Diagnostik, Self-Heal &amp; Auto-Ulang Trigger
+                </span>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-white border border-slate-200 text-slate-600">
+                  Target: {lastTriggerUsed || cloudStatus.lastAction || "all"} • Retry {autoRetryCount}/{MAX_FRONTEND_AUTO_RETRIES}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={toggleAutoRetry}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold border transition-colors ${
+                    autoRetryEnabled
+                      ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+                      : "bg-slate-200 text-slate-600 border-slate-300"
+                  }`}
+                >
+                  Auto-Ulang Saat Error: {autoRetryEnabled ? "ON" : "OFF"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSelfHealAndRetry(lastTriggerUsed || cloudStatus.lastAction, false)}
+                  disabled={isSelfHealing || isGhDispatching}
+                  className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold flex items-center gap-1 disabled:opacity-50"
+                >
+                  {isSelfHealing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
+                  {isSelfHealing ? "Membenahi..." : "Benahi & Ulangi"}
+                </button>
+              </div>
+            </div>
+
+            {autoRetryCountdown !== null && (
+              <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-300 text-xs text-amber-950 flex flex-wrap items-center justify-between gap-2">
+                <span className="font-bold whitespace-normal break-words">
+                  ⏳ Error terdeteksi pada trigger [{lastTriggerUsed || cloudStatus.lastAction}] — menjalankan Self-Heal &amp; mengulang otomatis dalam{" "}
+                  <strong>{autoRetryCountdown} detik</strong>...
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (cloudStatus.activeRun?.id) retriedRunIdsRef.current.add(cloudStatus.activeRun.id);
+                    setAutoRetryCountdown(null);
+                  }}
+                  className="px-2.5 py-1 rounded bg-white border border-amber-300 text-amber-900 text-[11px] font-bold hover:bg-amber-100"
+                >
+                  Batalkan
+                </button>
+              </div>
+            )}
+
+            {cloudStatus.healsApplied.length > 0 && (
+              <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-950 space-y-1">
+                <p className="font-extrabold text-[11px] uppercase tracking-wider text-emerald-800">
+                  🔧 Self-Healing Otomatis Diterapkan oleh Python Guardian ({cloudStatus.healsApplied.length}x):
+                </p>
+                {cloudStatus.healsApplied.slice(-4).map((h, idx) => (
+                  <p key={idx} className="text-[11px] font-mono whitespace-normal break-words">
+                    • [{h.diagnosisCode}] {h.message}
+                  </p>
+                ))}
+              </div>
+            )}
+
+            {(isFailed || cloudStatus.diagnostics.length > 0) && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex flex-col gap-2 text-xs text-rose-900">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-extrabold whitespace-normal break-words">
+                      Deteksi Bug / Error Eksekusi ({cloudStatus.diagnostics.length > 0 ? cloudStatus.diagnostics[cloudStatus.diagnostics.length - 1].code : "FAILURE"}):
+                    </p>
+                    {cloudStatus.diagnostics.length === 0 ? (
+                      <p className="font-mono text-[11px] text-rose-700 mt-0.5 whitespace-normal break-words">
+                        {activeRun?.errorStep || "Kegagalan pada salah satu step runner cloud."}
+                      </p>
+                    ) : (
+                      <div className="space-y-1.5 mt-1">
+                        {cloudStatus.diagnostics.slice(-3).map((d, idx) => (
+                          <div key={idx} className="p-2 rounded-lg bg-white/80 border border-rose-200">
+                            <p className="font-bold text-rose-950 whitespace-normal break-words">
+                              [{d.code}] {d.title} {d.step ? `— (${d.step})` : ""}
+                            </p>
+                            <p className="text-[11px] text-rose-800 whitespace-normal break-words mt-0.5">{d.detail}</p>
+                            {d.traceback?.snippet && (
+                              <pre className="mt-1 p-1.5 rounded bg-slate-950 text-rose-300 text-[10px] font-mono whitespace-pre-wrap break-words">
+                                {d.traceback.snippet}
+                              </pre>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Checklist Langkah-Langkah Eksekusi Cloud */}
           {cloudStatus.steps.length > 0 && (
@@ -674,65 +1072,159 @@ export default function UpdateProdukPage() {
             </div>
           )}
 
-          {/* Terminal Console Output */}
+          {/* Terminal Console Output Real Line-by-Line */}
           <div className="rounded-xl overflow-hidden border border-slate-800 bg-slate-950 shadow-inner">
-            <div className="flex items-center justify-between px-3 py-2 bg-slate-900 border-b border-slate-800 text-[11px] text-slate-300">
-              <span className="flex items-center gap-1.5 font-mono">
-                <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-                Console Log Output
-              </span>
-              <button
-                onClick={() => setShowFullTerminal(!showFullTerminal)}
-                className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-white transition-colors"
-              >
-                {showFullTerminal ? "Ringkas" : "Perluas"}
-                {showFullTerminal ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-              </button>
+            <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 bg-slate-900 border-b border-slate-800 text-[11px] text-slate-300">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="flex items-center gap-1.5 font-mono font-bold">
+                  <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+                  Console Log Output Asli
+                </span>
+                <span
+                  className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${
+                    cloudStatus.consoleSource === "live-guardian"
+                      ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                      : cloudStatus.consoleSource === "github-raw"
+                      ? "bg-sky-500/20 text-sky-300 border border-sky-500/30"
+                      : "bg-slate-800 text-slate-400"
+                  }`}
+                >
+                  {cloudStatus.consoleSource === "live-guardian"
+                    ? `LIVE STREAM (${cloudStatus.consoleLines.length} baris)`
+                    : cloudStatus.consoleSource === "github-raw"
+                    ? `GITHUB RAW LOG (${cloudStatus.consoleLines.length} baris)`
+                    : "SUMMARY"}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setAutoScrollLog((v) => !v)}
+                  className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
+                    autoScrollLog
+                      ? "bg-indigo-500/20 text-indigo-300 border-indigo-500/40"
+                      : "bg-slate-800 text-slate-400 border-slate-700"
+                  }`}
+                >
+                  Auto-Scroll: {autoScrollLog ? "ON" : "OFF"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const txt = cloudStatus.consoleLines
+                      .map((l) => `[${l.ts}] [${l.step}] ${l.text}`)
+                      .join("\n");
+                    if (txt && typeof navigator !== "undefined" && navigator.clipboard) {
+                      navigator.clipboard.writeText(txt).catch(() => {});
+                      setCopiedLog(true);
+                      setTimeout(() => setCopiedLog(false), 2000);
+                    }
+                  }}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px] text-slate-200 border border-slate-700"
+                >
+                  <Copy className="w-3 h-3" />
+                  {copiedLog ? "Tersalin!" : "Salin Log"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowFullTerminal(!showFullTerminal)}
+                  className="flex items-center gap-1 text-[10px] text-slate-300 hover:text-white transition-colors"
+                >
+                  {showFullTerminal ? "Ringkas" : "Perluas"}
+                  {showFullTerminal ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                </button>
+              </div>
+            </div>
+
+            {/* Filter Tabs & Search Barisi Log */}
+            <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-1.5 bg-slate-900/60 border-b border-slate-800/80">
+              <div className="flex items-center gap-1 flex-wrap">
+                {(
+                  [
+                    { key: "all", label: "Semua" },
+                    { key: "error", label: "Error / Bug" },
+                    { key: "heal", label: "Self-Heal" },
+                    { key: "db", label: "DB / Produk Baru" },
+                  ] as const
+                ).map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setLogFilter(tab.key)}
+                    className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors ${
+                      logFilter === tab.key
+                        ? "bg-emerald-500 text-slate-950"
+                        : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-700 rounded px-2 py-0.5">
+                <Search className="w-3 h-3 text-slate-400" />
+                <input
+                  type="text"
+                  value={logSearch}
+                  onChange={(e) => setLogSearch(e.target.value)}
+                  placeholder="Cari baris log..."
+                  className="bg-transparent text-[11px] text-slate-200 placeholder-slate-500 outline-none w-36 sm:w-44"
+                />
+              </div>
             </div>
 
             <div
-              className={`p-3 font-mono text-xs text-slate-200 overflow-y-auto space-y-1 ${
-                showFullTerminal ? "max-h-80" : "max-h-36"
+              ref={logContainerRef}
+              className={`p-3 font-mono text-[11px] text-slate-200 overflow-y-auto space-y-1 ${
+                showFullTerminal ? "max-h-[420px]" : "max-h-60"
               }`}
             >
-              <div className="text-emerald-400">
-                [SYSTEM] Mesin Python 3 Kategori (Scrab • Update Stock • Promo Email) siap di GitHub Actions.
-              </div>
-              {activeRun && (
-                <>
-                  <div className="text-indigo-300">
-                    [{new Date(activeRun.createdAt).toLocaleTimeString("id-ID")}] 🚀 Run #{activeRun.runNumber} aktif
-                    (Trigger: {activeRun.event})
-                  </div>
-                  <div className="text-slate-400">
-                    [PROGRES] Progres saat ini: {activeRun.percent}% ({activeRun.currentStep})
-                  </div>
-                  {activeRun.hasError && (
-                    <div className="text-rose-400 font-bold">
-                      [ERROR] 💥 Terjadi kendala pada: {activeRun.errorStep || activeRun.currentStep}
-                    </div>
-                  )}
-                  {activeRun.conclusion === "success" && (
-                    <div className="text-emerald-300 font-bold">
-                      [SUKSES] 🎉 Seluruh tahapan sinkronisasi selesai ({activeRun.totalDuration}) tanpa error!
-                    </div>
-                  )}
-                </>
-              )}
+              {(() => {
+                const q = logSearch.trim().toLowerCase();
+                const filteredLines = cloudStatus.consoleLines.filter((l) => {
+                  if (logFilter === "error" && l.level !== "error" && l.level !== "warn") return false;
+                  if (logFilter === "heal" && l.level !== "heal") return false;
+                  if (logFilter === "db" && l.level !== "db") return false;
+                  if (q && !l.text.toLowerCase().includes(q) && !l.step.toLowerCase().includes(q)) return false;
+                  return true;
+                });
 
-              {/* Data Sinkronisasi Tersimpan di Supabase */}
-              {cloudStatus.syncHistory.length > 0 && (
-                <div className="pt-2 border-t border-slate-800 mt-2">
-                  <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1">
-                    <Database className="w-3 h-3 text-cyan-400" /> Riwayat Data Masuk ke Database Supabase:
-                  </div>
-                  {cloudStatus.syncHistory.slice(0, 3).map((item) => (
-                    <div key={item.id} className="text-cyan-300 text-[11px] whitespace-normal break-words">
-                      • {item.type}: {item.fileName} ➔ {item.records.toLocaleString("id-ID")} produk ({item.status})
+                if (filteredLines.length === 0) {
+                  return (
+                    <div className="space-y-1 text-slate-400">
+                      <div className="text-emerald-400">
+                        [SYSTEM] Guardian Console siap — jalankan salah satu trigger untuk melihat stream log Python baris per baris secara realtime.
+                      </div>
+                      {activeRun && (
+                        <div>
+                          [{new Date(activeRun.createdAt).toLocaleTimeString("id-ID")}] Run #{activeRun.runNumber} • {activeRun.percent}% ({activeRun.currentStep})
+                        </div>
+                      )}
                     </div>
-                  ))}
-                </div>
-              )}
+                  );
+                }
+
+                return filteredLines.map((ln, idx) => {
+                  const colorCls =
+                    ln.level === "error"
+                      ? "text-rose-400 font-semibold"
+                      : ln.level === "warn"
+                      ? "text-amber-300"
+                      : ln.level === "heal"
+                      ? "text-emerald-300 font-semibold"
+                      : ln.level === "db"
+                      ? "text-cyan-300"
+                      : ln.level === "success"
+                      ? "text-emerald-400 font-bold"
+                      : "text-slate-200";
+                  return (
+                    <div key={idx} className={`${colorCls} whitespace-pre-wrap break-words leading-relaxed`}>
+                      <span className="text-slate-500">[{ln.ts}]</span>{" "}
+                      <span className="text-indigo-300/90">[{ln.step}]</span> {ln.text}
+                    </div>
+                  );
+                });
+              })()}
             </div>
           </div>
 
@@ -787,8 +1279,16 @@ export default function UpdateProdukPage() {
                   AKTIF
                 </span>
               </div>
-              <p className="text-xs font-bold text-slate-800">97.546+ SKU • Studio Foto</p>
-              <p className="text-[11px] text-slate-500 mt-0.5">by luqman org + Studio Matahari.com</p>
+              <p className="text-xs font-bold text-slate-800">
+                {cloudStatus.dbMetrics?.totalProducts
+                  ? `${cloudStatus.dbMetrics.totalProducts.toLocaleString("id-ID")} SKU • Studio Foto`
+                  : "310.526+ SKU • Studio Foto"}
+              </p>
+              <p className="text-[11px] text-slate-500 mt-0.5 whitespace-normal break-words">
+                {cloudStatus.newProductsSummary && (cloudStatus.newProductsSummary.newSkusAdded > 0 || cloudStatus.newProductsSummary.newArticlesAdded > 0)
+                  ? `Terbaru: +${cloudStatus.newProductsSummary.newSkusAdded.toLocaleString("id-ID")} SKU / +${cloudStatus.newProductsSummary.newArticlesAdded.toLocaleString("id-ID")} Artikel`
+                  : "by luqman org + Studio Matahari.com"}
+              </p>
             </div>
 
             {/* Kategori 2: Update Stock Live */}
@@ -845,6 +1345,7 @@ export default function UpdateProdukPage() {
                   <th className="px-3.5 py-2.5">Waktu Eksekusi</th>
                   <th className="px-3.5 py-2.5">Kategori Mesin</th>
                   <th className="px-3.5 py-2.5">Deskripsi / Target</th>
+                  <th className="px-3.5 py-2.5 text-right">Produk Baru (+Add)</th>
                   <th className="px-3.5 py-2.5 text-right">Data Diperbarui</th>
                   <th className="px-3.5 py-2.5 text-center">Status</th>
                 </tr>
@@ -852,7 +1353,7 @@ export default function UpdateProdukPage() {
               <tbody className="divide-y divide-slate-100">
                 {cloudStatus.syncHistory.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="text-center py-4 text-slate-400 text-xs">
+                    <td colSpan={6} className="text-center py-4 text-slate-400 text-xs">
                       Belum ada riwayat sync di database
                     </td>
                   </tr>
@@ -883,6 +1384,22 @@ export default function UpdateProdukPage() {
                         </span>
                       </td>
                       <td className="px-3.5 py-2.5 text-slate-600 whitespace-normal break-words max-w-md">{item.fileName?.replace(/MDS\s*BISA/gi, "by luqman org")}</td>
+                      <td className="px-3.5 py-2.5 text-right whitespace-nowrap">
+                        {(item.newSkusAdded ?? 0) > 0 || (item.newArticlesAdded ?? 0) > 0 ? (
+                          <div className="inline-flex flex-col items-end gap-0.5">
+                            <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 font-mono font-black text-[10px]">
+                              +{(item.newSkusAdded ?? 0).toLocaleString("id-ID")} SKU Baru
+                            </span>
+                            {(item.newArticlesAdded ?? 0) > 0 && (
+                              <span className="text-[10px] font-bold text-teal-700">
+                                +{(item.newArticlesAdded ?? 0).toLocaleString("id-ID")} Artikel
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-slate-300 font-mono text-[11px]">—</span>
+                        )}
+                      </td>
                       <td className="px-3.5 py-2.5 text-right font-mono font-bold text-slate-700 whitespace-nowrap">
                         {item.records.toLocaleString("id-ID")} item
                       </td>

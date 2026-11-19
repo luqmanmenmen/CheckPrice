@@ -4,7 +4,8 @@ import useSWR from "swr";
 import { 
   Trash2, Plus, UserPlus, Store, Edit, X, LogIn, Activity, 
   History, Users, UserCheck, PauseCircle, Search, RefreshCw,
-  Calendar, Clock, ShieldCheck, ArrowUpDown, ExternalLink
+  Calendar, Clock, ShieldCheck, ArrowUpDown, ExternalLink,
+  LogOut, Lock, ShieldAlert
 } from "lucide-react";
 import { AlertModal } from "@/components/AlertModal";
 
@@ -59,6 +60,10 @@ export default function UsersManagement() {
   });
   const { data: meData } = useSWR("/api/auth/me", fetcher);
   const isTopBoss = meData?.user?.nik === "22054178";
+  const isSupervisorOrDev = meData?.user?.role === "SUPERVISOR" || isTopBoss;
+
+  const [loggingOutAll, setLoggingOutAll] = useState(false);
+  const [forcingUserId, setForcingUserId] = useState<string | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -239,6 +244,71 @@ export default function UsersManagement() {
     }
   };
 
+  const confirmLogoutAllDevices = () => {
+    showAlert(
+      "Logout All Device (Semua + Developer)?",
+      "PERHATIAN: Semua akun yang sedang login (Crew Store, Supervisor, TERMASUK akun Developer 22054178) akan langsung dikeluarkan dari seluruh perangkat dan shift aktif akan ditutup.\n\nPerangkat ini juga akan ikut keluar ke halaman Login.",
+      "error",
+      async () => {
+        setLoggingOutAll(true);
+        try {
+          const res = await fetch("/api/auth/logout-all", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ scope: "all" }),
+          });
+          const resData = await res.json();
+          if (res.ok && resData.success) {
+            if (typeof window !== "undefined") {
+              localStorage.removeItem("suko_user");
+              window.location.href = "/login?reason=logged_out_all";
+            }
+          } else {
+            setLoggingOutAll(false);
+            showAlert("Gagal", resData.error || "Gagal menjalankan Logout All Device.", "error");
+          }
+        } catch {
+          setLoggingOutAll(false);
+          showAlert("Error", "Terjadi kesalahan jaringan.", "error");
+        }
+      }
+    );
+  };
+
+  const confirmForceLogoutUser = (targetUser: any) => {
+    showAlert(
+      "Paksa Logout & Buka Kunci Sesi?",
+      `Keluarkan akun ${targetUser.name} (${targetUser.nik}) dari perangkat yang sedang aktif agar bisa login kembali di perangkat lain?`,
+      "warning",
+      async () => {
+        setForcingUserId(targetUser.id);
+        try {
+          const res = await fetch("/api/auth/logout-all", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ scope: "user", targetUserId: targetUser.id }),
+          });
+          const resData = await res.json();
+          if (res.ok && resData.success) {
+            if (resData.loggedOutSelf && typeof window !== "undefined") {
+              localStorage.removeItem("suko_user");
+              window.location.href = "/login?reason=logged_out_all";
+              return;
+            }
+            showAlert("Berhasil", `Sesi ${targetUser.name} berhasil di-logout dan dibuka kuncinya.`, "success");
+            mutate();
+          } else {
+            showAlert("Gagal", resData.error || "Gagal memaksa logout pengguna.", "error");
+          }
+        } catch {
+          showAlert("Error", "Terjadi kesalahan jaringan.", "error");
+        } finally {
+          setForcingUserId(null);
+        }
+      }
+    );
+  };
+
   const rawUsers = (data?.users || []).filter((u: any) => u.nik !== "22054178");
 
   // Summary Metrics
@@ -288,21 +358,33 @@ export default function UsersManagement() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2 w-full md:w-auto">
+        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
           <button 
             onClick={() => openLoginLogs("ALL")}
-            className="flex-1 md:flex-none bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2.5 px-4 rounded-xl border border-slate-200 flex items-center justify-center gap-2 text-sm transition-colors shadow-xs"
+            className="flex-1 md:flex-none bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2.5 px-4 rounded-xl border border-slate-200 flex items-center justify-center gap-2 text-sm transition-colors shadow-xs whitespace-normal break-words text-center"
           >
-            <History className="w-4 h-4 text-slate-500" />
-            Rekap Semua Login
+            <History className="w-4 h-4 text-slate-500 shrink-0" />
+            <span>Rekap Semua Login</span>
           </button>
+
+          {isSupervisorOrDev && (
+            <button
+              onClick={confirmLogoutAllDevices}
+              disabled={loggingOutAll}
+              className="flex-1 md:flex-none bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white font-bold py-2.5 px-4 rounded-xl shadow-xs flex items-center justify-center gap-2 text-sm transition-colors whitespace-normal break-words text-center"
+              title="Keluarkan semua akun yang sedang login di seluruh perangkat, termasuk akun Developer"
+            >
+              <ShieldAlert className="w-4 h-4 shrink-0" />
+              <span>{loggingOutAll ? "Memproses..." : "Logout All Device"}</span>
+            </button>
+          )}
 
           {isTopBoss && (
             <button 
               onClick={() => setShowAddForm(!showAddForm)}
-              className="flex-1 md:flex-none bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-5 rounded-xl shadow-xs flex items-center justify-center gap-2 text-sm transition-colors"
+              className="flex-1 md:flex-none bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-5 rounded-xl shadow-xs flex items-center justify-center gap-2 text-sm transition-colors whitespace-normal break-words text-center"
             >
-              {showAddForm ? "Batal Tambah" : <><UserPlus className="w-4 h-4" /> Tambah Karyawan</>}
+              {showAddForm ? "Batal Tambah" : <><UserPlus className="w-4 h-4 shrink-0" /> <span>Tambah Karyawan</span></>}
             </button>
           )}
         </div>
@@ -524,7 +606,7 @@ export default function UsersManagement() {
                 <th className="p-4">Terakhir Login</th>
                 <th className="p-4">Aktivitas Terakhir</th>
                 <th className="p-4">Terdaftar</th>
-                {isTopBoss && <th className="p-4 text-right">Aksi</th>}
+                {isSupervisorOrDev && <th className="p-4 text-right">Aksi</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -572,10 +654,18 @@ export default function UsersManagement() {
                         Sedang Rehat
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 bg-slate-50 px-2.5 py-1 rounded-full border border-slate-200">
-                        <span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span>
-                        Offline
-                      </span>
+                      <div className="flex flex-col gap-1 items-start">
+                        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 bg-slate-50 px-2.5 py-1 rounded-full border border-slate-200">
+                          <span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span>
+                          Offline
+                        </span>
+                        {Boolean(user.sessionId) && (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200 whitespace-normal break-words">
+                            <Lock className="w-3 h-3 shrink-0" />
+                            Sesi Terkunci (Belum Logout)
+                          </span>
+                        )}
+                      </div>
                     )}
                   </td>
 
@@ -632,35 +722,49 @@ export default function UsersManagement() {
                     {new Date(user.createdAt).toLocaleDateString('id-ID', {day: 'numeric', month: 'short', year: 'numeric'})}
                   </td>
 
-                  {isTopBoss && (
+                  {isSupervisorOrDev && (
                     <td className="p-4 text-right whitespace-nowrap">
-                      {user.nik !== "22054178" && (
-                        <button 
-                          onClick={() => handleToggleRedirect(user.id, user.name, !!user.redirectMds)}
-                          className={`p-2 rounded-lg transition-colors mr-1 ${
-                            user.redirectMds 
-                              ? 'bg-amber-100 text-amber-800 hover:bg-amber-200 border border-amber-300' 
-                              : 'text-slate-400 hover:text-amber-600 hover:bg-amber-50'
-                          }`}
-                          title={user.redirectMds ? "Batalkan Redirect (Kembali ke Price Checker Biasa)" : "Alihkan ke Portal Login by luqman org saat Login"}
+                      {(Boolean(user.sessionId) || user.status !== "OFFLINE") && (
+                        <button
+                          onClick={() => confirmForceLogoutUser(user)}
+                          disabled={forcingUserId === user.id}
+                          className="text-rose-600 hover:text-rose-700 p-2 hover:bg-rose-50 rounded-lg transition-colors mr-1 disabled:opacity-50"
+                          title="Paksa Logout & Buka Kunci Perangkat"
                         >
-                          <ExternalLink className="w-4 h-4" />
+                          <LogOut className="w-4 h-4" />
                         </button>
                       )}
-                      <button 
-                        onClick={() => setEditingUser(user)}
-                        className="text-indigo-500 hover:text-indigo-700 p-2 hover:bg-indigo-50 rounded-lg transition-colors mr-1"
-                        title="Edit Pengguna"
-                      >
-                        <Edit className="w-4 h-4" />
-                      </button>
-                      <button 
-                        onClick={() => confirmDelete(user.id, user.name)}
-                        className="text-red-500 hover:text-red-700 p-2 hover:bg-red-50 rounded-lg transition-colors"
-                        title="Hapus Pengguna"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {isTopBoss && (
+                        <>
+                          {user.nik !== "22054178" && (
+                            <button 
+                              onClick={() => handleToggleRedirect(user.id, user.name, !!user.redirectMds)}
+                              className={`p-2 rounded-lg transition-colors mr-1 ${
+                                user.redirectMds 
+                                  ? 'bg-amber-100 text-amber-800 hover:bg-amber-200 border border-amber-300' 
+                                  : 'text-slate-400 hover:text-amber-600 hover:bg-amber-50'
+                              }`}
+                              title={user.redirectMds ? "Batalkan Redirect (Kembali ke Price Checker Biasa)" : "Alihkan ke Portal Login by luqman org saat Login"}
+                            >
+                              <ExternalLink className="w-4 h-4" />
+                            </button>
+                          )}
+                          <button 
+                            onClick={() => setEditingUser(user)}
+                            className="text-indigo-500 hover:text-indigo-700 p-2 hover:bg-indigo-50 rounded-lg transition-colors mr-1"
+                            title="Edit Pengguna"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </button>
+                          <button 
+                            onClick={() => confirmDelete(user.id, user.name)}
+                            className="text-red-500 hover:text-red-700 p-2 hover:bg-red-50 rounded-lg transition-colors"
+                            title="Hapus Pengguna"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </>
+                      )}
                     </td>
                   )}
                 </tr>
@@ -668,7 +772,7 @@ export default function UsersManagement() {
               })}
               {filteredUsers.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="p-8 text-center text-slate-400 italic">
+                  <td colSpan={isSupervisorOrDev ? 11 : 10} className="p-8 text-center text-slate-400 italic">
                     {searchQuery ? "Tidak ditemukan karyawan yang sesuai pencarian" : "Belum ada karyawan terdaftar"}
                   </td>
                 </tr>

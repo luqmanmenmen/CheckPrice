@@ -10,10 +10,21 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { dispatchToGitHubRunner } from '@/lib/githubDispatcher';
 
+function safeNormalizeUrl(rawUrl: string): string {
+  const trimmed = rawUrl.trim();
+  if (!trimmed || trimmed.includes(',')) return '';
+  try {
+    return encodeURI(decodeURI(trimmed));
+  } catch {
+    return trimmed.replace(/ /g, '%20');
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
-    const explicitUrl = String(body.explicitUrl || body.promo_url || '').trim();
+    const rawExplicitUrl = String(body.explicitUrl || body.promo_url || '').trim();
+    const safePromoUrl = safeNormalizeUrl(rawExplicitUrl);
 
     const supervisor = await prisma.user.findFirst({
       where: { OR: [{ nik: '22054178' }, { role: 'SUPERVISOR' }] },
@@ -23,7 +34,7 @@ export async function POST(request: NextRequest) {
     const result = await dispatchToGitHubRunner({
       action: 'promo',
       force: true,
-      promoUrl: explicitUrl.includes(',') ? '' : explicitUrl,
+      promoUrl: safePromoUrl,
       userId: supervisor?.id || null,
     });
 

@@ -13,17 +13,48 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   const pathname = usePathname();
   const isAuth = pathname?.startsWith("/login");
   const isCekHarga = pathname?.startsWith("/cek-harga");
-  const { data, isLoading } = useSWR(isAuth || isCekHarga ? null : "/api/auth/me", fetcher, {
-    refreshInterval: 60000, // Heartbeat setiap 1 menit saat aplikasi terbuka
-    revalidateOnFocus: true
+  const { data, isLoading, mutate } = useSWR(isAuth || isCekHarga ? null : "/api/auth/me", fetcher, {
+    refreshInterval: 20000, // Heartbeat & cek sesi aktif di seluruh halaman setiap 20 detik
+    revalidateOnFocus: true,
+    revalidateOnReconnect: true,
+    dedupingInterval: 3000,
   });
 
-  // Simpan info user ke localStorage agar siap seketika saat offline / refresh
+  // Segera verifikasi ulang sesi saat tab/perangkat kembali terlihat
   useEffect(() => {
-    if (data?.user && typeof window !== "undefined") {
+    if (isAuth || isCekHarga || typeof document === "undefined") return;
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        mutate();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, [isAuth, isCekHarga, mutate]);
+
+  // Simpan info user ke localStorage atau tendang segera ke /login jika sesi diputus (Logout All / Device Switched)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (data?.user) {
       localStorage.setItem("suko_user", JSON.stringify(data.user));
+    } else if (
+      !isAuth &&
+      !isCekHarga &&
+      (data?.kickedOut ||
+        data?.reason === "logged_out_all" ||
+        data?.reason === "device_switched" ||
+        data?.reason === "unauthenticated")
+    ) {
+      localStorage.removeItem("suko_user");
+      const reasonParam =
+        data.reason === "logged_out_all"
+          ? "logged_out_all"
+          : data.reason === "device_switched"
+            ? "device_switched"
+            : "session_expired_cart_saved";
+      window.location.href = `/login?reason=${reasonParam}`;
     }
-  }, [data]);
+  }, [data, isAuth, isCekHarga]);
 
   // Entry transition effect cepat dan halus (tidak membuat user merasa loading lama)
   const [entryFade, setEntryFade] = useState(true);

@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { signToken } from "@/lib/auth";
+import { signToken, verifyToken } from "@/lib/auth";
 
 export async function POST(req: NextRequest) {
   try {
-    let { nik, pin, shift, jobTitle, force } = await req.json();
+    let { nik, pin, shift, jobTitle } = await req.json();
 
     if (!nik || !pin || !jobTitle) {
       return NextResponse.json({ error: "NIK, PIN, dan Posisi wajib diisi" }, { status: 400 });
@@ -95,13 +95,68 @@ export async function POST(req: NextRequest) {
         });
       }
       
-      // Jika user sedang aktif di perangkat lain (status ACTIVE) dan force belum true, kembalikan 409 untuk konfirmasi
-      // Namun jika user berstatus OFFLINE atau akun Developer (22054178), izinkan login langsung
-      if (user.sessionId && user.status === "ACTIVE" && !force && user.nik !== "22054178") {
-        return NextResponse.json({ 
-          error: "Sesi Aktif Ditemukan", 
-          isAlreadyLoggedIn: true 
-        }, { status: 409 });
+      // ATURAN KETAT 1 AKUN = 1 DEVICE (Berlaku untuk SEMUA role termasuk SUPERVISOR & Developer 22054178)
+      // Tanpa bypass/force login: perangkat baru ditolak (HTTP 409) sampai perangkat lama logout / sesi kedaluwarsa.
+      if (user.sessionId && user.status !== "OFFLINE") {
+        const existingCookieToken = req.cookies.get("token")?.value;
+        let isSameDevice = false;
+        if (existingCookieToken) {
+          const existingSession = await verifyToken(existingCookieToken);
+          if (
+            existingSession &&
+            existingSession.userId === user.id &&
+            existingSession.sessionId === user.sessionId
+          ) {
+            isSameDevice = true;
+          }
+        }
+
+        const lastSeen = user.lastActive || user.lastLogin;
+        const sessionAgeMs = lastSeen ? Date.now() - new Date(lastSeen).getTime() : Infinity;
+        const isExpiredByAge = sessionAgeMs >= 24 * 60 * 60 * 1000;
+        let isExpiredByShift = false;
+
+        if (!isSuperOrDev && !isSameDevice && !isExpiredByAge) {
+          const activeShift = await prisma.shift.findFirst({
+            where: { userId: user.id, endTime: null },
+            orderBy: { startTime: "desc" },
+          });
+          if (activeShift) {
+            const now = new Date();
+            const jakartaStr = now.toLocaleString("en-US", { timeZone: "Asia/Jakarta", hour12: false });
+            const hourMatch = jakartaStr.match(/ (24|\d+):/);
+            let hour = hourMatch ? parseInt(hourMatch[1], 10) : now.getUTCHours() + 7;
+            if (hour === 24) hour = 0;
+
+            const shiftAgeHours = (now.getTime() - new Date(activeShift.startTime).getTime()) / (1000 * 60 * 60);
+            if (
+              shiftAgeHours > 14 ||
+              shiftAgeHours > 10 ||
+              (activeShift.type === 1 && (hour >= 17 || hour < 8)) ||
+              (activeShift.type === 2 && (hour >= 23 || hour < 14))
+            ) {
+              await prisma.shift.updateMany({
+                where: { userId: user.id, endTime: null },
+                data: { endTime: now },
+              });
+              isExpiredByShift = true;
+            }
+          }
+        }
+
+        if (!isSameDevice && !isExpiredByAge && !isExpiredByShift) {
+          return NextResponse.json(
+            {
+              error:
+                "Akun ini masih aktif (login) di perangkat lain. Silakan logout terlebih dahulu di perangkat sebelumnya agar bisa login di perangkat ini (aturan 1 Akun = 1 Perangkat).",
+              isAlreadyLoggedIn: true,
+              strictLocked: true,
+              lastActive: user.lastActive || user.lastLogin || null,
+              canDeveloperLogoutAll: user.nik === "22054178",
+            },
+            { status: 409 }
+          );
+        }
       }
       
       // Update role if changed (unless they are super admin) and update sessionId & login timestamps
@@ -167,7 +222,8 @@ export async function POST(req: NextRequest) {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: 60 * 60 * 24 // 1 day
+      maxAge: 60 * 60 * 24, // 1 day
+      path: "/",
     });
 
     return response;

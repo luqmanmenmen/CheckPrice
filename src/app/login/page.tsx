@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import ShiftToggle from "@/components/ShiftToggle";
 import ShiftLoader from "@/components/ShiftLoader";
-import { ShoppingCart, Shirt, Footprints, Package, Search } from "lucide-react";
+import { ShoppingCart, Shirt, Footprints, Package, Search, Lock, LogOut } from "lucide-react";
 import { APP_VERSION, forceAppUpdate } from "@/lib/version";
 
 export default function Login() {
@@ -14,6 +14,7 @@ export default function Login() {
   const [jobTitle, setJobTitle] = useState("Cashier");
   const [shift, setShift] = useState("1");
   const [error, setError] = useState("");
+  const [infoNotice, setInfoNotice] = useState("");
   const [loading, setLoading] = useState(false);
   const [fadeExit, setFadeExit] = useState(false);
   const pinRef = React.useRef<HTMLInputElement>(null);
@@ -98,6 +99,8 @@ export default function Login() {
         setError("⏰ Sesi shift Anda telah berakhir demi keamanan operasional toko. Silakan login kembali saat jam shift Anda dimulai.");
       } else if (reason === "device_switched") {
         setError("🔄 Tab/perangkat lama ini otomatis logout karena akun Anda baru saja login di tab/perangkat lain. (Tenang, daftar keranjang scan Anda tetap tersimpan aman!).");
+      } else if (reason === "logged_out_all") {
+        setError("🔒 Akun Anda telah dikeluarkan melalui fitur Logout All Device. Silakan login kembali di perangkat ini.");
       } else if (reason === "session_expired_cart_saved") {
         setError("🔒 Sesi login perlu disegarkan. Jangan khawatir, seluruh barang yang sudah Anda scan tetap tersimpan utuh di keranjang dan siap dikirim setelah login!");
       }
@@ -106,51 +109,52 @@ export default function Login() {
 
   const router = useRouter();
 
-  const [showForceLoginModal, setShowForceLoginModal] = useState(false);
+  const [lockModal, setLockModal] = useState<{
+    open: boolean;
+    message: string;
+    lastActive: string | null;
+    canDeveloperLogoutAll: boolean;
+    confirmRecovery: boolean;
+    recovering: boolean;
+  }>({
+    open: false,
+    message: "",
+    lastActive: null,
+    canDeveloperLogoutAll: false,
+    confirmRecovery: false,
+    recovering: false,
+  });
 
-  const handleForceLogin = async () => {
-    if (typeof document !== "undefined" && document.activeElement instanceof HTMLElement) {
-      document.activeElement.blur();
-    }
-    setShowForceLoginModal(false);
-    setLoading(true);
+  const handleDeveloperRecoveryLogoutAll = async () => {
+    if (lockModal.recovering) return;
+    setLockModal((prev) => ({ ...prev, recovering: true }));
     setError("");
+    setInfoNotice("");
 
     try {
-      const res = await fetch("/api/auth/login", {
+      const res = await fetch("/api/auth/logout-all", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nik, pin, shift, jobTitle, force: true })
+        body: JSON.stringify({ scope: "developer_recovery", nik, pin }),
       });
-
       const data = await res.json();
-      if (res.ok) {
-        if (data.redirectMds || data.redirectUrl) {
-          setLoading(true);
-          window.location.href = data.redirectUrl || "https://storehub.mdsretailing.id/login?next=%2F";
-          return;
-        }
-
-        if (pin === "123456") {
-          setLoginRole(data.role);
-          setShowChangePin(true);
-          setLoading(false);
-        } else {
-          if (data.role === "SUPERVISOR") {
-            performExit("/spv-gateway");
-          } else if (jobTitle === "Gudang Stock") {
-            performExit("/warehouse");
-          } else {
-            performExit("/");
-          }
-        }
+      if (res.ok && data.success) {
+        setLockModal({
+          open: false,
+          message: "",
+          lastActive: null,
+          canDeveloperLogoutAll: false,
+          confirmRecovery: false,
+          recovering: false,
+        });
+        setInfoNotice("✅ Semua sesi akun Developer telah di-logout. Anda kini dapat menekan tombol Masuk Shift.");
       } else {
-        setError(data.error || "Gagal login");
-        setLoading(false);
+        setError(data.error || "Gagal memproses Logout All Device akun Developer.");
+        setLockModal((prev) => ({ ...prev, recovering: false, confirmRecovery: false }));
       }
-    } catch (err) {
-      setError("Terjadi kesalahan jaringan");
-      setLoading(false);
+    } catch {
+      setError("Terjadi kesalahan jaringan saat memproses Logout All Device.");
+      setLockModal((prev) => ({ ...prev, recovering: false, confirmRecovery: false }));
     }
   };
 
@@ -161,6 +165,7 @@ export default function Login() {
     }
     setLoading(true);
     setError("");
+    setInfoNotice("");
 
     try {
       const res = await fetch("/api/auth/login", {
@@ -172,7 +177,16 @@ export default function Login() {
       const data = await res.json();
       
       if (res.status === 409 && data.isAlreadyLoggedIn) {
-        setShowForceLoginModal(true);
+        setLockModal({
+          open: true,
+          message:
+            data.error ||
+            "Akun ini masih aktif (login) di perangkat lain. Silakan logout terlebih dahulu di perangkat sebelumnya agar bisa login di perangkat ini.",
+          lastActive: data.lastActive || null,
+          canDeveloperLogoutAll: Boolean(data.canDeveloperLogoutAll),
+          confirmRecovery: false,
+          recovering: false,
+        });
         setLoading(false);
         return;
       }
@@ -315,8 +329,14 @@ export default function Login() {
             <p className="text-gray-500 text-sm font-medium">Masuk untuk memulai shift Anda</p>
           </div>
 
+        {infoNotice && (
+          <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 p-3 rounded-lg text-sm mb-4 text-center whitespace-normal break-words font-medium">
+            {infoNotice}
+          </div>
+        )}
+
         {error && (
-          <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm mb-4 text-center">
+          <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-lg text-sm mb-4 text-center whitespace-normal break-words">
             {error}
           </div>
         )}
@@ -468,34 +488,87 @@ export default function Login() {
         </div>
       </div>
 
-      {/* Modal Force Login */}
-      {showForceLoginModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 shadow-2xl max-w-sm w-full animate-[spring_.5s]">
-            <div className="w-12 h-12 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mb-4">
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+      {/* Modal Kunci Ketat 1 Akun = 1 Device */}
+      {lockModal.open && (
+        <div className="fixed inset-0 z-50 bg-slate-900/65 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 shadow-2xl max-w-sm w-full animate-[spring_.4s] border border-slate-100">
+            <div className="w-12 h-12 bg-rose-100 text-rose-600 rounded-2xl flex items-center justify-center mb-4">
+              <Lock className="w-6 h-6" />
             </div>
-            <h2 className="text-xl font-bold text-slate-800 mb-2">Sesi Masih Aktif!</h2>
-            <p className="text-sm text-slate-500 mb-6 leading-relaxed">
-              Akun ini terdeteksi sedang aktif (login) di perangkat lain. Apakah Anda ingin mengakhiri sesi di perangkat tersebut dan memindahkan login ke perangkat ini?
+            <h2 className="text-lg font-black text-slate-800 mb-2 whitespace-normal break-words leading-snug">
+              Akun Aktif di Perangkat Lain (1 Akun = 1 Device)
+            </h2>
+            <p className="text-sm text-slate-600 mb-3 leading-relaxed whitespace-normal break-words">
+              {lockModal.message}
             </p>
-            
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={() => setShowForceLoginModal(false)}
-                className="flex-1 h-12 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-all"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                onClick={handleForceLogin}
-                className="flex-1 h-12 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl shadow-lg shadow-rose-200 transition-all"
-              >
-                Ya, Lanjutkan
-              </button>
+            <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 mb-4 text-xs text-amber-900 leading-relaxed whitespace-normal break-words">
+              Akun tidak dapat dipakai bersamaan di beberapa perangkat. Silakan tekan <strong>Logout</strong> pada perangkat yang sedang login terlebih dahulu (atau minta Supervisor / Developer untuk membuka kunci sesi).
+              {lockModal.lastActive && (
+                <div className="mt-1.5 font-mono text-[11px] text-amber-800">
+                  Aktivitas terakhir:{" "}
+                  {new Date(lockModal.lastActive).toLocaleString("id-ID", {
+                    day: "numeric",
+                    month: "short",
+                    year: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}{" "}
+                  WIB
+                </div>
+              )}
             </div>
+
+            {lockModal.canDeveloperLogoutAll && (
+              <div className="mb-4 rounded-xl bg-rose-50 border border-rose-200 p-3 space-y-2.5">
+                <div className="text-xs font-bold text-rose-800 whitespace-normal break-words">
+                  Perangkat lama hilang atau cache terhapus?
+                </div>
+                {!lockModal.confirmRecovery ? (
+                  <button
+                    type="button"
+                    disabled={lockModal.recovering}
+                    onClick={() => setLockModal((prev) => ({ ...prev, confirmRecovery: true }))}
+                    className="w-full py-2.5 px-3 bg-white hover:bg-rose-100 text-rose-700 border border-rose-300 font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-1.5 whitespace-normal break-words text-center"
+                  >
+                    <LogOut className="w-4 h-4 shrink-0" />
+                    <span>Logout All Device (Khusus Developer)</span>
+                  </button>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="text-[11px] text-rose-700 font-medium whitespace-normal break-words">
+                      Konfirmasi keluarkan sesi akun Developer dari perangkat sebelumnya agar bisa login di sini?
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        disabled={lockModal.recovering}
+                        onClick={() => setLockModal((prev) => ({ ...prev, confirmRecovery: false }))}
+                        className="flex-1 py-2 px-2 bg-white border border-slate-200 text-slate-600 font-bold text-xs rounded-lg"
+                      >
+                        Batal
+                      </button>
+                      <button
+                        type="button"
+                        disabled={lockModal.recovering}
+                        onClick={handleDeveloperRecoveryLogoutAll}
+                        className="flex-[2] py-2 px-3 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-lg shadow-sm disabled:opacity-60 whitespace-normal break-words"
+                      >
+                        {lockModal.recovering ? "Memproses..." : "Ya, Logout Semua Sesi Developer Sekarang"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <button
+              type="button"
+              disabled={lockModal.recovering}
+              onClick={() => setLockModal((prev) => ({ ...prev, open: false, confirmRecovery: false }))}
+              className="w-full py-3 px-4 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-md transition-all text-sm"
+            >
+              Mengerti / Tutup
+            </button>
           </div>
         </div>
       )}

@@ -452,6 +452,11 @@ export function computeProductRelevanceScore(
     score += Math.round(overallSim * 50);
   }
 
+  // Jangan pernah beri poin bonus stok/foto/harga jika query tidak cocok sama sekali!
+  if (score <= 0) {
+    return 0;
+  }
+
   // 6. Prioritas Stok Fisik Aktif, Foto Studio, & Kewajaran Harga
   if ((p.stok || 0) > 0) score += 25;
   if (p.imageUrl) score += 12;

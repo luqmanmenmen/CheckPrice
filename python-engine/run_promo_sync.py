@@ -20,6 +20,7 @@ import os
 import sys
 import re
 import uuid
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 import httpx
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
@@ -67,58 +68,147 @@ MONTH_MAP = {
 }
 
 
+def _safe_encode_url(url: str) -> str:
+    """Meng-encode aman spasi & karakter khusus di path URL Storage tanpa mendouble-encode."""
+    if not url or not url.startswith(("http://", "https://")):
+        return url
+    parts = urlsplit(url)
+    clean_path = quote(unquote(parts.path), safe="/:@!$&'()*+,;=-._~")
+    return urlunsplit((parts.scheme, parts.netloc, clean_path, parts.query, parts.fragment))
+
+
+def _sanitize_temp_filename(name: str, fallback: str = "promo.xlsx") -> str:
+    base = os.path.basename(unquote(name or fallback))
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("_")
+    return cleaned or fallback
+
+
+def _normalize_iso_date(val) -> str | None:
+    if not val:
+        return None
+    s = str(val).strip()
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", s)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    m2 = re.match(r"^(\d{1,2})[/-](\d{1,2})[/-](\d{4})", s)
+    if m2:
+        p1, p2, yr = int(m2.group(1)), int(m2.group(2)), int(m2.group(3))
+        if p2 > 12:
+            month, day = p1, p2
+        else:
+            day, month = p1, p2
+        if 1 <= month <= 12 and 1 <= day <= 31:
+            return f"{yr:04d}-{month:02d}-{day:02d}"
+    return None
+
+
 def extract_folder_date_info(folder_name: str):
     """
-    Mengekstrak (score, start_iso, end_iso) dari nama folder promo.
-    Mendukung spasi/tanda hubung, lintas bulan, serta format ISO 'UPCOMING_2026-11-26'.
+    Mengekstrak (score, start_iso, end_iso) dari Subject email, nama folder, atau nama file promo.
+    Mendukung format spasi ('PROMO 19 25 NOV 2026'), kompak tanpa spasi ('05-11NOV2026', '26NOV-02DES2026'),
+    lintas bulan/tahun, serta format ISO ('UPCOMING_2026-11-26').
     """
-    name_upper = folder_name.upper().strip()
+    raw = unquote(folder_name or "").upper().strip()
+    if not raw:
+        return 0, None, None
 
-    # Format eksplisit ISO (mis. UPCOMING_2026-11-26)
-    iso_matches = re.findall(r'(202\d)-(\d{2})-(\d{2})', name_upper)
+    # Hapus ekstensi file jika input berasal dari nama berkas Excel/CSV
+    raw = re.sub(r"\.(XLSX|XLS|CSV)$", "", raw).strip()
+
+    # Format eksplisit ISO (mis. UPCOMING_2026-11-26 atau MANUAL_2026-11-19)
+    iso_matches = re.findall(r"(202\d)-(\d{2})-(\d{2})", raw)
     if iso_matches:
         y1, m1, d1 = int(iso_matches[0][0]), int(iso_matches[0][1]), int(iso_matches[0][2])
         y2, m2, d2 = int(iso_matches[-1][0]), int(iso_matches[-1][1]), int(iso_matches[-1][2])
         score = (y2 * 1000000) + (m2 * 10000) + (d2 * 100) + d1
         return score, f"{y1:04d}-{m1:02d}-{d1:02d}", f"{y2:04d}-{m2:02d}-{d2:02d}"
 
-    year = 2026
-    year_match = re.search(r'202\d', name_upper)
-    if year_match:
-        year = int(year_match.group())
+    years = [int(y) for y in re.findall(r"202\d", raw)]
+    start_year = years[0] if years else 2026
+    end_year = years[-1] if years else 2026
+
+    # Hapus nomor urut di awal nama file (mis. '18. PROMO ...'), penanda week ('WEEK45', 'W47'), & tahun 202x
+    cleaned = re.sub(r"^\s*\d{1,3}[\.\)]\s*", " ", raw)
+    cleaned = re.sub(r"\bW(?:EEK|K)?\s*\d+\b", " ", cleaned)
+    cleaned = re.sub(r"202\d", " ", cleaned)
+    cleaned = re.sub(r"[-_/,()\[\]]+", " ", cleaned)
+    # Pisahkan angka & huruf agar '05-11NOV2026' -> '05 11 NOV' dan '26NOV-02DES' -> '26 NOV 02 DES'
+    cleaned = re.sub(r"(\d)([A-Z])", r"\1 \2", cleaned)
+    cleaned = re.sub(r"([A-Z])(\d)", r"\1 \2", cleaned)
+    cleaned = re.sub(r"\b(?:S\.?D\.?|SAMPAI|HINGGA|TO)\b", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
     found_months = []
+    occupied_spans = []
     for m_str in sorted(MONTH_MAP.keys(), key=len, reverse=True):
-        for match in re.finditer(rf'\b{re.escape(m_str)}\b', name_upper):
-            found_months.append((match.start(), MONTH_MAP[m_str]))
+        for match in re.finditer(rf"\b{re.escape(m_str)}\b", cleaned):
+            s_idx, e_idx = match.start(), match.end()
+            if any(not (e_idx <= os_idx or s_idx >= oe_idx) for os_idx, oe_idx in occupied_spans):
+                continue
+            occupied_spans.append((s_idx, e_idx))
+            found_months.append((s_idx, e_idx, MONTH_MAP[m_str]))
     found_months.sort(key=lambda x: x[0])
 
+    if not found_months:
+        return 0, None, None
+
+    def _valid_pair(n1_str, n2_str=None):
+        vals = []
+        for tok in (n1_str, n2_str):
+            if tok and tok.isdigit():
+                v = int(tok)
+                if 1 <= v <= 31:
+                    vals.append(v)
+        return vals
+
     if len(found_months) >= 2:
-        start_month = found_months[0][1]
-        end_month = found_months[-1][1]
-    elif len(found_months) == 1:
-        start_month = end_month = found_months[0][1]
+        ms0, me0, start_month = found_months[0]
+        msk, mek, end_month = found_months[-1]
+
+        pre0 = re.search(r"(?:^|\s)(\d{1,2})(?:\s+(\d{1,2}))?\s*$", cleaned[:ms0])
+        post0 = re.match(r"^\s*(\d{1,2})\b", cleaned[me0:msk])
+        nums0 = _valid_pair(*(pre0.groups() if pre0 else ()))
+        if nums0:
+            start_day = nums0[0]
+        elif post0 and 1 <= int(post0.group(1)) <= 31:
+            start_day = int(post0.group(1))
+        else:
+            return 0, None, None
+
+        pre_last = re.search(r"(?:^|\s)(\d{1,2})(?:\s+(\d{1,2}))?\s*$", cleaned[me0:msk])
+        post_last = re.match(r"^\s*(\d{1,2})\b", cleaned[mek:])
+        nums_last = _valid_pair(*(pre_last.groups() if pre_last else ()))
+        if nums_last:
+            end_day = nums_last[-1]
+        elif post_last and 1 <= int(post_last.group(1)) <= 31:
+            end_day = int(post_last.group(1))
+        else:
+            return 0, None, None
+
+        if len(years) <= 1 and start_month == 12 and end_month == 1:
+            end_year = start_year + 1
+        score_day = end_day
     else:
-        return 0, None, None
+        ms0, me0, start_month = found_months[0]
+        end_month = start_month
+        pre = re.search(r"(?:^|\s)(\d{1,2})(?:\s+(\d{1,2}))?\s*$", cleaned[:ms0])
+        post = re.match(r"^\s*(\d{1,2})(?:\s+(\d{1,2}))?\b", cleaned[me0:])
+        nums = _valid_pair(*(pre.groups() if pre else ()))
+        if not nums:
+            nums = _valid_pair(*(post.groups() if post else ()))
+        if len(nums) >= 2:
+            start_day, end_day = nums[0], nums[-1]
+            if end_day < start_day:
+                end_month = 1 if start_month == 12 else start_month + 1
+                if start_month == 12 and end_month == 1 and len(years) <= 1:
+                    end_year = start_year + 1
+            score_day = end_day if end_day >= start_day else start_day
+        elif len(nums) == 1:
+            start_day = end_day = score_day = nums[0]
+        else:
+            return 0, None, None
 
-    cleaned = re.sub(r'202\d', ' ', name_upper)
-    cleaned = re.sub(r'\bW(?:EEK|K)?\s*\d+\b', ' ', cleaned)
-    nums = [int(n) for n in re.findall(r'\b(\d{1,2})\b', cleaned) if 1 <= int(n) <= 31]
-
-    if len(nums) >= 2:
-        start_day, end_day = nums[0], nums[-1]
-        # Bila bulan tunggal tetapi tanggal kecil-ke-besar atau lintas bulan
-        if len(found_months) == 1 and end_day < start_day:
-            end_month = 1 if start_month == 12 else start_month + 1
-        end_year = year + 1 if (start_month == 12 and end_month == 1) else year
-        score_day = end_day if len(found_months) > 1 or end_day >= start_day else start_day
-    elif len(nums) == 1:
-        start_day = end_day = score_day = nums[0]
-        end_year = year
-    else:
-        return 0, None, None
-
-    start_iso = f"{year:04d}-{start_month:02d}-{start_day:02d}"
+    start_iso = f"{start_year:04d}-{start_month:02d}-{start_day:02d}"
     end_iso = f"{end_year:04d}-{end_month:02d}-{end_day:02d}"
     score = (end_year * 1000000) + (end_month * 10000) + (score_day * 100) + start_day
     return score, start_iso, end_iso
@@ -126,6 +216,150 @@ def extract_folder_date_info(folder_name: str):
 
 def parse_folder_date_score(folder_name: str) -> int:
     return extract_folder_date_info(folder_name)[0]
+
+
+def _extract_storage_folder_from_url(url: str) -> tuple[str | None, str]:
+    """Mengambil (folder_name, file_name) bila URL berasal dari Storage PROMO/<folder>/<file>."""
+    if not url:
+        return None, ""
+    decoded = unquote(str(url)).split("?", 1)[0].strip()
+    marker = "/PROMO/"
+    idx = decoded.upper().find(marker)
+    if idx != -1:
+        rel = decoded[idx + len(marker):].strip("/")
+        if "/" in rel:
+            folder_part, file_part = rel.split("/", 1)
+            return folder_part, os.path.basename(file_part)
+        return None, os.path.basename(rel)
+    return None, os.path.basename(decoded)
+
+
+def _list_files_in_promo_folder(folder_name: str) -> list[dict]:
+    """Mengembalikan seluruh berkas promo valid di Storage subfolder PROMO/<folder_name>."""
+    files = []
+    if not folder_name:
+        return files
+    try:
+        sub_res = supabase.storage.from_("excel-uploads").list(f"PROMO/{folder_name}")
+        for item in (sub_res or []):
+            name = item.get("name", "")
+            if name.lower().endswith((".xlsx", ".csv", ".xls")):
+                path = f"PROMO/{folder_name}/{name}"
+                url = _safe_encode_url(supabase.storage.from_("excel-uploads").get_public_url(path))
+                files.append({"name": name, "url": url})
+    except Exception as e:
+        print(f"⚠️ Gagal membaca daftar berkas folder PROMO/{folder_name}: {e}")
+    return files
+
+
+def detect_promo_launch_window(
+    parsed_rows: list,
+    file_name: str = "",
+    folder_name: str = "",
+    today_wib: str = None,
+    all_file_names: list[str] = None,
+) -> dict:
+    """
+    Auto-Guard 3-Lapis untuk mendeteksi promo yang belum launching (H-2 / H-1):
+      - Tag eksplisit folder ('UPCOMING', 'DRAFT', 'NEXT', 'POP')
+      - Lapis 1 (Terakurat): Kolom `tgl_mulai` pada baris promo di dalam isi Excel
+      - Lapis 2: Tanggal periode pada nama file Excel (termasuk format kompak e.g. 26NOV-02DES2026)
+      - Lapis 3: Subject email / nama folder Storage
+    """
+    if not today_wib:
+        today_wib = datetime.now(timezone(timedelta(hours=7))).strftime("%Y-%m-%d")
+
+    folder_upper = (folder_name or "").upper()
+    is_upcoming_tag = any(k in folder_upper for k in ("UPCOMING", "DRAFT", "NEXT", "POP"))
+
+    # Lapis 1: Isi Excel (`tgl_mulai` & `tgl_akhir`)
+    valid_froms = []
+    valid_tos = []
+    for r in (parsed_rows or []):
+        is_promo_row = bool(r.get("is_promo") or r.get("harga_promo") or r.get("diskon") or r.get("tipe_diskon"))
+        if not is_promo_row:
+            continue
+        f_iso = _normalize_iso_date(r.get("tgl_mulai"))
+        t_iso = _normalize_iso_date(r.get("tgl_akhir"))
+        if f_iso:
+            valid_froms.append(f_iso)
+        if t_iso:
+            valid_tos.append(t_iso)
+
+    future_froms = [d for d in valid_froms if d > today_wib]
+    active_froms = [d for d in valid_froms if d <= today_wib]
+
+    # Lapis 2: Nama file Excel (cek semua file di folder bila tersedia)
+    candidate_names = [n for n in (all_file_names or []) if n]
+    if file_name and file_name not in candidate_names:
+        candidate_names.insert(0, file_name)
+
+    file_starts = []
+    file_ends = []
+    for cname in candidate_names:
+        _, f_start, f_end = extract_folder_date_info(cname)
+        if f_start:
+            file_starts.append(f_start)
+        if f_end:
+            file_ends.append(f_end)
+
+    # Lapis 3: Subject email / Nama folder
+    _, folder_start, folder_end = extract_folder_date_info(folder_name or "")
+
+    # Keputusan prioritas 3 lapis
+    if is_upcoming_tag:
+        start_dt = (min(future_froms) if future_froms else None) or (min(file_starts) if file_starts else None) or folder_start
+        end_dt = (max(valid_tos) if valid_tos else None) or (max(file_ends) if file_ends else None) or folder_end
+        return {
+            "is_future": True,
+            "reason": "TAG_FOLDER_UPCOMING",
+            "start_date": start_dt,
+            "end_date": end_dt,
+            "future_cnt": len(future_froms),
+            "active_cnt": len(active_froms),
+        }
+
+    if len(future_froms) > 0 and len(future_froms) >= len(active_froms):
+        return {
+            "is_future": True,
+            "reason": "ISI_EXCEL_TGL_MULAI",
+            "start_date": min(future_froms),
+            "end_date": (max(valid_tos) if valid_tos else None) or max(future_froms),
+            "future_cnt": len(future_froms),
+            "active_cnt": len(active_froms),
+        }
+
+    if len(active_froms) == 0:
+        future_file_starts = [d for d in file_starts if d > today_wib]
+        active_file_starts = [d for d in file_starts if d <= today_wib]
+        if future_file_starts and not active_file_starts:
+            return {
+                "is_future": True,
+                "reason": "NAMA_FILE_EXCEL",
+                "start_date": min(future_file_starts),
+                "end_date": (max(file_ends) if file_ends else None) or max(future_file_starts),
+                "future_cnt": 0,
+                "active_cnt": 0,
+            }
+
+        if folder_start and folder_start > today_wib:
+            return {
+                "is_future": True,
+                "reason": "SUBJECT_EMAIL_FOLDER",
+                "start_date": folder_start,
+                "end_date": folder_end or folder_start,
+                "future_cnt": 0,
+                "active_cnt": 0,
+            }
+
+    return {
+        "is_future": False,
+        "reason": "ACTIVE_TODAY",
+        "start_date": (min(active_froms) if active_froms else None) or (min(file_starts) if file_starts else None) or folder_start,
+        "end_date": (max(valid_tos) if valid_tos else None) or (max(file_ends) if file_ends else None) or folder_end,
+        "future_cnt": len(future_froms),
+        "active_cnt": len(active_froms),
+    }
 
 
 def list_promo_folders_from_storage():
@@ -140,15 +374,17 @@ def list_promo_folders_from_storage():
             fname = sf.get("name", "")
             score, start_iso, end_iso = extract_folder_date_info(fname)
             is_upcoming_tag = any(k in fname.upper() for k in ("UPCOMING", "DRAFT", "NEXT", "POP"))
-            sub_res = supabase.storage.from_("excel-uploads").list(f"PROMO/{fname}")
-            files = []
-            for item in (sub_res or []):
-                name = item.get("name", "")
-                if name.lower().endswith((".xlsx", ".csv", ".xls")):
-                    path = f"PROMO/{fname}/{name}"
-                    url = supabase.storage.from_("excel-uploads").get_public_url(path)
-                    files.append({"name": name, "url": url})
+            files = _list_files_in_promo_folder(fname)
             if files:
+                # Fallback Layer 2: jika Subject/nama folder belum mencantumkan tanggal, ambil dari nama file di dalamnya
+                if score == 0:
+                    best_fscore, best_fs, best_fe = 0, None, None
+                    for fl in files:
+                        fs_score, fs_start, fs_end = extract_folder_date_info(fl["name"])
+                        if fs_score > best_fscore:
+                            best_fscore, best_fs, best_fe = fs_score, fs_start, fs_end
+                    if best_fscore > 0:
+                        score, start_iso, end_iso = best_fscore, best_fs, best_fe
                 folders.append({
                     "name": fname,
                     "score": score,
@@ -210,27 +446,44 @@ def log_sync_history(file_name: str, total_records: int, file_url: str = None):
         print(f"⚠️ Gagal mencatat SyncHistory: {log_err}")
 
 
-def process_single_promo_file(file_url: str, file_name: str = None) -> int:
-    print(f"\n📄 Memproses file: {file_name}")
+def process_single_promo_file(
+    file_url: str,
+    file_name: str = None,
+    parsed_data: list = None,
+    force_apply: bool = False,
+    today_wib: str = None,
+) -> int:
+    print(f"\n📄 Memproses file: {file_name or os.path.basename(unquote(file_url or ''))}")
     print(f"🔗 Sumber URL: {file_url}")
 
-    temp_path = f"temp_promo_{uuid.uuid4().hex[:8]}_{file_name or 'promo.xlsx'}"
+    if not today_wib:
+        today_wib = datetime.now(timezone(timedelta(hours=7))).strftime("%Y-%m-%d")
 
     try:
-        if file_url.startswith("http://") or file_url.startswith("https://"):
-            print("⬇️  Mengunduh file dari cloud storage...")
-            with httpx.Client(timeout=60) as client:
-                res = client.get(file_url)
-                res.raise_for_status()
-                with open(temp_path, "wb") as f:
-                    f.write(res.content)
+        if parsed_data is None:
+            print("⚙️  Mengunduh & menjalankan parser.py (ekstraksi kolom & diskon)...")
+            parsed_data = _load_parsed_rows_from_source(file_url, file_name)
         else:
-            temp_path = file_url
+            print("⚙️  Menggunakan hasil parsing tercache (tanpa unduh ulang)...")
 
-        print("⚙️  Menjalankan parser.py (ekstraksi kolom & diskon)...")
-        parsed_data = parse_promo_file(temp_path)
+        if not force_apply:
+            filtered_rows = []
+            skipped_future = 0
+            for row in (parsed_data or []):
+                f_iso = _normalize_iso_date(row.get("tgl_mulai"))
+                if f_iso and f_iso > today_wib:
+                    skipped_future += 1
+                    continue
+                filtered_rows.append(row)
+            if skipped_future > 0:
+                print(
+                    f"🛡️ Guard baris campuran: {skipped_future:,} baris promo masa depan (> {today_wib}) "
+                    "dilewati agar tidak menimpa harga kasir hari ini."
+                )
+            parsed_data = filtered_rows
+
         total_rows = len(parsed_data)
-        print(f"✅ Berhasil mengekstrak {total_rows} baris data promo.")
+        print(f"✅ Siap memperbarui {total_rows} baris data promo aktif.")
 
         if total_rows == 0:
             return 0
@@ -338,7 +591,7 @@ def process_single_promo_file(file_url: str, file_name: str = None) -> int:
                     "acara": item.get("acara") or item.get("sumber_sheet"),
                     "fromDate": item.get("tgl_mulai"),
                     "toDate": item.get("tgl_akhir"),
-                    "promoFileName": file_name or os.path.basename(file_url),
+                    "promoFileName": file_name or os.path.basename(unquote(file_url)),
                     "stok": ex.get("stok", 0),
                     "updatedAt": now_iso,
                     "createdAt": ex.get("createdAt") or now_iso,
@@ -357,12 +610,6 @@ def process_single_promo_file(file_url: str, file_name: str = None) -> int:
     except Exception as e:
         print(f"❌ Gagal memproses file {file_name}: {e}")
         return 0
-    finally:
-        if os.path.exists(temp_path) and temp_path.startswith("temp_promo_"):
-            try:
-                os.remove(temp_path)
-            except Exception:
-                pass
 
 
 def _compute_mds_sku8(sku7: str) -> str:
@@ -374,11 +621,13 @@ def _compute_mds_sku8(sku7: str) -> str:
 
 
 def _load_parsed_rows_from_source(file_url: str, file_name: str = None):
-    temp_path = f"temp_promo_{uuid.uuid4().hex[:8]}_{file_name or 'promo.xlsx'}"
+    safe_name = _sanitize_temp_filename(file_name or os.path.basename(unquote(file_url or "")))
+    temp_path = f"temp_promo_{uuid.uuid4().hex[:8]}_{safe_name}"
     try:
         if file_url.startswith("http://") or file_url.startswith("https://"):
-            with httpx.Client(timeout=60) as client:
-                res = client.get(file_url)
+            encoded_url = _safe_encode_url(file_url)
+            with httpx.Client(timeout=60, follow_redirects=True) as client:
+                res = client.get(encoded_url)
                 res.raise_for_status()
                 with open(temp_path, "wb") as f:
                     f.write(res.content)
@@ -430,6 +679,7 @@ def build_upcoming_promo_preview(
     folder_name: str,
     start_date: str = None,
     end_date: str = None,
+    preloaded_rows: dict = None,
 ):
     """
     MODE PERSIAPAN POP (H-2 / H-1 — 100% READ-ONLY TERHADAP DB KASIR):
@@ -442,11 +692,17 @@ def build_upcoming_promo_preview(
 
     all_parsed = []
     source_names = []
+    preloaded_rows = preloaded_rows or {}
     for f in files_to_process:
-        fname = f.get("name") or os.path.basename(f.get("url", ""))
+        fname = f.get("name") or os.path.basename(unquote(f.get("url", "")))
         source_names.append(fname)
         try:
-            rows = _load_parsed_rows_from_source(f["url"], fname)
+            if fname in preloaded_rows:
+                rows = preloaded_rows[fname]
+            elif f.get("url") in preloaded_rows:
+                rows = preloaded_rows[f["url"]]
+            else:
+                rows = _load_parsed_rows_from_source(f["url"], fname)
             for r in rows:
                 r["_source_file"] = fname
             all_parsed.extend(rows)
@@ -625,79 +881,24 @@ def build_upcoming_promo_preview(
     return len(articles)
 
 
-def run_promo_sync(
-    target_file_or_url: str = None,
-    explicit_name: str = None,
-    upcoming_only: bool = False,
-    force_apply: bool = False,
-):
-    print("=" * 60)
-    print("🚀 [PYTHON ENGINE] Memulai Sinkronisasi File Promo")
-    print("=" * 60)
+def _preload_files_for_guard(files_list: list) -> tuple[dict, list]:
+    """Mem-parsing seluruh file dalam satu batch ke memori untuk verifikasi 3-lapis tanpa unduh ganda."""
+    preloaded = {}
+    aggregated = []
+    for f in files_list:
+        fname = f.get("name") or os.path.basename(unquote(f.get("url", "")))
+        try:
+            rows = _load_parsed_rows_from_source(f["url"], fname)
+            preloaded[fname] = rows
+            aggregated.extend(rows)
+        except Exception as exc:
+            print(f"  ⚠️ Gagal preload {fname}: {exc}")
+            preloaded[fname] = []
+    return preloaded, aggregated
 
-    today_wib = datetime.now(timezone(timedelta(hours=7))).strftime("%Y-%m-%d")
 
-    if target_file_or_url:
-        fname = explicit_name or os.path.basename(target_file_or_url)
-        if upcoming_only:
-            build_upcoming_promo_preview([{"name": fname, "url": target_file_or_url}], fname)
-            return
-        total = process_single_promo_file(target_file_or_url, explicit_name)
-        if total > 0:
-            log_sync_history(fname, total)
-        else:
-            print("ℹ️ Tidak ada baris promo yang diperbarui — lewati pencatatan SyncHistory.")
-        return
-
-    print("🔍 Mencari folder promo di Supabase Storage (PROMO/)...")
-    folders = list_promo_folders_from_storage()
-
-    if not folders:
-        files_fallback = get_latest_promo_files_from_storage()
-        if not files_fallback:
-            print("ℹ️ Tidak ada file promo yang ditemukan di Storage.")
-            return
-        if upcoming_only:
-            build_upcoming_promo_preview(files_fallback, "PROMO Draft")
-            return
-        grand_total = sum(process_single_promo_file(f["url"], f["name"]) for f in files_fallback)
-        if grand_total > 0:
-            log_sync_history(f"Batch Promo ({len(files_fallback)} file)", grand_total)
-        return
-
-    # MODE PERSIAPAN POP KHUSUS (--upcoming)
-    if upcoming_only:
-        top = folders[0]
-        build_upcoming_promo_preview(top["files"], top["name"], top.get("start_date"), top.get("end_date"))
-        return
-
-    # AUTO-GUARD H-2 / H-1: Jika folder paling baru bertanggal masa depan (> today_wib) atau bertag DRAFT/UPCOMING,
-    # simpan otomatis ke draft POP (`upcoming-promo.json`) dan JANGAN timpa promo kasir hari ini kecuali `--force-apply`!
-    active_folder = None
-    for fld in folders:
-        is_future = bool(fld.get("start_date") and fld["start_date"] > today_wib)
-        if (fld["is_upcoming_tag"] or is_future) and not force_apply:
-            print(f"🛡️ Auto-Guard H-2/H-1: Folder '{fld['name']}' belum mulai ({fld.get('start_date')} > {today_wib}). Dialihkan ke Persiapan POP agar promo hari ini tidak rusak!")
-            build_upcoming_promo_preview(fld["files"], fld["name"], fld.get("start_date"), fld.get("end_date"))
-            continue
-        active_folder = fld
-        break
-
-    if not active_folder:
-        print("ℹ️ Tidak ada folder promo aktif hari ini untuk ditimpa ke Product DB.")
-        return
-
-    files_to_process = active_folder["files"]
-    print(f"📦 Memproses folder aktif '{active_folder['name']}' ({len(files_to_process)} file)...")
-    grand_total = 0
-    for f in files_to_process:
-        grand_total += process_single_promo_file(f["url"], f["name"])
-
-    print("=" * 60)
-    print(f"🎉 [SUKSES BATCH] Total {grand_total} produk berhasil diperbarui dari {len(files_to_process)} file!")
-    print("=" * 60)
-
-    # Bersihkan promo lama di PostgreSQL yang toDate-nya sudah lewat dari hari ini WIB
+def _cleanup_expired_promos_wib(today_wib: str):
+    """Membersihkan promo lama di PostgreSQL yang toDate-nya sudah lewat dari hari ini WIB."""
     try:
         cleanup_res = (
             supabase.table("Product")
@@ -718,6 +919,196 @@ def run_promo_sync(
             print(f"🧹 Membersihkan {cleaned_cnt} produk promo kedaluwarsa (< {today_wib}).")
     except Exception as cln_err:
         print(f"⚠️ Lewati pembersihan promo kedaluwarsa: {cln_err}")
+
+
+def run_promo_sync(
+    target_file_or_url: str = None,
+    explicit_name: str = None,
+    upcoming_only: bool = False,
+    force_apply: bool = False,
+):
+    print("=" * 60)
+    print("🚀 [PYTHON ENGINE] Memulai Sinkronisasi File Promo")
+    print("=" * 60)
+
+    today_wib = datetime.now(timezone(timedelta(hours=7))).strftime("%Y-%m-%d")
+
+    # 1. JALUR SINGLE-FILE (Dipanggil Gmail GAS Webhook / --file=<url>)
+    if target_file_or_url:
+        folder_name, inferred_name = _extract_storage_folder_from_url(target_file_or_url)
+        fname = explicit_name or inferred_name or os.path.basename(unquote(target_file_or_url))
+        normalized_url = _safe_encode_url(target_file_or_url)
+
+        if upcoming_only:
+            files_for_preview = _list_files_in_promo_folder(folder_name) if folder_name else []
+            if not any(f["name"] == fname for f in files_for_preview):
+                files_for_preview.append({"name": fname, "url": normalized_url})
+            _, fld_start, fld_end = extract_folder_date_info(folder_name or fname)
+            build_upcoming_promo_preview(
+                files_for_preview,
+                folder_name or fname,
+                start_date=fld_start,
+                end_date=fld_end,
+            )
+            return
+
+        print(f"🔎 [Auto-Guard 3-Lapis] Memeriksa kelayakan promo '{fname}' (Folder/Subject: '{folder_name or '-'}')...")
+        rows = _load_parsed_rows_from_source(normalized_url, fname)
+        guard = detect_promo_launch_window(
+            rows,
+            file_name=fname,
+            folder_name=folder_name or "",
+            today_wib=today_wib,
+        )
+
+        if guard["is_future"] and not force_apply:
+            print(
+                f"🛡️ Auto-Guard 3-Lapis ({guard['reason']}): File '{fname}' mulai {guard['start_date']} "
+                f"(> {today_wib}). Dialihkan ke Draf POP (/promo-mendatang) tanpa menyentuh promo kasir!"
+            )
+            files_for_preview = _list_files_in_promo_folder(folder_name) if folder_name else []
+            if not any(f["name"] == fname for f in files_for_preview):
+                files_for_preview.append({"name": fname, "url": normalized_url})
+            build_upcoming_promo_preview(
+                files_for_preview,
+                folder_name or fname,
+                start_date=guard.get("start_date"),
+                end_date=guard.get("end_date"),
+                preloaded_rows={fname: rows},
+            )
+            return
+
+        print(f"✅ Terverifikasi aktif ({guard['reason']}). Menerapkan '{fname}' ke Product DB...")
+        total = process_single_promo_file(
+            normalized_url,
+            fname,
+            parsed_data=rows,
+            force_apply=force_apply,
+            today_wib=today_wib,
+        )
+        if total > 0:
+            log_sync_history(fname, total)
+        else:
+            print("ℹ️ Tidak ada baris promo yang diperbarui — lewati pencatatan SyncHistory.")
+        return
+
+    # 2. JALUR FOLDER PROMO DI SUPABASE STORAGE (PROMO/)
+    print("🔍 Mencari folder promo di Supabase Storage (PROMO/)...")
+    folders = list_promo_folders_from_storage()
+
+    if not folders:
+        files_fallback = get_latest_promo_files_from_storage()
+        if not files_fallback:
+            print("ℹ️ Tidak ada file promo yang ditemukan di Storage.")
+            return
+        if upcoming_only:
+            build_upcoming_promo_preview(files_fallback, "PROMO Draft")
+            return
+        preloaded, agg_rows = _preload_files_for_guard(files_fallback)
+        guard = detect_promo_launch_window(
+            agg_rows,
+            file_name=files_fallback[0]["name"],
+            folder_name="PROMO",
+            today_wib=today_wib,
+            all_file_names=[f["name"] for f in files_fallback],
+        )
+        if guard["is_future"] and not force_apply:
+            print(
+                f"🛡️ Auto-Guard 3-Lapis ({guard['reason']}): Berkas promo mulai {guard['start_date']} "
+                f"(> {today_wib}). Dialihkan ke Persiapan POP (/promo-mendatang)!"
+            )
+            build_upcoming_promo_preview(
+                files_fallback,
+                "PROMO Draft",
+                start_date=guard.get("start_date"),
+                end_date=guard.get("end_date"),
+                preloaded_rows=preloaded,
+            )
+            return
+        grand_total = sum(
+            process_single_promo_file(
+                f["url"],
+                f["name"],
+                parsed_data=preloaded.get(f["name"]),
+                force_apply=force_apply,
+                today_wib=today_wib,
+            )
+            for f in files_fallback
+        )
+        _cleanup_expired_promos_wib(today_wib)
+        if grand_total > 0:
+            log_sync_history(f"Batch Promo ({len(files_fallback)} file)", grand_total)
+        return
+
+    # MODE PERSIAPAN POP KHUSUS (--upcoming)
+    if upcoming_only:
+        top = folders[0]
+        build_upcoming_promo_preview(top["files"], top["name"], top.get("start_date"), top.get("end_date"))
+        return
+
+    # AUTO-GUARD 3-LAPIS UNTUK FOLDER BATCH:
+    # Cek Lapis 3 (Tag/Subject folder), dan jika lolos cek Lapis 1 (Isi `tgl_mulai` Excel) + Lapis 2 (Nama file)
+    active_folder = None
+    active_preloaded = None
+    for fld in folders:
+        is_future_tag_or_folder = bool(
+            fld["is_upcoming_tag"] or (fld.get("start_date") and fld["start_date"] > today_wib)
+        )
+        if is_future_tag_or_folder and not force_apply:
+            print(
+                f"🛡️ Auto-Guard H-2/H-1 (Folder/Subject): '{fld['name']}' belum mulai "
+                f"({fld.get('start_date')} > {today_wib}). Dialihkan ke Persiapan POP!"
+            )
+            build_upcoming_promo_preview(fld["files"], fld["name"], fld.get("start_date"), fld.get("end_date"))
+            continue
+
+        preloaded, agg_rows = _preload_files_for_guard(fld["files"])
+        guard = detect_promo_launch_window(
+            agg_rows,
+            file_name=fld["files"][0]["name"],
+            folder_name=fld["name"],
+            today_wib=today_wib,
+            all_file_names=[f["name"] for f in fld["files"]],
+        )
+        if guard["is_future"] and not force_apply:
+            print(
+                f"🛡️ Auto-Guard 3-Lapis ({guard['reason']}): Folder '{fld['name']}' ternyata promo mendatang "
+                f"(mulai {guard.get('start_date')} > {today_wib}). Dialihkan ke Persiapan POP (/promo-mendatang)!"
+            )
+            build_upcoming_promo_preview(
+                fld["files"],
+                fld["name"],
+                start_date=guard.get("start_date"),
+                end_date=guard.get("end_date"),
+                preloaded_rows=preloaded,
+            )
+            continue
+
+        active_folder = fld
+        active_preloaded = preloaded
+        break
+
+    if not active_folder:
+        print("ℹ️ Tidak ada folder promo aktif hari ini untuk ditimpa ke Product DB.")
+        return
+
+    files_to_process = active_folder["files"]
+    print(f"📦 Memproses folder aktif '{active_folder['name']}' ({len(files_to_process)} file)...")
+    grand_total = 0
+    for f in files_to_process:
+        grand_total += process_single_promo_file(
+            f["url"],
+            f["name"],
+            parsed_data=(active_preloaded or {}).get(f["name"]),
+            force_apply=force_apply,
+            today_wib=today_wib,
+        )
+
+    print("=" * 60)
+    print(f"🎉 [SUKSES BATCH] Total {grand_total} produk berhasil diperbarui dari {len(files_to_process)} file!")
+    print("=" * 60)
+
+    _cleanup_expired_promos_wib(today_wib)
 
     if grand_total > 0:
         log_sync_history(f"Batch Promo ({len(files_to_process)} file)", grand_total)
