@@ -185,6 +185,7 @@ export default function LaporanPenjualanPage() {
   const [statusFilter, setStatusFilter] = useState<"ALL" | "PROMO" | "NORMAL" | "NO_PRICE">("ALL");
   const [chartMetric, setChartMetric] = useState<"omzet" | "qty">("omzet");
   const [alertPanelFilter, setAlertPanelFilter] = useState<"all" | "fast" | "kritis" | "slow">("all");
+  const [showAllDepts, setShowAllDepts] = useState(false);
 
   // Theme switcher: default Clean Light Toko, bisa switch ke Executive Dark kapan saja
   const [darkMode, setDarkMode] = useState(false);
@@ -602,13 +603,15 @@ export default function LaporanPenjualanPage() {
   const totalDeptValForShare = topDeptData.reduce((s, d) => s + (hasAnySalesYet ? d.value : d.stok), 0) || 1;
   const maxDeptBar = Math.max(...topDeptData.map((d) => (hasAnySalesYet ? d.value : d.stok)), 1);
 
+  const visibleDeptData = showAllDepts ? topDeptData : topDeptData.slice(0, 6);
+
   return (
-    <div className={`min-h-screen ${pageBg} p-3 sm:p-5 lg:p-6 pb-24 transition-colors duration-200 font-sans antialiased`}>
-      <div className="max-w-7xl mx-auto flex flex-col gap-5">
+    <div className={`min-h-screen overflow-x-hidden ${pageBg} px-3 py-3 sm:p-5 lg:p-6 pb-24 transition-colors duration-200 font-sans antialiased`}>
+      <div className="max-w-7xl mx-auto flex flex-col gap-3.5 sm:gap-5">
         {/* ================= TOAST NOTIFIKASI (Error PIN, Sync, Refresh) ================= */}
         {toast && (
           <div
-            className={`fixed bottom-5 right-4 left-4 sm:left-auto sm:max-w-md z-50 px-4 py-3 rounded-2xl shadow-2xl border flex items-start justify-between gap-3 text-xs sm:text-sm font-bold ${
+            className={`fixed bottom-4 right-3 left-3 sm:left-auto sm:right-5 sm:max-w-md z-50 px-4 py-3 rounded-2xl shadow-2xl border flex items-start justify-between gap-3 text-xs sm:text-sm font-bold ${
               toast.type === "error"
                 ? "bg-rose-600 text-white border-rose-500"
                 : toast.type === "success"
@@ -635,119 +638,127 @@ export default function LaporanPenjualanPage() {
           </div>
         )}
 
-        {/* ================= HEADER UTAMA ================= */}
-        <div className={`${cardCls} rounded-2xl sm:rounded-3xl p-4 sm:p-5 flex flex-col gap-4`}>
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3.5">
-            <div className="flex items-start sm:items-center gap-3 min-w-0">
+        {/* ================= HEADER UTAMA (Mobile-First Grid, Zero Berantakan) ================= */}
+        <div className={`${cardCls} rounded-2xl sm:rounded-3xl p-3.5 sm:p-5 flex flex-col gap-3.5`}>
+          {/* Baris 1: Back + Judul + Icon Theme & Refresh di pojok kanan atas */}
+          <div className="flex items-start justify-between gap-2.5">
+            <div className="flex items-start gap-2.5 sm:gap-3 min-w-0 flex-1">
               <Link
                 href="/super-admin"
-                className={`p-2.5 rounded-xl ${softCls} ${textPrimary} hover:opacity-80 transition-all shrink-0`}
+                className={`w-10 h-10 rounded-xl ${softCls} ${textPrimary} flex items-center justify-center hover:opacity-80 transition-all shrink-0`}
                 title="Kembali ke Dashboard Super Admin"
               >
-                <ArrowLeft className="w-5 h-5" />
+                <ArrowLeft className="w-4 h-4 sm:w-5 sm:h-5" />
               </Link>
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h1 className={`font-black text-lg sm:text-xl md:text-2xl tracking-tight ${textPrimary} whitespace-normal break-words`}>
-                    Laporan Penjualan &amp; Analitik SUKO
+                  <h1 className={`font-black text-base sm:text-xl md:text-2xl leading-tight tracking-tight ${textPrimary} whitespace-normal break-words`}>
+                    Laporan Penjualan SUKO
                   </h1>
-                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-emerald-500/15 text-emerald-600 border border-emerald-500/30 shrink-0">
-                    ● MDS BISA Live
+                  <span className="px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-extrabold bg-emerald-500/15 text-emerald-600 border border-emerald-500/30 shrink-0">
+                    ● MDS Live
                   </span>
                 </div>
-                <p className={`text-xs ${textMuted} mt-1 whitespace-normal break-words`}>
-                  Sumber: <strong className={textPrimary}>{data?.pqFileName || "MDS BISA Delta Sales (SUKO)"}</strong> • Sync:{" "}
-                  <strong className={textPrimary}>{data?.pqUploadTime || "-"}</strong>
+                <p className={`text-[11px] sm:text-xs ${textMuted} mt-1 leading-snug whitespace-normal break-words`}>
+                  Sync: <strong className={textPrimary}>{data?.pqUploadTime || "-"}</strong>
+                  <span className="hidden sm:inline">
+                    {" "}• Sumber: <strong className={textPrimary}>{data?.pqFileName || "MDS BISA Delta Sales (SUKO)"}</strong>
+                  </span>
                 </p>
               </div>
             </div>
 
-            {/* Aksi Cepat: Switch Tema, Tarik Sales SUKO Python, Refresh, CSV, PDF */}
-            <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {/* Quick Icon Buttons di pojok kanan atas (rapi di HP & Desktop) */}
+            <div className="flex items-center gap-1.5 shrink-0">
               <button
                 type="button"
                 onClick={() => toggleTheme(!darkMode)}
-                className={`px-3 py-2 rounded-xl ${softCls} ${textPrimary} text-xs font-bold flex items-center gap-1.5 hover:opacity-85 transition-all cursor-pointer`}
-                title="Ganti Tema Tampilan"
+                className={`h-10 px-2.5 sm:px-3 rounded-xl ${softCls} ${textPrimary} text-xs font-bold flex items-center justify-center gap-1.5 hover:opacity-85 transition-all cursor-pointer`}
+                title="Ganti Tema Light / Dark"
               >
-                {darkMode ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5 text-indigo-600" />}
-                <span>{darkMode ? "Light" : "Dark"}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleTriggerSukoSalesSync}
-                disabled={triggeringSync}
-                className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
-                title="Jalankan mesin Python di GitHub Actions khusus tarik stok & sales SUKO (0 beban RAM Supabase)"
-              >
-                <Zap className={`w-3.5 h-3.5 ${triggeringSync ? "animate-pulse" : ""}`} />
-                <span>{triggeringSync ? "Menyalakan..." : "Tarik Sales SUKO"}</span>
+                {darkMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-indigo-600" />}
+                <span className="hidden sm:inline">{darkMode ? "Light" : "Dark"}</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => fetchReport(selectedDate, timeframe, true)}
                 disabled={refreshing}
-                className={`px-3 py-2 rounded-xl ${softCls} ${textPrimary} text-xs font-bold flex items-center gap-1.5 hover:opacity-85 transition-all cursor-pointer`}
+                className={`h-10 px-2.5 sm:px-3 rounded-xl ${softCls} ${textPrimary} text-xs font-bold flex items-center justify-center gap-1.5 hover:opacity-85 transition-all cursor-pointer`}
+                title="Segarkan Data Laporan"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
-                <span>Refresh</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleExportTrigger("CSV")}
-                className={`px-3 py-2 rounded-xl ${softCls} ${textPrimary} text-xs font-bold flex items-center gap-1.5 hover:opacity-85 transition-all cursor-pointer`}
-              >
-                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
-                <span>CSV</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleExportTrigger("PDF")}
-                className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>PDF</span>
+                <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
+                <span className="hidden sm:inline">Refresh</span>
               </button>
             </div>
           </div>
 
-          {/* Baris Filter Global: Periode + Tanggal + Departemen */}
-          <div className={`pt-3.5 border-t ${borderSub} flex flex-wrap items-center justify-between gap-2.5`}>
-            <div className={`inline-flex items-center p-1 rounded-xl ${softCls} gap-1`}>
+          {/* Baris 2: Aksi Utama (HP: 1 tombol utama penuh + 2 tombol Export 50/50; Desktop: sejajar rapi) */}
+          <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleTriggerSukoSalesSync}
+              disabled={triggeringSync}
+              className="col-span-2 sm:col-span-1 h-10 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white text-xs font-extrabold flex items-center justify-center gap-1.5 shadow-xs transition-all cursor-pointer"
+              title="Jalankan mesin Python di GitHub Actions khusus tarik stok & sales SUKO (0 beban RAM Supabase)"
+            >
+              <Zap className={`w-4 h-4 shrink-0 ${triggeringSync ? "animate-pulse" : ""}`} />
+              <span>{triggeringSync ? "Menyalakan Mesin Python..." : "Tarik Sales SUKO Sekarang"}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleExportTrigger("CSV")}
+              className={`h-10 px-3.5 rounded-xl ${softCls} ${textPrimary} text-xs font-bold flex items-center justify-center gap-1.5 hover:opacity-85 transition-all cursor-pointer`}
+            >
+              <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>Export CSV</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleExportTrigger("PDF")}
+              className="h-10 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold flex items-center justify-center gap-1.5 shadow-xs transition-all cursor-pointer"
+            >
+              <Download className="w-4 h-4 shrink-0" />
+              <span>Export PDF</span>
+            </button>
+          </div>
+
+          {/* Baris 3: Filter Periode (4 kolom simetris penuh di HP) + Dropdown Tanggal & Dept full-width di HP */}
+          <div className={`pt-3 border-t ${borderSub} flex flex-col lg:flex-row lg:items-center justify-between gap-2.5`}>
+            <div className={`grid grid-cols-4 sm:inline-flex items-center p-1 rounded-xl ${softCls} gap-1 w-full lg:w-auto`}>
               {(
                 [
-                  ["1D", "SPD (Harian)"],
-                  ["1W", "WTD (Mingguan)"],
-                  ["1M", "MTD (Bulanan)"],
-                  ["1Y", "YTD (Tahunan)"],
+                  ["1D", "SPD", "Harian"],
+                  ["1W", "WTD", "Mingguan"],
+                  ["1M", "MTD", "Bulanan"],
+                  ["1Y", "YTD", "Tahunan"],
                 ] as const
-              ).map(([tf, lbl]) => (
+              ).map(([tf, shortLbl, longLbl]) => (
                 <button
                   key={tf}
                   type="button"
                   onClick={() => setTimeframe(tf)}
-                  className={`px-2.5 sm:px-3 py-1.5 text-xs font-extrabold rounded-lg transition-all cursor-pointer ${
+                  className={`py-2 sm:px-3 sm:py-1.5 text-xs font-extrabold rounded-lg transition-all cursor-pointer text-center ${
                     timeframe === tf
                       ? "bg-emerald-600 text-white shadow-xs"
                       : `${textMuted} hover:opacity-80`
                   }`}
                 >
-                  {lbl}
+                  <span>{shortLbl}</span>
+                  <span className="hidden sm:inline font-semibold opacity-90"> ({longLbl})</span>
                 </button>
               ))}
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              <div className={`flex items-center gap-2 ${softCls} px-3 py-1.5 rounded-xl`}>
-                <Calendar className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex items-center gap-2 w-full lg:w-auto">
+              <div className={`flex items-center gap-2 ${softCls} px-3 py-2 rounded-xl w-full lg:w-auto`}>
+                <Calendar className="w-4 h-4 text-emerald-600 shrink-0" />
                 <select
                   value={selectedDate}
                   onChange={(e) => setSelectedDate(e.target.value)}
-                  className={`bg-transparent border-none text-xs font-bold ${textPrimary} focus:ring-0 cursor-pointer outline-none`}
+                  className={`bg-transparent border-none text-xs font-bold ${textPrimary} focus:ring-0 cursor-pointer outline-none w-full`}
                 >
                   {(data?.availableDates?.length ? data.availableDates : [selectedDate || "2026-11-21"]).map((date) => (
                     <option
@@ -761,12 +772,12 @@ export default function LaporanPenjualanPage() {
                 </select>
               </div>
 
-              <div className={`flex items-center gap-2 ${softCls} px-3 py-1.5 rounded-xl`}>
-                <Tag className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+              <div className={`flex items-center gap-2 ${softCls} px-3 py-2 rounded-xl w-full lg:w-auto`}>
+                <Tag className="w-4 h-4 text-indigo-500 shrink-0" />
                 <select
                   value={selectedDeptFilter}
                   onChange={(e) => setSelectedDeptFilter(e.target.value)}
-                  className={`bg-transparent border-none text-xs font-bold ${textPrimary} focus:ring-0 cursor-pointer outline-none max-w-[200px]`}
+                  className={`bg-transparent border-none text-xs font-bold ${textPrimary} focus:ring-0 cursor-pointer outline-none w-full lg:max-w-[220px]`}
                 >
                   <option value="ALL" className={darkMode ? "bg-slate-900 text-slate-100" : "bg-white text-slate-900"}>
                     Semua Dept SUKO ({topDeptData.length})
@@ -822,9 +833,9 @@ export default function LaporanPenjualanPage() {
             )}
 
             {/* ================= HERO REVENUE SPOTLIGHT + 4 KARTU KPI RINGKAS ================= */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 sm:gap-4">
               {/* Hero Spotlight */}
-              <div className="lg:col-span-5 rounded-2xl sm:rounded-3xl p-5 bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-950 text-white shadow-lg flex flex-col justify-between gap-4 border border-slate-700/70">
+              <div className="lg:col-span-5 rounded-2xl sm:rounded-3xl p-4 sm:p-5 bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-950 text-white shadow-lg flex flex-col justify-between gap-3.5 border border-slate-700/70">
                 <div>
                   <div className="flex items-center justify-between gap-2 flex-wrap">
                     <span className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-300">
@@ -832,7 +843,7 @@ export default function LaporanPenjualanPage() {
                     </span>
                     {heroMeta.growth !== null && (
                       <span
-                        className={`inline-flex items-center gap-0.5 px-2.5 py-0.5 rounded-full text-xs font-extrabold border ${
+                        className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[11px] font-extrabold border shrink-0 ${
                           heroMeta.growth >= 0
                             ? "bg-emerald-500/20 text-emerald-200 border-emerald-400/30"
                             : "bg-rose-500/20 text-rose-200 border-rose-400/30"
@@ -852,53 +863,56 @@ export default function LaporanPenjualanPage() {
                     {formatCurrency(heroMeta.omzet)}
                   </p>
 
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-300 mt-1.5 tabular-nums">
-                    <span>
-                      Terjual: <strong className="text-white">{heroMeta.qty.toLocaleString("id-ID")} pcs</strong>
-                    </span>
-                    <span>
-                      Rata-rata/pcs (ASP): <strong className="text-white">{formatCurrency(heroAsp)}</strong>
-                    </span>
+                  <div className="grid grid-cols-2 gap-2 mt-3 tabular-nums">
+                    <div className="rounded-xl bg-white/10 border border-white/10 px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-wider text-slate-300 font-bold">Total Terjual</div>
+                      <div className="text-sm sm:text-base font-black text-white mt-0.5">
+                        {heroMeta.qty.toLocaleString("id-ID")} pcs
+                      </div>
+                    </div>
+                    <div className="rounded-xl bg-white/10 border border-white/10 px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-wider text-slate-300 font-bold">Rata-rata / pcs</div>
+                      <div className="text-sm sm:text-base font-black text-white mt-0.5">
+                        {formatCurrency(heroAsp)}
+                      </div>
+                    </div>
                   </div>
                 </div>
 
-                {/* Target MTD yang bisa diedit langsung */}
-                <div className="bg-white/10 rounded-2xl p-3.5 border border-white/15 space-y-2">
-                  <div className="flex items-center justify-between gap-2 text-xs flex-wrap">
-                    {editingTarget ? (
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="text-slate-200">Target (Juta Rp):</span>
+                {/* Target MTD yang bisa diedit langsung (rapi di HP) */}
+                <div className="bg-white/10 rounded-2xl p-3 border border-white/15 space-y-2">
+                  {editingTarget ? (
+                    <div className="flex flex-col gap-2">
+                      <span className="text-[11px] font-bold text-slate-200">Ubah Target Bulanan (dalam Juta Rp):</span>
+                      <div className="flex items-center gap-2">
                         <input
                           type="number"
                           min={10}
                           value={targetInputM}
                           onChange={(e) => setTargetInputM(e.target.value)}
-                          className="w-24 px-2 py-1 rounded-lg bg-slate-900 text-white border border-emerald-400 text-xs font-bold outline-none"
+                          className="flex-1 min-w-0 px-3 py-1.5 rounded-xl bg-slate-900 text-white border border-emerald-400 text-xs font-bold outline-none"
                         />
                         <button
                           type="button"
                           onClick={handleSaveTarget}
-                          className="p-1 rounded-lg bg-emerald-500 text-slate-950 hover:bg-emerald-400 cursor-pointer"
-                          title="Simpan Target"
+                          className="px-3 py-1.5 rounded-xl bg-emerald-500 text-slate-950 font-extrabold text-xs hover:bg-emerald-400 cursor-pointer shrink-0 flex items-center gap-1"
                         >
-                          <Check className="w-3.5 h-3.5" />
+                          <Check className="w-3.5 h-3.5" /> Simpan
                         </button>
                         <button
                           type="button"
                           onClick={() => setEditingTarget(false)}
-                          className="p-1 rounded-lg bg-white/15 text-white hover:bg-white/25 cursor-pointer"
-                          title="Batal"
+                          className="p-1.5 rounded-xl bg-white/15 text-white hover:bg-white/25 cursor-pointer shrink-0"
                         >
                           <X className="w-3.5 h-3.5" />
                         </button>
                       </div>
-                    ) : (
-                      <span className="text-slate-200">
-                        Target Bulanan (MTD): <strong className="text-white">{formatCompactCurrency(targetMtd)}</strong>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <span className="text-slate-200 whitespace-normal break-words">
+                        Target MTD: <strong className="text-white">{formatCompactCurrency(targetMtd)}</strong>
                       </span>
-                    )}
-
-                    {!editingTarget && (
                       <div className="flex items-center gap-2 shrink-0">
                         <span className="font-black text-emerald-300 tabular-nums">{mtdProgress.toFixed(1)}%</span>
                         <button
@@ -907,13 +921,13 @@ export default function LaporanPenjualanPage() {
                             setTargetInputM(String(Math.round(targetMtd / 1_000_000)));
                             setEditingTarget(true);
                           }}
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white/15 hover:bg-white/25 text-white text-[11px] font-bold cursor-pointer"
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white/15 hover:bg-white/25 text-white text-[11px] font-bold cursor-pointer"
                         >
                           <Edit3 className="w-3 h-3" /> Ubah
                         </button>
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
 
                   <div className="w-full h-2.5 rounded-full bg-black/35 overflow-hidden">
                     <div
@@ -921,66 +935,66 @@ export default function LaporanPenjualanPage() {
                       style={{ width: `${Math.min(mtdProgress, 100)}%` }}
                     />
                   </div>
-                  <div className="flex items-center justify-between text-[11px] text-slate-300 tabular-nums">
+                  <div className="flex items-center justify-between gap-2 text-[11px] text-slate-300 tabular-nums">
                     <span>
-                      Sisa target:{" "}
+                      Sisa:{" "}
                       <strong className="text-white">
                         {mtdOmzet >= targetMtd ? "Tercapai!" : formatCompactCurrency(targetMtd - mtdOmzet)}
                       </strong>
                     </span>
                     <span>
-                      Porsi Promo: <strong className="text-emerald-300">{promoPct}%</strong>
+                      Promo: <strong className="text-emerald-300">{promoPct}%</strong>
                     </span>
                   </div>
                 </div>
               </div>
 
-              {/* 4 Supporting KPI Cards (2x2 Grid) */}
-              <div className="lg:col-span-7 grid grid-cols-2 gap-3 sm:gap-4">
+              {/* 4 Supporting KPI Cards (2x2 Grid rapi & proporsional di HP 360px) */}
+              <div className="lg:col-span-7 grid grid-cols-2 gap-2.5 sm:gap-4">
                 <button
                   type="button"
                   onClick={() => setTimeframe("1D")}
-                  className={`text-left ${cardCls} rounded-2xl p-4 hover:border-emerald-500 transition-all cursor-pointer flex flex-col justify-between gap-2.5`}
+                  className={`text-left ${cardCls} rounded-2xl p-3.5 sm:p-4 hover:border-emerald-500 transition-all cursor-pointer flex flex-col justify-between gap-2`}
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className={`text-[11px] font-extrabold uppercase tracking-wide ${textMuted}`}>SPD (Hari Ini)</span>
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className={`text-[11px] font-extrabold uppercase tracking-wide ${textMuted}`}>SPD Hari Ini</span>
                     <div className="w-7 h-7 rounded-xl bg-emerald-500/15 text-emerald-600 flex items-center justify-center shrink-0">
-                      <TrendingUp className="w-4 h-4" />
+                      <TrendingUp className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                     </div>
                   </div>
-                  <div>
-                    <p className={`text-xl sm:text-2xl font-black ${textPrimary} tabular-nums whitespace-normal break-words`}>
+                  <div className="space-y-0.5">
+                    <p className={`text-lg sm:text-2xl font-black leading-tight ${textPrimary} tabular-nums whitespace-normal break-words`}>
                       {formatCompactCurrency(spdOmzet)}
                     </p>
-                    <p className={`text-xs ${textMuted} mt-1 tabular-nums whitespace-normal break-words`}>
-                      Terjual <strong className={textPrimary}>{spdQty.toLocaleString("id-ID")} pcs</strong>
-                      {dodGrowth !== null && (
-                        <span className={`ml-1.5 font-bold ${dodGrowth >= 0 ? "text-emerald-600" : "text-rose-500"}`}>
-                          ({dodGrowth >= 0 ? "+" : ""}
-                          {dodGrowth.toFixed(1)}% DoD)
-                        </span>
-                      )}
+                    <p className={`text-[11px] sm:text-xs ${textMuted} tabular-nums`}>
+                      <strong className={textPrimary}>{spdQty.toLocaleString("id-ID")} pcs</strong>
                     </p>
+                    {dodGrowth !== null && (
+                      <p className={`text-[11px] font-bold tabular-nums ${dodGrowth >= 0 ? "text-emerald-600" : "text-rose-500"}`}>
+                        {dodGrowth >= 0 ? "↗ +" : "↘ "}
+                        {Math.abs(dodGrowth).toFixed(1)}% DoD
+                      </p>
+                    )}
                   </div>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setTimeframe("1W")}
-                  className={`text-left ${cardCls} rounded-2xl p-4 hover:border-blue-500 transition-all cursor-pointer flex flex-col justify-between gap-2.5`}
+                  className={`text-left ${cardCls} rounded-2xl p-3.5 sm:p-4 hover:border-blue-500 transition-all cursor-pointer flex flex-col justify-between gap-2`}
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className={`text-[11px] font-extrabold uppercase tracking-wide ${textMuted}`}>WTD (Minggu Ini)</span>
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className={`text-[11px] font-extrabold uppercase tracking-wide ${textMuted}`}>WTD Minggu</span>
                     <div className="w-7 h-7 rounded-xl bg-blue-500/15 text-blue-600 flex items-center justify-center shrink-0">
-                      <Layers className="w-4 h-4" />
+                      <Layers className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                     </div>
                   </div>
-                  <div>
-                    <p className={`text-xl sm:text-2xl font-black ${textPrimary} tabular-nums whitespace-normal break-words`}>
+                  <div className="space-y-0.5">
+                    <p className={`text-lg sm:text-2xl font-black leading-tight ${textPrimary} tabular-nums whitespace-normal break-words`}>
                       {formatCompactCurrency(wtdOmzet)}
                     </p>
-                    <p className={`text-xs ${textMuted} mt-1 tabular-nums whitespace-normal break-words`}>
-                      Terjual <strong className={textPrimary}>{wtdQty.toLocaleString("id-ID")} pcs</strong>
+                    <p className={`text-[11px] sm:text-xs ${textMuted} tabular-nums`}>
+                      <strong className={textPrimary}>{wtdQty.toLocaleString("id-ID")} pcs</strong> terjual
                     </p>
                   </div>
                 </button>
@@ -988,20 +1002,20 @@ export default function LaporanPenjualanPage() {
                 <button
                   type="button"
                   onClick={() => setTimeframe("1Y")}
-                  className={`text-left ${cardCls} rounded-2xl p-4 hover:border-purple-500 transition-all cursor-pointer flex flex-col justify-between gap-2.5`}
+                  className={`text-left ${cardCls} rounded-2xl p-3.5 sm:p-4 hover:border-purple-500 transition-all cursor-pointer flex flex-col justify-between gap-2`}
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className={`text-[11px] font-extrabold uppercase tracking-wide ${textMuted}`}>YTD (Tahun Ini)</span>
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className={`text-[11px] font-extrabold uppercase tracking-wide ${textMuted}`}>YTD Tahun Ini</span>
                     <div className="w-7 h-7 rounded-xl bg-purple-500/15 text-purple-600 flex items-center justify-center shrink-0">
-                      <BarChart3 className="w-4 h-4" />
+                      <BarChart3 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                     </div>
                   </div>
-                  <div>
-                    <p className={`text-xl sm:text-2xl font-black ${textPrimary} tabular-nums whitespace-normal break-words`}>
+                  <div className="space-y-0.5">
+                    <p className={`text-lg sm:text-2xl font-black leading-tight ${textPrimary} tabular-nums whitespace-normal break-words`}>
                       {formatCompactCurrency(ytdOmzet)}
                     </p>
-                    <p className={`text-xs ${textMuted} mt-1 tabular-nums whitespace-normal break-words`}>
-                      Terjual <strong className={textPrimary}>{ytdQty.toLocaleString("id-ID")} pcs</strong>
+                    <p className={`text-[11px] sm:text-xs ${textMuted} tabular-nums`}>
+                      <strong className={textPrimary}>{ytdQty.toLocaleString("id-ID")} pcs</strong> terjual
                     </p>
                   </div>
                 </button>
@@ -1009,47 +1023,47 @@ export default function LaporanPenjualanPage() {
                 <button
                   type="button"
                   onClick={() => setActiveTab("rekonsiliasi")}
-                  className={`text-left ${cardCls} rounded-2xl p-4 hover:border-cyan-500 transition-all cursor-pointer flex flex-col justify-between gap-2.5`}
+                  className={`text-left ${cardCls} rounded-2xl p-3.5 sm:p-4 hover:border-cyan-500 transition-all cursor-pointer flex flex-col justify-between gap-2`}
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className={`text-[11px] font-extrabold uppercase tracking-wide ${textMuted}`}>Valuasi Stok SUKO</span>
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className={`text-[11px] font-extrabold uppercase tracking-wide ${textMuted}`}>Stok SUKO</span>
                     <div className="w-7 h-7 rounded-xl bg-cyan-500/15 text-cyan-600 flex items-center justify-center shrink-0">
-                      <Box className="w-4 h-4" />
+                      <Box className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                     </div>
                   </div>
-                  <div>
-                    <p className={`text-xl sm:text-2xl font-black ${textPrimary} tabular-nums whitespace-normal break-words`}>
+                  <div className="space-y-0.5">
+                    <p className={`text-lg sm:text-2xl font-black leading-tight ${textPrimary} tabular-nums whitespace-normal break-words`}>
                       {formatCompactCurrency(nilaiInventori)}
                     </p>
-                    <p className={`text-xs ${textMuted} mt-1 tabular-nums whitespace-normal break-words`}>
-                      Stok fisik <strong className={textPrimary}>{totalStok.toLocaleString("id-ID")} pcs</strong>
+                    <p className={`text-[11px] sm:text-xs ${textMuted} tabular-nums`}>
+                      <strong className={textPrimary}>{totalStok.toLocaleString("id-ID")} pcs</strong> fisik
                     </p>
                   </div>
                 </button>
               </div>
             </div>
 
-            {/* ================= NAVIGASI TAB SEGMENTED PILL ================= */}
-            <div className={`flex flex-wrap items-center gap-1.5 p-1.5 rounded-2xl ${softCls}`}>
+            {/* ================= NAVIGASI TAB SIMETRIS (2x2 di HP, 4x1 di Desktop) ================= */}
+            <div className={`grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1.5 rounded-2xl ${softCls}`}>
               {(
                 [
-                  ["tren", "📈 Tren & Departemen"],
-                  ["rekonsiliasi", "🔄 Rekonsiliasi Stok"],
+                  ["tren", "📈 Tren & Dept"],
+                  ["rekonsiliasi", "🔄 Rekonsiliasi"],
                   ["top", `⚡ Top & Alert (${filteredKritis.length})`],
-                  ["tabel", `📋 Rincian SKU (${filteredItems.length})`],
+                  ["tabel", `📋 Rincian (${filteredItems.length})`],
                 ] as const
               ).map(([tabKey, label]) => (
                 <button
                   key={tabKey}
                   type="button"
                   onClick={() => setActiveTab(tabKey)}
-                  className={`flex-1 min-w-[140px] px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-extrabold transition-all cursor-pointer ${
+                  className={`min-h-[42px] px-2.5 sm:px-3.5 py-2 rounded-xl text-xs sm:text-sm font-extrabold transition-all cursor-pointer text-center flex items-center justify-center ${
                     activeTab === tabKey
                       ? "bg-emerald-600 text-white shadow-sm"
                       : `${textMuted} hover:opacity-80`
                   }`}
                 >
-                  {label}
+                  <span className="whitespace-normal break-words leading-tight">{label}</span>
                 </button>
               ))}
             </div>
@@ -1101,10 +1115,10 @@ export default function LaporanPenjualanPage() {
                       </div>
                     </div>
 
-                    <div className="h-[260px] w-full">
+                    <div className="h-[210px] sm:h-[260px] w-full">
                       {data?.trendData && data.trendData.length > 0 ? (
                         <ResponsiveContainer width="100%" height="100%">
-                          <AreaChart data={data.trendData} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
+                          <AreaChart data={data.trendData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                             <defs>
                               <linearGradient id="omzetGradientNew" x1="0" y1="0" x2="0" y2="1">
                                 <stop offset="5%" stopColor="#10b981" stopOpacity={0.35} />
@@ -1120,16 +1134,17 @@ export default function LaporanPenjualanPage() {
                               dataKey="fullDate"
                               axisLine={false}
                               tickLine={false}
-                              tick={{ fontSize: 11, fill: darkMode ? "#94a3b8" : "#64748b" }}
+                              tick={{ fontSize: 10, fill: darkMode ? "#94a3b8" : "#64748b" }}
                               tickFormatter={formatShortDate}
-                              dy={8}
+                              dy={6}
                             />
                             <YAxis
+                              width={48}
                               axisLine={false}
                               tickLine={false}
-                              tick={{ fontSize: 11, fill: darkMode ? "#94a3b8" : "#64748b" }}
+                              tick={{ fontSize: 10, fill: darkMode ? "#94a3b8" : "#64748b" }}
                               tickFormatter={(val) =>
-                                chartMetric === "omzet" ? formatCompactCurrency(val) : `${val} pcs`
+                                chartMetric === "omzet" ? formatCompactCurrency(val) : `${val}`
                               }
                             />
                             <Tooltip
@@ -1283,8 +1298,8 @@ export default function LaporanPenjualanPage() {
                     )}
                   </div>
 
-                  <div className="space-y-2.5 max-h-[540px] overflow-y-auto pr-1">
-                    {topDeptData.map((d, idx) => {
+                  <div className="space-y-2.5 xl:max-h-[540px] xl:overflow-y-auto xl:pr-1">
+                    {visibleDeptData.map((d, idx) => {
                       const metricVal = hasAnySalesYet ? d.value : d.stok;
                       const sharePct = ((metricVal / totalDeptValForShare) * 100).toFixed(1);
                       const barPct = Math.max(4, (metricVal / maxDeptBar) * 100);
@@ -1336,6 +1351,17 @@ export default function LaporanPenjualanPage() {
                         </button>
                       );
                     })}
+                    {topDeptData.length > 6 && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAllDepts((v) => !v)}
+                        className={`w-full py-2.5 rounded-xl ${softCls} ${textPrimary} text-xs font-extrabold hover:opacity-85 transition-all cursor-pointer`}
+                      >
+                        {showAllDepts
+                          ? "Tampilkan Lebih Ringkas (6 Teratas)"
+                          : `Lihat Semua Departemen (${topDeptData.length})`}
+                      </button>
+                    )}
                     {topDeptData.length === 0 && (
                       <div className={`p-8 text-center text-xs ${textMuted} ${softCls} rounded-2xl`}>
                         Belum ada data departemen SUKO.
@@ -1468,20 +1494,20 @@ export default function LaporanPenjualanPage() {
             {/* ================= TAB 3: TOP BEST SELLER, STOK KRITIS & SLOW MOVING ================= */}
             {activeTab === "top" && (
               <div className="space-y-4">
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-1.5">
                   {(
                     [
-                      ["all", "Semua (3 Panel)"],
-                      ["fast", `🏆 Top Best Seller (${filteredFast.length})`],
-                      ["kritis", `🚨 Stok Kritis (${filteredKritis.length})`],
-                      ["slow", `🐢 Slow Moving (${filteredSlow.length})`],
+                      ["all", "Semua Panel"],
+                      ["fast", `🏆 Best Seller (${filteredFast.length})`],
+                      ["kritis", `🚨 Kritis (${filteredKritis.length})`],
+                      ["slow", `🐢 Slow Move (${filteredSlow.length})`],
                     ] as const
                   ).map(([k, lbl]) => (
                     <button
                       key={k}
                       type="button"
                       onClick={() => setAlertPanelFilter(k)}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-extrabold cursor-pointer transition-all ${
+                      className={`py-2 px-2.5 sm:px-3 rounded-xl text-xs font-extrabold cursor-pointer transition-all text-center ${
                         alertPanelFilter === k ? "bg-emerald-600 text-white shadow-xs" : `${softCls} ${textMuted}`
                       }`}
                     >
@@ -1684,20 +1710,20 @@ export default function LaporanPenjualanPage() {
                     />
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-1.5 text-xs font-extrabold">
+                  <div className="grid grid-cols-4 sm:flex items-center gap-1.5 text-[11px] sm:text-xs font-extrabold w-full md:w-auto">
                     {(
                       [
                         ["ALL", "Semua"],
-                        ["PROMO", "🏷️ Promo"],
+                        ["PROMO", "Promo"],
                         ["NORMAL", "Reguler"],
-                        ["NO_PRICE", "⚠️ No Price"],
+                        ["NO_PRICE", "No Price"],
                       ] as const
                     ).map(([st, lbl]) => (
                       <button
                         key={st}
                         type="button"
                         onClick={() => setStatusFilter(st)}
-                        className={`px-3 py-1.5 rounded-xl cursor-pointer transition-all ${
+                        className={`py-2 px-2 sm:px-3 rounded-xl cursor-pointer transition-all text-center ${
                           statusFilter === st ? "bg-emerald-600 text-white" : `${softCls} ${textMuted}`
                         }`}
                       >
