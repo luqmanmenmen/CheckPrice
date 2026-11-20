@@ -1853,3 +1853,22 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   - [`src/app/api/admin/sales-report/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/sales-report/route.ts): Mendeteksi `missedYesterday` (`hasMissed`, `yesterdayDate`, `todayDate`) secara otomatis dari `SyncHistory` (`Buku YYYY-MM-DD`) & `DailySales` untuk hari kemarin (`>= 2026-11-21`).
   - [`src/app/api/admin/trigger/github-dispatch/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/github-dispatch/route.ts), [`src/lib/githubDispatcher.ts`](file:///c:/Max%20Display/price-checker/src/lib/githubDispatcher.ts), [`.github/workflows/retail-sync-engine.yml`](file:///c:/Max%20Display/price-checker/.github/workflows/retail-sync-engine.yml), & [`python-engine/morning_full_sweep.py`](file:///c:/Max%20Display/price-checker/python-engine/morning_full_sweep.py): Mendukung parameter `salesDate` / `--sales-date=YYYY-MM-DD` agar tarikan susulan membukukan delta sales ke tanggal kemarin (`DailySales.date` & `SyncHistory` `Buku YYYY-MM-DD`), lalu tarikan berikutnya otomatis normal ke hari ini.
   - [`src/app/super-admin/laporan-penjualan/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/laporan-penjualan/page.tsx): Menampilkan banner alert amber, modal konfirmasi alur 2-langkah (tarikan ke-1 → kemarin, tarikan ke-2 → hari ini), serta badge `Buku: <tanggal>` pada Live Loader.
+
+---
+
+### 107. Finalisasi Geofencing Ketat Per-Toko (`SUKO 719` vs `SUKO 720`), Pindah Lokasi 1-Klik SPV/Dev, & Checklist Tes Besok (21 November 2026 — Save Point `c53e01e`)
+
+- **Perubahan Final yang Sudah Live (`c53e01e`):**
+  1. **Geofencing Ketat Per-Toko (`resolveAssignedStoreZone` di [`src/lib/storeGeofence.ts`](file:///c:/Max%20Display/price-checker/src/lib/storeGeofence.ts)):**
+     - Pin **SUKO 719 PAKUWON MALL** dikalibrasi tepat ke pin toko SUKO (`-7.2896, 112.6747`, radius `750m`), dan **SUKO 720 TUNJUNGAN PLAZA** (`-7.26238, 112.73928`, radius `700m`).
+     - Crew `SUKO 719 PAKUWON MALL` hanya bisa login di Pakuwon Mall (ditolak di TP), dan Crew `SUKO 720 TUNJUNGAN PLAZA` hanya bisa login di Tunjungan Plaza (ditolak di Pakuwon).
+     - Jam operasional aktif: **`08:00 – 23:00 WIB`** (di luar jam tersebut ditolak `"Kamu sedang tidak bekerja"` meski di depan mall; `SUPERVISOR` & Developer `22054178` bebas akses 24 jam dari mana saja).
+  2. **Deteksi GPS Mobile Anti-Macet & Hapus Demo Notice ([`src/app/login/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/login/page.tsx), [`next.config.ts`](file:///c:/Max%20Display/price-checker/next.config.ts)):**
+     - Header `Permissions-Policy: geolocation=(self)`, deteksi 2-tahap + hard timeout `11s`, tombol refresh tidak pernah terkunci, dan kotak demo koordinat sudah dihapus bersih setelah lulus tes nyata di HP (jarak lurus 10,48 km Ploso–Pakuwon Mall terverifikasi akurat).
+  3. **Pindah Lokasi Kerja Crew 1-Klik ([`src/app/super-admin/users/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/users/page.tsx), [`src/app/api/admin/users/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/users/route.ts)):**
+     - Baik **SPV** maupun **Developer** kini bisa memindahkan penempatan toko crew (`SUKO 719 PAKUWON MALL` ↔ `SUKO 720 TUNJUNGAN PLAZA`) langsung dari dropdown tabel atau modal Edit.
+- **Checklist Tes & Lanjutan Besok (Saat Jam Toko Buka ≥ 09:00 WIB):**
+  1. **Tes Login Crew di Lokasi Mall Nyata (`SUKO 719` & `SUKO 720`):** Pastikan akun crew (`223515` dkk.) terverifikasi hijau di toko masing-masing dan bisa klik `MULAI KERJA`.
+  2. **Tes Live Tarik Sales SUKO (`Tarik Sales SUKO Sekarang`):** Pantau Live Loader (`0% → 100%`), auto-refresh laporan, angka omzet/qty/Top 10/Stok Kritis terisi real-time, serta verifikasi alur Alert Susulan Kemarin jika keesokan harinya terlewat.
+  3. **Tes Edit Target Toko (Rupiah Penuh) & Cut-Off Kalender 100 Tahun + Ekspor PDF/CSV.**
+  4. **Opsional:** Penyesuaian jam operasional buka/tutup toko di `storeGeofence.ts` bila ingin dipersempit dari `08:00–23:00 WIB` (mis. `09:00–22:30 WIB`).
