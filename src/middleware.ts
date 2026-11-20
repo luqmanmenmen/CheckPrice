@@ -33,15 +33,14 @@ export async function middleware(request: NextRequest) {
 
       const isSuperOrDev = userRole === 'SUPERVISOR' || userNik === '22054178';
 
-      // Auto-logout jika jam shift telah berakhir untuk keamanan toko dengan pemberitahuan jelas
-      if (shiftType && !isSuperOrDev) {
+      // Auto-logout otomatis di luar jam operasional mall (08:00 - 23:00 WIB) khusus CREW_STORE
+      // SUPERVISOR & Developer (22054178) bebas akses 24 jam.
+      if (!isSuperOrDev) {
         const now = new Date();
-        const jakartaStr = now.toLocaleString("en-US", { timeZone: "Asia/Jakarta", hour12: false });
-        const hourMatch = jakartaStr.match(/ (24|\d+):/);
-        let hour = hourMatch ? parseInt(hourMatch[1], 10) : now.getUTCHours() + 7;
-        if (hour === 24) hour = 0;
+        const wib = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+        const hour = wib.getUTCHours();
 
-        if ((shiftType === 1 && (hour >= 17 || hour < 8)) || (shiftType === 2 && (hour >= 23 || hour < 14))) {
+        if (hour >= 23 || hour < 8) {
           isValidSession = false;
           if (!isAuthPage) {
             const redirectUrl = new URL('/login?reason=shift_ended', request.url);

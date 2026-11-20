@@ -13,21 +13,35 @@ export async function GET(req: NextRequest) {
     nik = nik.trim();
 
     if (nik === "22054178") {
-      return NextResponse.json({ success: true, toko: "Server", name: "Luqman Arif (Developer)" });
+      return NextResponse.json({
+        success: true,
+        toko: "Server",
+        name: "Luqman Arif (Developer)",
+        role: "SUPERVISOR",
+        isBypassLocation: true,
+      });
     }
 
     const user = await prisma.user.findUnique({
       where: { nik },
       // @ts-ignore - IDE cache workaround
-      select: { toko: true, name: true }
+      select: { toko: true, name: true, role: true }
     });
 
     if (!user) {
       return NextResponse.json({ error: "NIK tidak terdaftar" }, { status: 404 });
     }
 
+    const isBypassLocation = user.role === "SUPERVISOR" || nik === "22054178";
+
     // @ts-ignore
-    return NextResponse.json({ success: true, toko: user.toko, name: user.name });
+    return NextResponse.json({
+      success: true,
+      toko: user.toko,
+      name: user.name,
+      role: user.role,
+      isBypassLocation,
+    });
   } catch (error) {
     console.error("Check NIK error:", error);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });

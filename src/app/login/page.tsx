@@ -3,16 +3,15 @@ import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 import Link from "next/link";
-import ShiftToggle from "@/components/ShiftToggle";
 import ShiftLoader from "@/components/ShiftLoader";
-import { ShoppingCart, Shirt, Footprints, Package, Search, Lock, LogOut } from "lucide-react";
+import { ShoppingCart, Shirt, Footprints, Package, Lock, LogOut, MapPin, ShieldCheck, Loader2, RefreshCw } from "lucide-react";
 import { APP_VERSION, forceAppUpdate } from "@/lib/version";
+import { verifyStoreGeofence } from "@/lib/storeGeofence";
 
 export default function Login() {
   const [nik, setNik] = useState("");
   const [pin, setPin] = useState("");
   const [jobTitle, setJobTitle] = useState("Cashier");
-  const [shift, setShift] = useState("1");
   const [error, setError] = useState("");
   const [infoNotice, setInfoNotice] = useState("");
   const [loading, setLoading] = useState(false);
@@ -26,7 +25,14 @@ export default function Login() {
   };
   const [toko, setToko] = useState("");
   const [userName, setUserName] = useState("");
+  const [isBypassLocation, setIsBypassLocation] = useState(false);
   const [checkingNik, setCheckingNik] = useState(false);
+
+  // GPS Geofencing State (Pakuwon Mall & Tunjungan Plaza Surabaya — dikecualikan untuk SPV & Developer)
+  const [geoStatus, setGeoStatus] = useState<"idle" | "checking" | "verified" | "outside" | "denied" | "unsupported">("idle");
+  const [geoCoords, setGeoCoords] = useState<{ lat: number; lng: number; accuracy: number | null } | null>(null);
+  const [verifiedMall, setVerifiedMall] = useState("");
+  const [notWorkingAlert, setNotWorkingAlert] = useState(false);
   
   const [showChangePin, setShowChangePin] = useState(false);
   const [newPin, setNewPin] = useState("");
@@ -36,6 +42,65 @@ export default function Login() {
   // Client-side only states for random positions
   const [mounted, setMounted] = useState(false);
   const [stars, setStars] = useState<{ x: number; y: number; delay: string }[]>([]);
+
+  const requestGpsLocation = React.useCallback((): Promise<{ lat: number; lng: number; accuracy: number | null } | null> => {
+    return new Promise((resolve) => {
+      if (typeof window === "undefined" || !("geolocation" in navigator)) {
+        setGeoStatus("unsupported");
+        resolve(null);
+        return;
+      }
+
+      setGeoStatus("checking");
+
+      const handleSuccess = (pos: GeolocationPosition) => {
+        const coords = {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy : null,
+        };
+        setGeoCoords(coords);
+        const check = verifyStoreGeofence(coords.lat, coords.lng, coords.accuracy);
+        if (check?.allowed) {
+          setGeoStatus("verified");
+          setVerifiedMall(check.nearestZone.shortName);
+          setNotWorkingAlert(false);
+        } else {
+          setGeoStatus("outside");
+          setVerifiedMall("");
+        }
+        resolve(coords);
+      };
+
+      const handleFinalError = (err: GeolocationPositionError) => {
+        if (err.code === err.PERMISSION_DENIED) {
+          setGeoStatus("denied");
+        } else {
+          setGeoStatus("denied");
+        }
+        setGeoCoords(null);
+        setVerifiedMall("");
+        resolve(null);
+      };
+
+      navigator.geolocation.getCurrentPosition(
+        handleSuccess,
+        (err) => {
+          // Jika High Accuracy timeout di dalam gedung mall, fallback ke Network/Wi-Fi Geolocation
+          if (err.code === err.TIMEOUT || err.code === err.POSITION_UNAVAILABLE) {
+            navigator.geolocation.getCurrentPosition(
+              handleSuccess,
+              handleFinalError,
+              { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 }
+            );
+          } else {
+            handleFinalError(err);
+          }
+        },
+        { enableHighAccuracy: true, timeout: 7000, maximumAge: 30000 }
+      );
+    });
+  }, []);
 
   useEffect(() => {
     const checkNik = async () => {
@@ -47,6 +112,12 @@ export default function Login() {
           if (res.ok) {
             setToko(data.toko || "Toko Belum Di-set");
             setUserName(data.name || "");
+            const bypass = Boolean(data.isBypassLocation);
+            setIsBypassLocation(bypass);
+            setNotWorkingAlert(false);
+            if (!bypass) {
+              requestGpsLocation();
+            }
             setTimeout(() => {
               if (pinRef.current) {
                 pinRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -57,22 +128,25 @@ export default function Login() {
           } else {
             setToko("");
             setUserName("");
+            setIsBypassLocation(false);
           }
         } catch (error) {
           setToko("");
           setUserName("");
+          setIsBypassLocation(false);
         } finally {
           setCheckingNik(false);
         }
       } else {
         setToko("");
         setUserName("");
+        setIsBypassLocation(false);
       }
     };
     
     const timeoutId = setTimeout(checkNik, 500); // Debounce
     return () => clearTimeout(timeoutId);
-  }, [nik]);
+  }, [nik, requestGpsLocation]);
 
   useEffect(() => {
     setMounted(true);
@@ -82,21 +156,12 @@ export default function Login() {
       delay: (Math.random() * 3).toFixed(2),
     })));
 
-    // Auto-select shift based on time
-    const currentHour = new Date().getHours();
-    // Jika jam 1 siang (13:00) ke atas, otomatis Shift Siang ("2"), jika di bawah itu Shift Pagi ("1")
-    if (currentHour >= 13) {
-      setShift("2");
-    } else {
-      setShift("1");
-    }
-
-    // Deteksi jika dialihkan karena jam shift berakhir atau pindah tab/perangkat
+    // Deteksi jika dialihkan karena di luar jam operasional atau pindah tab/perangkat
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       const reason = params.get("reason");
       if (reason === "shift_ended") {
-        setError("⏰ Sesi shift Anda telah berakhir demi keamanan operasional toko. Silakan login kembali saat jam shift Anda dimulai.");
+        setError("Kamu sedang tidak bekerja. Akses aplikasi crew hanya aktif saat jam operasional toko.");
       } else if (reason === "device_switched") {
         setError("🔄 Tab/perangkat lama ini otomatis logout karena akun Anda baru saja login di tab/perangkat lain. (Tenang, daftar keranjang scan Anda tetap tersimpan aman!).");
       } else if (reason === "logged_out_all") {
@@ -166,12 +231,38 @@ export default function Login() {
     setLoading(true);
     setError("");
     setInfoNotice("");
+    setNotWorkingAlert(false);
 
     try {
+      // Untuk Crew Store (bukan SPV / Developer): wajib ambil & verifikasi lokasi GPS HP terlebih dahulu
+      let activeCoords = geoCoords;
+      if (!isBypassLocation) {
+        if (!activeCoords) {
+          activeCoords = await requestGpsLocation();
+        }
+        if (!activeCoords) {
+          setError("Aktifkan izin lokasi (GPS) di HP Anda terlebih dahulu untuk masuk bekerja.");
+          setLoading(false);
+          return;
+        }
+        const localGeo = verifyStoreGeofence(activeCoords.lat, activeCoords.lng, activeCoords.accuracy);
+        if (!localGeo || !localGeo.allowed) {
+          setError("Kamu sedang tidak bekerja");
+          setNotWorkingAlert(true);
+          setLoading(false);
+          return;
+        }
+      }
+
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nik, pin, shift, jobTitle })
+        body: JSON.stringify({
+          nik,
+          pin,
+          jobTitle,
+          location: activeCoords,
+        }),
       });
 
       const data = await res.json();
@@ -187,6 +278,13 @@ export default function Login() {
           confirmRecovery: false,
           recovering: false,
         });
+        setLoading(false);
+        return;
+      }
+
+      if (res.status === 403 && data.outsideWorkArea) {
+        setError("Kamu sedang tidak bekerja");
+        setNotWorkingAlert(true);
         setLoading(false);
         return;
       }
@@ -443,14 +541,84 @@ export default function Login() {
                 </div>
               </div>
 
-              <ShiftToggle isNight={shift === "2"} onToggle={(isNight) => setShift(isNight ? "2" : "1")} />
+              {/* Status Verifikasi Lokasi Kerja Otomatis (menggantikan Shift Pagi/Siang manual) */}
+              {isBypassLocation ? (
+                <div className="rounded-xl bg-indigo-50 border border-indigo-200 px-3.5 py-2.5 flex items-center gap-2.5">
+                  <ShieldCheck className="w-5 h-5 text-indigo-600 shrink-0" />
+                  <div className="text-xs text-indigo-900 whitespace-normal break-words leading-snug">
+                    <div className="font-extrabold">Akses SPV / Developer</div>
+                    <div className="text-[11px] text-indigo-700/90">Bebas lokasi &amp; jam kerja (shift otomatis).</div>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  className={`rounded-xl border px-3.5 py-2.5 flex items-center justify-between gap-2 ${
+                    geoStatus === "verified"
+                      ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+                      : geoStatus === "outside" || geoStatus === "denied" || geoStatus === "unsupported"
+                      ? "bg-rose-50 border-rose-200 text-rose-900"
+                      : "bg-slate-50 border-slate-200 text-slate-700"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    {geoStatus === "checking" ? (
+                      <Loader2 className="w-4 h-4 text-blue-600 animate-spin shrink-0" />
+                    ) : (
+                      <MapPin
+                        className={`w-4 h-4 shrink-0 ${
+                          geoStatus === "verified"
+                            ? "text-emerald-600"
+                            : geoStatus === "outside" || geoStatus === "denied"
+                            ? "text-rose-600"
+                            : "text-slate-500"
+                        }`}
+                      />
+                    )}
+                    <div className="text-xs whitespace-normal break-words leading-snug">
+                      <div className="font-extrabold">
+                        {geoStatus === "checking"
+                          ? "Memeriksa lokasi HP..."
+                          : geoStatus === "verified"
+                          ? `Lokasi Kerja Terverifikasi (${verifiedMall})`
+                          : geoStatus === "outside"
+                          ? "Kamu sedang tidak bekerja"
+                          : geoStatus === "denied"
+                          ? "Izin lokasi (GPS) belum aktif"
+                          : geoStatus === "unsupported"
+                          ? "Perangkat tidak mendukung GPS"
+                          : "Menunggu verifikasi lokasi kerja"}
+                      </div>
+                      <div className="text-[10px] opacity-80">
+                        {geoStatus === "verified"
+                          ? "Shift otomatis menyesuaikan jam aktif."
+                          : geoStatus === "outside"
+                          ? "Akses crew hanya tersedia di area toko."
+                          : "Aktifkan GPS HP untuk melanjutkan login."}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => requestGpsLocation()}
+                    disabled={geoStatus === "checking"}
+                    className="p-2 rounded-lg bg-white/80 hover:bg-white border border-black/10 text-slate-700 cursor-pointer shrink-0 disabled:opacity-50"
+                    title="Cek ulang lokasi GPS"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${geoStatus === "checking" ? "animate-spin" : ""}`} />
+                  </button>
+                </div>
+              )}
 
               <button
                 type="submit"
-                disabled={loading || pin.length < 4 || !nik || !toko}
-                className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-black py-4 rounded-xl mt-6 shadow-lg shadow-blue-500/30 hover:shadow-blue-500/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={loading || pin.length < 4 || !nik || !toko || (!isBypassLocation && geoStatus === "checking")}
+                className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-black py-4 rounded-xl mt-6 shadow-lg shadow-blue-500/30 hover:shadow-blue-500/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               >
-                {loading ? "MEMERIKSA..." : "MULAI SHIFT SAYA"}
+                {loading
+                  ? "MEMERIKSA..."
+                  : !isBypassLocation && geoStatus === "checking"
+                  ? "MEMERIKSA LOKASI..."
+                  : "MULAI KERJA"}
               </button>
             </div>
           )}
@@ -487,6 +655,44 @@ export default function Login() {
           </button>
         </div>
       </div>
+
+      {/* Alert Modal "Kamu sedang tidak bekerja" untuk Crew di luar area toko */}
+      {notWorkingAlert && (
+        <div className="fixed inset-0 z-50 bg-slate-900/65 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 shadow-2xl max-w-sm w-full border border-rose-100 text-center space-y-4">
+            <div className="w-14 h-14 mx-auto rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center">
+              <MapPin className="w-7 h-7" />
+            </div>
+            <div className="space-y-1.5">
+              <h2 className="text-lg font-black text-slate-900 whitespace-normal break-words">
+                Kamu sedang tidak bekerja
+              </h2>
+              <p className="text-xs text-slate-500 leading-relaxed whitespace-normal break-words">
+                Login hanya dapat dilakukan saat berada di area lokasi kerja dan pada jam operasional toko.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setNotWorkingAlert(false);
+                  requestGpsLocation();
+                }}
+                className="flex-1 py-2.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
+              >
+                Cek Ulang Lokasi
+              </button>
+              <button
+                type="button"
+                onClick={() => setNotWorkingAlert(false)}
+                className="flex-1 py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs cursor-pointer"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal Kunci Ketat 1 Akun = 1 Device */}
       {lockModal.open && (

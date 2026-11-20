@@ -1,10 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { signToken, verifyToken } from "@/lib/auth";
+import {
+  getJakartaHour,
+  isWithinStoreOperatingHours,
+  resolveAutoShiftType,
+  verifyStoreGeofence,
+} from "@/lib/storeGeofence";
 
 export async function POST(req: NextRequest) {
   try {
-    let { nik, pin, shift, jobTitle } = await req.json();
+    let { nik, pin, shift, jobTitle, location } = await req.json();
 
     if (!nik || !pin || !jobTitle) {
       return NextResponse.json({ error: "NIK, PIN, dan Posisi wajib diisi" }, { status: 400 });
@@ -19,7 +25,9 @@ export async function POST(req: NextRequest) {
 
     const ipAddress = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || null;
     const userAgent = req.headers.get("user-agent") || null;
-    const parsedShift = shift ? parseInt(shift, 10) : null;
+    const hourWib = getJakartaHour();
+    const parsedShift = shift ? parseInt(shift, 10) : resolveAutoShiftType(hourWib);
+    let verifiedMallLabel = "";
 
     // Cek user
     let user = await prisma.user.findUnique({ where: { nik } });
@@ -47,27 +55,51 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "PIN salah" }, { status: 401 });
       }
 
-      // Cek jam operasional shift untuk CREW_STORE (Bukan SUPERVISOR / Developer 22054178)
+      // Verifikasi Geofencing GPS Lokasi Mall & Jam Operasional untuk CREW_STORE
+      // Pengecualian mutlak: SUPERVISOR & Developer (22054178) bebas login dari mana saja & kapan saja.
       const isSuperOrDev = user.role === "SUPERVISOR" || user.nik === "22054178";
-      if (!isSuperOrDev && parsedShift) {
-        const now = new Date();
-        const jakartaStr = now.toLocaleString("en-US", { timeZone: "Asia/Jakarta", hour12: false });
-        const hourMatch = jakartaStr.match(/ (24|\d+):/);
-        let hour = hourMatch ? parseInt(hourMatch[1], 10) : now.getUTCHours() + 7;
-        if (hour === 24) hour = 0;
-
-        let isOutsideHours = false;
-        if (parsedShift === 1 && (hour >= 17 || hour < 8)) {
-          isOutsideHours = true;
-        } else if (parsedShift === 2 && (hour >= 23 || hour < 14)) {
-          isOutsideHours = true;
+      if (!isSuperOrDev) {
+        if (!isWithinStoreOperatingHours(hourWib)) {
+          return NextResponse.json(
+            {
+              error: "Kamu sedang tidak bekerja",
+              outsideWorkArea: true,
+              reason: "outside_hours",
+            },
+            { status: 403 }
+          );
         }
 
-        if (isOutsideHours) {
-          return NextResponse.json({
-            error: `⛔ Akses di luar jam operasional shift. Shift ${parsedShift} (${parsedShift === 1 ? "Pagi: 08:00 - 17:00" : "Siang: 14:00 - 23:00"} WIB). Demi keamanan toko, akses dibatasi saat jam kerja.`
-          }, { status: 403 });
+        const lat = typeof location?.lat === "number" ? location.lat : Number(location?.lat);
+        const lng = typeof location?.lng === "number" ? location.lng : Number(location?.lng);
+        const accuracy =
+          location?.accuracy !== undefined && location?.accuracy !== null
+            ? Number(location.accuracy)
+            : null;
+
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+          return NextResponse.json(
+            {
+              error: "Aktifkan izin lokasi (GPS) di HP Anda terlebih dahulu agar sistem dapat memverifikasi bahwa Anda sedang bekerja.",
+              locationRequired: true,
+            },
+            { status: 403 }
+          );
         }
+
+        const geo = verifyStoreGeofence(lat, lng, accuracy);
+        if (!geo || !geo.allowed) {
+          return NextResponse.json(
+            {
+              error: "Kamu sedang tidak bekerja",
+              outsideWorkArea: true,
+              reason: "outside_geofence",
+            },
+            { status: 403 }
+          );
+        }
+
+        verifiedMallLabel = geo.nearestZone.shortName;
       }
 
       // Cek apakah karyawan ini diarahkan ke Portal MDS BISA
@@ -129,12 +161,7 @@ export async function POST(req: NextRequest) {
             if (hour === 24) hour = 0;
 
             const shiftAgeHours = (now.getTime() - new Date(activeShift.startTime).getTime()) / (1000 * 60 * 60);
-            if (
-              shiftAgeHours > 14 ||
-              shiftAgeHours > 10 ||
-              (activeShift.type === 1 && (hour >= 17 || hour < 8)) ||
-              (activeShift.type === 2 && (hour >= 23 || hour < 14))
-            ) {
+            if (shiftAgeHours > 12 || !isWithinStoreOperatingHours(hour)) {
               await prisma.shift.updateMany({
                 where: { userId: user.id, endTime: null },
                 data: { endTime: now },
@@ -174,6 +201,10 @@ export async function POST(req: NextRequest) {
     }
 
     // Catat riwayat login ke tabel LoginLog
+    const loggedJobTitle = verifiedMallLabel
+      ? `${jobTitle || "Sales Area"} (${verifiedMallLabel})`
+      : jobTitle || (user.role === "SUPERVISOR" ? "Supervisor" : "Sales Area");
+
     await prisma.loginLog.create({
       data: {
         userId: user.id,
@@ -181,16 +212,15 @@ export async function POST(req: NextRequest) {
         name: user.name,
         role: user.role,
         shift: parsedShift,
-        jobTitle: jobTitle || (user.role === "SUPERVISOR" ? "Supervisor" : "Sales Area"),
+        jobTitle: loggedJobTitle,
         toko: user.toko,
         ipAddress,
         userAgent
       }
     }).catch(err => console.error("Failed to save LoginLog:", err));
 
-    // Create active shift if requested
-    if (shift) {
-      // Find if already has active shift (endTime is null)
+    // Create active shift otomatis (1 = Pagi / 2 = Siang mengikuti jam WIB)
+    if (parsedShift) {
       let activeShift = await prisma.shift.findFirst({
         where: { userId: user.id, endTime: null }
       });
@@ -198,7 +228,7 @@ export async function POST(req: NextRequest) {
         activeShift = await prisma.shift.create({
           data: {
             userId: user.id,
-            type: parseInt(shift, 10)
+            type: parsedShift
           }
         });
       }
@@ -214,7 +244,7 @@ export async function POST(req: NextRequest) {
       toko: user.toko,
       jobTitle,
       sessionId,
-      shiftType: shift ? parseInt(shift, 10) : undefined
+      shiftType: parsedShift
     });
 
     const response = NextResponse.json({ success: true, role: user.role });

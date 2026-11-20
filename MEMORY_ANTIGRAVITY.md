@@ -1826,3 +1826,17 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   1. **Seluruh Halaman UI (`src/app/page.tsx`, `src/app/cek-harga/page.tsx`, `src/app/super-admin/laporan-penjualan/page.tsx`, `src/app/super-admin/sinkronisasi-harian/page.tsx`):** Mengganti seluruh label tombol, toast notifikasi, kartu Notice barcode tidak ditemukan, tooltip, info ZES, badge status, judul grafik/PDF, dan tabel riwayat sync menjadi **`luqman org`**.
   2. **Pesan Respons API & Masking Otomatis (`src/lib/mdsBisaClient.ts`, `src/lib/githubDispatcher.ts`, `src/app/api/product/[identifier]/route.ts`, `src/app/api/admin/sales-report/route.ts`, `src/app/api/last-update/route.ts`, `src/app/api/admin/trigger/self-heal/route.ts`, `src/app/api/admin/trigger/github-status/route.ts`):** Memperbarui pesan user-facing menjadi `luqman org` sekaligus memasang masking otomatis untuk histori `SyncHistory` lama, step GitHub Actions, diagnosis, dan `consoleLines` — sementara seluruh endpoint fetch teknis (`storehub.mdsretailing.id`, `matahari.com`) di server tetap utuh 100%.
   3. **Python Guardian Log Sanitizer (`python-engine/runner_guardian.py`):** Menambahkan masking branding pada `sanitize_log_line()` serta pesan diagnosis & self-heal agar console log yang diunggah ke `logs/live-runner-log.json` bebas dari eksposur sumber eksternal.
+
+---
+
+### 105. Login Geofencing GPS (Pakuwon Mall & Tunjungan Plaza Surabaya) + Shift Otomatis Tanpa Toggle Manual + Pengecualian SPV/Developer (21 November 2026)
+
+- **Arahan Pengguna:**
+  1. Mengganti konsep login shift pagi/siang manual menjadi **otomatis** (hilangkan tombol toggle Shift Pagi/Siang di `/login`).
+  2. Menerapkan **tracking lokasi HP (GPS Geofencing)** agar Crew Store hanya bisa login saat berada di area **Pakuwon Mall Surabaya** (`-7.28918, 112.67565`, radius `750m`) atau **Tunjungan Plaza / TP Surabaya** (`-7.26238, 112.73928`, radius `700m`), dengan alert tegas **`"Kamu sedang tidak bekerja"`** jika berada di luar area kerja atau di luar jam operasional (`08:00–23:00 WIB`).
+  3. **Pengecualian Mutlak:** `SUPERVISOR` & Developer (`22054178`) bebas akses login dari mana saja dan kapan saja tanpa verifikasi GPS maupun batas jam.
+- **Perubahan yang Diterapkan:**
+  - [`src/lib/storeGeofence.ts`](file:///c:/Max%20Display/price-checker/src/lib/storeGeofence.ts): Modul geofencing Haversine terpusat (Pakuwon Mall & TP Surabaya, buffer akurasi indoor GPS sehat maks `180m`), helper `resolveAutoShiftType()` & `isWithinStoreOperatingHours()`.
+  - [`src/app/api/auth/check-nik/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/auth/check-nik/route.ts): Mengembalikan flag `isBypassLocation` untuk SPV/Developer.
+  - [`src/app/api/auth/login/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/auth/login/route.ts) & [`src/middleware.ts`](file:///c:/Max%20Display/price-checker/src/middleware.ts): Validasi geofencing GPS ketat di server (anti bypass frontend), auto-shift WIB, dan jam operasional mall `08:00–23:00 WIB` khusus Crew Store.
+  - [`src/app/login/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/login/page.tsx): Menghapus `ShiftToggle`, menambahkan kartu status GPS otomatis (fallback High Accuracy -> Wi-Fi/Network untuk dalam gedung mall), badge bebas lokasi SPV/Developer, dan modal alert `"Kamu sedang tidak bekerja"`.
