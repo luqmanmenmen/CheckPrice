@@ -518,7 +518,7 @@ export default function UpdateProdukPage() {
                     KATEGORI 1 • SCRAB
                   </span>
                   <p className="font-bold text-indigo-950 text-sm flex items-center gap-1.5">
-                    🔥 Mesin Brutal Scrab (by luqman org &amp; Gambar Produk Matahari.com)
+                    🔥 Mesin Brutal Scrab (by luqman org &amp; Gambar Produk luqman org)
                   </p>
                 </div>
                 <p className="text-xs text-slate-600 mt-1 leading-relaxed">
@@ -564,7 +564,7 @@ export default function UpdateProdukPage() {
                 ) : (
                   <Image className="w-3.5 h-3.5 text-purple-600" />
                 )}
-                📸 Scrab Foto Produk Matahari.com Saja
+                📸 Scrab Foto Produk luqman org Saja
               </button>
             </div>
           </div>
@@ -676,7 +676,7 @@ export default function UpdateProdukPage() {
                 </p>
               </div>
               <p className="text-xs text-slate-400 mt-1">
-                Scrab StoreHub &amp; Foto 404 Heal → Update Stock Live → Update Promo Terbaru → Build Catalog &amp; Snapshot CDN (.json.gz).
+                Scrab luqman org &amp; Foto 404 Heal → Update Stock Live → Update Promo Terbaru → Build Catalog &amp; Snapshot CDN (.json.gz).
               </p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
@@ -1287,7 +1287,7 @@ export default function UpdateProdukPage() {
               <p className="text-[11px] text-slate-500 mt-0.5 whitespace-normal break-words">
                 {cloudStatus.newProductsSummary && (cloudStatus.newProductsSummary.newSkusAdded > 0 || cloudStatus.newProductsSummary.newArticlesAdded > 0)
                   ? `Terbaru: +${cloudStatus.newProductsSummary.newSkusAdded.toLocaleString("id-ID")} SKU / +${cloudStatus.newProductsSummary.newArticlesAdded.toLocaleString("id-ID")} Artikel`
-                  : "by luqman org + Studio Matahari.com"}
+                  : "by luqman org + Studio luqman org"}
               </p>
             </div>
 
@@ -1380,10 +1380,16 @@ export default function UpdateProdukPage() {
                               : "bg-sky-50 text-sky-700 border border-sky-200"
                           }`}
                         >
-                          {item.type.replace(/MDS_BISA/gi, "BY_LUQMAN_ORG")}
+                          {item.type.replace(/MDS_BISA/gi, "LUQMAN_ORG").replace(/MDS_SALES/gi, "LUQMAN_ORG_SALES")}
                         </span>
                       </td>
-                      <td className="px-3.5 py-2.5 text-slate-600 whitespace-normal break-words max-w-md">{item.fileName?.replace(/MDS\s*BISA/gi, "by luqman org")}</td>
+                      <td className="px-3.5 py-2.5 text-slate-600 whitespace-normal break-words max-w-md">
+                        {item.fileName
+                          ?.replace(/MDS\s*[-]?\s*BISA/gi, "luqman org")
+                          .replace(/StoreHub/gi, "luqman org")
+                          .replace(/(?:https?:\/\/)?(?:www\.)?matahari\.com/gi, "luqman org")
+                          .replace(/\bMatahari\b/gi, "luqman org")}
+                      </td>
                       <td className="px-3.5 py-2.5 text-right whitespace-nowrap">
                         {(item.newSkusAdded ?? 0) > 0 || (item.newArticlesAdded ?? 0) > 0 ? (
                           <div className="inline-flex flex-col items-end gap-0.5">

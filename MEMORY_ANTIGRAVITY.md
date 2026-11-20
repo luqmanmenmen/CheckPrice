@@ -1816,3 +1816,13 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
 - **Verifikasi Nyata:**
   - Audit zero-truncate pada `src/app/super-admin/laporan-penjualan/page.tsx`: `0` temuan.
   - `npx tsc --noEmit` dan `npm run build` lulus `exit code 0`.
+
+---
+
+### 104. Rebranding Privasi Total: Ganti Seluruh Teks `MDS BISA`, `Matahari.com`, & `StoreHub` yang Terekspos di UI/API/Log Menjadi `luqman org` (21 November 2026)
+
+- **Arahan Pengguna:** Menghilangkan seluruh penyebutan `"MDS BISA"` dan `"Matahari.com"` (termasuk `"StoreHub"`) yang terekspos di antarmuka aplikasi, pesan notifikasi, ekspor PDF, respons API, riwayat sinkronisasi, dan live console log, lalu menggantinya menjadi **`luqman org`** tanpa memutus koneksi teknis backend/Python.
+- **Perubahan yang Diterapkan:**
+  1. **Seluruh Halaman UI (`src/app/page.tsx`, `src/app/cek-harga/page.tsx`, `src/app/super-admin/laporan-penjualan/page.tsx`, `src/app/super-admin/sinkronisasi-harian/page.tsx`):** Mengganti seluruh label tombol, toast notifikasi, kartu Notice barcode tidak ditemukan, tooltip, info ZES, badge status, judul grafik/PDF, dan tabel riwayat sync menjadi **`luqman org`**.
+  2. **Pesan Respons API & Masking Otomatis (`src/lib/mdsBisaClient.ts`, `src/lib/githubDispatcher.ts`, `src/app/api/product/[identifier]/route.ts`, `src/app/api/admin/sales-report/route.ts`, `src/app/api/last-update/route.ts`, `src/app/api/admin/trigger/self-heal/route.ts`, `src/app/api/admin/trigger/github-status/route.ts`):** Memperbarui pesan user-facing menjadi `luqman org` sekaligus memasang masking otomatis untuk histori `SyncHistory` lama, step GitHub Actions, diagnosis, dan `consoleLines` — sementara seluruh endpoint fetch teknis (`storehub.mdsretailing.id`, `matahari.com`) di server tetap utuh 100%.
+  3. **Python Guardian Log Sanitizer (`python-engine/runner_guardian.py`):** Menambahkan masking branding pada `sanitize_log_line()` serta pesan diagnosis & self-heal agar console log yang diunggah ke `logs/live-runner-log.json` bebas dari eksposur sumber eksternal.

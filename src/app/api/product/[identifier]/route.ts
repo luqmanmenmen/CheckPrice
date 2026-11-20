@@ -279,7 +279,7 @@ export async function GET(
         return NextResponse.json(
           {
             error: `Produk tidak ditemukan untuk: "${rawInput}"`,
-            hint: "Ketuk tombol Scrap MDS BISA & Matahari di bawah untuk menarik SKU, barcode, dan foto secara langsung."
+            hint: "Ketuk tombol Scrap luqman org di bawah untuk menarik SKU, barcode, dan foto secara langsung."
           },
           { status: 404 }
         );

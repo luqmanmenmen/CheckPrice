@@ -125,19 +125,19 @@ function extractDiagnosticsFromRawLines(lines: ConsoleLogLine[]): DiagnosticItem
     };
   }
 
-  if (low.includes('cookie login storehub tidak ditemukan') || low.includes('mso_session tidak ditemukan') || low.includes('username dan password wajib diisi')) {
+  if (low.includes('cookie login storehub tidak ditemukan') || low.includes('cookie login luqman org tidak ditemukan') || low.includes('mso_session tidak ditemukan') || low.includes('username dan password wajib diisi')) {
     out.push({
       code: 'AUTH_EXPIRED',
-      title: 'Sesi Cookie StoreHub MDS BISA Kedaluwarsa',
-      detail: 'Server StoreHub meminta login ulang (`mso_session`). Gunakan tombol Self-Heal untuk auto-login ulang.',
+      title: 'Sesi Cookie luqman org Kedaluwarsa',
+      detail: 'Server luqman org meminta login ulang (`mso_session`). Gunakan tombol Self-Heal untuk auto-login ulang.',
       retryable: true,
       traceback: tbInfo,
     });
   } else if (low.includes('toko 719 sedang tutup') || low.includes('no route to host')) {
     out.push({
       code: 'STORE_OFFLINE',
-      title: 'Server Toko Fisik 719 Sedang Offline (Malam Hari)',
-      detail: 'StoreHub toko fisik tutup di luar jam ~09:00–21:30 WIB.',
+      title: 'Server Toko Fisik Sedang Offline (Malam Hari)',
+      detail: 'Server toko fisik tutup di luar jam ~09:00–21:30 WIB.',
       retryable: false,
       traceback: tbInfo,
     });
@@ -316,7 +316,11 @@ export async function GET(req: Request) {
               duration = diffMs < 1000 ? '<1s' : `${Math.round(diffMs / 1000)}s`;
             }
 
-            const cleanStepName = String(s.name || '').replace(/MDS\s*BISA/gi, 'by luqman org');
+            const cleanStepName = String(s.name || '')
+              .replace(/MDS\s*[-]?\s*BISA/gi, 'luqman org')
+              .replace(/StoreHub/gi, 'luqman org')
+              .replace(/(?:https?:\/\/)?(?:www\.)?matahari\.com/gi, 'luqman org')
+              .replace(/\bMatahari\b/gi, 'luqman org');
             if (isFailed) {
               hasError = true;
               errorStepName = cleanStepName;
@@ -398,10 +402,17 @@ export async function GET(req: Request) {
       })(),
     ]);
 
+    const maskSourceBranding = (raw: string): string =>
+      raw
+        .replace(/https?:\/\/storehub\.mdsretailing\.id[^\s"']*/gi, 'https://luqman.org')
+        .replace(/storehub\.mdsretailing\.id/gi, 'luqman.org')
+        .replace(/(?:https?:\/\/)?(?:www\.)?matahari\.com/gi, 'luqman org')
+        .replace(/MDS\s*[-]?\s*BISA/gi, 'luqman org')
+        .replace(/StoreHub/gi, 'luqman org')
+        .replace(/\bMatahari\b/gi, 'luqman org');
+
     const cleanSyncHistory = dbSyncHistory.map((h) => {
-      const cleanName = h.fileName
-        ? String(h.fileName).replace(/MDS\s*BISA/gi, 'by luqman org').replace(/StoreHub/gi, 'by luqman org')
-        : h.fileName;
+      const cleanName = h.fileName ? maskSourceBranding(String(h.fileName)) : h.fileName;
       const newStats = parseNewProductStatsFromFileName(cleanName);
       return {
         ...h,
@@ -533,6 +544,23 @@ export async function GET(req: Request) {
       };
     });
 
+    const maskedConsoleLines = consoleLines.map((ln) => ({
+      ...ln,
+      text: maskSourceBranding(String(ln.text || '')),
+    }));
+    const maskedDiagnostics = diagnostics.map((d) => ({
+      ...d,
+      title: maskSourceBranding(String(d.title || '')),
+      detail: maskSourceBranding(String(d.detail || '')),
+    }));
+    const maskedHeals = healsApplied.map((h: any) =>
+      typeof h === 'string'
+        ? maskSourceBranding(h)
+        : h && typeof h === 'object'
+        ? { ...h, message: h.message ? maskSourceBranding(String(h.message)) : h.message }
+        : h
+    );
+
     return NextResponse.json({
       success: true,
       hasRuns: true,
@@ -541,9 +569,9 @@ export async function GET(req: Request) {
       recentRuns,
       syncHistory: cleanSyncHistory,
       consoleSource,
-      consoleLines,
-      diagnostics,
-      healsApplied,
+      consoleLines: maskedConsoleLines,
+      diagnostics: maskedDiagnostics,
+      healsApplied: maskedHeals,
       newProductsSummary,
       stepReports,
       lastAction,

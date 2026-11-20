@@ -455,7 +455,7 @@ export default function CekHargaPage() {
         setProduct(data.data);
         setSiblings(allSibs);
       } else {
-        setError(data.message || `Kode "${codeToSearch}" sudah dicek di StoreHub & Matahari.com namun tidak terdaftar.`);
+        setError(data.message || `Kode "${codeToSearch}" sudah dicek di server luqman org namun tidak terdaftar.`);
       }
     } catch {
       setError("Gagal menghubungi server scrap langsung.");
@@ -666,12 +666,12 @@ export default function CekHargaPage() {
                 {discoveringServer ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin text-amber-300 shrink-0" />
-                    <span>Menarik StoreHub + Foto + 1 Artikel...</span>
+                    <span>Menarik luqman org + Foto + 1 Artikel...</span>
                   </>
                 ) : (
                   <>
                     <Zap className="w-4 h-4 text-amber-300 fill-amber-300 shrink-0" />
-                    <span>Cari &amp; Scrap Barang Ini di Server (StoreHub + Foto + 1 Artikel)</span>
+                    <span>Cari &amp; Scrap Barang Ini di Server (luqman org + Foto + 1 Artikel)</span>
                   </>
                 )}
               </button>

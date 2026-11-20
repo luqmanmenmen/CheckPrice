@@ -80,7 +80,7 @@ export async function POST(req: Request) {
       userId: user?.id || null,
     });
 
-    const healNote = healedCookie ? ' + Cookie StoreHub diperbarui otomatis' : '';
+    const healNote = healedCookie ? ' + Cookie sesi luqman org diperbarui otomatis' : '';
     return NextResponse.json(
       {
         ...result.payload,

@@ -520,7 +520,7 @@ export default function Home() {
           if (changed > 0) {
             showToast(`⚡ Live Stok sukses: ${liveChecked} varian dicek (${changed} berubah) — semua warna & size tersinkron!`, "success");
           } else {
-            showToast(`⚡ Live Stok sukses: ${liveChecked} varian dicek live dari StoreHub (stok saat ini sama dengan StoreHub).`, "success");
+            showToast(`⚡ Live Stok sukses: ${liveChecked} varian dicek live dari luqman org (stok saat ini sudah sesuai).`, "success");
           }
         }
       } else {
@@ -617,7 +617,7 @@ export default function Home() {
         return Boolean(json.healed);
       }
       if (isManual) {
-        showToast(json?.error || "Foto warna tersebut belum ditemukan di katalog Matahari.com", "info");
+        showToast(json?.error || "Foto warna tersebut belum ditemukan di katalog luqman org", "info");
       }
       return false;
     } catch {
@@ -1291,9 +1291,9 @@ export default function Home() {
       } else {
         const notFoundMsg =
           data.message ||
-          `Kode "${codeToSearch}" sudah dicek langsung ke StoreHub Toko 719 & Matahari.com namun memang tidak terdaftar.`;
+          `Kode "${codeToSearch}" sudah dicek langsung ke server luqman org namun memang tidak terdaftar.`;
         setError(notFoundMsg);
-        showToast("Produk tidak ditemukan di server toko maupun Matahari.com", "error");
+        showToast("Produk tidak ditemukan di server luqman org", "error");
       }
     } catch {
       showToast("Gagal menghubungi server scrap langsung", "error");
@@ -1809,7 +1809,7 @@ export default function Home() {
       setError(msg);
       if (notifyToast && codeStr) {
         showToast(
-          `Kode "${codeStr}" belum ada di database. Ketuk tombol Scrap MDS BISA + Matahari untuk cari & tarik gambarnya sekarang!`,
+          `Kode "${codeStr}" belum ada di database. Ketuk tombol Scrap luqman org untuk cari & tarik gambarnya sekarang!`,
           "info"
         );
       }
@@ -1970,7 +1970,7 @@ export default function Home() {
         if (isScanning) setIsScanning(false);
         showBarcodeNotFoundNotice(
           trimmed,
-          `Barcode / kode "${trimmed}" belum ada di database offline (${(localSkuCount || 310526).toLocaleString("id-ID")} SKU) maupun server. Ketuk tombol di bawah untuk langsung mencari di MDS BISA dan mengambil foto dari Matahari.com.`,
+          `Barcode / kode "${trimmed}" belum ada di database offline (${(localSkuCount || 310526).toLocaleString("id-ID")} SKU) maupun server. Ketuk tombol di bawah untuk langsung mencari & mengambil foto dari luqman org.`,
           true
         );
       }
@@ -2014,9 +2014,9 @@ export default function Home() {
             if (!hasTaxonomyFilter && trimmed && !onlyPromo) {
               const isDigitCode = /^\d{8,14}$/.test(trimmed);
               const msg = isDigitCode && localDbReady
-                ? `Barcode / produk "${trimmed}" tidak ada di database offline (${(localSkuCount || 306312).toLocaleString('id-ID')} SKU) maupun server. Tekan tombol di bawah untuk langsung scrap MDS BISA & gambar Matahari.com.`
+                ? `Barcode / produk "${trimmed}" tidak ada di database offline (${(localSkuCount || 306312).toLocaleString('id-ID')} SKU) maupun server. Tekan tombol di bawah untuk langsung scrap data & gambar luqman org.`
                 : isDigitCode
-                  ? `Barcode / produk "${trimmed}" belum tercatat di database toko. Tekan tombol di bawah untuk langsung tarik data MDS BISA & gambar Matahari.com sekarang.`
+                  ? `Barcode / produk "${trimmed}" belum tercatat di database toko. Tekan tombol di bawah untuk langsung tarik data & gambar luqman org sekarang.`
                   : `Produk tidak ditemukan untuk: "${trimmed}"`;
               showBarcodeNotFoundNotice(trimmed, msg, true);
             }
@@ -2104,7 +2104,7 @@ export default function Home() {
         if (isScanning) setIsScanning(false);
       } else {
         const msg = isCodeSearch && localDbReady && res.status === 404
-          ? `Barcode / produk "${trimmed}" tidak ditemukan di database offline (${(localSkuCount || 306312).toLocaleString('id-ID')} SKU) maupun server. Ketuk tombol di bawah untuk scrap langsung di MDS BISA + Matahari.com.`
+          ? `Barcode / produk "${trimmed}" tidak ditemukan di database offline (${(localSkuCount || 306312).toLocaleString('id-ID')} SKU) maupun server. Ketuk tombol di bawah untuk scrap langsung di luqman org.`
           : (data.error || `Produk tidak ditemukan untuk: "${trimmed}"`);
         showBarcodeNotFoundNotice(trimmed, msg, Boolean(trimmed));
       }
@@ -2113,7 +2113,7 @@ export default function Home() {
         if (localDbReady && isCodeSearch) {
           showBarcodeNotFoundNotice(
             trimmed,
-            `Barcode / produk "${trimmed}" tidak ditemukan di database offline (${(localSkuCount || 306312).toLocaleString('id-ID')} SKU) maupun server. Ketuk tombol di bawah untuk scrap langsung di MDS BISA + Matahari.com.`,
+            `Barcode / produk "${trimmed}" tidak ditemukan di database offline (${(localSkuCount || 306312).toLocaleString('id-ID')} SKU) maupun server. Ketuk tombol di bawah untuk scrap langsung di luqman org.`,
             Boolean(trimmed)
           );
           return;
@@ -3231,12 +3231,12 @@ export default function Home() {
                 {discoveringServer ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin text-amber-200 shrink-0" />
-                    <span>Sedang Scrap MDS BISA &amp; Gambar Matahari.com...</span>
+                    <span>Sedang Scrap Data &amp; Gambar luqman org...</span>
                   </>
                 ) : (
                   <>
                     <Zap className="w-4 h-4 text-amber-300 fill-amber-300 shrink-0" />
-                    <span>Cari Barcode &amp; Gambar Sekarang (Scrap MDS BISA + Matahari)</span>
+                    <span>Cari Barcode &amp; Gambar Sekarang (Scrap luqman org)</span>
                   </>
                 )}
               </button>
@@ -3254,7 +3254,7 @@ export default function Home() {
 
           {discoveringServer && (
             <div className="w-full max-w-lg rounded-xl bg-blue-50 border border-blue-200 px-3.5 py-2.5 text-xs text-blue-800 font-medium text-center whitespace-normal break-words">
-              Sedang menghubungi server StoreHub Toko 719 (MDS BISA) untuk menarik stok &amp; detail artikel, lalu mengambil galeri foto resmi dari Matahari.com / Shopify CDN...
+              Sedang menghubungi server luqman org untuk menarik stok &amp; detail artikel, lalu mengambil galeri foto resmi luqman org...
             </div>
           )}
         </div>
@@ -3673,7 +3673,7 @@ export default function Home() {
                   INFO ZES
                 </span>
                 <span className="leading-snug">
-                  <strong>matahari.com</strong> belum menyediakan foto studio resmi untuk ZES. Foto merk lain yang sempat tertaut sudah dibersihkan — kartu tetap menampilkan artikel, warna, ukuran, &amp; harga akurat.
+                  <strong>luqman org</strong> belum menyediakan foto studio resmi untuk ZES. Foto merk lain yang sempat tertaut sudah dibersihkan — kartu tetap menampilkan artikel, warna, ukuran, &amp; harga akurat.
                 </span>
               </div>
             )}
@@ -4177,7 +4177,7 @@ export default function Home() {
                         type="button"
                         onClick={handleCheckLiveStock}
                         disabled={checkingLiveStock}
-                        title="Periksa stok langsung StoreHub Toko 719, lengkapi varian 1 keluarga artikel, & tarik foto studio"
+                        title="Periksa stok langsung luqman org, lengkapi varian 1 keluarga artikel, & tarik foto studio"
                         className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-50 active:scale-95 cursor-pointer border ${
                           !heroImages.length || sourceSiblings.length <= 1
                             ? "bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white border-indigo-700 shadow-sm"
@@ -4207,7 +4207,7 @@ export default function Home() {
                           )
                         }
                         disabled={updatingImages}
-                        title="Cari & sinkronkan foto resmi sesuai warna produk aktif + seluruh warna artikel ini dari Matahari.com & CDN"
+                        title="Cari & sinkronkan foto resmi sesuai warna produk aktif + seluruh warna artikel ini dari luqman org"
                         className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-50 active:scale-95 cursor-pointer border ${
                           mismatchedOwnerColor || heroImages.length === 0
                             ? "bg-amber-600 hover:bg-amber-700 text-white border-amber-700 shadow-sm"

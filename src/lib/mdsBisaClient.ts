@@ -1429,7 +1429,7 @@ export async function checkLiveStockFast(
   let cookie = await getStoreHubCookie().catch(() => null);
   if (!cookie) {
     return {
-      result: { success: false, sku: cleanSku, message: 'Gagal login StoreHub MDS BISA. Coba tekan ulang Live Stok.' },
+      result: { success: false, sku: cleanSku, message: 'Gagal login server luqman org. Coba tekan ulang Live Stok.' },
       persist: noop,
     };
   }
@@ -1451,7 +1451,7 @@ export async function checkLiveStockFast(
   }
   if (first.authFailed) {
     return {
-      result: { success: false, sku: cleanSku, message: 'Sesi login StoreHub gagal diperbarui. Coba tekan ulang Live Stok.' },
+      result: { success: false, sku: cleanSku, message: 'Sesi login luqman org gagal diperbarui. Coba tekan ulang Live Stok.' },
       persist: noop,
     };
   }
@@ -1555,7 +1555,7 @@ export async function checkLiveStockFast(
   const mainStok = stockBySku.get(cleanSku);
   if (mainStok === undefined && stockBySku.size === 0) {
     return {
-      result: { success: false, sku: cleanSku, message: 'Produk tidak ditemukan di StoreHub. Menampilkan stok tersimpan.' },
+      result: { success: false, sku: cleanSku, message: 'Produk tidak ditemukan di server luqman org. Menampilkan stok tersimpan.' },
       persist: noop,
     };
   }
@@ -1804,7 +1804,7 @@ export async function checkSingleItemStock(
         }
       }
       if (queryRes.authFailed) {
-        return await fallbackToDb('Sesi login StoreHub MDS BISA gagal diperbarui. Menampilkan stok tersimpan.');
+        return await fallbackToDb('Sesi login luqman org gagal diperbarui. Menampilkan stok tersimpan.');
       }
     }
 
@@ -2485,12 +2485,12 @@ export async function healProductImagesInDb(params: {
   let message = '';
   if (healedCount > 0) {
     const extraMissing =
-      unmatchedColors.length > 0 ? ` (${unmatchedColors.join(', ')} belum diunggah Matahari.com)` : '';
+      unmatchedColors.length > 0 ? ` (${unmatchedColors.join(', ')} belum tersedia di katalog luqman org)` : '';
     message = `📸 ${healedCount} varian diperbarui foto resminya (${matchedColors.join(', ') || 'tersinkron'}).${extraMissing}`;
   } else if (activeColorMatched) {
     message = `Foto warna ${activeColorLabel || 'aktif'} sudah paling baru & sinkron.`;
   } else {
-    message = `Foto warna ${activeColorLabel || 'terpilih'} belum tersedia di katalog online Matahari.com (${matchedColors.length > 0 ? `warna tersedia: ${matchedColors.join(', ')}` : 'tidak ditemukan'}).`;
+    message = `Foto warna ${activeColorLabel || 'terpilih'} belum tersedia di katalog online luqman org (${matchedColors.length > 0 ? `warna tersedia: ${matchedColors.join(', ')}` : 'tidak ditemukan'}).`;
   }
 
   return {

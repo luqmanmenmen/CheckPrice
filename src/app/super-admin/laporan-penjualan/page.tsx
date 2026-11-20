@@ -601,7 +601,7 @@ export default function LaporanPenjualanPage() {
     if (!data) return;
     const doc = new jsPDF();
     doc.setFontSize(16);
-    doc.text(`Laporan Penjualan SUKO (MDS BISA) - ${formatDate(data.targetDate)}`, 14, 20);
+    doc.text(`Laporan Penjualan SUKO (luqman org) - ${formatDate(data.targetDate)}`, 14, 20);
     doc.setFontSize(9);
     doc.text(
       `Cut-Off: ${data.cutoff?.start || cutoffStart} s/d ${data.cutoff?.end || cutoffEnd} | Sync: ${data.pqUploadTime}`,
@@ -740,13 +740,13 @@ export default function LaporanPenjualanPage() {
                     Laporan Penjualan SUKO
                   </h1>
                   <span className="px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-extrabold bg-emerald-500/15 text-emerald-600 border border-emerald-500/30 shrink-0">
-                    ● MDS Live
+                    ● luqman org Live
                   </span>
                 </div>
                 <p className={`text-[11px] sm:text-xs ${textMuted} mt-1 leading-snug whitespace-normal break-words`}>
                   Sync: <strong className={textPrimary}>{data?.pqUploadTime || "-"}</strong>
                   <span className="hidden sm:inline">
-                    {" "}• Sumber: <strong className={textPrimary}>{data?.pqFileName || "MDS BISA Delta Sales (SUKO)"}</strong>
+                    {" "}• Sumber: <strong className={textPrimary}>{data?.pqFileName || "luqman org Delta Sales (SUKO)"}</strong>
                   </span>
                 </p>
               </div>
@@ -966,7 +966,7 @@ export default function LaporanPenjualanPage() {
                   <Info className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
                   <div className="text-xs sm:text-sm whitespace-normal break-words">
                     <p className="font-extrabold">
-                      Rekap Sales Bersih MDS BISA Aktif Mulai 21 November 2026!
+                      Rekap Sales Bersih luqman org Aktif Mulai 21 November 2026!
                     </p>
                     <p className={`mt-0.5 ${darkMode ? "text-emerald-200/80" : "text-emerald-800"}`}>
                       Data sales lama sudah dibersihkan. Baseline stok aktif SUKO saat ini:{" "}
@@ -1237,7 +1237,7 @@ export default function LaporanPenjualanPage() {
                     <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
                       <div>
                         <h2 className={`font-extrabold text-base sm:text-lg ${textPrimary}`}>
-                          Tren Penjualan Harian (SUKO MDS BISA)
+                          Tren Penjualan Harian (SUKO luqman org)
                         </h2>
                         <p className={`text-xs ${textMuted} mt-0.5`}>
                           Puncak:{" "}
@@ -1428,7 +1428,7 @@ export default function LaporanPenjualanPage() {
                         <div className={`flex items-center justify-between p-2.5 rounded-xl ${softCls}`}>
                           <span className={textMuted}>Status Sumber Data</span>
                           <span className="font-extrabold text-emerald-600 inline-flex items-center gap-1">
-                            <CheckCircle2 className="w-3.5 h-3.5" /> MDS BISA + Excel
+                            <CheckCircle2 className="w-3.5 h-3.5" /> luqman org + Excel
                           </span>
                         </div>
                       </div>

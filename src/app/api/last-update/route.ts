@@ -85,7 +85,13 @@ export async function GET() {
     const lastPromo = recentHistories.find(h => h.type === 'UPDATE_PROMO' || h.type === 'PROMO_MINGGUAN');
 
     const sanitizeLabel = (val?: string | null) =>
-      val ? val.replace(/MDS\s*BISA/gi, 'by luqman org').replace(/StoreHub/gi, 'by luqman org') : val;
+      val
+        ? val
+            .replace(/MDS\s*[-]?\s*BISA/gi, 'luqman org')
+            .replace(/StoreHub/gi, 'luqman org')
+            .replace(/(?:https?:\/\/)?(?:www\.)?matahari\.com/gi, 'luqman org')
+            .replace(/\bMatahari\b/gi, 'luqman org')
+        : val;
 
     const cleanHistories = recentHistories.map(h => ({
       ...h,

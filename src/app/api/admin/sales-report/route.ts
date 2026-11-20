@@ -611,9 +611,9 @@ export async function GET(request: NextRequest) {
     try {
       let startDate = startOfMonth;
       let endDate = endOfMonth;
+      const targetDate = selectedSync ? new Date(selectedSync.date) : new Date();
 
       if (!hasCustomCutoff) {
-        const targetDate = selectedSync ? new Date(selectedSync.date) : new Date();
         if (timeframe === '1W' || timeframe === '1D') {
           startDate = new Date(targetDate);
           startDate.setDate(startDate.getDate() - 6);
@@ -632,7 +632,7 @@ export async function GET(request: NextRequest) {
         orderBy: { date: 'asc' },
       });
 
-      if (timeframe === '1Y') {
+      if (timeframe === '1Y' && !hasCustomCutoff) {
         const monthMap = new Map();
         const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
         for (const d of salesByDay) {
@@ -655,15 +655,19 @@ export async function GET(request: NextRequest) {
     } catch (_e) { /* DailySales kosong */ }
 
     if (trendData.length === 0) {
-      const fallbackOmzet = (targetYearMonth === todayStr.substring(0, 7)) ? (calculatedMtdOmzet || agg._sum.sales_mtd_retail || 0) : (agg._sum.sales_mtd_retail || 0);
-      const fallbackQty = (targetYearMonth === todayStr.substring(0, 7)) ? (calculatedMtdQty || agg._sum.sales_mtd || 0) : (agg._sum.sales_mtd || 0);
+      const fallbackOmzet = hasCustomCutoff
+        ? calculatedMtdOmzet
+        : ((targetYearMonth === todayStr.substring(0, 7)) ? (calculatedMtdOmzet || agg._sum.sales_mtd_retail || 0) : (agg._sum.sales_mtd_retail || 0));
+      const fallbackQty = hasCustomCutoff
+        ? calculatedMtdQty
+        : ((targetYearMonth === todayStr.substring(0, 7)) ? (calculatedMtdQty || agg._sum.sales_mtd || 0) : (agg._sum.sales_mtd || 0));
       
       trendData = [{
-        date:  new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short' }),
-        fullDate: todayStr,
+        date:  hasCustomCutoff ? `${cutoffStartStr.slice(8, 10)}–${cutoffEndStr.slice(8, 10)}` : new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short' }),
+        fullDate: hasCustomCutoff ? cutoffEndStr : todayStr,
         omzet: fallbackOmzet,
         qty:   fallbackQty,
-        label: 'MTD s/d ' + todayStr,
+        label: hasCustomCutoff ? `Cut-Off ${cutoffStartStr} s/d ${cutoffEndStr}` : ('MTD s/d ' + todayStr),
       }];
     }
 
@@ -673,12 +677,21 @@ export async function GET(request: NextRequest) {
 
     const isCurrentMonth = targetYearMonth === todayStr.substring(0, 7);
 
+    const sanitizeBrandText = (val?: string | null) =>
+      val
+        ? val
+            .replace(/MDS\s*[-]?\s*BISA/gi, 'luqman org')
+            .replace(/StoreHub/gi, 'luqman org')
+            .replace(/(?:https?:\/\/)?(?:www\.)?matahari\.com/gi, 'luqman org')
+            .replace(/\bMatahari\b/gi, 'luqman org')
+        : null;
+
     const responseData = {
       success: true,
       data: {
         targetDate: pqDateLabel,
         pqUploadTime,
-        pqFileName: selectedSync?.fileName || null,
+        pqFileName: sanitizeBrandText(selectedSync?.fileName),
         availableDates: availableDates,
         cutoff: {
           start: cutoffStartStr,

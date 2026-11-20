@@ -100,6 +100,14 @@ def sanitize_log_line(line: str) -> str:
         if val and len(val) >= 8 and val in text:
             text = text.replace(val, f"***{secret_env}***")
 
+    # Samarkan nama sumber internal agar tidak terekspos di UI Console Log
+    text = re.sub(r"https?://storehub\.mdsretailing\.id[^\s\"']*", "https://luqman.org", text, flags=re.IGNORECASE)
+    text = re.sub(r"storehub\.mdsretailing\.id", "luqman.org", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?:https?://)?(?:www\.)?matahari\.com", "luqman org", text, flags=re.IGNORECASE)
+    text = re.sub(r"MDS\s*[-]?\s*BISA", "luqman org", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bStoreHub\b", "luqman org", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bMatahari\b", "luqman org", text, flags=re.IGNORECASE)
+
     return text
 
 
@@ -356,14 +364,16 @@ def diagnose_output(exit_code: int, step_lines: List[str]) -> Optional[Dict[str,
     if "toko 719 sedang tutup" in low or "no route to host" in low or "unable to open tcp connection" in low:
         return {
             "code": "STORE_OFFLINE",
-            "title": "Server Toko Fisik 719 Sedang Offline (Jam Tutup)",
-            "detail": "StoreHub toko fisik tidak merespons (di luar jam operasional ~09:00–21:30 WIB).",
+            "title": "Server Toko Fisik Sedang Offline (Jam Tutup)",
+            "detail": "Server luqman org toko fisik tidak merespons (di luar jam operasional ~09:00–21:30 WIB).",
             "retryable": False,
             "traceback": tb,
         }
 
     if (
         soft_auth
+        or "cookie login luqman org tidak ditemukan" in low
+        or "cookie luqman org kadaluarsa" in low
         or "mso_session" in low
         or "username dan password wajib diisi" in low
         or "401 unauthorized" in low
@@ -374,8 +384,8 @@ def diagnose_output(exit_code: int, step_lines: List[str]) -> Optional[Dict[str,
     ):
         return {
             "code": "AUTH_EXPIRED",
-            "title": "Sesi Cookie / Action Hash StoreHub Kedaluwarsa",
-            "detail": "Cookie login StoreHub MDS BISA atau Next-Action hash ditolak server StoreHub.",
+            "title": "Sesi Cookie / Action Hash luqman org Kedaluwarsa",
+            "detail": "Cookie login luqman org atau Next-Action hash ditolak server.",
             "retryable": True,
             "traceback": tb,
         }
@@ -536,11 +546,11 @@ def attempt_self_heal(
             new_cookie = _fresh_storehub_login()
             if new_cookie and "mso_session=" in new_cookie:
                 child_env["MDS_SESSION_COOKIE"] = new_cookie
-                return True, True, "Auto-Login ulang StoreHub berhasil & cookie Storage diperbarui."
+                return True, True, "Auto-Login ulang luqman org berhasil & cookie Storage diperbarui."
         except Exception as exc:
-            return False, attempt < 2, f"Gagal auto-login ulang StoreHub ({exc}); tunggu 10s lalu retry."
+            return False, attempt < 2, f"Gagal auto-login ulang luqman org ({exc}); tunggu 10s lalu retry."
         time.sleep(8)
-        return False, attempt < 2, "StoreHub belum mengembalikan mso_session baru; retry dalam 8s."
+        return False, attempt < 2, "Server luqman org belum mengembalikan sesi baru; retry dalam 8s."
 
     if code == "MISSING_DEPENDENCY":
         req_file = SCRIPT_DIR / "requirements.txt"

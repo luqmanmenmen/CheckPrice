@@ -117,7 +117,7 @@ export async function dispatchToGitHubRunner(params: {
   };
 
   const labelMap: Record<SyncActionType, string> = {
-    'scrab': `KATEGORI 1: Brutal Scrab (by luqman org + Foto Matahari.com) [v${APP_VERSION}]`,
+    'scrab': `KATEGORI 1: Brutal Scrab (by luqman org + Foto luqman org) [v${APP_VERSION}]`,
     'mds-bisa': `KATEGORI 1A: Brutal Scrab by luqman org [v${APP_VERSION}]`,
     'photos': `KATEGORI 1B: Brutal Scrab Foto & Pulihkan URL 404 [v${APP_VERSION}]`,
     'stock-only': `KATEGORI 2: Update Stock Live (Mapping 84.763 SKU + Sales) [v${APP_VERSION}]`,
