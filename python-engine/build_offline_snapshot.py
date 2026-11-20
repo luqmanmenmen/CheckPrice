@@ -108,22 +108,32 @@ def _storage_upload(
     bucket = "excel-uploads"
     clean_path = object_path.lstrip("/")
     endpoint = f"{supa_url}/storage/v1/object/{bucket}/{clean_path}"
-    req = urllib.request.Request(
-        endpoint,
-        data=data,
-        headers={
-            "apikey": supa_key,
-            "Authorization": f"Bearer {supa_key}",
-            "Content-Type": content_type,
-            "Cache-Control": cache_control,
-            "x-upsert": "true",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        if resp.status not in (200, 201):
-            raise RuntimeError(f"Gagal upload Storage {clean_path}: HTTP {resp.status}")
-    return f"{supa_url}/storage/v1/object/public/{bucket}/{clean_path}"
+    cc_header = cache_control if "max-age=" in str(cache_control) else f"max-age={cache_control}"
+    headers = {
+        "apikey": supa_key,
+        "Authorization": f"Bearer {supa_key}",
+        "Content-Type": content_type,
+        "Cache-Control": cc_header,
+        "x-upsert": "true",
+    }
+    last_err = None
+    for method in ("POST", "PUT"):
+        req = urllib.request.Request(endpoint, data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                if resp.status in (200, 201):
+                    return f"{supa_url}/storage/v1/object/public/{bucket}/{clean_path}"
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode("utf-8", errors="ignore")[:300]
+            except Exception:
+                pass
+            last_err = RuntimeError(f"Gagal upload Storage {clean_path} ({method}): HTTP {e.code} {body}")
+            if method == "POST" and e.code in (400, 409):
+                continue
+            raise last_err
+    raise last_err or RuntimeError(f"Gagal upload Storage {clean_path}")
 
 
 def _fetch_existing_manifest(supa_url: str) -> Dict[str, Any]:

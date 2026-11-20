@@ -1167,17 +1167,160 @@ def flush_buffer(
 
 
 # =============================================================================
-# MODE 1: UPDATE STOCK LIVE TERKINI VIA JALUR MAPPING 84.763 SKU (`--stock-only`)
+# MODE 1: UPDATE STOCK LIVE TERKINI & REKAP SALES DELTA SUKO (`--stock-only` / `--suko-sales-only`)
 # =============================================================================
-def execute_live_stock_sync(max_minutes: int = 45):
+def _is_suko_sales_eligible(row: Optional[Dict[str, Any]]) -> bool:
+    """
+    Hanya hitung penjualan untuk produk SUKO / stok aktif toko 719.
+    MUKU & ZES (stok 0 / -1 karena beda role akun StoreHub) DIABAIKAN dari pencatatan sales.
+    """
+    if not row:
+        return False
+    brand_up = str(row.get("brand") or "").upper()
+    dept_up = str(row.get("dept") or "").upper()
+    if "MUKU" in brand_up or "MU+KU" in brand_up or "MUKU" in dept_up or "ZES" in brand_up or "ZES" in dept_up:
+        return False
+    return ("SUKO" in brand_up) or ("SUKO" in dept_up) or ("BYRCH" in dept_up) or (int(row.get("stok") or 0) > 0)
+
+
+def _resolve_effective_price(row: Optional[Dict[str, Any]], today_wib: str) -> Tuple[float, bool]:
+    """Ambil harga jual aktif (Harga Promo Excel bila aktif & < normal, atau Harga Normal)."""
+    if not row:
+        return (0.0, False)
+    h_norm = float(row.get("hargaNormal") or 0)
+    h_promo = row.get("hargaPromo")
+    to_date = str(row.get("toDate") or "").strip()[:10]
+    promo_expired = bool(len(to_date) == 10 and to_date < today_wib)
+    if not promo_expired and h_promo is not None:
+        try:
+            hp = float(h_promo)
+            if hp > 0 and (h_norm <= 0 or hp < h_norm):
+                return (hp, True)
+        except Exception:
+            pass
+    return (h_norm, False)
+
+
+def record_mds_delta_sales(sales_deltas: Dict[str, Dict[str, Any]]) -> Tuple[int, int, float]:
+    """
+    Catat HANYA SKU yang stoknya berkurang (terjual) ke DailySales & ringkasan Product
+    melalui 1 batch SQL ringan (< 50 KB tulis ke Supabase, 0 beban RAM Supabase).
+    """
+    if not sales_deltas:
+        return (0, 0, 0.0)
+    try:
+        from build_offline_snapshot import _connect_postgres
+        wib_now = datetime.now(timezone(timedelta(hours=7)))
+        today_str = wib_now.strftime("%Y-%m-%d")
+        week_start_str = (wib_now - timedelta(days=wib_now.weekday())).strftime("%Y-%m-%d")
+        month_start_str = wib_now.strftime("%Y-%m-01")
+        year_start_str = wib_now.strftime("%Y-01-01")
+
+        conn = _connect_postgres()
+        cur = conn.cursor()
+        skus = list(sales_deltas.keys())
+        cur.execute('SELECT id, sku FROM "Product" WHERE sku = ANY(%s)', (skus,))
+        sku_to_id = {str(r[1]): int(r[0]) for r in cur.fetchall()}
+
+        total_skus = 0
+        total_qty = 0
+        total_omzet = 0.0
+        touched_ids: List[int] = []
+
+        for sku, info in sales_deltas.items():
+            pid = sku_to_id.get(sku)
+            if not pid:
+                continue
+            qty = int(info.get("qty") or 0)
+            omzet = float(info.get("omzet") or 0.0)
+            if qty <= 0:
+                continue
+            ds_id = f"mds_{today_str}_{pid}"
+            cur.execute(
+                '''
+                INSERT INTO "DailySales" (id, "productId", date, "qtySold", omzet, "createdAt")
+                VALUES (%s, %s, %s::date, %s, %s, NOW())
+                ON CONFLICT ("productId", date)
+                DO UPDATE SET
+                    "qtySold" = "DailySales"."qtySold" + EXCLUDED."qtySold",
+                    omzet = "DailySales".omzet + EXCLUDED.omzet
+                ''',
+                (ds_id, pid, today_str, qty, omzet),
+            )
+            touched_ids.append(pid)
+            total_skus += 1
+            total_qty += qty
+            total_omzet += omzet
+
+        if touched_ids:
+            # Recalculate kolom ringkas HANYA untuk SKU yang terjual hari ini (super ringan, 0 full scan!)
+            cur.execute(
+                '''
+                UPDATE "Product" p
+                SET
+                    day_sales_unit   = COALESCE(agg.d_qty, 0),
+                    day_sales_retail = COALESCE(agg.d_omz, 0),
+                    sales_wtd        = COALESCE(agg.w_qty, 0),
+                    sales_wtd_retail = COALESCE(agg.w_omz, 0),
+                    sales_mtd        = COALESCE(agg.m_qty, 0),
+                    sales_mtd_retail = COALESCE(agg.m_omz, 0),
+                    sales_ytd        = COALESCE(agg.y_qty, 0),
+                    sales_ytd_retail = COALESCE(agg.y_omz, 0),
+                    eoh_retail       = GREATEST(p.stok, 0) * COALESCE(
+                        CASE WHEN p."hargaPromo" IS NOT NULL AND p."hargaPromo" > 0 AND (p."hargaNormal" <= 0 OR p."hargaPromo" < p."hargaNormal")
+                             THEN p."hargaPromo" ELSE NULL END,
+                        NULLIF(p."hargaNormal", 0),
+                        0
+                    )
+                FROM (
+                    SELECT
+                        "productId",
+                        SUM(CASE WHEN date::date = %s::date THEN "qtySold" ELSE 0 END) AS d_qty,
+                        SUM(CASE WHEN date::date = %s::date THEN omzet ELSE 0 END) AS d_omz,
+                        SUM(CASE WHEN date::date >= %s::date THEN "qtySold" ELSE 0 END) AS w_qty,
+                        SUM(CASE WHEN date::date >= %s::date THEN omzet ELSE 0 END) AS w_omz,
+                        SUM(CASE WHEN date::date >= %s::date THEN "qtySold" ELSE 0 END) AS m_qty,
+                        SUM(CASE WHEN date::date >= %s::date THEN omzet ELSE 0 END) AS m_omz,
+                        SUM(CASE WHEN date::date >= %s::date THEN "qtySold" ELSE 0 END) AS y_qty,
+                        SUM(CASE WHEN date::date >= %s::date THEN omzet ELSE 0 END) AS y_omz
+                    FROM "DailySales"
+                    WHERE "productId" = ANY(%s)
+                    GROUP BY "productId"
+                ) agg
+                WHERE p.id = agg."productId"
+                ''',
+                (
+                    today_str, today_str,
+                    week_start_str, week_start_str,
+                    month_start_str, month_start_str,
+                    year_start_str, year_start_str,
+                    touched_ids,
+                ),
+            )
+
+        conn.commit()
+        cur.close()
+        conn.close()
+        print(f"   💰 [MDS SALES TRACKER] Tercatat {total_skus:,} SKU terjual ({total_qty:,} pcs | Rp {total_omzet:,.0f}) ke DailySales!")
+        return (total_skus, total_qty, total_omzet)
+    except Exception as e:
+        print(f"⚠️ [MDS SALES TRACKER] Gagal mencatat delta sales: {e}")
+        return (0, 0, 0.0)
+
+
+def execute_live_stock_sync(max_minutes: int = 45, suko_sales_only: bool = False):
     """
     Memperbarui stok fisik terkini (`stok`) dan harga normal (`hargaNormal`)
-    menggunakan seluruh jalur mapping 84.763 SKU & Artikel yang sudah tersimpan
-    tanpa membuang satu pun jalur SKU, foto, maupun promo.
+    sekaligus menghitung penjualan otomatis (Delta Stok Turun SUKO) di RAM Python
+    (0 beban RAM Supabase — hanya menulis SKU yang stoknya berubah / terjual!).
     """
     start_time = datetime.now()
+    today_wib = datetime.now(timezone(timedelta(hours=7))).strftime("%Y-%m-%d")
     print("=" * 80)
-    print("⚡ [LIVE STOCK ENGINE] UPDATE STOK TERKINI VIA JALUR MAPPING 84.763 SKU")
+    if suko_sales_only:
+        print("💰 [SUKO SALES & STOCK ENGINE] TARIK SALES OTOMATIS KHUSUS PRODUK SUKO (STOK > 0)")
+    else:
+        print("⚡ [LIVE STOCK + SALES ENGINE] UPDATE STOK TERKINI & REKAP SALES SUKO")
     print("=" * 80)
 
     cookie = get_active_cookie()
@@ -1215,40 +1358,70 @@ def execute_live_stock_sync(max_minutes: int = 45):
         if art not in INVALID_ARTS:
             article_variants_map.setdefault(art, []).append(row)
 
-    # Wave 1A: Semua SKU dengan stok > 0 atau sedang promo aktif
+    # Wave 1A: Semua SKU SUKO/aktif dengan stok > 0 (atau promo bila mode penuh)
     for sku, row in catalog_by_sku.items():
-        if int(row.get("stok") or 0) > 0 or row.get("hargaPromo"):
+        is_in_stock = int(row.get("stok") or 0) > 0
+        if suko_sales_only:
+            if is_in_stock and _is_suko_sales_eligible(row):
+                priority_wave_1.append(sku)
+                seen_in_wave_1.add(sku)
+        elif is_in_stock or row.get("hargaPromo"):
             priority_wave_1.append(sku)
             seen_in_wave_1.add(sku)
             art = str(row.get("article") or "").strip().upper()
             if art not in INVALID_ARTS:
                 seen_rep_articles.add(art)
 
-    # Wave 1B: 1 SKU perwakilan untuk setiap artikel unik di toko (~12.000 artikel)
-    for art, rows in article_variants_map.items():
-        if art not in seen_rep_articles and rows:
-            rep_sku = str(rows[0].get("sku") or "").strip()
-            if rep_sku and rep_sku not in seen_in_wave_1:
-                priority_wave_1.append(rep_sku)
-                seen_in_wave_1.add(rep_sku)
-                seen_rep_articles.add(art)
+    if not suko_sales_only:
+        # Wave 1B: 1 SKU perwakilan untuk setiap artikel unik di toko (~12.000 artikel)
+        for art, rows in article_variants_map.items():
+            if art not in seen_rep_articles and rows:
+                rep_sku = str(rows[0].get("sku") or "").strip()
+                if rep_sku and rep_sku not in seen_in_wave_1:
+                    priority_wave_1.append(rep_sku)
+                    seen_in_wave_1.add(rep_sku)
+                    seen_rep_articles.add(art)
 
-    # Wave 2: Seluruh sisa jalur SKU dari 84.763 mapping
-    for sku in catalog_by_sku.keys():
-        if sku not in seen_in_wave_1:
-            priority_wave_2.append(sku)
+        # Wave 2: Seluruh sisa jalur SKU dari mapping
+        for sku in catalog_by_sku.keys():
+            if sku not in seen_in_wave_1:
+                priority_wave_2.append(sku)
 
     ordered_skus = priority_wave_1 + priority_wave_2
-    print(f"🎯 Strategi Prioritas Update Stok:")
-    print(f"   👉 [GELOMBANG 1 - Stok Aktif, Promo & Perwakilan Artikel] : {len(priority_wave_1):,} SKU")
-    print(f"   👉 [GELOMBANG 2 - Sisa Jalur Mapping SKU Lengkap]         : {len(priority_wave_2):,} SKU")
+    print(f"🎯 Strategi Prioritas Update Stok & Sales:")
+    print(f"   👉 [GELOMBANG 1 - Stok Aktif SUKO] : {len(priority_wave_1):,} SKU")
+    print(f"   👉 [GELOMBANG 2 - Sisa Mapping]    : {len(priority_wave_2):,} SKU")
 
     checked_count = 0
     changed_count = 0
     buffer_by_sku: Dict[str, Dict[str, Any]] = {}
+    sales_deltas: Dict[str, Dict[str, Any]] = {}
     resolved_by_related_stock: Set[str] = set()
     chunk_size = 240
     now_iso = datetime.now(timezone.utc).isoformat()
+
+    def _track_delta_sale(sku_key: str, prev_row: Optional[Dict[str, Any]], old_q: int, new_q: int):
+        # Produk tidak ada penjualan -> skip 0 write!
+        # Pengaman: hanya produk SUKO/stok positif, new_q >= 0 (tolak -1 MUKU/ZES), dan batas RTO <= 25 pcs/scan
+        if not _is_suko_sales_eligible(prev_row):
+            return
+        if old_q <= 0 or new_q < 0 or new_q >= old_q:
+            return
+        delta = old_q - new_q
+        if delta > 25:
+            return
+        eff_price, is_promo = _resolve_effective_price(prev_row, today_wib)
+        cur_entry = sales_deltas.get(sku_key)
+        if cur_entry:
+            cur_entry["qty"] += delta
+            cur_entry["omzet"] += delta * eff_price
+        else:
+            sales_deltas[sku_key] = {
+                "qty": delta,
+                "omzet": delta * eff_price,
+                "price": eff_price,
+                "is_promo": is_promo,
+            }
 
     for c_start in range(0, len(ordered_skus), chunk_size):
         elapsed_min = (datetime.now() - start_time).total_seconds() / 60.0
@@ -1298,6 +1471,7 @@ def execute_live_stock_sync(max_minutes: int = 45):
                         or (rec.get("barcode") and rec.get("barcode") != old_bc)
                         or (ex_row and ex_row.get("_from_registry_only"))
                     ):
+                        _track_delta_sale(s_val, ex_row or rec, old_stok, int(rec["stok"] or 0))
                         buffer_by_sku[s_val] = rec
                         catalog_by_sku[s_val] = rec
                         changed_count += 1
@@ -1330,7 +1504,9 @@ def execute_live_stock_sync(max_minutes: int = 45):
                             if found_qty is not None:
                                 resolved_by_related_stock.add(sib_sku)
                                 checked_count += 1
-                                if int(sib.get("stok") or 0) != found_qty:
+                                old_sib_q = int(sib.get("stok") or 0)
+                                if old_sib_q != found_qty:
+                                    _track_delta_sale(sib_sku, sib, old_sib_q, found_qty)
                                     upd_sib = dict(sib)
                                     upd_sib["stok"] = found_qty
                                     upd_sib["updatedAt"] = now_iso
@@ -1354,15 +1530,34 @@ def execute_live_stock_sync(max_minutes: int = 45):
     if buffer_by_sku:
         flush_buffer(buffer_by_sku, write_md_report=False)
 
+    sold_skus, sold_qty, sold_omzet = record_mds_delta_sales(sales_deltas)
+
     save_mapped_paths_registry(catalog_by_sku)
     log_sync_history(
-        "STOCK_SYNC",
-        f"Update Stok Live Terkini ({checked_count:,} Jalur SKU Diperiksa, {changed_count:,} Berubah)",
-        checked_count,
+        "MDS_SALES_SYNC" if (suko_sales_only or sold_qty > 0) else "STOCK_SYNC",
+        f"Rekap Stok & Sales MDS BISA ({checked_count:,} SKU dicek | {sold_skus:,} SKU terjual, {sold_qty:,} pcs, Rp {sold_omzet:,.0f})",
+        sold_skus if sold_skus > 0 else checked_count,
         "SUCCESS",
     )
+
+    # Langsung segarkan JSON matang CDN (0 beban RAM Postgres saat halaman Laporan Sales dibuka!)
+    try:
+        import run_admin_analytics
+        from build_offline_snapshot import _connect_postgres, _storage_upload, _supabase_credentials
+        conn_an = _connect_postgres()
+        s_url, s_key = _supabase_credentials()
+        try:
+            run_admin_analytics.generate_po_suggestions(conn_an)
+            sales_payload = run_admin_analytics.build_sales_report_summary_payload(conn_an)
+            sales_bytes = json.dumps(sales_payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            _storage_upload(s_url, s_key, "analytics/sales-report-summary.json", sales_bytes, "application/json", "300")
+            print(f"   📊 [ANALYTICS CDN] analytics/sales-report-summary.json diperbarui ({len(sales_bytes)/1024:.1f} KB)")
+        finally:
+            conn_an.close()
+    except Exception as an_err:
+        print(f"⚠️ Lewati refresh analytics CDN otomatis: {an_err}")
     print("\n" + "=" * 80)
-    print(f"🎉 SELESAI UPDATE STOK LIVE! Terperiksa: {checked_count:,} SKU | Diperbarui: {changed_count:,} SKU")
+    print(f"🎉 SELESAI UPDATE STOK & SALES SUKO! Terperiksa: {checked_count:,} SKU | Diperbarui: {changed_count:,} SKU | Terjual: {sold_qty:,} pcs (Rp {sold_omzet:,.0f})")
     print("=" * 80 + "\n")
 
 
@@ -1722,8 +1917,10 @@ if __name__ == "__main__":
         print("🗺️ Mengekspor seluruh jalur mapping 84.763+ SKU dari Supabase ke mapped_sku_paths.json.gz...")
         cat, _, _ = load_existing_catalog_full()
         save_mapped_paths_registry(cat)
+    elif "--suko-sales-only" in args:
+        execute_live_stock_sync(max_minutes=max_min_arg or 20, suko_sales_only=True)
     elif "--stock-only" in args:
-        execute_live_stock_sync(max_minutes=max_min_arg or 45)
+        execute_live_stock_sync(max_minutes=max_min_arg or 45, suko_sales_only=False)
     elif "--census-sku" in args or "--brutal" in args or "--run-once" in args or "--force" in args or "--upc-first" in args or custom_range_arg or is_gh_actions:
         execute_morning_sweep(
             run_once_cloud=True,

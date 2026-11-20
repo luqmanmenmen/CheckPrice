@@ -21,6 +21,7 @@ on:
           - mds-bisa
           - photos
           - stock-only
+          - suko-sales
           - promo
           - upcoming-promo
           - catalog
@@ -43,7 +44,7 @@ on:
         type: string
 
   repository_dispatch:
-    types: [trigger-sync-engine, trigger-scrab, trigger-mds-bisa, trigger-stock-only, trigger-photos, trigger-promo, trigger-upcoming-promo, trigger-catalog, trigger-analytics]
+    types: [trigger-sync-engine, trigger-scrab, trigger-mds-bisa, trigger-stock-only, trigger-suko-sales, trigger-photos, trigger-promo, trigger-upcoming-promo, trigger-catalog, trigger-analytics]
 
 concurrency:
   group: retail-sync-group
@@ -127,10 +128,14 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
-      - name: ⚡ [KATEGORI 2 - UPDATE STOCK LIVE] Update Stok Terkini via Jalur Mapping 84.763 SKU & Artikel
-        if: ${{ github.event.inputs.action == 'stock-only' || github.event.inputs.action == 'all' || github.event.action == 'trigger-stock-only' }}
+      - name: ⚡ [KATEGORI 2 - UPDATE STOCK & SALES SUKO] Update Stok Terkini & Rekap Penjualan MDS BISA
+        if: ${{ github.event.inputs.action == 'stock-only' || github.event.inputs.action == 'suko-sales' || github.event.inputs.action == 'all' || github.event.action == 'trigger-stock-only' || github.event.action == 'trigger-suko-sales' }}
         run: |
-          python -u python-engine/runner_guardian.py --step "KATEGORI 2: Update Stock Live Mapping" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 -- python python-engine/morning_full_sweep.py --stock-only
+          if [ "${{ github.event.inputs.action }}" = "suko-sales" ] || [ "${{ github.event.action }}" = "trigger-suko-sales" ]; then
+            python -u python-engine/runner_guardian.py --step "KATEGORI 2: Tarik Sales & Stok SUKO Cepat" --action "suko-sales" --max-retries 3 -- python python-engine/morning_full_sweep.py --suko-sales-only
+          else
+            python -u python-engine/runner_guardian.py --step "KATEGORI 2: Update Stock Live Mapping & Sales" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 -- python python-engine/morning_full_sweep.py --stock-only
+          fi
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           MDS_SESSION_COOKIE: ${{ github.event.inputs.session_cookie || secrets.MDS_SESSION_COOKIE }}

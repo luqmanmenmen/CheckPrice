@@ -1760,3 +1760,36 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
 - **Verifikasi Nyata:**
   - DB Supabase: Ukuran turun dari `475 MB` → `436 MB` (`Product` indexes `139 MB` → `99 MB`), `SyncHistory` & `CatalogArticle` terindeks penuh.
   - `npx tsc --noEmit`, `npm run build` (`47/47` rute), dan audit zero-truncate lulus 0 error.
+
+---
+
+### 102. Reset Bersih Sales PQ Lama -> Mesin Tarik Sales Otomatis SUKO MDS BISA (0 RAM Supabase) & Redesign UI/UX Laporan Penjualan (21 November 2026)
+
+- **Arahan Pengguna:**
+  1. Membenahi total UI/UX halaman Laporan Sales (`/super-admin/laporan-penjualan`) berdasarkan pre-review interaktif (`laporan_sales_uiux_prereview.html`) dengan tema **Clean Light Toko + switch ke Executive Dark**.
+  2. Mengganti sumber rekap penjualan dari Power Query lama ke **MDS BISA (stok real-time SUKO + harga promo Excel/normal)**, hanya memindai produk **SUKO** (mengecualikan **MUKU & ZES** yang stoknya `0` / `-1` karena beda role akun), **0 beban RAM Supabase**.
+  3. Menghapus bersih seluruh data sales lama & memulai rekap bersih dari **21 November 2026** lengkap dengan **Top 10 Best Seller, Stok Kritis, Slow Moving, Ranking Departemen, dan Rekonsiliasi BOM → MTD → EOH**.
+
+- **Perubahan yang Diterapkan:**
+  1. **Reset Bersih Baseline Sales MDS BISA (21 Nov 2026) di Supabase:**
+     - `TRUNCATE TABLE "DailySales"` (menghapus 4.282 baris sales PQ lama) & membersihkan `PoSuggestion` lama.
+     - Reset 7.415 baris kolom sales PQ lama di `Product` ke `0`, membersihkan baseline `bom_unit`/`eoh_retail` pada 1.775 produk stok `<= 0`.
+     - Menetapkan baseline stok awal hari ini untuk **5.956 SKU aktif SUKO** (**62.638 pcs**, valuasi inventori **Rp 10,78 Miliar**) & mencatat `SyncHistory` (`MDS_SALES_SYNC`).
+  2. **Mesin Tarik Sales Otomatis SUKO (0 RAM Supabase) ([`python-engine/morning_full_sweep.py`](file:///c:/Max%20Display/price-checker/python-engine/morning_full_sweep.py), [`python-engine/run_admin_analytics.py`](file:///c:/Max%20Display/price-checker/python-engine/run_admin_analytics.py), [`.github/workflows/retail-sync-engine.yml`](file:///c:/Max%20Display/price-checker/.github/workflows/retail-sync-engine.yml)):**
+     - Menambahkan `_is_suko_sales_eligible()`, `_resolve_effective_price()`, `record_mds_delta_sales()`, dan mode cepat **`--suko-sales-only`** (hanya memindai ~5.956 SKU SUKO berstok aktif di RAM GitHub Actions 7 GB, skip 0 write untuk produk tanpa penjualan, tolak stok negatif `-1` MUKU/ZES & batas RTO `<= 25 pcs`, otomatis hitung harga promo Excel vs normal).
+     - Merombak `build_sales_report_summary_payload()` di `run_admin_analytics.py` dari 4x Full Table Scan 310rb baris menjadi **1x Index Scan ketat (`WHERE stok > 0` ~5.956 baris + `DailySales`)** di RAM Python, termasuk pre-compute `deptBreakdown`, `topFastMtd`, `topKritis` (`sales_mtd >= 1` & stok `0..5`), dan `topSlow` (`stok >= 10` SUKO) ke `analytics/sales-report-summary.json` CDN.
+     - Memperbaiki bug lama di mana `SUM(stok)` ikut menjumlahkan stok `-1` MUKU/ZES.
+     - Menambahkan action `suko-sales` di [`src/lib/githubDispatcher.ts`](file:///c:/Max%20Display/price-checker/src/lib/githubDispatcher.ts) & [`src/app/api/admin/trigger/github-dispatch/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/github-dispatch/route.ts).
+  3. **Pencatatan Delta Sales Real-Time di Live Stock HP & Zero Full-Scan API ([`src/lib/mdsBisaClient.ts`](file:///c:/Max%20Display/price-checker/src/lib/mdsBisaClient.ts), [`src/app/api/admin/sales-report/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/sales-report/route.ts)):**
+     - `checkLiveStockFast()` (`persist()` di `after()`) kini ikut mencatat penurunan stok SUKO (`0 < prevStok - newStok <= 25`, exclude MUKU/ZES) ke `DailySales` & kolom sales `Product` secara real-time dan anti double-count.
+     - `/api/admin/sales-report` memprioritaskan `deptBreakdown` & ringkasan dari CDN Python (0 full-scan `groupBy` 310rb baris Postgres!) digabung ringan dengan `DailySales` bulan berjalan.
+  4. **Redesign Total UI/UX Laporan Penjualan ([`src/app/super-admin/laporan-penjualan/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/laporan-penjualan/page.tsx)):**
+     - Default **Clean Light Toko** + tombol switch instan **Light / Executive Dark** (`localStorage`).
+     - Tombol **⚡ Tarik Sales SUKO** (trigger GitHub Actions Python), **Refresh**, **CSV**, dan **PDF** (PIN `220117` + notifikasi toast error bila PIN salah — memperbaiki bug lama!).
+     - **Hero Revenue Spotlight + 4 Kartu KPI 2×2** dengan **Target MTD yang bisa diedit langsung**, ASP, DoD & MoM Growth.
+     - **4 Tab Segmented Pill Modern:** AreaChart dengan switch Omzet/Qty + Peak/Avg, **Ranked Department Progress List** (bebas truncate, klik untuk filter), **Rekonsiliasi & Rincian SKU otomatis Card View di HP** (0 horizontal scroll, 0 text truncation).
+
+- **Verifikasi Nyata:**
+  - `python -m py_compile morning_full_sweep.py run_admin_analytics.py`: Lulus (`PY_COMPILE_OK`).
+  - `run_admin_analytics.py --analytics`: Sukses mengunggah `analytics/sales-report-summary.json` bersih ke Storage CDN.
+  - `npx tsc --noEmit`, `npm run build` (`47/47` rute), dan audit zero-truncate lulus 0 error.

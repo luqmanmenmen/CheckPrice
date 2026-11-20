@@ -23,9 +23,10 @@ export async function GET(request: NextRequest) {
     const skip = (page - 1) * limit;
     const targetDateParam = searchParams.get("date") || "";
 
-    // Check latest sync to invalidate cache if new data arrived
+    // Check latest sync to invalidate cache if new data arrived (mendukung MDS_SALES_SYNC, STOCK_SYNC, dan PQ_HARIAN)
+    const SALES_SYNC_TYPES = ["MDS_SALES_SYNC", "STOCK_SYNC", "PQ_HARIAN"];
     const latestSync = await prisma.syncHistory.findFirst({
-      where: { type: "PQ_HARIAN", status: "SUCCESS" },
+      where: { type: { in: SALES_SYNC_TYPES }, status: "SUCCESS" },
       orderBy: { createdAt: "desc" },
       select: { id: true }
     });
@@ -35,24 +36,24 @@ export async function GET(request: NextRequest) {
       lastSyncId = latestSync.id;
     }
 
+    const forceRefresh = searchParams.get("refresh") === "1";
     const cacheKey = `${targetDateParam}_${timeframe}_${deptFilter}_${page}_${limit}`;
-    if (routeCache[cacheKey] && Date.now() - routeCache[cacheKey].timestamp < CACHE_TTL) {
+    if (!forceRefresh && routeCache[cacheKey] && Date.now() - routeCache[cacheKey].timestamp < CACHE_TTL) {
       return NextResponse.json(routeCache[cacheKey].data);
     }
 
-    // Bersih-bersih promo expired dilakukan oleh python-engine/run_admin_analytics.py --clean-promo
-    const todayStr = new Date().toISOString().split('T')[0];
+    // Tanggal hari ini (WIB)
+    const todayStr = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().split('T')[0];
 
     // ============================================================
-    // SUMBER DATA UTAMA: Product table langsung dari PQ upload
-    // Grand total sudah tersedia di PQ: MTD, YTD, EOH, DAY_SALES
+    // SUMBER DATA UTAMA: MDS BISA (SUKO Delta-Stock Sales) + CDN Pre-computed Analytics (0 Full-Scan Postgres!)
     // ============================================================
 
-    // Extract all sync history dates for the dropdown
     const allPqSyncs = await prisma.syncHistory.findMany({
-      where: { type: "PQ_HARIAN", status: "SUCCESS" },
+      where: { type: { in: SALES_SYNC_TYPES }, status: "SUCCESS" },
       orderBy: { createdAt: "desc" },
-      select: { fileName: true, createdAt: true, id: true }
+      take: 40,
+      select: { fileName: true, createdAt: true, id: true, type: true }
     });
 
     const MONTHS: Record<string, string> = {
@@ -365,84 +366,87 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // 2. CATEGORY BREAKDOWN per Department (MTD & Stock Movement)
-    const deptBreakdown = await prisma.product.groupBy({
-      by: ['dept'],
-      _sum: {
-        sales_mtd_retail: true,
-        sales_mtd:        true,
-        sales_wtd_retail: true,
-        sales_wtd:        true,
-        sales_ytd_retail: true,
-        sales_ytd:        true,
-        stok:             true,
-        eoh_retail:       true,
-        day_sales_retail: true,
-        day_sales_unit:   true,
-        bom_unit:         true,
-        boy_unit:         true,
-        boy_retail:       true,
-      },
-      orderBy: { _sum: { sales_mtd_retail: 'desc' } },
-    });
-
+    // 2. CATEGORY BREAKDOWN per Department (Prioritaskan pre-computed CDN Python -> 0 full-scan 310rb baris Postgres!)
     const categoryBreakdown: any = {};
-    
-    // Periksa apakah ganti bulan terjadi (calculatedMtdOmzet jauh lebih kecil dari total sales_mtd_retail)
+    const precomputedDepts = precomputedSummary?.deptBreakdown;
+    const hasPrecomputedDepts = Boolean(precomputedDepts && typeof precomputedDepts === 'object' && Object.keys(precomputedDepts).length > 0);
+
+    // Ambil delta penjualan aktual bulan berjalan dari DailySales (tabel kecil & bersih mulai 21 Nov 2026)
+    const mtdDeptSales = await prisma.dailySales.findMany({
+      where: { date: { gte: startOfMonth, lte: endOfMonth } },
+      include: { product: { select: { dept: true } } }
+    });
+    const deptMtdMap = new Map<string, { omzet: number; qty: number; todayOmzet: number; todayQty: number }>();
+    for (const ds of mtdDeptSales) {
+      const dept = (ds.product?.dept || 'SUKO LAINNYA').trim();
+      const entry = deptMtdMap.get(dept) || { omzet: 0, qty: 0, todayOmzet: 0, todayQty: 0 };
+      entry.omzet += ds.omzet || 0;
+      entry.qty += ds.qtySold || 0;
+      const dsDateStr = ds.date.toISOString().slice(0, 10);
+      if (dsDateStr === todayStr) {
+        entry.todayOmzet += ds.omzet || 0;
+        entry.todayQty += ds.qtySold || 0;
+      }
+      deptMtdMap.set(dept, entry);
+    }
+
     const isNewMonth = calculatedMtdOmzet < (agg._sum.sales_mtd_retail || 0) * 0.5;
 
-    if (isNewMonth) {
-      // Ambil breakdown department murni dari DailySales untuk bulan berjalan
-      const mtdDeptSales = await prisma.dailySales.findMany({
-        where: {
-          date: { gte: startOfMonth, lte: endOfMonth }
-        },
-        include: { product: { select: { dept: true } } }
-      });
-      
-      const deptMtdMap = new Map();
-      mtdDeptSales.forEach(ds => {
-        const dept = ds.product.dept || 'LAINNYA';
-        if (!deptMtdMap.has(dept)) deptMtdMap.set(dept, { omzet: 0, qty: 0 });
-        const val = deptMtdMap.get(dept);
-        val.omzet += ds.omzet || 0;
-        val.qty += ds.qtySold || 0;
-      });
-      
-      deptBreakdown.forEach((d) => {
-        const deptName = d.dept || 'LAINNYA';
-        const mtdValues = deptMtdMap.get(deptName) || { omzet: 0, qty: 0 };
+    if (hasPrecomputedDepts) {
+      for (const [deptName, rawMetrics] of Object.entries(precomputedDepts as Record<string, any>)) {
+        const liveMtd = deptMtdMap.get(deptName);
         categoryBreakdown[deptName] = {
-          omzet:           mtdValues.omzet,
-          qty:             mtdValues.qty,
-          omzet_hari_ini:  d._sum.day_sales_retail   || 0,
-          qty_hari_ini:    d._sum.day_sales_unit      || 0,
-          omzet_wtd:       d._sum.sales_wtd_retail    || 0,
-          qty_wtd:         d._sum.sales_wtd           || 0,
-          omzet_ytd:       d._sum.sales_ytd_retail    || 0,
-          qty_ytd:         d._sum.sales_ytd           || 0,
-          stok:            d._sum.stok                || 0,
-          eoh:             d._sum.eoh_retail          || 0,
-          bom_unit:        d._sum.bom_unit            || 0,
-          boy_unit:        d._sum.boy_unit            || 0,
+          omzet:          Math.max(Number(rawMetrics.omzet || 0), liveMtd?.omzet || 0),
+          qty:            Math.max(Number(rawMetrics.qty || 0), liveMtd?.qty || 0),
+          omzet_hari_ini: Math.max(Number(rawMetrics.omzet_hari_ini || 0), liveMtd?.todayOmzet || 0),
+          qty_hari_ini:   Math.max(Number(rawMetrics.qty_hari_ini || 0), liveMtd?.todayQty || 0),
+          omzet_wtd:      Math.max(Number(rawMetrics.omzet_wtd || 0), liveMtd?.omzet || 0),
+          qty_wtd:        Math.max(Number(rawMetrics.qty_wtd || 0), liveMtd?.qty || 0),
+          omzet_ytd:      Math.max(Number(rawMetrics.omzet_ytd || 0), liveMtd?.omzet || 0),
+          qty_ytd:        Math.max(Number(rawMetrics.qty_ytd || 0), liveMtd?.qty || 0),
+          stok:           Number(rawMetrics.stok || 0),
+          eoh:            Number(rawMetrics.eoh || 0),
+          bom_unit:       Number(rawMetrics.bom_unit || 0),
+          boy_unit:       Number(rawMetrics.boy_unit || 0),
         };
-      });
+      }
     } else {
+      const deptBreakdown = await prisma.product.groupBy({
+        by: ['dept'],
+        where: { OR: [{ stok: { gt: 0 } }, { sales_mtd: { gt: 0 } }, { day_sales_unit: { gt: 0 } }] },
+        _sum: {
+          sales_mtd_retail: true,
+          sales_mtd:        true,
+          sales_wtd_retail: true,
+          sales_wtd:        true,
+          sales_ytd_retail: true,
+          sales_ytd:        true,
+          stok:             true,
+          eoh_retail:       true,
+          day_sales_retail: true,
+          day_sales_unit:   true,
+          bom_unit:         true,
+          boy_unit:         true,
+          boy_retail:       true,
+        },
+        orderBy: { _sum: { sales_mtd_retail: 'desc' } },
+      });
       deptBreakdown.forEach((d) => {
-        const deptName = d.dept || 'LAINNYA';
+        const deptName = (d.dept || 'SUKO LAINNYA').trim();
+        const liveMtd = deptMtdMap.get(deptName);
         categoryBreakdown[deptName] = {
-          omzet:           d._sum.sales_mtd_retail  || 0,
-          qty:             d._sum.sales_mtd          || 0,
-          omzet_hari_ini:  d._sum.day_sales_retail   || 0,
-          qty_hari_ini:    d._sum.day_sales_unit      || 0,
-          omzet_wtd:       d._sum.sales_wtd_retail    || 0,
-          qty_wtd:         d._sum.sales_wtd           || 0,
-          omzet_ytd:       d._sum.sales_ytd_retail    || 0,
-          qty_ytd:         d._sum.sales_ytd           || 0,
-          stok:            d._sum.stok                || 0,
-          eoh:             d._sum.eoh_retail          || 0,
-          bom_unit:        d._sum.bom_unit            || 0,
-          boy_unit:        d._sum.boy_unit            || 0,
+          omzet:          Math.max(d._sum.sales_mtd_retail || 0, liveMtd?.omzet || 0),
+          qty:            Math.max(d._sum.sales_mtd || 0, liveMtd?.qty || 0),
+          omzet_hari_ini: Math.max(d._sum.day_sales_retail || 0, liveMtd?.todayOmzet || 0),
+          qty_hari_ini:   Math.max(d._sum.day_sales_unit || 0, liveMtd?.todayQty || 0),
+          omzet_wtd:      d._sum.sales_wtd_retail || 0,
+          qty_wtd:        d._sum.sales_wtd || 0,
+          omzet_ytd:      d._sum.sales_ytd_retail || 0,
+          qty_ytd:        d._sum.sales_ytd || 0,
+          stok:           Math.max(0, d._sum.stok || 0),
+          eoh:            Math.max(0, d._sum.eoh_retail || 0),
+          bom_unit:       Math.max(0, d._sum.bom_unit || 0),
+          boy_unit:       Math.max(0, d._sum.boy_unit || 0),
         };
       });
     }
@@ -656,32 +660,34 @@ export async function GET(request: NextRequest) {
         pqFileName: selectedSync?.fileName || null,
         availableDates: availableDates,
         summary: {
-          // SPD (Sales Per Day / Hari Ini)
-          spd_omzet:        selectedDateOmzet || agg._sum.day_sales_retail || 0,
-          spd_qty:          selectedDateQty || agg._sum.day_sales_unit || 0,
+          // SPD (Sales Per Day / Hari Ini) — gabungkan DailySales live agar instan tanpa tunggu CDN
+          spd_omzet:        Math.max(selectedDateOmzet, agg._sum.day_sales_retail || 0),
+          spd_qty:          Math.max(selectedDateQty, agg._sum.day_sales_unit || 0),
           yesterday_omzet:  yesterdayOmzet,
           yesterday_qty:    yesterdayQty,
 
           // WTD (Week To Date / Minggu Ini)
-          wtd_omzet:        agg._sum.sales_wtd_retail || 0,
-          wtd_qty:          agg._sum.sales_wtd || 0,
+          wtd_omzet:        Math.max(calculatedMtdOmzet, agg._sum.sales_wtd_retail || 0),
+          wtd_qty:          Math.max(calculatedMtdQty, agg._sum.sales_wtd || 0),
 
           // MTD (Month To Date / Bulan Ini)
-          mtd_omzet:        isCurrentMonth ? (calculatedMtdOmzet || agg._sum.sales_mtd_retail || 0) : (agg._sum.sales_mtd_retail || 0),
-          mtd_qty:          isCurrentMonth ? (calculatedMtdQty || agg._sum.sales_mtd || 0) : (agg._sum.sales_mtd || 0),
+          mtd_omzet:        isCurrentMonth ? Math.max(calculatedMtdOmzet, agg._sum.sales_mtd_retail || 0) : (agg._sum.sales_mtd_retail || 0),
+          mtd_qty:          isCurrentMonth ? Math.max(calculatedMtdQty, agg._sum.sales_mtd || 0) : (agg._sum.sales_mtd || 0),
           last_month_omzet: lastMonthOmzet,
           last_month_qty:   lastMonthQty,
 
           // YTD (Year To Date / Tahun Ini)
-          ytd_omzet:        agg._sum.sales_ytd_retail  || 0,
-          ytd_qty:          agg._sum.sales_ytd          || 0,
+          ytd_omzet:        Math.max(calculatedMtdOmzet, agg._sum.sales_ytd_retail || 0),
+          ytd_qty:          Math.max(calculatedMtdQty, agg._sum.sales_ytd || 0),
 
-          // Valuasi & Inventori
+          // Valuasi & Inventori SUKO Aktif
           nilai_inventori:  agg._sum.eoh_retail         || 0,
           total_stok:       agg._sum.stok               || 0,
+          active_stock_skus: precomputedSummary?.aggSummary?.activeStockSkus || 0,
           boy_unit:         agg._sum.boy_unit           || 0,
           boy_retail:       agg._sum.boy_retail         || 0,
           bom_unit:         agg._sum.bom_unit           || 0,
+          data_source:      precomputedSummary?.source  || "MDS_BISA_LIVE",
 
           // Promo
           omzet_promo:      omzetPromo,

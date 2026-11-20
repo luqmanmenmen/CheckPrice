@@ -1562,13 +1562,21 @@ export async function checkLiveStockFast(
 
   let changedCount = 0;
   const changedByQty = new Map<number, string[]>();
+  const deltaSoldSkus: Array<{ sku: string; qtySold: number; newStok: number }> = [];
   const variants: LiveStockVariantSummary[] = [];
   for (const [s, stok] of stockBySku.entries()) {
     const meta = variantMeta.get(s);
     const cs = colorSizeBySku.get(s);
     variants.push({ sku: s, color: cs?.color ?? meta?.color ?? null, size: cs?.size ?? meta?.size ?? null, stok });
     if (meta?.prevStok === undefined || meta.prevStok !== stok) {
-      if (meta?.prevStok !== undefined && meta.prevStok !== stok) changedCount++;
+      if (meta?.prevStok !== undefined && meta.prevStok !== stok) {
+        changedCount++;
+        // Catat delta penurunan stok SUKO sebagai penjualan real-time (tolak stok negatif -1 & RTO > 25 pcs)
+        const diff = meta.prevStok - stok;
+        if (meta.prevStok > 0 && stok >= 0 && diff > 0 && diff <= 25) {
+          deltaSoldSkus.push({ sku: s, qtySold: diff, newStok: stok });
+        }
+      }
       const list = changedByQty.get(stok) || [];
       list.push(s);
       changedByQty.set(stok, list);
@@ -1599,6 +1607,73 @@ export async function checkLiveStockFast(
           .catch(() => {})
       );
     }
+
+    // Rekam penjualan real-time dari penurunan stok SUKO ke DailySales & ringkasan Product (hanya SKU yang laku!)
+    if (deltaSoldSkus.length > 0) {
+      tasks.push(
+        (async () => {
+          try {
+            const soldSkusList = deltaSoldSkus.map((d) => d.sku);
+            const dbProds = await prisma.product.findMany({
+              where: { sku: { in: soldSkusList } },
+              select: { id: true, sku: true, brand: true, dept: true, hargaNormal: true, hargaPromo: true, toDate: true },
+            });
+            const todayWibStr = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
+            const todayDateObj = new Date(`${todayWibStr}T00:00:00.000Z`);
+
+            for (const d of deltaSoldSkus) {
+              const p = dbProds.find((x) => x.sku === d.sku);
+              if (!p) continue;
+              const bUp = `${p.brand || ''} ${p.dept || ''}`.toUpperCase();
+              if (bUp.includes('MUKU') || bUp.includes('MU+KU') || bUp.includes('ZES')) continue;
+
+              const promoExpired = Boolean(p.toDate && String(p.toDate).trim().slice(0, 10) < todayWibStr);
+              const usePromo = Boolean(
+                !promoExpired &&
+                  p.hargaPromo &&
+                  p.hargaPromo > 0 &&
+                  (!p.hargaNormal || p.hargaPromo < p.hargaNormal)
+              );
+              const unitPrice = usePromo ? Number(p.hargaPromo) : Number(p.hargaNormal || 0);
+              const omzetDelta = d.qtySold * unitPrice;
+
+              await prisma.dailySales.upsert({
+                where: { productId_date: { productId: p.id, date: todayDateObj } },
+                update: {
+                  qtySold: { increment: d.qtySold },
+                  omzet: { increment: omzetDelta },
+                },
+                create: {
+                  id: `live_${todayWibStr}_${p.id}`,
+                  productId: p.id,
+                  date: todayDateObj,
+                  qtySold: d.qtySold,
+                  omzet: omzetDelta,
+                },
+              });
+
+              await prisma.product.update({
+                where: { id: p.id },
+                data: {
+                  day_sales_unit: { increment: d.qtySold },
+                  day_sales_retail: { increment: omzetDelta },
+                  sales_wtd: { increment: d.qtySold },
+                  sales_wtd_retail: { increment: omzetDelta },
+                  sales_mtd: { increment: d.qtySold },
+                  sales_mtd_retail: { increment: omzetDelta },
+                  sales_ytd: { increment: d.qtySold },
+                  sales_ytd_retail: { increment: omzetDelta },
+                  eoh_retail: Math.max(0, d.newStok) * unitPrice,
+                },
+              });
+            }
+          } catch (saleErr) {
+            console.warn('[MDS-CLIENT] Gagal rekam delta sales live:', saleErr);
+          }
+        })()
+      );
+    }
+
     await withTimeout(Promise.allSettled(tasks).then(() => true), 12000, false);
   };
 
