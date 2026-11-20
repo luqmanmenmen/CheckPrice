@@ -7,23 +7,30 @@ export interface StoreGeofenceZone {
   radiusMeters: number;
 }
 
+export const OFFICIAL_STORES = [
+  "SUKO 719 PAKUWON MALL",
+  "SUKO 720 TUNJUNGAN PLAZA",
+] as const;
+
+export type OfficialStoreName = (typeof OFFICIAL_STORES)[number];
+
 /**
- * Daftar zona geofencing lokasi kerja toko (Surabaya).
+ * Daftar zona geofencing lokasi kerja toko resmi (Surabaya).
  * Radius diberi buffer wajar mall besar + toleransi indoor GPS.
  */
 export const WORK_LOCATION_ZONES: StoreGeofenceZone[] = [
   {
-    id: "PAKUWON_MALL_SBY",
-    name: "Pakuwon Mall Surabaya",
-    shortName: "Pakuwon Mall",
+    id: "SUKO_719_PAKUWON_MALL",
+    name: "SUKO 719 PAKUWON MALL",
+    shortName: "SUKO 719 PAKUWON MALL",
     lat: -7.28918,
     lng: 112.67565,
     radiusMeters: 750,
   },
   {
-    id: "TUNJUNGAN_PLAZA_SBY",
-    name: "Tunjungan Plaza (TP) Surabaya",
-    shortName: "Tunjungan Plaza",
+    id: "SUKO_720_TUNJUNGAN_PLAZA",
+    name: "SUKO 720 TUNJUNGAN PLAZA",
+    shortName: "SUKO 720 TUNJUNGAN PLAZA",
     lat: -7.26238,
     lng: 112.73928,
     radiusMeters: 700,

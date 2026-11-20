@@ -47,11 +47,15 @@ export async function POST(req: Request) {
     const validActions: SyncActionType[] = ['scrab', 'mds-bisa', 'photos', 'stock-only', 'suko-sales', 'promo', 'upcoming-promo', 'catalog', 'analytics', 'all'];
     const action: SyncActionType = validActions.includes(rawAction) ? rawAction : 'all';
 
+    const rawSalesDate = typeof body.salesDate === 'string' ? body.salesDate.trim() : typeof body.sales_date === 'string' ? body.sales_date.trim() : '';
+    const cleanSalesDate = /^\d{4}-\d{2}-\d{2}$/.test(rawSalesDate) ? rawSalesDate : '';
+
     const result = await dispatchToGitHubRunner({
       action,
       force: body.force !== false,
       promoUrl: body.promo_url || body.explicitUrl || '',
       sessionCookie: body.session_cookie || '',
+      salesDate: cleanSalesDate,
       userId: user?.id || null,
     });
 

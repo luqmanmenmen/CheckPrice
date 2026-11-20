@@ -24,9 +24,11 @@ export async function dispatchToGitHubRunner(params: {
   force?: boolean;
   promoUrl?: string;
   sessionCookie?: string;
+  salesDate?: string;
   userId?: string | null;
 }) {
-  const { action, force = true, promoUrl = '', sessionCookie = '', userId = null } = params;
+  const { action, force = true, promoUrl = '', sessionCookie = '', salesDate = '', userId = null } = params;
+  const cleanSalesDate = /^\d{4}-\d{2}-\d{2}$/.test(salesDate.trim()) ? salesDate.trim() : '';
 
   let githubToken = process.env.GITHUB_TOKEN || process.env.GH_PAT;
 
@@ -87,6 +89,7 @@ export async function dispatchToGitHubRunner(params: {
         promo_url: promoUrl,
         force: String(force),
         session_cookie: mdsCookie,
+        sales_date: cleanSalesDate,
       },
     }),
   });

@@ -117,6 +117,11 @@ type SalesData = {
     end: string;
     isCustom: boolean;
   };
+  missedYesterday?: {
+    hasMissed: boolean;
+    yesterdayDate: string;
+    todayDate: string;
+  };
   summary: {
     spd_omzet?: number;
     spd_qty?: number;
@@ -416,6 +421,7 @@ export default function LaporanPenjualanPage() {
   };
 
   // Live Loader & Auto-Refresh Tracker untuk Tarik Sales SUKO (0 nebak-nebak, otomatis refresh begitu selesai!)
+  const [missedSyncModalOpen, setMissedSyncModalOpen] = useState(false);
   const [salesSyncProgress, setSalesSyncProgress] = useState<{
     visible: boolean;
     phase: "dispatching" | "queued" | "running" | "success" | "failed";
@@ -425,6 +431,7 @@ export default function LaporanPenjualanPage() {
     runNumber?: number;
     actionsUrl?: string;
     errorDetail?: string;
+    bookingDate?: string;
     recentLogs: string[];
   } | null>(null);
 
@@ -597,9 +604,12 @@ export default function LaporanPenjualanPage() {
     };
   }, [salesSyncProgress?.visible, salesSyncProgress?.phase, selectedDate, timeframe, appliedCutoff]);
 
-  const handleTriggerSukoSalesSync = async () => {
+  const executeTriggerSukoSalesSync = async (explicitSalesDate?: string) => {
     if (isSyncBusy) return;
+    setMissedSyncModalOpen(false);
     setTriggeringSync(true);
+
+    const bookingDateStr = explicitSalesDate || data?.missedYesterday?.todayDate || "";
 
     // Catat runId terakhir agar loader tidak salah membaca run sebelumnya
     let prevId = syncPollMetaRef.current.lastKnownRunId;
@@ -620,8 +630,11 @@ export default function LaporanPenjualanPage() {
       visible: true,
       phase: "dispatching",
       percent: 8,
-      currentStep: "Mengirim perintah ke mesin Python Tarik Sales SUKO...",
+      currentStep: explicitSalesDate
+        ? `Mengirim perintah Tarik Sales SUKO (Masuk Buku Tanggal ${formatDate(explicitSalesDate)})...`
+        : "Mengirim perintah ke mesin Python Tarik Sales SUKO...",
       elapsedSec: 1,
+      bookingDate: bookingDateStr,
       recentLogs: [],
     });
 
@@ -629,7 +642,11 @@ export default function LaporanPenjualanPage() {
       const res = await fetch("/api/admin/trigger/github-dispatch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "suko-sales", force: true }),
+        body: JSON.stringify({
+          action: "suko-sales",
+          force: true,
+          salesDate: explicitSalesDate || "",
+        }),
       });
       const json = await res.json().catch(() => ({}));
       if (res.ok && json.success) {
@@ -637,9 +654,12 @@ export default function LaporanPenjualanPage() {
           visible: true,
           phase: "queued",
           percent: 15,
-          currentStep: "Mesin aktif di Cloud! Menunggu proses berjalan (laporan otomatis refresh saat selesai)...",
+          currentStep: explicitSalesDate
+            ? `Mesin aktif di Cloud! Sales akan dibukukan ke ${formatDate(explicitSalesDate)} (laporan otomatis refresh saat selesai)...`
+            : "Mesin aktif di Cloud! Menunggu proses berjalan (laporan otomatis refresh saat selesai)...",
           elapsedSec: cur?.elapsedSec || 2,
           actionsUrl: json.actionsUrl,
+          bookingDate: cur?.bookingDate || bookingDateStr,
           recentLogs: [],
         }));
       } else {
@@ -651,6 +671,7 @@ export default function LaporanPenjualanPage() {
           currentStep: "Gagal menyalakan mesin Tarik Sales SUKO.",
           elapsedSec: 1,
           errorDetail: errMsg,
+          bookingDate: bookingDateStr,
           recentLogs: [],
         });
         showToast(errMsg, "error");
@@ -664,12 +685,23 @@ export default function LaporanPenjualanPage() {
         currentStep: errMsg,
         elapsedSec: 1,
         errorDetail: errMsg,
+        bookingDate: bookingDateStr,
         recentLogs: [],
       });
       showToast(errMsg, "error");
     } finally {
       setTriggeringSync(false);
     }
+  };
+
+  const handleTriggerSukoSalesSync = async () => {
+    if (isSyncBusy) return;
+    // Case khusus: jika kemarin belum tarik sales, tampilkan alert dulu sebelum tarik agar user tahu sales pertama masuk ke tanggal kemarin
+    if (data?.missedYesterday?.hasMissed) {
+      setMissedSyncModalOpen(true);
+      return;
+    }
+    await executeTriggerSukoSalesSync();
   };
 
   const formatCurrency = (amount: number = 0) =>
@@ -1306,6 +1338,109 @@ export default function LaporanPenjualanPage() {
           </div>
         </div>
 
+        {/* ================= ALERT KHUSUS: KEMARIN BELUM TARIK SALES ================= */}
+        {data?.missedYesterday?.hasMissed && !isSyncBusy && (
+          <div
+            className={`rounded-2xl sm:rounded-3xl p-4 border shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+              darkMode
+                ? "bg-amber-950/40 border-amber-700/70 text-amber-100"
+                : "bg-amber-50 border-amber-300 text-amber-950"
+            }`}
+          >
+            <div className="flex items-start gap-3 min-w-0 flex-1">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-600 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div className="text-xs sm:text-sm whitespace-normal break-words space-y-0.5">
+                <p className="font-black">
+                  Kemarin ({formatDate(data.missedYesterday.yesterdayDate)}) Belum Tarik Sales!
+                </p>
+                <p className="opacity-90 leading-relaxed">
+                  Tarikan sales pertama sekarang akan masuk ke tanggal{" "}
+                  <strong>{formatDate(data.missedYesterday.yesterdayDate)}</strong> (karena kemarin belum tarik sales).
+                  Setelah selesai, tarikan sales berikutnya otomatis masuk ke hari ini (
+                  <strong>{formatDate(data.missedYesterday.todayDate)}</strong>).
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMissedSyncModalOpen(true)}
+              className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs cursor-pointer shrink-0 flex items-center justify-center gap-1.5 shadow-xs"
+            >
+              <Zap className="w-4 h-4 shrink-0" />
+              <span>Tarik Susulan ({formatCutoffDate(data.missedYesterday.yesterdayDate)})</span>
+            </button>
+          </div>
+        )}
+
+        {/* ================= MODAL KONFIRMASI TARIK SALES SUSULAN KEMARIN ================= */}
+        {missedSyncModalOpen && data?.missedYesterday && (
+          <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className={`${cardCls} rounded-3xl p-5 sm:p-6 max-w-md w-full space-y-4 shadow-2xl`}>
+              <div className="flex items-start gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-amber-500/15 text-amber-600 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-6 h-6" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className={`font-black text-base ${textPrimary} whitespace-normal break-words`}>
+                    Kemarin Belum Tarik Sales
+                  </h3>
+                  <p className={`text-xs ${textMuted} mt-1 leading-relaxed whitespace-normal break-words`}>
+                    Tanggal <strong className={textPrimary}>{formatDate(data.missedYesterday.yesterdayDate)}</strong>{" "}
+                    belum memiliki tarikan sales.
+                  </p>
+                </div>
+              </div>
+
+              <div
+                className={`rounded-2xl p-3.5 text-xs leading-relaxed whitespace-normal break-words ${
+                  darkMode ? "bg-amber-950/40 text-amber-100 border border-amber-800/60" : "bg-amber-50 text-amber-950 border border-amber-200"
+                }`}
+              >
+                <p className="font-bold">Alur Pembukuan Otomatis:</p>
+                <ul className="list-disc pl-4 mt-1 space-y-1">
+                  <li>
+                    <strong>Tarikan ke-1 (Sekarang):</strong> Masuk ke tanggal{" "}
+                    <strong>{formatDate(data.missedYesterday.yesterdayDate)}</strong> (menutup sales kemarin).
+                  </li>
+                  <li>
+                    <strong>Tarikan ke-2 (Setelah selesai):</strong> Otomatis masuk ke hari ini{" "}
+                    <strong>{formatDate(data.missedYesterday.todayDate)}</strong> yang sebenarnya.
+                  </li>
+                </ul>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={() => executeTriggerSukoSalesSync(data.missedYesterday!.yesterdayDate)}
+                  className="w-full py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs sm:text-sm cursor-pointer flex items-center justify-center gap-2 shadow-sm"
+                >
+                  <Zap className="w-4 h-4 shrink-0" />
+                  <span>Ya, Tarik &amp; Masuk Tanggal {formatCutoffDate(data.missedYesterday.yesterdayDate)}</span>
+                </button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => executeTriggerSukoSalesSync(data.missedYesterday!.todayDate)}
+                    className={`py-2.5 px-3 rounded-xl ${softCls} ${textPrimary} font-bold text-xs hover:opacity-85 cursor-pointer`}
+                  >
+                    Masuk Hari Ini Saja
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMissedSyncModalOpen(false)}
+                    className={`py-2.5 px-3 rounded-xl ${softCls} ${textMuted} font-bold text-xs hover:opacity-85 cursor-pointer`}
+                  >
+                    Batal
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ================= LIVE PROGRESS LOADER TARIK SALES SUKO ================= */}
         {salesSyncProgress?.visible && (
           <div
@@ -1356,6 +1491,11 @@ export default function LaporanPenjualanPage() {
                         ? "Menyalakan Mesin Tarik Sales SUKO..."
                         : "Sedang Menarik Data Sales & Stok SUKO..."}
                     </span>
+                    {salesSyncProgress.bookingDate && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 tabular-nums">
+                        Buku: {formatCutoffDate(salesSyncProgress.bookingDate)}
+                      </span>
+                    )}
                     {salesSyncProgress.runNumber && (
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-black/10 tabular-nums">
                         Run #{salesSyncProgress.runNumber}

@@ -1201,10 +1201,14 @@ def _resolve_effective_price(row: Optional[Dict[str, Any]], today_wib: str) -> T
     return (h_norm, False)
 
 
-def record_mds_delta_sales(sales_deltas: Dict[str, Dict[str, Any]]) -> Tuple[int, int, float]:
+def record_mds_delta_sales(
+    sales_deltas: Dict[str, Dict[str, Any]],
+    target_sales_date: Optional[str] = None,
+) -> Tuple[int, int, float]:
     """
     Catat HANYA SKU yang stoknya berkurang (terjual) ke DailySales & ringkasan Product
     melalui 1 batch SQL ringan (< 50 KB tulis ke Supabase, 0 beban RAM Supabase).
+    Mendukung `target_sales_date` (YYYY-MM-DD) untuk pembukuan susulan jika kemarin lupa tarik sales.
     """
     if not sales_deltas:
         return (0, 0, 0.0)
@@ -1212,9 +1216,15 @@ def record_mds_delta_sales(sales_deltas: Dict[str, Dict[str, Any]]) -> Tuple[int
         from build_offline_snapshot import _connect_postgres
         wib_now = datetime.now(timezone(timedelta(hours=7)))
         today_str = wib_now.strftime("%Y-%m-%d")
-        week_start_str = (wib_now - timedelta(days=wib_now.weekday())).strftime("%Y-%m-%d")
-        month_start_str = wib_now.strftime("%Y-%m-01")
-        year_start_str = wib_now.strftime("%Y-01-01")
+        booking_str = (
+            target_sales_date.strip()
+            if target_sales_date and re.match(r"^\d{4}-\d{2}-\d{2}$", target_sales_date.strip())
+            else today_str
+        )
+        ref_dt = datetime.strptime(booking_str, "%Y-%m-%d")
+        week_start_str = (ref_dt - timedelta(days=ref_dt.weekday())).strftime("%Y-%m-%d")
+        month_start_str = ref_dt.strftime("%Y-%m-01")
+        year_start_str = ref_dt.strftime("%Y-01-01")
 
         conn = _connect_postgres()
         cur = conn.cursor()
@@ -1235,7 +1245,7 @@ def record_mds_delta_sales(sales_deltas: Dict[str, Dict[str, Any]]) -> Tuple[int
             omzet = float(info.get("omzet") or 0.0)
             if qty <= 0:
                 continue
-            ds_id = f"mds_{today_str}_{pid}"
+            ds_id = f"mds_{booking_str}_{pid}"
             cur.execute(
                 '''
                 INSERT INTO "DailySales" (id, "productId", date, "qtySold", omzet, "createdAt")
@@ -1245,7 +1255,7 @@ def record_mds_delta_sales(sales_deltas: Dict[str, Dict[str, Any]]) -> Tuple[int
                     "qtySold" = "DailySales"."qtySold" + EXCLUDED."qtySold",
                     omzet = "DailySales".omzet + EXCLUDED.omzet
                 ''',
-                (ds_id, pid, today_str, qty, omzet),
+                (ds_id, pid, booking_str, qty, omzet),
             )
             touched_ids.append(pid)
             total_skus += 1
@@ -1308,7 +1318,11 @@ def record_mds_delta_sales(sales_deltas: Dict[str, Dict[str, Any]]) -> Tuple[int
         return (0, 0, 0.0)
 
 
-def execute_live_stock_sync(max_minutes: int = 45, suko_sales_only: bool = False):
+def execute_live_stock_sync(
+    max_minutes: int = 45,
+    suko_sales_only: bool = False,
+    sales_date: Optional[str] = None,
+):
     """
     Memperbarui stok fisik terkini (`stok`) dan harga normal (`hargaNormal`)
     sekaligus menghitung penjualan otomatis (Delta Stok Turun SUKO) di RAM Python
@@ -1316,11 +1330,16 @@ def execute_live_stock_sync(max_minutes: int = 45, suko_sales_only: bool = False
     """
     start_time = datetime.now()
     today_wib = datetime.now(timezone(timedelta(hours=7))).strftime("%Y-%m-%d")
+    booking_date = (
+        sales_date.strip()
+        if sales_date and re.match(r"^\d{4}-\d{2}-\d{2}$", sales_date.strip())
+        else today_wib
+    )
     print("=" * 80)
     if suko_sales_only:
-        print("💰 [SUKO SALES & STOCK ENGINE] TARIK SALES OTOMATIS KHUSUS PRODUK SUKO (STOK > 0)")
+        print(f"💰 [SUKO SALES & STOCK ENGINE] TARIK SALES OTOMATIS KHUSUS PRODUK SUKO (BUKU: {booking_date})")
     else:
-        print("⚡ [LIVE STOCK + SALES ENGINE] UPDATE STOK TERKINI & REKAP SALES SUKO")
+        print(f"⚡ [LIVE STOCK + SALES ENGINE] UPDATE STOK TERKINI & REKAP SALES SUKO (BUKU: {booking_date})")
     print("=" * 80)
 
     cookie = get_active_cookie()
@@ -1530,12 +1549,12 @@ def execute_live_stock_sync(max_minutes: int = 45, suko_sales_only: bool = False
     if buffer_by_sku:
         flush_buffer(buffer_by_sku, write_md_report=False)
 
-    sold_skus, sold_qty, sold_omzet = record_mds_delta_sales(sales_deltas)
+    sold_skus, sold_qty, sold_omzet = record_mds_delta_sales(sales_deltas, target_sales_date=booking_date)
 
     save_mapped_paths_registry(catalog_by_sku)
     log_sync_history(
         "MDS_SALES_SYNC" if (suko_sales_only or sold_qty > 0) else "STOCK_SYNC",
-        f"Rekap Stok & Sales MDS BISA ({checked_count:,} SKU dicek | {sold_skus:,} SKU terjual, {sold_qty:,} pcs, Rp {sold_omzet:,.0f})",
+        f"Rekap Stok & Sales luqman org — Buku {booking_date} ({checked_count:,} SKU dicek | {sold_skus:,} SKU terjual, {sold_qty:,} pcs, Rp {sold_omzet:,.0f})",
         sold_skus if sold_skus > 0 else checked_count,
         "SUCCESS",
     )
@@ -1899,7 +1918,8 @@ if __name__ == "__main__":
     custom_range_arg: Optional[Tuple[int, int]] = None
     workers_arg = 28
     max_min_arg: Optional[int] = None
-    for a in argv:
+    sales_date_arg: Optional[str] = None
+    for idx_a, a in enumerate(argv):
         if a.startswith("--range="):
             parts = a.split("=", 1)[1].split("-")
             if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
@@ -1912,15 +1932,23 @@ if __name__ == "__main__":
             m_val = a.split("=", 1)[1]
             if m_val.isdigit():
                 max_min_arg = max(1, int(m_val))
+        elif a.startswith("--sales-date="):
+            sd_val = a.split("=", 1)[1].strip()
+            if re.match(r"^\d{4}-\d{2}-\d{2}$", sd_val):
+                sales_date_arg = sd_val
+        elif a == "--sales-date" and idx_a + 1 < len(argv):
+            sd_val = argv[idx_a + 1].strip()
+            if re.match(r"^\d{4}-\d{2}-\d{2}$", sd_val):
+                sales_date_arg = sd_val
 
     if "--export-paths" in args:
         print("🗺️ Mengekspor seluruh jalur mapping 84.763+ SKU dari Supabase ke mapped_sku_paths.json.gz...")
         cat, _, _ = load_existing_catalog_full()
         save_mapped_paths_registry(cat)
     elif "--suko-sales-only" in args:
-        execute_live_stock_sync(max_minutes=max_min_arg or 20, suko_sales_only=True)
+        execute_live_stock_sync(max_minutes=max_min_arg or 20, suko_sales_only=True, sales_date=sales_date_arg)
     elif "--stock-only" in args:
-        execute_live_stock_sync(max_minutes=max_min_arg or 45, suko_sales_only=False)
+        execute_live_stock_sync(max_minutes=max_min_arg or 45, suko_sales_only=False, sales_date=sales_date_arg)
     elif "--census-sku" in args or "--brutal" in args or "--run-once" in args or "--force" in args or "--upc-first" in args or custom_range_arg or is_gh_actions:
         execute_morning_sweep(
             run_once_cloud=True,

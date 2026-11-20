@@ -8,6 +8,7 @@ import {
   LogOut, Lock, ShieldAlert
 } from "lucide-react";
 import { AlertModal } from "@/components/AlertModal";
+import { OFFICIAL_STORES } from "@/lib/storeGeofence";
 
 function formatRelativeTime(dateString: string | null | undefined): { text: string; isRecent: boolean; fullDate: string } {
   if (!dateString) return { text: "Belum pernah", isRecent: false, fullDate: "-" };
@@ -73,7 +74,7 @@ export default function UsersManagement() {
   const [nik, setNik] = useState("");
   const [name, setName] = useState("");
   const [pin, setPin] = useState("123456");
-  const [toko, setToko] = useState("");
+  const [toko, setToko] = useState<string>(OFFICIAL_STORES[0]);
   const [role, setRole] = useState("CREW_STORE");
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
@@ -136,7 +137,7 @@ export default function UsersManagement() {
         showAlert("Berhasil", `Karyawan ${name} berhasil ditambahkan!`, "success");
         setNik("");
         setName("");
-        setToko("");
+        setToko(OFFICIAL_STORES[0]);
         setShowAddForm(false);
         mutate();
       } else {
@@ -458,8 +459,19 @@ export default function UsersManagement() {
             <div>
               <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Penempatan Toko</label>
               <div className="relative">
-                <Store className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input type="text" required value={toko} onChange={e => setToko(e.target.value)} className="w-full pl-9 p-2.5 rounded-lg border focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Contoh: TOKO MANGGA DUA" />
+                <Store className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                <select
+                  required
+                  value={toko}
+                  onChange={e => setToko(e.target.value)}
+                  className="w-full pl-9 p-2.5 rounded-lg border focus:ring-2 focus:ring-blue-500 outline-none bg-white font-semibold text-slate-800 cursor-pointer"
+                >
+                  {OFFICIAL_STORES.map((storeName) => (
+                    <option key={storeName} value={storeName}>
+                      {storeName}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
             <div>
@@ -500,8 +512,22 @@ export default function UsersManagement() {
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Penempatan Toko</label>
                 <div className="relative">
-                  <Store className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <input type="text" required value={editingUser.toko || ""} onChange={e => setEditingUser({...editingUser, toko: e.target.value})} className="w-full pl-9 p-2.5 rounded-lg border focus:ring-2 focus:ring-indigo-500 outline-none" />
+                  <Store className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                  <select
+                    required
+                    value={editingUser.toko || OFFICIAL_STORES[0]}
+                    onChange={e => setEditingUser({...editingUser, toko: e.target.value})}
+                    className="w-full pl-9 p-2.5 rounded-lg border focus:ring-2 focus:ring-indigo-500 outline-none bg-white font-semibold text-slate-800 cursor-pointer"
+                  >
+                    {editingUser.toko && !OFFICIAL_STORES.includes(editingUser.toko) && (
+                      <option value={editingUser.toko}>{editingUser.toko} (Lama)</option>
+                    )}
+                    {OFFICIAL_STORES.map((storeName) => (
+                      <option key={storeName} value={storeName}>
+                        {storeName}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
               <div>
