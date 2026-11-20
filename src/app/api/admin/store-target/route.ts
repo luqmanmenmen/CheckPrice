@@ -66,7 +66,7 @@ async function readStoreTargetFromStorage(): Promise<StoreTargetConfig> {
       if (res.ok) {
         const json = await res.json();
         const val = Number(json?.targetMtd || 0);
-        if (val >= 10_000_000) {
+        if (val >= 1_000_000) {
           const cfg: StoreTargetConfig = {
             targetMtd: val,
             updatedBy: String(json.updatedBy || "SPV / Developer"),
@@ -125,9 +125,9 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json().catch(() => ({}));
     const rawTarget = Number(body.targetMtd);
-    if (!Number.isFinite(rawTarget) || rawTarget < 10_000_000 || rawTarget > 500_000_000_000) {
+    if (!Number.isFinite(rawTarget) || rawTarget < 1_000_000 || rawTarget > 500_000_000_000) {
       return NextResponse.json(
-        { success: false, error: "Target toko harus di antara Rp 10 juta hingga Rp 500 Miliar." },
+        { success: false, error: "Target toko harus di antara Rp 1.000.000 hingga Rp 500.000.000.000." },
         { status: 400 }
       );
     }

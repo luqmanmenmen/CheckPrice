@@ -220,7 +220,18 @@ export default function LaporanPenjualanPage() {
   const [canEditTarget, setCanEditTarget] = useState<boolean>(false);
   const [savingTarget, setSavingTarget] = useState<boolean>(false);
   const [editingTarget, setEditingTarget] = useState(false);
-  const [targetInputM, setTargetInputM] = useState("2000");
+  const [targetInputRp, setTargetInputRp] = useState("2.000.000.000");
+
+  const formatRupiahDigits = (raw: string | number) => {
+    const digits = String(raw ?? "").replace(/\D/g, "");
+    if (!digits) return "";
+    return Number(digits).toLocaleString("id-ID");
+  };
+
+  const parseRupiahDigits = (raw: string) => {
+    const digits = String(raw ?? "").replace(/\D/g, "");
+    return digits ? Number(digits) : 0;
+  };
 
   const [showPinModal, setShowPinModal] = useState(false);
   const [exportType, setExportType] = useState<"PDF" | "CSV">("PDF");
@@ -251,9 +262,9 @@ export default function LaporanPenjualanPage() {
     fetch("/api/admin/store-target", { cache: "no-store" })
       .then((r) => r.json())
       .then((j) => {
-        if (j?.success && typeof j.targetMtd === "number" && j.targetMtd >= 10_000_000) {
+        if (j?.success && typeof j.targetMtd === "number" && j.targetMtd >= 1_000_000) {
           setTargetMtd(j.targetMtd);
-          setTargetInputM(String(Math.round(j.targetMtd / 1_000_000)));
+          setTargetInputRp(formatRupiahDigits(j.targetMtd));
           setTargetUpdatedBy(j.updatedBy || "");
           setCanEditTarget(Boolean(j.canEdit));
         }
@@ -269,12 +280,11 @@ export default function LaporanPenjualanPage() {
   };
 
   const handleSaveTarget = async () => {
-    const juta = Number(String(targetInputM).replace(/[^0-9.]/g, ""));
-    if (isNaN(juta) || juta < 10) {
-      showToast("Target minimal Rp 10 juta.", "error");
+    const val = parseRupiahDigits(targetInputRp);
+    if (!Number.isFinite(val) || val < 1_000_000) {
+      showToast("Target minimal Rp 1.000.000 (masukkan nominal Rupiah penuh).", "error");
       return;
     }
-    const val = Math.round(juta * 1_000_000);
     setSavingTarget(true);
     try {
       const res = await fetch("/api/admin/store-target", {
@@ -285,6 +295,7 @@ export default function LaporanPenjualanPage() {
       const json = await res.json().catch(() => ({}));
       if (res.ok && json.success) {
         setTargetMtd(json.targetMtd);
+        setTargetInputRp(formatRupiahDigits(json.targetMtd));
         setTargetUpdatedBy(json.updatedBy || "");
         setEditingTarget(false);
         showToast(
@@ -1026,43 +1037,54 @@ export default function LaporanPenjualanPage() {
                   </div>
                 </div>
 
-                {/* Target MTD Global (khusus SPV / Developer yang bisa edit — tersinkron ke seluruh perangkat) */}
+                {/* Target MTD Global (khusus SPV / Developer yang bisa edit — nominal Rupiah penuh) */}
                 <div className="bg-white/10 rounded-2xl p-3 border border-white/15 space-y-2">
                   {editingTarget ? (
                     <div className="flex flex-col gap-2">
-                      <span className="text-[11px] font-bold text-slate-200">
-                        Ubah Target Toko Global (dalam Juta Rp, mis. 2000 = Rp 2 M):
+                      <span className="text-[11px] font-bold text-slate-200 whitespace-normal break-words">
+                        Ubah Target Toko Global (Rupiah Penuh):
                       </span>
                       <div className="flex items-center gap-2">
-                        <input
-                          type="number"
-                          min={10}
-                          value={targetInputM}
-                          onChange={(e) => setTargetInputM(e.target.value)}
-                          className="flex-1 min-w-0 px-3 py-1.5 rounded-xl bg-slate-900 text-white border border-emerald-400 text-xs font-bold outline-none"
-                        />
+                        <div className="flex-1 min-w-0 flex items-center rounded-xl bg-slate-900 border border-emerald-400 px-2.5 py-1.5 gap-1.5">
+                          <span className="text-xs font-extrabold text-emerald-400 shrink-0">Rp</span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            placeholder="2.000.000.000"
+                            value={targetInputRp}
+                            onChange={(e) => setTargetInputRp(formatRupiahDigits(e.target.value))}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") handleSaveTarget();
+                            }}
+                            className="w-full min-w-0 bg-transparent text-white text-xs sm:text-sm font-bold outline-none tabular-nums"
+                          />
+                        </div>
                         <button
                           type="button"
                           onClick={handleSaveTarget}
                           disabled={savingTarget}
-                          className="px-3 py-1.5 rounded-xl bg-emerald-500 disabled:opacity-60 text-slate-950 font-extrabold text-xs hover:bg-emerald-400 cursor-pointer shrink-0 flex items-center gap-1"
+                          className="px-3 py-2 rounded-xl bg-emerald-500 disabled:opacity-60 text-slate-950 font-extrabold text-xs hover:bg-emerald-400 cursor-pointer shrink-0 flex items-center gap-1"
                         >
-                          <Check className="w-3.5 h-3.5" /> {savingTarget ? "Menyimpan..." : "Simpan"}
+                          <Check className="w-3.5 h-3.5" /> {savingTarget ? "Simpan..." : "Simpan"}
                         </button>
                         <button
                           type="button"
                           onClick={() => setEditingTarget(false)}
-                          className="p-1.5 rounded-xl bg-white/15 text-white hover:bg-white/25 cursor-pointer shrink-0"
+                          className="p-2 rounded-xl bg-white/15 text-white hover:bg-white/25 cursor-pointer shrink-0"
                         >
                           <X className="w-3.5 h-3.5" />
                         </button>
+                      </div>
+                      <div className="text-[10px] text-emerald-200/90 tabular-nums whitespace-normal break-words">
+                        Nominal: <strong>{formatCurrency(parseRupiahDigits(targetInputRp))}</strong>{" "}
+                        ({formatCompactCurrency(parseRupiahDigits(targetInputRp))})
                       </div>
                     </div>
                   ) : (
                     <div className="flex items-center justify-between gap-2 text-xs">
                       <div className="min-w-0">
                         <span className="text-slate-200 whitespace-normal break-words">
-                          Target Toko (MTD): <strong className="text-white">{formatCompactCurrency(targetMtd)}</strong>
+                          Target Toko (MTD): <strong className="text-white tabular-nums">{formatCurrency(targetMtd)}</strong>
                         </span>
                         {targetUpdatedBy && (
                           <div className="text-[10px] text-slate-300/80 whitespace-normal break-words">
@@ -1076,7 +1098,7 @@ export default function LaporanPenjualanPage() {
                           <button
                             type="button"
                             onClick={() => {
-                              setTargetInputM(String(Math.round(targetMtd / 1_000_000)));
+                              setTargetInputRp(formatRupiahDigits(targetMtd));
                               setEditingTarget(true);
                             }}
                             className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white/15 hover:bg-white/25 text-white text-[11px] font-bold cursor-pointer"
