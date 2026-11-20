@@ -353,16 +353,12 @@ export async function GET(
     if (categoryWhere) extraAndFilters.push(categoryWhere);
 
     const buildTermOrClause = (term: string) => {
+      // Hanya query kolom ber-index GIN (description, article) + prefix B-tree (sku, barcode)
+      // agar DIJAMIN 0 Sequential Scan 260MB pada tabel Product (hemat Disk IO Budget Supabase)
       const clauses: any[] = [
         { description: { contains: term, mode: 'insensitive' as const } },
         { article: { contains: term, mode: 'insensitive' as const } },
-        { brand: { contains: term, mode: 'insensitive' as const } },
-        { dept: { contains: term, mode: 'insensitive' as const } },
-        { color: { contains: term, mode: 'insensitive' as const } }
       ];
-      if (SIZE_TOKEN_RE.test(term)) {
-        clauses.push({ size: { contains: term, mode: 'insensitive' as const } });
-      }
       if (/\d/.test(term)) {
         clauses.push(
           buildBtreePrefixWhere('sku', term),
@@ -419,9 +415,6 @@ export async function GET(
           OR: meaningfulTerms.flatMap(term => [
             { description: { contains: term, mode: 'insensitive' as const } },
             { article: { contains: term, mode: 'insensitive' as const } },
-            { brand: { contains: term, mode: 'insensitive' as const } },
-            { dept: { contains: term, mode: 'insensitive' as const } },
-            { color: { contains: term, mode: 'insensitive' as const } }
           ])
         };
         if (extraAndFilters.length > 0) relaxedWhere.AND = extraAndFilters;
@@ -453,9 +446,6 @@ export async function GET(
           OR: aiExpandedTerms.flatMap(term => [
             { description: { contains: term, mode: 'insensitive' as const } },
             { article: { contains: term, mode: 'insensitive' as const } },
-            { brand: { contains: term, mode: 'insensitive' as const } },
-            { dept: { contains: term, mode: 'insensitive' as const } },
-            { color: { contains: term, mode: 'insensitive' as const } }
           ])
         };
         if (extraAndFilters.length > 0) aiWhere.AND = extraAndFilters;

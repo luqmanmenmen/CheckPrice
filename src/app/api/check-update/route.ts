@@ -27,21 +27,26 @@ interface CheckUpdatePayload {
 
 let cachedPayload: CheckUpdatePayload | null = null;
 let cachedAtMs = 0;
-const CHECK_CACHE_TTL_MS = 15000;
+let lastKnownManifest: any = null;
+const CHECK_CACHE_TTL_MS = 60_000;
 
 async function fetchStorageManifest() {
   const supaUrl = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim().replace(/\/+$/, "");
-  if (!supaUrl) return null;
+  if (!supaUrl) return lastKnownManifest;
   try {
     const res = await fetch(
-      `${supaUrl}/storage/v1/object/public/excel-uploads/offline-db/manifest.json?t=${Date.now()}`,
-      { cache: "no-store", signal: AbortSignal.timeout(2500) }
+      `${supaUrl}/storage/v1/object/public/excel-uploads/offline-db/manifest.json`,
+      { cache: "no-store", signal: AbortSignal.timeout(4500) }
     );
-    if (!res.ok) return null;
+    if (!res.ok) return lastKnownManifest;
     const json = await res.json();
-    return json && typeof json === "object" ? json : null;
+    if (json && typeof json === "object") {
+      lastKnownManifest = json;
+      return json;
+    }
+    return lastKnownManifest;
   } catch {
-    return null;
+    return lastKnownManifest;
   }
 }
 
@@ -53,7 +58,7 @@ export async function GET() {
         { ...cachedPayload, cached: true },
         {
           headers: {
-            "Cache-Control": "public, max-age=10, s-maxage=15, stale-while-revalidate=30",
+            "Cache-Control": "public, max-age=30, s-maxage=60, stale-while-revalidate=120",
           },
         }
       );
@@ -98,7 +103,7 @@ export async function GET() {
 
     return NextResponse.json(payload, {
       headers: {
-        "Cache-Control": "public, max-age=10, s-maxage=15, stale-while-revalidate=30",
+        "Cache-Control": "public, max-age=30, s-maxage=60, stale-while-revalidate=120",
       },
     });
   } catch {

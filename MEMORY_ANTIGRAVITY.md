@@ -1725,3 +1725,38 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   - `npx tsc --noEmit`: Lulus `0` error (`TSC_OK`).
   - `npm run build`: `47/47` rute terkompilasi sempurna (`BUILD_OK`).
   - Zero-truncate audit: `0` pelanggaran kelas pemotong teks (`whitespace-normal break-words`).
+
+---
+
+### 101. Pembenahan Total Supabase Disk IO Over-Budget, Jalur Tol Khusus Live Stock (~1 Detik), & Auto-Save 3 Tabel DB untuk Scrap Barcode + Gambar (21 November 2026)
+
+- **Laporan Pengguna:**
+  1. Dashboard Supabase menunjukkan status **Unhealthy** (PostgREST, Auth, Realtime, Storage Unhealthy) akibat **Disk IO Budget terlampaui** pada paket Free Tier Nano.
+  2. Tombol **Live Stock** sangat lambat karena terus "mencari jalur / ngeping jalur" dan mem-probe puluhan SKU satu per satu.
+  3. Memastikan tombol **Scrap Barcode & Gambar** untuk produk yang tidak ditemukan langsung menyimpan data lengkap (produk, barcode/alias, galeri gambar, dan entri katalog) ke database secara permanen begitu muncul.
+
+- **Temuan Forensik Nyata (`pg_stat_statements`, `pg_stat_user_tables`, `pg_stat_user_indexes`):**
+  1. **Spam `17.288` kali UPSERT ke `storage.objects` (`22 MB WAL`, `277.551` index scans):** `persistRefreshedSessionIfAny()` di `mdsBisaClient.ts` mengunggah ulang `secrets/mds_cookie.txt` ke Supabase Storage pada setiap respons StoreHub yang membawa header `Set-Cookie`.
+  2. **Tsunami Fallback `/api/export-products` (`815` call = `4.863.756` baris = `701.962` blok Disk IO):** Saat Storage lambat dan `manifest.json` di `/api/check-update` timeout `2.5s`, HP kasir langsung jatuh ke mode cadangan 52 chunk full-scan PostgreSQL.
+  3. **Ukuran DB `475 MB` (nyaris menyentuh batas `500 MB` Free Tier) & 12 Index Berat pada `Product` (`139 MB`):** 4 index mubazir (`Product_stok_idx` duplikat 3.6 MB, `Product_color_trgm_idx` 12 MB / 8 scan, `Product_dept_trgm_idx` 15 MB / 15 scan, `Product_brand_trgm_idx` 10 MB / 14 scan) memicu *cache thrashing* RAM 128 MB dan memperberat beban WAL/Disk IO di setiap `UPDATE`/`INSERT`. Sementara `SyncHistory` terkena `1.730` seq_scan tanpa index.
+  4. **Bottleneck Live Stock (`20–45 detik`):** `getStoreHubCookie()` sebelumnya menunggu download Storage + loop sequential 12 JS chunk, `checkLiveStockFast()` belum memanfaatkan `itemData.relatedStock` (menembak hingga 78 SKU berantai selama 20 detik), dan `prisma.ts` membatasi `connection_limit=1`.
+  5. **Celah Penyimpanan Scrap Produk Baru:** `upsertStoreHubItemToDb` hanya menyimpan 1 `imageUrl` (belum mengisi array galeri `images[]`), belum menjamin input kode asli user masuk `BarcodeAlias`, dan `finalizeProductFamilyResponse` belum meng-upsert entri baru ke tabel `CatalogArticle`.
+
+- **Perbaikan yang Diterapkan:**
+  1. **Optimasi Langsung Index & Disk IO PostgreSQL Supabase ([`prisma/schema.prisma`](file:///c:/Max%20Display/price-checker/prisma/schema.prisma)):**
+     - Menghapus 4 index mubazir di produksi (`Product_stok_idx`, `Product_color_trgm_idx`, `Product_dept_trgm_idx`, `Product_brand_trgm_idx`) → **ukuran DB turun langsung dari `475 MB` ke `436 MB` (`-39 MB`)** dan **index `Product` turun dari `139 MB` ke `99 MB` (`-40 MB`)**.
+     - Menambahkan 2 index kecil strategis: `SyncHistory_status_type_createdAt_idx` dan `CatalogArticle_article_idx`.
+     - Menyesuaikan query fallback di [`src/app/api/product/[identifier]/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/product/%5Bidentifier%5D/route.ts) agar hanya menyentuh kolom terindeks GIN (`description`, `article`) + B-tree prefix (`sku`, `barcode`) sehingga 0 Sequential Scan 260 MB.
+     - Memperketat cache [`src/app/api/check-update/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/check-update/route.ts) (`60s` + simpan `lastKnownManifest` agar tidak pernah mengirim `snapshotUrl: null`), [`src/app/api/export-products/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/export-products/route.ts) (`s-maxage=1800`), serta proteksi [`src/lib/offlineDb.ts`](file:///c:/Max%20Display/price-checker/src/lib/offlineDb.ts) (retry CDN snapshot 2x + larang fallback 52 chunk Postgres bila HP sudah punya >= 1.000 SKU).
+     - Menaikkan `connection_limit` pool Supavisor di [`src/lib/prisma.ts`](file:///c:/Max%20Display/price-checker/src/lib/prisma.ts) dari `1` → `5` (`pool_timeout=10`, `connect_timeout=8`).
+  2. **Jalur Tol Khusus Live Stock (`~1–2 detik`, 0 Nyari Jalur) ([`src/lib/mdsBisaClient.ts`](file:///c:/Max%20Display/price-checker/src/lib/mdsBisaClient.ts), [`src/app/api/live-stock/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/live-stock/route.ts), [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx)):**
+     - **Throttle Upload Storage (`STORAGE_COOKIE_UPLOAD_COOLDOWN_MS = 15 menit`):** menghentikan total 17.288 spam write `storage.objects`.
+     - **Direct Login Jalur Tol:** `getStoreHubCookie()` kini cache 18 menit di RAM dan langsung `POST /login` memakai `ACTION_LOGIN` tersimpan (~400ms) tanpa download Storage dan tanpa loop 12 JS chunk dulu (hanya resolve JS **paralel `Promise.all`** bila 404). `resolveDetailActionHash()` juga diubah menjadi paralel.
+     - **`checkLiveStockFast()` v2:** HP kasir mengirim `familyVariants` (`sku, color, size, stok`) + `article`. Server melakukan **1 request langsung ke StoreHub** → langsung menyerap `allItems` + memetakan **`itemData.relatedStock`** ke seluruh warna & ukuran dalam 1 tarikan! Jika `relatedStock` kosong, maksimal 1 gelombang paralel cepat (maks 16 SKU, prioritas warna aktif, timeout 3.5 detik). Penulisan ke PostgreSQL jalan di belakang layar (`after()`) dan **0 write ke DB** jika stok tidak berubah!
+  3. **Auto-Save Permanen 3 Tabel DB untuk Scrap Barcode & Gambar Produk Tidak Ditemukan ([`src/lib/mdsBisaClient.ts`](file:///c:/Max%20Display/price-checker/src/lib/mdsBisaClient.ts), [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx)):**
+     - `upsertStoreHubItemToDb` kini menyimpan penuh **`imageUrl` + array galeri `images[]`** ke tabel `Product`, serta menjamin kode input asli pengguna (`originalInputCode`) selalu tersimpan ke **`BarcodeAlias`** dan `Product.barcode`.
+     - `finalizeProductFamilyResponse` otomatis melakukan backfill `images[]` dan langsung meng-**UPSERT entri katalog baru ke tabel `CatalogArticle`** (plus mengembalikan `savedToDb: true` dan `aliases` lengkap ke IndexedDB HP).
+
+- **Verifikasi Nyata:**
+  - DB Supabase: Ukuran turun dari `475 MB` → `436 MB` (`Product` indexes `139 MB` → `99 MB`), `SyncHistory` & `CatalogArticle` terindeks penuh.
+  - `npx tsc --noEmit`, `npm run build` (`47/47` rute), dan audit zero-truncate lulus 0 error.

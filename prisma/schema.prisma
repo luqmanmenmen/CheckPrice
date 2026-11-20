@@ -51,14 +51,10 @@ model Product {
   createdAt     DateTime @default(now())
 
   @@index([article])
-  @@index([stok(sort: Desc)])
   @@index([stok(sort: Desc), sku(sort: Asc)])
   @@index([updatedAt(sort: Desc)])
   @@index([description(ops: raw("gin_trgm_ops"))], type: Gin, map: "Product_description_trgm_idx")
   @@index([article(ops: raw("gin_trgm_ops"))], type: Gin, map: "Product_article_trgm_idx")
-  @@index([brand(ops: raw("gin_trgm_ops"))], type: Gin, map: "Product_brand_trgm_idx")
-  @@index([dept(ops: raw("gin_trgm_ops"))], type: Gin, map: "Product_dept_trgm_idx")
-  @@index([color(ops: raw("gin_trgm_ops"))], type: Gin, map: "Product_color_trgm_idx")
 }
 
 /// Tabel Katalog Pre-Grouped & Ternormalisasi yang dibangun oleh Python Engine (`build_catalog_index.py`)
@@ -92,6 +88,7 @@ model CatalogArticle {
   sortRank          Int      @default(0)
   updatedAt         DateTime @updatedAt
 
+  @@index([article])
   @@index([sortRank])
   @@index([brandGroup, sortRank])
   @@index([brandGroup, categoryKey, sortRank])
@@ -256,4 +253,6 @@ model SyncHistory {
   status    String   // "SUCCESS", "FAILED"
   records   Int
   createdAt DateTime @default(now())
+
+  @@index([status, type, createdAt(sort: Desc)])
 }

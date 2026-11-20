@@ -8,7 +8,7 @@ export const revalidate = 0;
 // In-memory cache per chunk agar hemat query Supabase dan bebas limit payload 4.5MB Vercel
 const chunkCache = new Map<string, { data: any[]; hasMore: boolean; nextCursor: { stok: number; sku: string } | null; lastUpdate: number }>();
 let metaCache: { lastUpdate: number; totalCount: number; fetchedAt: number } | null = null;
-const META_TTL_MS = 300000;
+const META_TTL_MS = 600_000;
 
 function formatProductRow(p: any) {
   const parts = p.description ? p.description.split(":") : [];
@@ -111,7 +111,7 @@ export async function GET(request: NextRequest) {
         },
         {
           headers: {
-            "Cache-Control": "public, max-age=120, s-maxage=600, stale-while-revalidate=1800",
+            "Cache-Control": "public, max-age=300, s-maxage=1800, stale-while-revalidate=3600",
           },
         }
       );

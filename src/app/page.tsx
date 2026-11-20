@@ -377,6 +377,15 @@ export default function Home() {
     const targetSku = product.sku;
     const curSibs = siblings && siblings.length > 0 ? siblings : [product];
     const needsDiscovery = curSibs.length <= 1 || !curSibs.some((s) => Boolean(s.imageUrl));
+    const familySkus = curSibs.map((s) => s.sku).filter(Boolean);
+    const familyVariants = curSibs
+      .filter((s) => Boolean(s.sku))
+      .map((s) => ({
+        sku: s.sku,
+        color: s.color || null,
+        size: s.size || null,
+        stok: typeof s.stok === "number" ? s.stok : 0,
+      }));
     try {
       const res = await fetch("/api/live-stock", {
         method: "POST",
@@ -384,9 +393,14 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sku: targetSku,
+          article: product.article || null,
           discoverFamily: needsDiscovery,
           withImages: needsDiscovery,
           syncAllSizes: true,
+          // Jalur tol khusus Live Stok: 1 request langsung ke StoreHub (+ peta relatedStock), 0 tunggu DB
+          fastMode: !needsDiscovery,
+          familySkus: !needsDiscovery ? familySkus : [],
+          familyVariants: !needsDiscovery ? familyVariants : [],
         }),
       });
       const data = await res.json();
@@ -498,7 +512,9 @@ export default function Home() {
           showToast(data.message || `Toko tutup (malam). Menampilkan stok tersimpan: ${resolvedStok} pcs${imgNote}`, "info");
         } else {
           const liveChecked = data.liveCheckedCount ?? totalUpdatedCount;
-          const changed = data.changedCount ?? 0;
+          const changed =
+            data.changedCount ??
+            curSibs.filter((s) => variantStockMap.has(s.sku) && variantStockMap.get(s.sku) !== (s.stok ?? 0)).length;
           const countText = liveChecked > 1 ? ` (${liveChecked} warna/size)` : '';
           setLiveStockVerified(`Live: ${resolvedStok} pcs${countText}`);
           if (changed > 0) {
@@ -1269,7 +1285,7 @@ export default function Home() {
         }
         const photoCount = resolvedSibs.filter((s) => Boolean(s.imageUrl)).length;
         showToast(
-          `Berhasil scrap ${data.article || data.sku}: ${resolvedSibs.length} varian & ${photoCount} foto tersimpan!`,
+          `✅ Berhasil scrap & simpan ke Database (${data.article || data.sku}): ${resolvedSibs.length} varian, barcode & ${photoCount} foto tersimpan permanen!`,
           "success"
         );
       } else {

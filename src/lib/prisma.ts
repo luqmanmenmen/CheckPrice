@@ -9,11 +9,17 @@ function buildPoolSafeDatabaseUrl(): string {
 
   try {
     const u = new URL(raw);
-    if (!u.searchParams.has("connection_limit")) {
-      u.searchParams.set("connection_limit", "1");
+    // connection_limit=1 membuat semua query paralel live stock (puluhan upsert/alias) mengantre di 1 koneksi
+    // sehingga sangat lambat & memicu timeout P2024. Supavisor (port 6543) aman untuk 5 koneksi per instance.
+    const curLimit = parseInt(u.searchParams.get("connection_limit") || "0", 10);
+    if (!curLimit || curLimit < 5) {
+      u.searchParams.set("connection_limit", "5");
     }
     if (!u.searchParams.has("pool_timeout")) {
-      u.searchParams.set("pool_timeout", "20");
+      u.searchParams.set("pool_timeout", "10");
+    }
+    if (!u.searchParams.has("connect_timeout")) {
+      u.searchParams.set("connect_timeout", "8");
     }
     if ((u.port === "6543" || raw.includes("pooler.supabase.com")) && !u.searchParams.has("pgbouncer")) {
       u.searchParams.set("pgbouncer", "true");

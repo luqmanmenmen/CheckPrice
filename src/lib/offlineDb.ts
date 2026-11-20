@@ -1081,15 +1081,35 @@ export async function syncOfflineDatabase(
         return true;
       }
 
-      // ── TIER 1 (UTAMA): Python Compressed Snapshot via Cloudflare CDN (~5-15 detik!) ──
-      const snapshotOk = await trySyncFromPythonSnapshot(
+      // ── TIER 1 (UTAMA): Python Compressed Snapshot via Cloudflare CDN (~5-15 detik, 0 Disk IO Postgres!) ──
+      let snapshotOk = await trySyncFromPythonSnapshot(
         checkData,
         emit,
         serverVersion,
         Math.max(count, 307000)
       );
+      if (!snapshotOk && checkData?.snapshotUrl) {
+        // Retry 1x CDN sebelum jatuh ke mode cadangan (melindungi Disk IO Postgres Supabase)
+        await new Promise((r) => setTimeout(r, 1500));
+        snapshotOk = await trySyncFromPythonSnapshot(
+          checkData,
+          emit,
+          serverVersion,
+          Math.max(count, 307000)
+        );
+      }
       if (snapshotOk) {
         return true;
+      }
+
+      // PROTEKSI DISK IO SUPABASE: Jika HP sudah punya katalog lokal (>= 1.000 SKU) dan bukan paksa manual,
+      // JANGAN membombardir PostgreSQL dengan 52 chunk /api/export-products! Tunggu CDN pulih di siklus berikutnya.
+      if (!forceSync && count >= 1000) {
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem(SYNC_BACKOFF_STORAGE_KEY, String(Date.now() + 5 * 60_000));
+        }
+        emit(false, 100, count, count, 0, "Menggunakan katalog lokal sementara (CDN sedang sibuk).", "done");
+        return false;
       }
 
       // ── TIER 2 (FALLBACK): Chunked Keyset API /api/export-products ──

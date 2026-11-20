@@ -5,6 +5,8 @@
 
 import { prisma } from './prisma';
 import { checkAndCleanPromo, getProductSiblings } from './productQueryHelpers';
+import { classifyBrandGroup, classifyProductCategory, getNormalizedSubBrand } from './productTaxonomy';
+import { getProductArticleGroupKey } from './smartSearchEngine';
 
 const STOREHUB_BASE = 'https://storehub.mdsretailing.id';
 const LOGIN_URL = `${STOREHUB_BASE}/login?next=%2F`;
@@ -23,10 +25,12 @@ const CREDENTIALS = {
 const INVALID_ARTICLE_CODES = new Set(['', '0', '-', 'N/A', 'NONE', 'NULL', 'PRODUK BARU']);
 const BAD_IMAGE_TOKENS = ['banner', 'logo', 'icon', 'badge', 'chart', 'size', 'panduan', '.svg', '.gif'];
 
-// In-memory cookie cache (session StoreHub bertahan ~20 menit)
+// In-memory cookie cache (session StoreHub bertahan ~20 menit; 0ms lookup tanpa sentuh Storage!)
 let cachedCookie: string | null = null;
 let cookieCachedAt: number = 0;
-const COOKIE_TTL_MS = 10 * 60 * 1000; // 10 menit (pendek agar selalu sinkron dengan Storage)
+const COOKIE_TTL_MS = 18 * 60 * 1000; // 18 menit
+const STORAGE_COOKIE_UPLOAD_COOLDOWN_MS = 15 * 60 * 1000; // Maks 1x upload per 15 menit (cegah 17k write storage.objects!)
+let lastStorageUploadAt: number = 0;
 
 export type LiveStockVariantSummary = {
   sku: string;
@@ -58,6 +62,8 @@ export type CheckSingleItemResult = {
   siblings?: any[];
   aliases?: Array<{ barcode: string; barcodeNorm: string; sku: string }>;
   storeOffline?: boolean;
+  savedToDb?: boolean;
+  fastMode?: boolean;
   message?: string;
 };
 
@@ -505,6 +511,44 @@ function normalizeBrandAndDept(itemData: Record<string, any>): { brand: string; 
   return { brand, dept: rawDept };
 }
 
+/** Batasi waktu tunggu promise (Supabase Storage bisa menggantung saat status Unhealthy) */
+function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise<T>((resolve) => {
+    const t = setTimeout(() => resolve(fallback), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      () => { clearTimeout(t); resolve(fallback); }
+    );
+  });
+}
+
+let lastStorageCookieUploaded = '';
+/**
+ * Simpan cookie ke Supabase Storage secara fire-and-forget & di-throttle maks 1x/15 menit.
+ * Mencegah lonjakan 17.000+ write ke storage.objects yang menghabiskan Disk IO Budget Supabase!
+ */
+function saveCookieToStorageBackground(cookie: string, isFreshLogin: boolean = false) {
+  const now = Date.now();
+  if (!cookie || cookie === lastStorageCookieUploaded) return;
+  if (!isFreshLogin && now - lastStorageUploadAt < STORAGE_COOKIE_UPLOAD_COOLDOWN_MS) return;
+  if (isFreshLogin && now - lastStorageUploadAt < 60_000) return;
+  lastStorageCookieUploaded = cookie;
+  lastStorageUploadAt = now;
+  void withTimeout(
+    (async () => {
+      const { supabase } = await import('@/lib/supabaseClient');
+      await supabase.storage.from('excel-uploads').upload(
+        'secrets/mds_cookie.txt',
+        Buffer.from(cookie, 'utf-8'),
+        { contentType: 'text/plain', upsert: true }
+      );
+      return true;
+    })(),
+    3000,
+    false
+  );
+}
+
 /** Gabungkan pembaruan Set-Cookie dari response StoreHub jika ada rotasi mso_session */
 async function persistRefreshedSessionIfAny(res: Response, currentCookie: string): Promise<string> {
   try {
@@ -531,17 +575,70 @@ async function persistRefreshedSessionIfAny(res: Response, currentCookie: string
     if (changed && updated.includes('mso_session=')) {
       cachedCookie = updated;
       cookieCachedAt = Date.now();
-      const { supabase } = await import('@/lib/supabaseClient');
-      await supabase.storage.from('excel-uploads').upload(
-        'secrets/mds_cookie.txt',
-        Buffer.from(updated, 'utf-8'),
-        { contentType: 'text/plain', upsert: true }
-      );
+      // Throttled 15 menit: update RAM langsung (0ms), tidak spam Supabase Storage!
+      saveCookieToStorageBackground(updated, false);
     }
     return updated;
   } catch {
     return currentCookie;
   }
+}
+
+async function resolveLoginActionHashParallel(): Promise<string | null> {
+  try {
+    const loginHtmlRes = await fetch(LOGIN_URL, { method: 'GET', signal: AbortSignal.timeout(4000) });
+    const loginHtml = await loginHtmlRes.text();
+    const scriptMatches = [...loginHtml.matchAll(/src="(\/_next\/static\/chunks\/[^"]+\.js)"/g)].slice(0, 12);
+    const texts = await Promise.all(
+      scriptMatches.map((m) =>
+        fetch(`${STOREHUB_BASE}${m[1]}`, { signal: AbortSignal.timeout(3000) })
+          .then((r) => r.text())
+          .catch(() => '')
+      )
+    );
+    for (const jsText of texts) {
+      const actMatch = jsText.match(/createServerReference\)?\("([a-f0-9]{40,44})"[^)]{0,160}"login"/);
+      if (actMatch?.[1]) {
+        ACTION_LOGIN = actMatch[1];
+        return actMatch[1];
+      }
+    }
+  } catch {}
+  return null;
+}
+
+async function postStoreHubLoginDirect(actionHash: string): Promise<{ cookie: string | null; status: number }> {
+  // KRUSIAL (React 19 decodeReplyFromBusboy): field `_1_*` WAJIB ditempatkan SEBELUM `'0'` (`[{},"$K1"]`).
+  const fd = new FormData();
+  fd.append('_1_next', '/');
+  fd.append('_1_username', CREDENTIALS.username);
+  fd.append('_1_password', CREDENTIALS.password);
+  fd.append('_1_tz', CREDENTIALS.tz);
+  fd.append('0', '[{},"$K1"]');
+
+  const res = await fetch(LOGIN_URL, {
+    method: 'POST',
+    headers: {
+      'Accept': 'text/x-component',
+      'Next-Action': actionHash,
+      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15',
+      'Referer': LOGIN_URL,
+      'Origin': STOREHUB_BASE,
+    },
+    body: fd,
+    redirect: 'manual',
+    signal: AbortSignal.timeout(6000),
+  });
+
+  const getSetCookie = (res.headers as any).getSetCookie;
+  const rawList: string[] = typeof getSetCookie === 'function'
+    ? getSetCookie.call(res.headers)
+    : (res.headers.get('set-cookie') || '').split(/,(?=\s*[A-Za-z0-9_-]+=)/);
+  const sessionCookie = rawList.map((c) => c.split(';')[0].trim()).filter(Boolean).join('; ');
+  return {
+    cookie: sessionCookie && sessionCookie.includes('mso_session=') ? sessionCookie : null,
+    status: res.status,
+  };
 }
 
 export async function getStoreHubCookie(
@@ -556,98 +653,56 @@ export async function getStoreHubCookie(
     return cachedCookie;
   }
 
-  // 1. Jika ada env MDS_SESSION_COOKIE yang memiliki mso_session, gunakan itu
+  // 1. Jika ada env MDS_SESSION_COOKIE yang memiliki mso_session, gunakan instan (0ms)
   if (!forceRefresh && process.env.MDS_SESSION_COOKIE && process.env.MDS_SESSION_COOKIE.includes('mso_session')) {
     cachedCookie = process.env.MDS_SESSION_COOKIE.trim();
     cookieCachedAt = now;
     return cachedCookie;
   }
 
-  // 2. Ambil dari Supabase Storage (secrets/mds_cookie.txt) — WAJIB berisi mso_session!
-  // Saat forceRefresh, hanya pakai ulang jika sudah diperbarui instance lain (berbeda dari previousCookie).
+  // 2. JALUR TOL LANGSUNG: langsung POST login pakai ACTION_LOGIN tersimpan (~300-600ms)
+  // TANPA download Supabase Storage & TANPA scraping 12 JS chunk dulu!
   try {
-    const { supabase } = await import('@/lib/supabaseClient');
-    const { data, error } = await supabase.storage.from('excel-uploads').download('secrets/mds_cookie.txt');
-    if (data && !error) {
-      const cookie = (await data.text()).trim();
-      const prevClean = String(previousCookie || '').trim();
-      if (cookie && cookie.includes('mso_session') && (!forceRefresh || (prevClean && cookie !== prevClean))) {
-        cachedCookie = cookie;
-        cookieCachedAt = now;
-        return cachedCookie;
+    let attempt = await postStoreHubLoginDirect(ACTION_LOGIN);
+    if (!attempt.cookie && attempt.status === 404) {
+      const freshHash = await resolveLoginActionHashParallel();
+      if (freshHash) {
+        attempt = await postStoreHubLoginDirect(freshHash);
       }
     }
-  } catch (e) {
-    console.warn('[MDS-CLIENT] Gagal membaca cookie dari Storage:', e);
-  }
-
-  // 3. Fallback Auto-login ke StoreHub (resolving ACTION_LOGIN hash dinamis + multipart Next 15/16)
-  try {
-    let loginActionHash = ACTION_LOGIN;
-    try {
-      const loginHtmlRes = await fetch(LOGIN_URL, { method: 'GET', signal: AbortSignal.timeout(5000) });
-      const loginHtml = await loginHtmlRes.text();
-      const scriptMatches = [...loginHtml.matchAll(/src="(\/_next\/static\/chunks\/[^"]+\.js)"/g)];
-      for (const m of scriptMatches.slice(0, 12)) {
-        const jsText = await fetch(`${STOREHUB_BASE}${m[1]}`, { signal: AbortSignal.timeout(4000) }).then(r => r.text()).catch(() => '');
-        const actMatch = jsText.match(/createServerReference\)?\("([a-f0-9]{40,44})"[^)]{0,160}"login"/);
-        if (actMatch?.[1]) {
-          loginActionHash = actMatch[1];
-          ACTION_LOGIN = actMatch[1];
-          break;
-        }
-      }
-    } catch {}
-
-    // KRUSIAL (React 19 decodeReplyFromBusboy): field `_1_*` WAJIB ditempatkan SEBELUM `'0'` (`[{},"$K1"]`).
-    const fd = new FormData();
-    fd.append('_1_next', '/');
-    fd.append('_1_username', CREDENTIALS.username);
-    fd.append('_1_password', CREDENTIALS.password);
-    fd.append('_1_tz', CREDENTIALS.tz);
-    fd.append('0', '[{},"$K1"]');
-
-    const res = await fetch(LOGIN_URL, {
-      method: 'POST',
-      headers: {
-        'Accept': 'text/x-component',
-        'Next-Action': loginActionHash,
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15',
-        'Referer': LOGIN_URL,
-        'Origin': STOREHUB_BASE,
-      },
-      body: fd,
-      redirect: 'manual',
-      signal: AbortSignal.timeout(8000),
-    });
-
-    const getSetCookie = (res.headers as any).getSetCookie;
-    const rawList: string[] = typeof getSetCookie === 'function'
-      ? getSetCookie.call(res.headers)
-      : (res.headers.get('set-cookie') || '').split(/,(?=\s*[A-Za-z0-9_-]+=)/);
-    const sessionCookie = rawList.map(c => c.split(';')[0].trim()).filter(Boolean).join('; ');
-
-    // HANYA terima cookie yang benar-benar memiliki mso_session (JANGAN pernah simpan db76d-only!)
-    if (sessionCookie && sessionCookie.includes('mso_session=')) {
-      cachedCookie = sessionCookie;
+    if (attempt.cookie) {
+      cachedCookie = attempt.cookie;
       cookieCachedAt = Date.now();
-      try {
-        const { supabase } = await import('@/lib/supabaseClient');
-        await supabase.storage.from('excel-uploads').upload(
-          'secrets/mds_cookie.txt',
-          Buffer.from(sessionCookie, 'utf-8'),
-          { contentType: 'text/plain', upsert: true }
-        );
-      } catch (uploadErr) {
-        console.warn('[MDS-CLIENT] Gagal menyimpan cookie baru ke Storage:', uploadErr);
-      }
-      return sessionCookie;
+      saveCookieToStorageBackground(attempt.cookie, true);
+      return attempt.cookie;
     }
   } catch (e) {
-    console.warn('[MDS-CLIENT] Auto-login error:', e);
+    console.warn('[MDS-CLIENT] Direct auto-login error:', e);
   }
 
-  throw new Error('Gagal mendapatkan session login by luqman org (mso_session tidak ditemukan)');
+  // 3. Fallback terakhir (hanya jika direct login gagal): baca cookie dari Supabase Storage (timeout ketat 1.5 detik)
+  try {
+    const cookie = await withTimeout(
+      (async () => {
+        const { supabase } = await import('@/lib/supabaseClient');
+        const { data, error } = await supabase.storage.from('excel-uploads').download('secrets/mds_cookie.txt');
+        if (!data || error) return '';
+        return (await data.text()).trim();
+      })(),
+      1500,
+      ''
+    );
+    const prevClean = String(previousCookie || '').trim();
+    if (cookie && cookie.includes('mso_session') && (!forceRefresh || (prevClean && cookie !== prevClean))) {
+      cachedCookie = cookie;
+      cookieCachedAt = Date.now();
+      return cachedCookie;
+    }
+  } catch (e) {
+    console.warn('[MDS-CLIENT] Gagal membaca cookie fallback dari Storage:', e);
+  }
+
+  throw new Error('Gagal mendapatkan session login StoreHub (mso_session tidak ditemukan)');
 }
 
 function harvestBarcodes(rows: any[], primaryItem?: any): string[] {
@@ -766,12 +821,13 @@ function buildInitialProbeCandidates(cleanCode: string): Array<{ kind: 'upc' | '
   return out;
 }
 
-/** Simpan 1 item temuan StoreHub ke Prisma Product & BarcodeAlias secara aman */
+/** Simpan 1 item temuan StoreHub ke Prisma Product (termasuk galeri images[]) & BarcodeAlias secara aman */
 async function upsertStoreHubItemToDb(
   itemData: any,
   opts: {
     queriedCode: string;
     queriedKind: 'upc' | 'sku';
+    originalInputCode?: string | null;
     mataImages: MatahariFamilyImages;
     siblingImgByColor: Map<string, string>;
     fallbackArticle?: string | null;
@@ -805,21 +861,25 @@ async function upsertStoreHubItemToDb(
 
   const existingProduct = await prisma.product.findUnique({
     where: { sku: itemSku },
-    select: { article: true, barcode: true, imageUrl: true },
+    select: { article: true, barcode: true, imageUrl: true, images: true },
   });
   const articleToUse = rawArticle || sanitizeArticleCode(existingProduct?.article) || opts.fallbackArticle || null;
 
   const allDiscoveredBarcodes: string[] = Array.isArray(itemData._harvestedBarcodes)
     ? [...itemData._harvestedBarcodes]
     : [];
+  const origClean = opts.originalInputCode ? String(opts.originalInputCode).trim() : '';
   const primaryCandidate = rawBarcode
     ? String(rawBarcode).trim()
-    : (opts.queriedKind === 'upc' ? opts.queriedCode : null);
+    : (opts.queriedKind === 'upc' ? opts.queriedCode : (origClean && origClean !== itemSku ? origClean : null));
   if (primaryCandidate && !allDiscoveredBarcodes.includes(primaryCandidate)) {
     allDiscoveredBarcodes.unshift(primaryCandidate);
   }
   if (opts.queriedKind === 'upc' && opts.queriedCode && !allDiscoveredBarcodes.includes(opts.queriedCode)) {
     allDiscoveredBarcodes.push(opts.queriedCode);
+  }
+  if (origClean && origClean !== itemSku && !allDiscoveredBarcodes.includes(origClean)) {
+    allDiscoveredBarcodes.push(origClean);
   }
 
   const candidateBarcode = primaryCandidate || existingProduct?.barcode || null;
@@ -834,15 +894,18 @@ async function upsertStoreHubItemToDb(
     }
   }
 
-  const resolvedImg =
-    opts.mataImages.imagesBySku.get(itemSku)?.[0] ||
-    (colorUp ? opts.mataImages.imagesByColor.get(colorUp)?.[0] : undefined) ||
-    (colorUp ? opts.siblingImgByColor.get(colorUp) : undefined) ||
-    opts.mataImages.defaultImages[0] ||
-    opts.fallbackArticleImg ||
-    null;
-
-  const imageUpdated = Boolean(!existingProduct?.imageUrl && resolvedImg);
+  const resolvedGallery = resolveProductGallery(
+    { sku: itemSku, color: cleanColor, imageUrl: existingProduct?.imageUrl || null },
+    opts.mataImages,
+    opts.siblingImgByColor,
+    opts.fallbackArticleImg || null
+  );
+  const resolvedImg = resolvedGallery[0] || null;
+  const existingImagesLen = Array.isArray(existingProduct?.images) ? existingProduct.images.length : 0;
+  const imageUpdated = Boolean(
+    (!existingProduct?.imageUrl && resolvedImg) ||
+    (resolvedGallery.length > existingImagesLen)
+  );
 
   try {
     const updateData: any = {
@@ -857,6 +920,7 @@ async function upsertStoreHubItemToDb(
     if (normalizedDept) updateData.dept = normalizedDept;
     if (hargaNormal && hargaNormal > 0) updateData.hargaNormal = hargaNormal;
     if (!existingProduct?.imageUrl && resolvedImg) updateData.imageUrl = resolvedImg;
+    if (resolvedGallery.length > existingImagesLen) updateData.images = resolvedGallery;
 
     await prisma.product.upsert({
       where: { sku: itemSku },
@@ -873,6 +937,7 @@ async function upsertStoreHubItemToDb(
         hargaNormal: hargaNormal || 0,
         stok: currentSkuStok,
         imageUrl: resolvedImg,
+        images: resolvedGallery,
         updatedAt: new Date(),
       },
     });
@@ -1011,21 +1076,20 @@ async function finalizeProductFamilyResponse(params: {
   if (params.withImages) {
     const dbBackfillUpdates: Promise<any>[] = [];
     for (const sib of siblings) {
-      if (!sib.imageUrl) {
-        const sibGal = resolveProductGallery(sib, mataImages, siblingImgByColor, fallbackArticleImg);
-        if (sibGal.length > 0) {
-          sib.imageUrl = sibGal[0];
-          sib.images = sibGal;
-          extraImagesMatched++;
-          dbBackfillUpdates.push(
-            prisma.product
-              .update({
-                where: { sku: sib.sku },
-                data: { imageUrl: sibGal[0], images: sibGal, updatedAt: new Date() },
-              })
-              .catch(() => {})
-          );
-        }
+      const sibGal = resolveProductGallery(sib, mataImages, siblingImgByColor, fallbackArticleImg);
+      const curImgsLen = Array.isArray(sib.images) ? sib.images.length : 0;
+      if (sibGal.length > 0 && (!sib.imageUrl || sibGal.length > curImgsLen)) {
+        sib.imageUrl = sib.imageUrl || sibGal[0];
+        sib.images = sibGal;
+        extraImagesMatched++;
+        dbBackfillUpdates.push(
+          prisma.product
+            .update({
+              where: { sku: sib.sku },
+              data: { imageUrl: sib.imageUrl, images: sibGal, updatedAt: new Date() },
+            })
+            .catch(() => {})
+        );
       }
     }
     if (dbBackfillUpdates.length > 0) {
@@ -1051,18 +1115,84 @@ async function finalizeProductFamilyResponse(params: {
     images: mainImages,
   };
 
-  // Perbarui CatalogArticle.articleTotalStok agar katalog utama sinkron dengan stok Live terbaru
-  if (cleanArticle && params.freshStockBySku && params.freshStockBySku.size > 0 && !params.storeOffline) {
+  // Sinkronkan & UPSERT ke CatalogArticle agar produk baru hasil scrap langsung permanen di katalog utama DB!
+  if (!params.storeOffline) {
     const updatedTotalStok = enrichedSiblings.reduce((sum, s) => sum + Math.max(0, Number(s.stok ?? 0)), 0);
-    await prisma.catalogArticle
-      .updateMany({
-        where: { article: cleanArticle },
-        data: {
-          articleTotalStok: updatedTotalStok,
-          updatedAt: new Date(),
-        },
-      })
-      .catch(() => {});
+    const shouldUpsertCatalog = params.newVariantsDiscovered > 0 || extraImagesMatched > 0;
+    if (shouldUpsertCatalog) {
+      try {
+        const catalogKey = getProductArticleGroupKey(enrichedMain);
+        const brandGroup = classifyBrandGroup(enrichedMain);
+        const categoryKey = classifyProductCategory(enrichedMain);
+        const subBrand = getNormalizedSubBrand(enrichedMain);
+        const colors = Array.from(new Set(enrichedSiblings.map((s) => String(s.color || '').trim().toUpperCase()).filter(Boolean))).sort();
+        const sizes = Array.from(new Set(enrichedSiblings.map((s) => String(s.size || '').trim().toUpperCase()).filter(Boolean)));
+        const hasPromo = enrichedSiblings.some(
+          (s) => Boolean(s.hargaPromo && Number(s.hargaPromo) > 0 && (!s.hargaNormal || Number(s.hargaPromo) < Number(s.hargaNormal)))
+        );
+        const repImg = enrichedMain.imageUrl || enrichedSiblings.find((s) => Boolean(s.imageUrl))?.imageUrl || null;
+        await prisma.catalogArticle.upsert({
+          where: { key: catalogKey },
+          update: {
+            sku: enrichedMain.sku,
+            barcode: enrichedMain.barcode || undefined,
+            article: cleanArticle || enrichedMain.article || undefined,
+            description: enrichedMain.description,
+            brand: enrichedMain.brand || undefined,
+            dept: enrichedMain.dept || undefined,
+            brandGroup,
+            subBrand,
+            categoryKey,
+            color: enrichedMain.color || undefined,
+            size: enrichedMain.size || undefined,
+            stok: enrichedMain.stok ?? 0,
+            hargaNormal: enrichedMain.hargaNormal ?? 0,
+            ...(repImg ? { imageUrl: repImg } : {}),
+            articleGroupCount: enrichedSiblings.length,
+            articleTotalStok: updatedTotalStok,
+            articleColors: colors,
+            articleSizes: sizes,
+            articleHasPromo: hasPromo,
+            updatedAt: new Date(),
+          },
+          create: {
+            key: catalogKey,
+            sku: enrichedMain.sku,
+            barcode: enrichedMain.barcode || null,
+            article: cleanArticle || enrichedMain.article || null,
+            description: enrichedMain.description || enrichedMain.sku,
+            brand: enrichedMain.brand || null,
+            dept: enrichedMain.dept || null,
+            brandGroup,
+            subBrand,
+            categoryKey,
+            color: enrichedMain.color || null,
+            size: enrichedMain.size || null,
+            stok: enrichedMain.stok ?? 0,
+            hargaNormal: enrichedMain.hargaNormal ?? 0,
+            imageUrl: repImg,
+            articleGroupCount: enrichedSiblings.length,
+            articleTotalStok: updatedTotalStok,
+            articleColors: colors,
+            articleSizes: sizes,
+            articleHasPromo: hasPromo,
+            sortRank: updatedTotalStok > 0 ? 500 : 50000,
+          },
+        });
+      } catch (catErr) {
+        console.warn('[MDS-CLIENT] Gagal upsert CatalogArticle:', catErr);
+      }
+    } else if (cleanArticle && params.freshStockBySku && params.freshStockBySku.size > 0) {
+      await prisma.catalogArticle
+        .updateMany({
+          where: { article: cleanArticle },
+          data: {
+            articleTotalStok: updatedTotalStok,
+            updatedAt: new Date(),
+          },
+        })
+        .catch(() => {});
+    }
   }
 
   const allFamilySkus = Array.from(new Set([enrichedMain.sku, ...enrichedSiblings.map((s) => s.sku)].filter(Boolean)));
@@ -1091,6 +1221,7 @@ async function finalizeProductFamilyResponse(params: {
     siblings: enrichedSiblings,
     aliases: familyAliases,
     storeOffline: params.storeOffline,
+    savedToDb: !params.storeOffline,
     ...(params.message ? { message: params.message } : {}),
   };
 }
@@ -1101,13 +1232,16 @@ async function resolveDetailActionHash(activeCookie: string): Promise<boolean> {
       headers: { Cookie: activeCookie },
       signal: AbortSignal.timeout(4000),
     }).then((r) => r.text());
-    const matches = [...html.matchAll(/src="(\/_next\/static\/chunks\/[^"]+\.js)"/g)];
-    for (const m of matches.slice(0, 12)) {
-      const jsText = await fetch(`${STOREHUB_BASE}${m[1]}`, {
-        signal: AbortSignal.timeout(3500),
-      })
-        .then((r) => r.text())
-        .catch(() => '');
+    const matches = [...html.matchAll(/src="(\/_next\/static\/chunks\/[^"]+\.js)"/g)].slice(0, 12);
+    // Paralel (Promise.all): selesai ~350ms, bukan 12x loop berurutan!
+    const jsTexts = await Promise.all(
+      matches.map((m) =>
+        fetch(`${STOREHUB_BASE}${m[1]}`, { signal: AbortSignal.timeout(3000) })
+          .then((r) => r.text())
+          .catch(() => '')
+      )
+    );
+    for (const jsText of jsTexts) {
       const actMatch = jsText.match(/createServerReference\)?\("([a-f0-9]{40,44})"[^)]{0,160}"checkItemDetail"/);
       if (actMatch?.[1]) {
         ACTION_DETAIL = actMatch[1];
@@ -1116,6 +1250,373 @@ async function resolveDetailActionHash(activeCookie: string): Promise<boolean> {
     }
   } catch {}
   return false;
+}
+
+/** Helper tunggal pemanggilan checkItemDetail StoreHub + parser Next.js RSC (mengembalikan allItems sekaligus) */
+async function queryStoreHubDetail(
+  kind: 'upc' | 'sku',
+  code: string,
+  activeCookie: string,
+  timeoutMs: number = 5000
+): Promise<{ itemData: any; allItems: any[]; authFailed: boolean; offline: boolean; actionExpired: boolean; cookie: string }> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(ITEM_CHECKER_URL, {
+      method: 'POST',
+      headers: {
+        'Accept': 'text/x-component',
+        'Content-Type': 'text/plain;charset=UTF-8',
+        'Cookie': activeCookie,
+        'Next-Action': ACTION_DETAIL,
+        'Referer': ITEM_CHECKER_URL,
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15',
+        'Next-Router-State-Tree': '%5B%22%22%2C%7B%22children%22%3A%5B%22(app)%22%2C%7B%22children%22%3A%5B%22item-checker%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C4%5D%7D%2Cnull%2C%22refetch%22%2C24%5D',
+      },
+      body: JSON.stringify([kind, code]),
+      redirect: 'manual',
+      signal: controller.signal,
+    });
+  } catch {
+    clearTimeout(timeoutId);
+    return { itemData: null, allItems: [], authFailed: false, offline: true, actionExpired: false, cookie: activeCookie };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  const updatedCookie = await persistRefreshedSessionIfAny(res, activeCookie);
+
+  if (res.status === 404) {
+    return { itemData: null, allItems: [], authFailed: false, offline: false, actionExpired: true, cookie: updatedCookie };
+  }
+
+  const redirectTarget = res.headers.get('location') || res.headers.get('x-action-redirect') || '';
+  if (res.status === 401 || (res.status >= 300 && res.status < 400 && redirectTarget.includes('/login')) || redirectTarget.includes('/login')) {
+    return { itemData: null, allItems: [], authFailed: true, offline: false, actionExpired: false, cookie: updatedCookie };
+  }
+
+  const text = await res.text();
+  if (
+    text.includes('504 Gateway') ||
+    text.includes('Gateway Time-out') ||
+    text.includes('no route to host') ||
+    text.includes('unable to open tcp connection') ||
+    res.status === 504
+  ) {
+    return { itemData: null, allItems: [], authFailed: false, offline: true, actionExpired: false, cookie: updatedCookie };
+  }
+  if (text.includes('NEXT_REDIRECT') && text.includes('/login')) {
+    return { itemData: null, allItems: [], authFailed: true, offline: false, actionExpired: false, cookie: updatedCookie };
+  }
+
+  const allItems: any[] = [];
+  let parsedItem: any = null;
+  for (const line of text.split('\n')) {
+    const colonIdx = line.indexOf(':');
+    if (colonIdx > 0 && colonIdx <= 3) {
+      try {
+        const parsed = JSON.parse(line.substring(colonIdx + 1));
+        if (parsed?.error) {
+          const errStr = String(parsed.error);
+          if (errStr.includes('no route to host') || errStr.includes('tcp connection')) {
+            return { itemData: null, allItems: [], authFailed: false, offline: true, actionExpired: false, cookie: updatedCookie };
+          }
+          if (/unauth|login|session|expired/i.test(errStr)) {
+            return { itemData: null, allItems: [], authFailed: true, offline: false, actionExpired: false, cookie: updatedCookie };
+          }
+        }
+        if (parsed?.result?.data && typeof parsed.result.data === 'object') {
+          const entries = Object.entries(parsed.result.data);
+          for (const [skuKey, val] of entries) {
+            const rowList = Array.isArray(val) ? val : (val && typeof val === 'object' ? [val] : []);
+            if (rowList.length === 0) continue;
+            const matchedRow =
+              kind === 'upc'
+                ? rowList.find((x: any) => String(x?.VendorBarcode || '').trim() === code)
+                : rowList.find((x: any) => String(x?.SKU || '').trim() === code);
+            const chosen = matchedRow || rowList[rowList.length - 1] || rowList[0];
+            if (chosen && typeof chosen === 'object') {
+              const copy = { ...chosen };
+              if (!copy.SKU && !copy.sku) copy.SKU = String(skuKey);
+              copy._harvestedBarcodes = harvestBarcodes(rowList, copy);
+              allItems.push(copy);
+            }
+          }
+          if (allItems.length > 0) {
+            parsedItem =
+              allItems.find((it) =>
+                kind === 'upc'
+                  ? String(it?.VendorBarcode || '').trim() === code
+                  : String(it?.SKU || it?.sku || '').trim() === code
+              ) || allItems[0];
+            break;
+          }
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  // Jika cookie expired/ditolak tanpa HTTP 307, Next.js RSC sering merender shell halaman (/login / ToastProvider / $Sreact.fragment)
+  if (
+    !parsedItem &&
+    allItems.length === 0 &&
+    !text.includes('"result"') &&
+    (text.includes('$Sreact.fragment') ||
+      text.includes('ToastProvider') ||
+      text.includes('LoginForm') ||
+      text.includes('/_next/static/chunks/') ||
+      text.includes('/login'))
+  ) {
+    return { itemData: null, allItems: [], authFailed: true, offline: false, actionExpired: false, cookie: updatedCookie };
+  }
+
+  return { itemData: parsedItem, allItems, authFailed: false, offline: false, actionExpired: false, cookie: updatedCookie };
+}
+
+export type FastLiveVariantInput = {
+  sku: string;
+  color?: string | null;
+  size?: string | null;
+  stok?: number;
+};
+
+export type FastLiveStockResult = {
+  result: CheckSingleItemResult;
+  /** Penulisan stok ke PostgreSQL — dijalankan di latar belakang (next/server `after`), HANYA jika ada stok yang berubah! */
+  persist: () => Promise<void>;
+};
+
+/**
+ * JALUR TOL KHUSUS LIVE STOK (~0.8–2.5 detik, 0 query baca DB, 0 nyari/ngeping jalur):
+ * 1. Panggil StoreHub 1 KALI langsung memakai ACTION_DETAIL tersimpan.
+ * 2. Langsung petakan `allItems` + `itemData.relatedStock` ke seluruh varian warna/ukuran dari HP kasir!
+ * 3. Hanya jika StoreHub tidak mengirim `relatedStock`, jalankan MAKSIMAL 1 gelombang paralel cepat
+ *    (prioritas warna aktif, maks 16 SKU, batas waktu keras 3.5 detik).
+ * 4. Simpan ke Supabase di latar belakang HANYA untuk SKU yang stoknya BENAR-BENAR berubah (0 write jika sama!).
+ */
+export async function checkLiveStockFast(
+  sku: string,
+  familySkus: string[],
+  familyVariants?: FastLiveVariantInput[],
+  article?: string | null
+): Promise<FastLiveStockResult> {
+  const cleanSku = String(sku).trim();
+  const noop = async () => {};
+
+  const variantMeta = new Map<string, { color: string | null; size: string | null; prevStok: number | undefined }>();
+  if (Array.isArray(familyVariants)) {
+    for (const v of familyVariants) {
+      const s = String(v?.sku || '').trim();
+      if (!s) continue;
+      variantMeta.set(s, {
+        color: v.color ? String(v.color).trim() : null,
+        size: v.size ? String(v.size).trim() : null,
+        prevStok: typeof v.stok === 'number' ? v.stok : undefined,
+      });
+    }
+  }
+  const targets = Array.from(
+    new Set(
+      [cleanSku, ...familySkus.map((s) => String(s || '').trim()), ...Array.from(variantMeta.keys())].filter((s) =>
+        /^[0-9A-Za-z\-]{4,20}$/.test(s)
+      )
+    )
+  ).slice(0, 150);
+
+  let cookie = await getStoreHubCookie().catch(() => null);
+  if (!cookie) {
+    return {
+      result: { success: false, sku: cleanSku, message: 'Gagal login StoreHub MDS BISA. Coba tekan ulang Live Stok.' },
+      persist: noop,
+    };
+  }
+
+  // 1 KALI panggilan langsung ke jalur StoreHub item-checker (tanpa nyari jalur!)
+  let first = await queryStoreHubDetail('sku', cleanSku, cookie, 5000);
+  if (first.actionExpired && (await resolveDetailActionHash(cookie))) {
+    first = await queryStoreHubDetail('sku', cleanSku, cookie, 5000);
+  }
+  if (first.authFailed) {
+    const fresh = await getStoreHubCookie(true, cookie).catch(() => null);
+    if (fresh) {
+      cookie = fresh;
+      first = await queryStoreHubDetail('sku', cleanSku, cookie, 5000);
+      if (first.actionExpired && (await resolveDetailActionHash(cookie))) {
+        first = await queryStoreHubDetail('sku', cleanSku, cookie, 5000);
+      }
+    }
+  }
+  if (first.authFailed) {
+    return {
+      result: { success: false, sku: cleanSku, message: 'Sesi login StoreHub gagal diperbarui. Coba tekan ulang Live Stok.' },
+      persist: noop,
+    };
+  }
+  if (first.offline) {
+    return {
+      result: {
+        success: false,
+        sku: cleanSku,
+        storeOffline: true,
+        message: 'Server toko fisik sedang istirahat / tidak terjangkau. Menampilkan stok tersimpan.',
+      },
+      persist: noop,
+    };
+  }
+  if (first.cookie) cookie = first.cookie;
+
+  const stockBySku = new Map<string, number>();
+  const colorSizeBySku = new Map<string, { color: string | null; size: string | null }>();
+  const absorb = (res: { itemData: any; allItems: any[] }) => {
+    const list = res.allItems.length > 0 ? res.allItems : res.itemData ? [res.itemData] : [];
+    for (const it of list) {
+      const s = String(it?.SKU ?? it?.sku ?? '').trim();
+      const raw = it?.StockOnHand ?? it?.stockOnHand ?? it?.stock_on_hand ?? it?.soh;
+      if (!s || raw === undefined || raw === null) continue;
+      const n = parseInt(String(raw), 10);
+      if (Number.isNaN(n)) continue;
+      stockBySku.set(s, n);
+      colorSizeBySku.set(s, {
+        color: it?.COLOR ?? it?.Color ?? it?.color ?? variantMeta.get(s)?.color ?? null,
+        size: it?.Size ?? it?.SIZE ?? it?.size ?? variantMeta.get(s)?.size ?? null,
+      });
+    }
+  };
+  absorb(first);
+
+  // JALUR KILAT: Manfaatkan `relatedStock` dari 1 response StoreHub di atas untuk memetakan SELURUH warna & size!
+  let mappedViaRelated = 0;
+  const relStock = first.itemData?.relatedStock;
+  if (relStock && typeof relStock === 'object' && variantMeta.size > 0) {
+    const normSize = (s: any) => String(s || '').trim().toUpperCase().replace(/[\s\-_.]+/g, '');
+    const relEntries = Object.entries(relStock).map(([cKey, sizesObj]) => ({
+      relColor: normalizeRetailColorKey(cKey),
+      sizes: sizesObj && typeof sizesObj === 'object'
+        ? Object.entries(sizesObj as Record<string, any>).map(([szKey, qtyVal]) => ({
+            relSize: normSize(szKey),
+            qty: parseInt(String(qtyVal), 10) || 0,
+          }))
+        : [],
+    }));
+
+    for (const [sibSku, meta] of variantMeta.entries()) {
+      if (stockBySku.has(sibSku)) continue;
+      const sibColor = normalizeRetailColorKey(meta.color);
+      const sibSize = normSize(meta.size);
+      if (!sibColor || !sibSize) continue;
+      for (const entry of relEntries) {
+        const colorMatched =
+          entry.relColor === sibColor ||
+          (entry.relColor.length >= 3 &&
+            sibColor.length >= 3 &&
+            (entry.relColor.includes(sibColor) || sibColor.includes(entry.relColor)));
+        if (!colorMatched) continue;
+        const sizeHit = entry.sizes.find((x) => x.relSize === sibSize);
+        if (sizeHit) {
+          stockBySku.set(sibSku, sizeHit.qty);
+          colorSizeBySku.set(sibSku, { color: meta.color, size: meta.size });
+          mappedViaRelated++;
+          break;
+        }
+      }
+    }
+  }
+
+  // Hanya jika `relatedStock` TIDAK meng-cover varian (misal format StoreHub tanpa relatedStock):
+  // lakukan MAKSIMAL 1 gelombang paralel cepat (prioritas warna aktif, maks 16 SKU, timeout 3.5 detik)
+  const activeNormColor = normalizeRetailColorKey(
+    first.itemData?.COLOR ?? first.itemData?.Color ?? first.itemData?.color ?? variantMeta.get(cleanSku)?.color
+  );
+  const remaining = targets
+    .filter((s) => !stockBySku.has(s))
+    .sort((a, b) => {
+      const aSame = activeNormColor && normalizeRetailColorKey(variantMeta.get(a)?.color) === activeNormColor ? 0 : 1;
+      const bSame = activeNormColor && normalizeRetailColorKey(variantMeta.get(b)?.color) === activeNormColor ? 0 : 1;
+      return aSame - bSame;
+    });
+
+  if (remaining.length > 0 && mappedViaRelated === 0) {
+    const singleWave = remaining.slice(0, 16);
+    const results = await Promise.all(singleWave.map((s) => queryStoreHubDetail('sku', s, cookie!, 3500)));
+    for (const r of results) {
+      if (!r.offline && !r.authFailed) absorb(r);
+    }
+  } else if (remaining.length > 0 && remaining.length <= 8) {
+    // Sisa sedikit (<= 8 SKU tidak ada di relatedStock): selesaikan dalam 1 batch paralel cepat (~0.8s)
+    const results = await Promise.all(remaining.map((s) => queryStoreHubDetail('sku', s, cookie!, 3000)));
+    for (const r of results) {
+      if (!r.offline && !r.authFailed) absorb(r);
+    }
+  }
+
+  const mainStok = stockBySku.get(cleanSku);
+  if (mainStok === undefined && stockBySku.size === 0) {
+    return {
+      result: { success: false, sku: cleanSku, message: 'Produk tidak ditemukan di StoreHub. Menampilkan stok tersimpan.' },
+      persist: noop,
+    };
+  }
+
+  let changedCount = 0;
+  const changedByQty = new Map<number, string[]>();
+  const variants: LiveStockVariantSummary[] = [];
+  for (const [s, stok] of stockBySku.entries()) {
+    const meta = variantMeta.get(s);
+    const cs = colorSizeBySku.get(s);
+    variants.push({ sku: s, color: cs?.color ?? meta?.color ?? null, size: cs?.size ?? meta?.size ?? null, stok });
+    if (meta?.prevStok === undefined || meta.prevStok !== stok) {
+      if (meta?.prevStok !== undefined && meta.prevStok !== stok) changedCount++;
+      const list = changedByQty.get(stok) || [];
+      list.push(s);
+      changedByQty.set(stok, list);
+    }
+  }
+
+  const cleanArt = sanitizeArticleCode(article || first.itemData?.StyleCode || first.itemData?.styleCode);
+
+  const persist = async () => {
+    // HEMAT DISK IO SUPABASE: jika tidak ada stok yang berubah vs layar kasir, 0 WRITE ke PostgreSQL!
+    if (changedByQty.size === 0) return;
+    const nowTs = new Date();
+    const tasks: Promise<any>[] = Array.from(changedByQty.entries()).map(([q, skus]) =>
+      prisma.product.updateMany({ where: { sku: { in: skus } }, data: { stok: q, updatedAt: nowTs } })
+    );
+    if (cleanArt && variantMeta.size > 0) {
+      let totalArtStok = 0;
+      for (const [s, meta] of variantMeta.entries()) {
+        const latest = stockBySku.has(s) ? stockBySku.get(s)! : (meta.prevStok ?? 0);
+        totalArtStok += Math.max(0, latest);
+      }
+      tasks.push(
+        prisma.catalogArticle
+          .updateMany({
+            where: { article: cleanArt },
+            data: { articleTotalStok: totalArtStok, updatedAt: nowTs },
+          })
+          .catch(() => {})
+      );
+    }
+    await withTimeout(Promise.allSettled(tasks).then(() => true), 12000, false);
+  };
+
+  return {
+    result: {
+      success: true,
+      sku: cleanSku,
+      article: cleanArt,
+      stok: mainStok ?? 0,
+      variants,
+      liveCheckedCount: stockBySku.size,
+      totalVariantsUpdated: stockBySku.size,
+      changedCount,
+      storeOffline: false,
+      fastMode: true,
+    },
+    persist,
+  };
 }
 
 export async function checkSingleItemStock(
@@ -1193,130 +1694,6 @@ export async function checkSingleItemStock(
         message: msg,
       };
     }
-  };
-
-  /** Helper tunggal pemanggilan checkItemDetail StoreHub + parser Next.js RSC (mengembalikan allItems sekaligus) */
-  const queryStoreHubDetail = async (
-    kind: 'upc' | 'sku',
-    code: string,
-    activeCookie: string,
-    timeoutMs: number = 5000
-  ): Promise<{ itemData: any; allItems: any[]; authFailed: boolean; offline: boolean; actionExpired: boolean; cookie: string }> => {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-    let res: Response;
-    try {
-      res = await fetch(ITEM_CHECKER_URL, {
-        method: 'POST',
-        headers: {
-          'Accept': 'text/x-component',
-          'Content-Type': 'text/plain;charset=UTF-8',
-          'Cookie': activeCookie,
-          'Next-Action': ACTION_DETAIL,
-          'Referer': ITEM_CHECKER_URL,
-          'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15',
-          'Next-Router-State-Tree': '%5B%22%22%2C%7B%22children%22%3A%5B%22(app)%22%2C%7B%22children%22%3A%5B%22item-checker%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C4%5D%7D%2Cnull%2C%22refetch%22%2C24%5D',
-        },
-        body: JSON.stringify([kind, code]),
-        redirect: 'manual',
-        signal: controller.signal,
-      });
-    } catch {
-      clearTimeout(timeoutId);
-      return { itemData: null, allItems: [], authFailed: false, offline: true, actionExpired: false, cookie: activeCookie };
-    } finally {
-      clearTimeout(timeoutId);
-    }
-
-    const updatedCookie = await persistRefreshedSessionIfAny(res, activeCookie);
-
-    if (res.status === 404) {
-      return { itemData: null, allItems: [], authFailed: false, offline: false, actionExpired: true, cookie: updatedCookie };
-    }
-
-    const redirectTarget = res.headers.get('location') || res.headers.get('x-action-redirect') || '';
-    if (res.status === 401 || (res.status >= 300 && res.status < 400 && redirectTarget.includes('/login')) || redirectTarget.includes('/login')) {
-      return { itemData: null, allItems: [], authFailed: true, offline: false, actionExpired: false, cookie: updatedCookie };
-    }
-
-    const text = await res.text();
-    if (
-      text.includes('504 Gateway') ||
-      text.includes('Gateway Time-out') ||
-      text.includes('no route to host') ||
-      text.includes('unable to open tcp connection') ||
-      res.status === 504
-    ) {
-      return { itemData: null, allItems: [], authFailed: false, offline: true, actionExpired: false, cookie: updatedCookie };
-    }
-    if (text.includes('NEXT_REDIRECT') && text.includes('/login')) {
-      return { itemData: null, allItems: [], authFailed: true, offline: false, actionExpired: false, cookie: updatedCookie };
-    }
-
-    const allItems: any[] = [];
-    let parsedItem: any = null;
-    for (const line of text.split('\n')) {
-      const colonIdx = line.indexOf(':');
-      if (colonIdx > 0 && colonIdx <= 3) {
-        try {
-          const parsed = JSON.parse(line.substring(colonIdx + 1));
-          if (parsed?.error) {
-            const errStr = String(parsed.error);
-            if (errStr.includes('no route to host') || errStr.includes('tcp connection')) {
-              return { itemData: null, allItems: [], authFailed: false, offline: true, actionExpired: false, cookie: updatedCookie };
-            }
-            if (/unauth|login|session|expired/i.test(errStr)) {
-              return { itemData: null, allItems: [], authFailed: true, offline: false, actionExpired: false, cookie: updatedCookie };
-            }
-          }
-          if (parsed?.result?.data && typeof parsed.result.data === 'object') {
-            const entries = Object.entries(parsed.result.data);
-            for (const [skuKey, val] of entries) {
-              const rowList = Array.isArray(val) ? val : (val && typeof val === 'object' ? [val] : []);
-              if (rowList.length === 0) continue;
-              const matchedRow =
-                kind === 'upc'
-                  ? rowList.find((x: any) => String(x?.VendorBarcode || '').trim() === code)
-                  : rowList.find((x: any) => String(x?.SKU || '').trim() === code);
-              const chosen = matchedRow || rowList[rowList.length - 1] || rowList[0];
-              if (chosen && typeof chosen === 'object') {
-                const copy = { ...chosen };
-                if (!copy.SKU && !copy.sku) copy.SKU = String(skuKey);
-                copy._harvestedBarcodes = harvestBarcodes(rowList, copy);
-                allItems.push(copy);
-              }
-            }
-            if (allItems.length > 0) {
-              parsedItem =
-                allItems.find((it) =>
-                  kind === 'upc'
-                    ? String(it?.VendorBarcode || '').trim() === code
-                    : String(it?.SKU || it?.sku || '').trim() === code
-                ) || allItems[0];
-              break;
-            }
-          }
-        } catch {
-          continue;
-        }
-      }
-    }
-
-    // Jika cookie expired/ditolak tanpa HTTP 307, Next.js RSC sering merender shell halaman (/login / ToastProvider / $Sreact.fragment)
-    if (
-      !parsedItem &&
-      allItems.length === 0 &&
-      !text.includes('"result"') &&
-      (text.includes('$Sreact.fragment') ||
-        text.includes('ToastProvider') ||
-        text.includes('LoginForm') ||
-        text.includes('/_next/static/chunks/') ||
-        text.includes('/login'))
-    ) {
-      return { itemData: null, allItems: [], authFailed: true, offline: false, actionExpired: false, cookie: updatedCookie };
-    }
-
-    return { itemData: parsedItem, allItems, authFailed: false, offline: false, actionExpired: false, cookie: updatedCookie };
   };
 
   try {
@@ -1450,6 +1827,7 @@ export async function checkSingleItemStock(
       const saved = await upsertStoreHubItemToDb(rawIt, {
         queriedCode,
         queriedKind: activeKind,
+        originalInputCode: cleanSku,
         mataImages,
         siblingImgByColor,
         fallbackArticle: articleToSearch,
@@ -1676,7 +2054,7 @@ export async function checkSingleItemStock(
         let refreshedMidLoop = false;
 
         for (let i = 0; i < remainingFamilySkus.length; i += DIRECT_BATCH) {
-          if (Date.now() - directProbeStart >= 15000) break;
+          if (Date.now() - directProbeStart >= 5000) break;
           const batch = remainingFamilySkus.slice(i, i + DIRECT_BATCH);
           let batchRes = await Promise.all(
             batch.map(async (targetSibSku) => ({
