@@ -28,8 +28,10 @@ export default function Login() {
   const [isBypassLocation, setIsBypassLocation] = useState(false);
   const [checkingNik, setCheckingNik] = useState(false);
 
-  // GPS Geofencing State (Pakuwon Mall & Tunjungan Plaza Surabaya — dikecualikan untuk SPV & Developer)
-  const [geoStatus, setGeoStatus] = useState<"idle" | "checking" | "verified" | "outside" | "denied" | "unsupported">("idle");
+  // GPS Geofencing State (SUKO 719 Pakuwon Mall & SUKO 720 Tunjungan Plaza — dikecualikan untuk SPV & Developer)
+  const [geoStatus, setGeoStatus] = useState<"idle" | "checking" | "verified" | "outside" | "denied" | "timeout" | "unsupported">("idle");
+  const [geoPermissionState, setGeoPermissionState] = useState<"granted" | "prompt" | "denied" | "unknown">("unknown");
+  const [geoErrorDetail, setGeoErrorDetail] = useState("");
   const [geoCoords, setGeoCoords] = useState<{ lat: number; lng: number; accuracy: number | null } | null>(null);
   const [verifiedMall, setVerifiedMall] = useState("");
   const [notWorkingAlert, setNotWorkingAlert] = useState(false);
@@ -47,11 +49,20 @@ export default function Login() {
     return new Promise((resolve) => {
       if (typeof window === "undefined" || !("geolocation" in navigator)) {
         setGeoStatus("unsupported");
+        setGeoErrorDetail("Browser HP ini tidak mendukung fitur GPS.");
         resolve(null);
         return;
       }
 
       setGeoStatus("checking");
+      setGeoErrorDetail("");
+
+      let settled = false;
+      const finish = (val: { lat: number; lng: number; accuracy: number | null } | null) => {
+        if (settled) return;
+        settled = true;
+        resolve(val);
+      };
 
       const handleSuccess = (pos: GeolocationPosition) => {
         const coords = {
@@ -59,7 +70,9 @@ export default function Login() {
           lng: pos.coords.longitude,
           accuracy: Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy : null,
         };
+        setGeoPermissionState("granted");
         setGeoCoords(coords);
+        setGeoErrorDetail("");
         const check = verifyStoreGeofence(coords.lat, coords.lng, coords.accuracy);
         if (check?.allowed) {
           setGeoStatus("verified");
@@ -69,37 +82,95 @@ export default function Login() {
           setGeoStatus("outside");
           setVerifiedMall("");
         }
-        resolve(coords);
+        finish(coords);
       };
 
       const handleFinalError = (err: GeolocationPositionError) => {
-        if (err.code === err.PERMISSION_DENIED) {
-          setGeoStatus("denied");
-        } else {
-          setGeoStatus("denied");
-        }
         setGeoCoords(null);
         setVerifiedMall("");
-        resolve(null);
+        if (err.code === err.PERMISSION_DENIED) {
+          setGeoPermissionState("denied");
+          setGeoStatus("denied");
+          setGeoErrorDetail(
+            "Izin lokasi ditolak di browser. Ketuk ikon pengaturan di kiri alamat luqmanganteng.my.id → Izin → Lokasi → Izinkan."
+          );
+        } else if (err.code === err.POSITION_UNAVAILABLE) {
+          setGeoStatus("timeout");
+          setGeoErrorDetail(
+            "Lokasi HP belum terdeteksi (pastikan Layanan Lokasi / Google Location Accuracy aktif di pengaturan HP)."
+          );
+        } else {
+          setGeoStatus("timeout");
+          setGeoErrorDetail("Sinyal GPS sedang lambat di dalam ruangan. Ketuk tombol di bawah untuk coba lagi.");
+        }
+        finish(null);
       };
 
+      // Tahap 3 (Fallback Android cold-start): watchPosition maks 6 detik
+      const tryWatchPosition = () => {
+        let watchId: number | null = null;
+        const watchTimer = setTimeout(() => {
+          if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+          setGeoCoords(null);
+          setVerifiedMall("");
+          setGeoStatus("timeout");
+          setGeoErrorDetail("Sinyal GPS belum merespons. Pastikan Lokasi/GPS HP menyala lalu ketuk Cek Lokasi Lagi.");
+          finish(null);
+        }, 6000);
+
+        watchId = navigator.geolocation.watchPosition(
+          (pos) => {
+            clearTimeout(watchTimer);
+            if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+            handleSuccess(pos);
+          },
+          (err) => {
+            clearTimeout(watchTimer);
+            if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+            handleFinalError(err);
+          },
+          { enableHighAccuracy: false, maximumAge: 180000, timeout: 5500 }
+        );
+      };
+
+      // Tahap 1: Cepat via Wi-Fi/Jaringan (instan < 1 detik di dalam mall/gedung + langsung trigger dialog Izinkan jika prompt)
       navigator.geolocation.getCurrentPosition(
         handleSuccess,
-        (err) => {
-          // Jika High Accuracy timeout di dalam gedung mall, fallback ke Network/Wi-Fi Geolocation
-          if (err.code === err.TIMEOUT || err.code === err.POSITION_UNAVAILABLE) {
-            navigator.geolocation.getCurrentPosition(
-              handleSuccess,
-              handleFinalError,
-              { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 }
-            );
-          } else {
-            handleFinalError(err);
+        (err1) => {
+          if (err1.code === err1.PERMISSION_DENIED) {
+            handleFinalError(err1);
+            return;
           }
+          // Tahap 2: Coba High Accuracy (GPS satelit)
+          navigator.geolocation.getCurrentPosition(
+            handleSuccess,
+            (err2) => {
+              if (err2.code === err2.PERMISSION_DENIED) {
+                handleFinalError(err2);
+              } else {
+                tryWatchPosition();
+              }
+            },
+            { enableHighAccuracy: true, timeout: 9000, maximumAge: 60000 }
+          );
         },
-        { enableHighAccuracy: true, timeout: 7000, maximumAge: 30000 }
+        { enableHighAccuracy: false, timeout: 6000, maximumAge: 120000 }
       );
     });
+  }, []);
+
+  // Cek status izin lokasi browser secara pasif
+  useEffect(() => {
+    if (typeof window === "undefined" || !("permissions" in navigator)) return;
+    navigator.permissions
+      .query({ name: "geolocation" as PermissionName })
+      .then((perm) => {
+        setGeoPermissionState(perm.state as "granted" | "prompt" | "denied");
+        perm.onchange = () => {
+          setGeoPermissionState(perm.state as "granted" | "prompt" | "denied");
+        };
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -241,7 +312,11 @@ export default function Login() {
           activeCoords = await requestGpsLocation();
         }
         if (!activeCoords) {
-          setError("Aktifkan izin lokasi (GPS) di HP Anda terlebih dahulu untuk masuk bekerja.");
+          setError(
+            geoStatus === "timeout"
+              ? "Sinyal GPS belum terbaca di dalam ruangan. Pastikan Lokasi/GPS HP aktif lalu ketuk tombol 'Izinkan & Deteksi Lokasi' di bawah."
+              : "Izin lokasi (GPS) belum terbaca. Ketuk tombol 'Izinkan & Deteksi Lokasi' di bawah untuk memunculkan izin lokasi."
+          );
           setLoading(false);
           return;
         }
@@ -434,8 +509,21 @@ export default function Login() {
         )}
 
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-lg text-sm mb-4 text-center whitespace-normal break-words">
-            {error}
+          <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded-xl text-xs sm:text-sm mb-4 text-center whitespace-normal break-words space-y-2">
+            <p className="font-semibold">{error}</p>
+            {!isBypassLocation && !geoCoords && (geoStatus === "denied" || geoStatus === "timeout" || geoStatus === "idle") && (
+              <button
+                type="button"
+                onClick={() => {
+                  setError("");
+                  requestGpsLocation();
+                }}
+                className="w-full py-2 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-xs cursor-pointer"
+              >
+                <MapPin className="w-3.5 h-3.5 shrink-0" />
+                <span>Izinkan &amp; Deteksi Lokasi Sekarang</span>
+              </button>
+            )}
           </div>
         )}
 
@@ -552,60 +640,96 @@ export default function Login() {
                 </div>
               ) : (
                 <div
-                  className={`rounded-xl border px-3.5 py-2.5 flex items-center justify-between gap-2 ${
+                  className={`rounded-xl border px-3.5 py-3 space-y-2.5 ${
                     geoStatus === "verified"
                       ? "bg-emerald-50 border-emerald-200 text-emerald-900"
                       : geoStatus === "outside" || geoStatus === "denied" || geoStatus === "unsupported"
                       ? "bg-rose-50 border-rose-200 text-rose-900"
+                      : geoStatus === "timeout"
+                      ? "bg-amber-50 border-amber-200 text-amber-900"
                       : "bg-slate-50 border-slate-200 text-slate-700"
                   }`}
                 >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    {geoStatus === "checking" ? (
-                      <Loader2 className="w-4 h-4 text-blue-600 animate-spin shrink-0" />
-                    ) : (
-                      <MapPin
-                        className={`w-4 h-4 shrink-0 ${
-                          geoStatus === "verified"
-                            ? "text-emerald-600"
-                            : geoStatus === "outside" || geoStatus === "denied"
-                            ? "text-rose-600"
-                            : "text-slate-500"
-                        }`}
-                      />
-                    )}
-                    <div className="text-xs whitespace-normal break-words leading-snug">
-                      <div className="font-extrabold">
-                        {geoStatus === "checking"
-                          ? "Memeriksa lokasi HP..."
-                          : geoStatus === "verified"
-                          ? `Lokasi Kerja Terverifikasi (${verifiedMall})`
-                          : geoStatus === "outside"
-                          ? "Kamu sedang tidak bekerja"
-                          : geoStatus === "denied"
-                          ? "Izin lokasi (GPS) belum aktif"
-                          : geoStatus === "unsupported"
-                          ? "Perangkat tidak mendukung GPS"
-                          : "Menunggu verifikasi lokasi kerja"}
-                      </div>
-                      <div className="text-[10px] opacity-80">
-                        {geoStatus === "verified"
-                          ? "Shift otomatis menyesuaikan jam aktif."
-                          : geoStatus === "outside"
-                          ? "Akses crew hanya tersedia di area toko."
-                          : "Aktifkan GPS HP untuk melanjutkan login."}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      {geoStatus === "checking" ? (
+                        <Loader2 className="w-4 h-4 text-blue-600 animate-spin shrink-0 mt-0.5" />
+                      ) : (
+                        <MapPin
+                          className={`w-4 h-4 shrink-0 mt-0.5 ${
+                            geoStatus === "verified"
+                              ? "text-emerald-600"
+                              : geoStatus === "outside" || geoStatus === "denied"
+                              ? "text-rose-600"
+                              : geoStatus === "timeout"
+                              ? "text-amber-600"
+                              : "text-slate-500"
+                          }`}
+                        />
+                      )}
+                      <div className="text-xs whitespace-normal break-words leading-snug">
+                        <div className="font-extrabold">
+                          {geoStatus === "checking"
+                            ? "Mendeteksi lokasi HP Anda..."
+                            : geoStatus === "verified"
+                            ? `Lokasi Terverifikasi (${verifiedMall})`
+                            : geoStatus === "outside"
+                            ? "Kamu sedang tidak bekerja"
+                            : geoStatus === "denied"
+                            ? "Izin lokasi browser diblokir / belum diizinkan"
+                            : geoStatus === "timeout"
+                            ? "Sinyal GPS belum terbaca"
+                            : geoStatus === "unsupported"
+                            ? "Perangkat tidak mendukung GPS"
+                            : geoPermissionState === "prompt"
+                            ? "Perlu izin lokasi GPS untuk masuk"
+                            : "Menunggu verifikasi lokasi kerja"}
+                        </div>
+                        <div className="text-[11px] opacity-85 mt-0.5 whitespace-normal break-words">
+                          {geoStatus === "verified"
+                            ? "Shift otomatis menyesuaikan jam aktif."
+                            : geoStatus === "outside"
+                            ? "Akses crew hanya tersedia di area toko."
+                            : geoErrorDetail ||
+                              "Ketuk tombol di bawah untuk mengizinkan & mendeteksi lokasi HP."}
+                        </div>
                       </div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => requestGpsLocation()}
+                      disabled={geoStatus === "checking"}
+                      className="p-2 rounded-lg bg-white/80 hover:bg-white border border-black/10 text-slate-700 cursor-pointer shrink-0 disabled:opacity-50"
+                      title="Cek ulang lokasi GPS"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${geoStatus === "checking" ? "animate-spin" : ""}`} />
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => requestGpsLocation()}
-                    disabled={geoStatus === "checking"}
-                    className="p-2 rounded-lg bg-white/80 hover:bg-white border border-black/10 text-slate-700 cursor-pointer shrink-0 disabled:opacity-50"
-                    title="Cek ulang lokasi GPS"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${geoStatus === "checking" ? "animate-spin" : ""}`} />
-                  </button>
+
+                  {geoStatus !== "verified" && (
+                    <button
+                      type="button"
+                      onClick={() => requestGpsLocation()}
+                      disabled={geoStatus === "checking"}
+                      className="w-full py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-xs cursor-pointer transition-all"
+                    >
+                      {geoStatus === "checking" ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                          <span>Sedang Meminta &amp; Mendeteksi Lokasi...</span>
+                        </>
+                      ) : (
+                        <>
+                          <MapPin className="w-3.5 h-3.5 shrink-0" />
+                          <span>
+                            {geoStatus === "denied"
+                              ? "Minta Izin Lokasi Sekarang"
+                              : "Izinkan & Deteksi Lokasi Sekarang"}
+                          </span>
+                        </>
+                      )}
+                    </button>
+                  )}
                 </div>
               )}
 
