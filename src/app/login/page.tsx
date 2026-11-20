@@ -32,9 +32,13 @@ export default function Login() {
   const [geoStatus, setGeoStatus] = useState<"idle" | "checking" | "verified" | "outside" | "denied" | "timeout" | "unsupported">("idle");
   const [geoPermissionState, setGeoPermissionState] = useState<"granted" | "prompt" | "denied" | "unknown">("unknown");
   const [geoErrorDetail, setGeoErrorDetail] = useState("");
+  const [geoDebugInfo, setGeoDebugInfo] = useState("");
   const [geoCoords, setGeoCoords] = useState<{ lat: number; lng: number; accuracy: number | null } | null>(null);
   const [verifiedMall, setVerifiedMall] = useState("");
   const [notWorkingAlert, setNotWorkingAlert] = useState(false);
+  const geoReqEpochRef = React.useRef(0);
+  const geoWatchIdRef = React.useRef<number | null>(null);
+  const geoPermRef = React.useRef<"granted" | "prompt" | "denied" | "unknown">("unknown");
   
   const [showChangePin, setShowChangePin] = useState(false);
   const [newPin, setNewPin] = useState("");
@@ -50,12 +54,23 @@ export default function Login() {
       if (typeof window === "undefined" || !("geolocation" in navigator)) {
         setGeoStatus("unsupported");
         setGeoErrorDetail("Browser HP ini tidak mendukung fitur GPS.");
+        setGeoDebugInfo("navigator.geolocation tidak tersedia");
         resolve(null);
         return;
       }
 
+      // Batalkan watcher lama bila user menekan tombol Refresh Lokasi berkali-kali (anti macet / anti deadlock!)
+      if (geoWatchIdRef.current !== null) {
+        try {
+          navigator.geolocation.clearWatch(geoWatchIdRef.current);
+        } catch {}
+        geoWatchIdRef.current = null;
+      }
+
+      const myEpoch = ++geoReqEpochRef.current;
       setGeoStatus("checking");
       setGeoErrorDetail("");
+      setGeoDebugInfo("");
 
       let settled = false;
       const finish = (val: { lat: number; lng: number; accuracy: number | null } | null) => {
@@ -64,7 +79,10 @@ export default function Login() {
         resolve(val);
       };
 
+      const isStale = () => geoReqEpochRef.current !== myEpoch;
+
       const handleSuccess = (pos: GeolocationPosition) => {
+        if (isStale()) return finish(null);
         const coords = {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
@@ -73,6 +91,9 @@ export default function Login() {
         setGeoPermissionState("granted");
         setGeoCoords(coords);
         setGeoErrorDetail("");
+        setGeoDebugInfo(
+          `GPS OK (±${Math.round(coords.accuracy || 0)}m)`
+        );
         const check = verifyStoreGeofence(coords.lat, coords.lng, coords.accuracy);
         if (check?.allowed) {
           setGeoStatus("verified");
@@ -85,76 +106,88 @@ export default function Login() {
         finish(coords);
       };
 
-      const handleFinalError = (err: GeolocationPositionError) => {
+      const handleFinalError = (code: number, msg: string) => {
+        if (isStale()) return finish(null);
         setGeoCoords(null);
         setVerifiedMall("");
-        if (err.code === err.PERMISSION_DENIED) {
+        setGeoDebugInfo(`Izin: ${geoPermRef.current} • Kode: ${code}${msg ? ` (${msg})` : ""}`);
+        if (code === 1) {
           setGeoPermissionState("denied");
           setGeoStatus("denied");
           setGeoErrorDetail(
-            "Izin lokasi ditolak di browser. Ketuk ikon pengaturan di kiri alamat luqmanganteng.my.id → Izin → Lokasi → Izinkan."
+            "Izin lokasi diblokir browser / HP. Buka ikon gembok di kiri alamat situs → Izin → Lokasi → Izinkan (dan pastikan izin Lokasi untuk aplikasi Browser di Setelan HP sudah aktif)."
           );
-        } else if (err.code === err.POSITION_UNAVAILABLE) {
+        } else if (code === 2) {
           setGeoStatus("timeout");
           setGeoErrorDetail(
-            "Lokasi HP belum terdeteksi (pastikan Layanan Lokasi / Google Location Accuracy aktif di pengaturan HP)."
+            "HP belum bisa mengambil koordinat GPS. Pastikan tombol Lokasi (GPS) & Google Location Accuracy di HP sudah aktif, lalu ketuk Cek Ulang."
           );
         } else {
           setGeoStatus("timeout");
-          setGeoErrorDetail("Sinyal GPS sedang lambat di dalam ruangan. Ketuk tombol di bawah untuk coba lagi.");
+          setGeoErrorDetail(
+            "Permintaan lokasi habis waktu (sinyal dalam ruangan lemah). Coba buka Google Maps 1 detik lalu kembali & ketuk Cek Ulang."
+          );
         }
         finish(null);
       };
 
-      // Tahap 3 (Fallback Android cold-start): watchPosition maks 6 detik
-      const tryWatchPosition = () => {
-        let watchId: number | null = null;
-        const watchTimer = setTimeout(() => {
-          if (watchId !== null) navigator.geolocation.clearWatch(watchId);
-          setGeoCoords(null);
-          setVerifiedMall("");
-          setGeoStatus("timeout");
-          setGeoErrorDetail("Sinyal GPS belum merespons. Pastikan Lokasi/GPS HP menyala lalu ketuk Cek Lokasi Lagi.");
-          finish(null);
-        }, 6000);
+      // Hard safety guard (maks 11 detik total, cegah bug browser Android yang hang tanpa callback!)
+      const hardGuardTimer = setTimeout(() => {
+        if (!settled && !isStale()) {
+          if (geoWatchIdRef.current !== null) {
+            try {
+              navigator.geolocation.clearWatch(geoWatchIdRef.current);
+            } catch {}
+            geoWatchIdRef.current = null;
+          }
+          handleFinalError(3, "Browser tidak merespons (timeout)");
+        }
+      }, 11000);
 
-        watchId = navigator.geolocation.watchPosition(
-          (pos) => {
-            clearTimeout(watchTimer);
-            if (watchId !== null) navigator.geolocation.clearWatch(watchId);
-            handleSuccess(pos);
-          },
-          (err) => {
-            clearTimeout(watchTimer);
-            if (watchId !== null) navigator.geolocation.clearWatch(watchId);
-            handleFinalError(err);
-          },
-          { enableHighAccuracy: false, maximumAge: 180000, timeout: 5500 }
-        );
+      const safeSuccess = (pos: GeolocationPosition) => {
+        clearTimeout(hardGuardTimer);
+        if (geoWatchIdRef.current !== null) {
+          try {
+            navigator.geolocation.clearWatch(geoWatchIdRef.current);
+          } catch {}
+          geoWatchIdRef.current = null;
+        }
+        handleSuccess(pos);
       };
 
-      // Tahap 1: Cepat via Wi-Fi/Jaringan (instan < 1 detik di dalam mall/gedung + langsung trigger dialog Izinkan jika prompt)
+      // Tahap 2 (Fallback cepat): watchPosition High/Network maks 5 detik
+      const tryFallbackHighAcc = () => {
+        if (settled || isStale()) return;
+        const wId = navigator.geolocation.watchPosition(
+          safeSuccess,
+          (err2) => {
+            clearTimeout(hardGuardTimer);
+            if (geoWatchIdRef.current !== null) {
+              try {
+                navigator.geolocation.clearWatch(geoWatchIdRef.current);
+              } catch {}
+              geoWatchIdRef.current = null;
+            }
+            handleFinalError(err2.code, err2.message || "");
+          },
+          { enableHighAccuracy: true, maximumAge: 120000, timeout: 5000 }
+        );
+        geoWatchIdRef.current = wId;
+      };
+
+      // Tahap 1: Instan via Wi-Fi/Jaringan (maks 4.5 detik, langsung munculkan dialog Izinkan di HP saat klik tombol)
       navigator.geolocation.getCurrentPosition(
-        handleSuccess,
+        safeSuccess,
         (err1) => {
-          if (err1.code === err1.PERMISSION_DENIED) {
-            handleFinalError(err1);
-            return;
+          if (settled || isStale()) return;
+          if (err1.code === 1) {
+            clearTimeout(hardGuardTimer);
+            handleFinalError(err1.code, err1.message || "");
+          } else {
+            tryFallbackHighAcc();
           }
-          // Tahap 2: Coba High Accuracy (GPS satelit)
-          navigator.geolocation.getCurrentPosition(
-            handleSuccess,
-            (err2) => {
-              if (err2.code === err2.PERMISSION_DENIED) {
-                handleFinalError(err2);
-              } else {
-                tryWatchPosition();
-              }
-            },
-            { enableHighAccuracy: true, timeout: 9000, maximumAge: 60000 }
-          );
         },
-        { enableHighAccuracy: false, timeout: 6000, maximumAge: 120000 }
+        { enableHighAccuracy: false, timeout: 4500, maximumAge: 300000 }
       );
     });
   }, []);
@@ -165,9 +198,13 @@ export default function Login() {
     navigator.permissions
       .query({ name: "geolocation" as PermissionName })
       .then((perm) => {
-        setGeoPermissionState(perm.state as "granted" | "prompt" | "denied");
+        const st = perm.state as "granted" | "prompt" | "denied";
+        geoPermRef.current = st;
+        setGeoPermissionState(st);
         perm.onchange = () => {
-          setGeoPermissionState(perm.state as "granted" | "prompt" | "denied");
+          const nextSt = perm.state as "granted" | "prompt" | "denied";
+          geoPermRef.current = nextSt;
+          setGeoPermissionState(nextSt);
         };
       })
       .catch(() => {});
@@ -186,7 +223,8 @@ export default function Login() {
             const bypass = Boolean(data.isBypassLocation);
             setIsBypassLocation(bypass);
             setNotWorkingAlert(false);
-            if (!bypass) {
+            // Hanya auto-cek lokasi jika izin browser sudah 'granted'; jika masih 'prompt', biarkan user ketuk tombol langsung agar popup izin HP pasti muncul!
+            if (!bypass && geoPermRef.current === "granted") {
               requestGpsLocation();
             }
             setTimeout(() => {
@@ -693,13 +731,17 @@ export default function Login() {
                             : geoErrorDetail ||
                               "Ketuk tombol di bawah untuk mengizinkan & mendeteksi lokasi HP."}
                         </div>
+                        {geoDebugInfo && geoStatus !== "verified" && (
+                          <div className="text-[10px] font-mono opacity-70 mt-1 whitespace-normal break-words">
+                            {geoDebugInfo}
+                          </div>
+                        )}
                       </div>
                     </div>
                     <button
                       type="button"
                       onClick={() => requestGpsLocation()}
-                      disabled={geoStatus === "checking"}
-                      className="p-2 rounded-lg bg-white/80 hover:bg-white border border-black/10 text-slate-700 cursor-pointer shrink-0 disabled:opacity-50"
+                      className="p-2 rounded-lg bg-white/80 hover:bg-white border border-black/10 text-slate-700 cursor-pointer shrink-0 active:scale-95 transition-transform"
                       title="Cek ulang lokasi GPS"
                     >
                       <RefreshCw className={`w-3.5 h-3.5 ${geoStatus === "checking" ? "animate-spin" : ""}`} />
@@ -710,13 +752,12 @@ export default function Login() {
                     <button
                       type="button"
                       onClick={() => requestGpsLocation()}
-                      disabled={geoStatus === "checking"}
-                      className="w-full py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-xs cursor-pointer transition-all"
+                      className="w-full py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-98 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-xs cursor-pointer transition-all"
                     >
                       {geoStatus === "checking" ? (
                         <>
                           <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
-                          <span>Sedang Meminta &amp; Mendeteksi Lokasi...</span>
+                          <span>Mendeteksi... (Ketuk untuk Ulangi)</span>
                         </>
                       ) : (
                         <>
