@@ -111,6 +111,11 @@ type SalesData = {
   pqUploadTime: string;
   pqFileName: string | null;
   availableDates: string[];
+  cutoff?: {
+    start: string;
+    end: string;
+    isCustom: boolean;
+  };
   summary: {
     spd_omzet?: number;
     spd_qty?: number;
@@ -187,6 +192,24 @@ export default function LaporanPenjualanPage() {
   const [alertPanelFilter, setAlertPanelFilter] = useState<"all" | "fast" | "kritis" | "slow">("all");
   const [showAllDepts, setShowAllDepts] = useState(false);
   const [deptBarMode, setDeptBarMode] = useState<"target" | "stok">("target");
+
+  // Mode Cut-Off Periode (Default: Tanggal 1 s/d Tanggal Berakhirnya Bulan Ini; bisa juga Cut-Off Kustom)
+  const getCurrentMonthCutoffBounds = () => {
+    const nowWib = new Date(Date.now() + 7 * 60 * 60 * 1000);
+    const y = nowWib.getUTCFullYear();
+    const m = nowWib.getUTCMonth();
+    const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    const mm = String(m + 1).padStart(2, "0");
+    return {
+      start: `${y}-${mm}-01`,
+      end: `${y}-${mm}-${String(lastDay).padStart(2, "0")}`,
+    };
+  };
+  const defaultCutoffBounds = getCurrentMonthCutoffBounds();
+  const [cutoffMode, setCutoffMode] = useState<"monthly" | "custom">("monthly");
+  const [cutoffStart, setCutoffStart] = useState<string>(defaultCutoffBounds.start);
+  const [cutoffEnd, setCutoffEnd] = useState<string>(defaultCutoffBounds.end);
+  const [appliedCutoff, setAppliedCutoff] = useState<{ start: string; end: string } | null>(null);
 
   // Theme switcher: default Clean Light Toko, bisa switch ke Executive Dark kapan saja
   const [darkMode, setDarkMode] = useState(false);
@@ -278,12 +301,21 @@ export default function LaporanPenjualanPage() {
     }
   };
 
-  const fetchReport = async (dateStr: string, tf: string, forceRefresh = false) => {
+  const fetchReport = async (
+    dateStr: string,
+    tf: string,
+    forceRefresh = false,
+    customRange: { start: string; end: string } | null = appliedCutoff
+  ) => {
     if (forceRefresh) setRefreshing(true);
     else setLoading(true);
     try {
       const qs = new URLSearchParams({ date: dateStr, timeframe: tf });
       if (forceRefresh) qs.set("refresh", "1");
+      if (customRange?.start && customRange?.end) {
+        qs.set("cutoffStart", customRange.start);
+        qs.set("cutoffEnd", customRange.end);
+      }
       const res = await fetch(`/api/admin/sales-report?${qs.toString()}`, { cache: "no-store" });
       const json = await res.json();
       if (json.success) {
@@ -303,8 +335,24 @@ export default function LaporanPenjualanPage() {
   };
 
   useEffect(() => {
-    fetchReport(selectedDate, timeframe);
-  }, [selectedDate, timeframe]);
+    fetchReport(selectedDate, timeframe, false, appliedCutoff);
+  }, [selectedDate, timeframe, appliedCutoff]);
+
+  const handleSelectMonthlyCutoff = () => {
+    setCutoffMode("monthly");
+    setAppliedCutoff(null);
+    setTimeframe("1M");
+  };
+
+  const handleApplyCustomCutoff = () => {
+    if (!cutoffStart || !cutoffEnd || cutoffStart > cutoffEnd) {
+      showToast("Tanggal mulai Cut-Off harus lebih awal atau sama dengan tanggal akhir.", "error");
+      return;
+    }
+    setCutoffMode("custom");
+    setAppliedCutoff({ start: cutoffStart, end: cutoffEnd });
+    showToast(`Mode Cut-Off diterapkan: ${formatShortDate(cutoffStart)} – ${formatShortDate(cutoffEnd)}`, "success");
+  };
 
   const handleTriggerSukoSalesSync = async () => {
     if (triggeringSync) return;
@@ -555,7 +603,11 @@ export default function LaporanPenjualanPage() {
     doc.setFontSize(16);
     doc.text(`Laporan Penjualan SUKO (MDS BISA) - ${formatDate(data.targetDate)}`, 14, 20);
     doc.setFontSize(9);
-    doc.text(`Sumber: ${data.pqFileName || "MDS BISA Delta Sales"} | Sync: ${data.pqUploadTime}`, 14, 27);
+    doc.text(
+      `Cut-Off: ${data.cutoff?.start || cutoffStart} s/d ${data.cutoff?.end || cutoffEnd} | Sync: ${data.pqUploadTime}`,
+      14,
+      27
+    );
     doc.text(`Omzet Harian (SPD): ${formatCurrency(spdOmzet)} (${spdQty} pcs)`, 14, 33);
     doc.text(
       `Omzet Bulanan (MTD): ${formatCurrency(mtdOmzet)} (${mtdQty} pcs) | Stok SUKO: ${totalStok.toLocaleString("id-ID")} pcs`,
@@ -826,6 +878,69 @@ export default function LaporanPenjualanPage() {
                 </select>
               </div>
             </div>
+          </div>
+
+          {/* Baris 4: Mode Cut-Off Bulanan (Tgl 1 s/d Akhir Bulan) atau Cut-Off Kustom */}
+          <div className={`pt-3 border-t ${borderSub} flex flex-col gap-2.5`}>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className={`grid grid-cols-2 sm:inline-flex p-1 rounded-xl ${softCls} gap-1 text-xs font-extrabold`}>
+                <button
+                  type="button"
+                  onClick={handleSelectMonthlyCutoff}
+                  className={`py-1.5 px-3 rounded-lg cursor-pointer transition-all text-center ${
+                    cutoffMode === "monthly" ? "bg-emerald-600 text-white shadow-xs" : textMuted
+                  }`}
+                >
+                  📅 Cut-Off Tgl 1 – Akhir Bulan
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCutoffMode("custom")}
+                  className={`py-1.5 px-3 rounded-lg cursor-pointer transition-all text-center ${
+                    cutoffMode === "custom" ? "bg-emerald-600 text-white shadow-xs" : textMuted
+                  }`}
+                >
+                  ✂️ Cut-Off Kustom
+                </button>
+              </div>
+
+              <div className={`text-[11px] sm:text-xs font-bold ${textMuted} flex items-center gap-1.5 flex-wrap`}>
+                <span>Periode Cut-Off Aktif:</span>
+                <span className="px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-600 font-extrabold tabular-nums">
+                  {formatShortDate(data?.cutoff?.start || cutoffStart)} – {formatShortDate(data?.cutoff?.end || cutoffEnd)}
+                </span>
+              </div>
+            </div>
+
+            {cutoffMode === "custom" && (
+              <div className="grid grid-cols-2 sm:flex items-end gap-2">
+                <label className="flex flex-col gap-1 text-[11px] font-bold">
+                  <span className={textMuted}>Dari Tanggal</span>
+                  <input
+                    type="date"
+                    value={cutoffStart}
+                    onChange={(e) => setCutoffStart(e.target.value)}
+                    className={`${softCls} rounded-xl px-2.5 py-2 text-xs font-bold ${textPrimary} outline-none focus:border-emerald-500 w-full`}
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-[11px] font-bold">
+                  <span className={textMuted}>Sampai Tanggal</span>
+                  <input
+                    type="date"
+                    value={cutoffEnd}
+                    onChange={(e) => setCutoffEnd(e.target.value)}
+                    className={`${softCls} rounded-xl px-2.5 py-2 text-xs font-bold ${textPrimary} outline-none focus:border-emerald-500 w-full`}
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={handleApplyCustomCutoff}
+                  className="col-span-2 sm:col-span-1 h-9 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold cursor-pointer transition-all"
+                >
+                  Terapkan Cut-Off
+                </button>
+              </div>
+            )}
           </div>
         </div>
 

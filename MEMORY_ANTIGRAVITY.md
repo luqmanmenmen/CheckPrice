@@ -1793,3 +1793,26 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   - `python -m py_compile morning_full_sweep.py run_admin_analytics.py`: Lulus (`PY_COMPILE_OK`).
   - `run_admin_analytics.py --analytics`: Sukses mengunggah `analytics/sales-report-summary.json` bersih ke Storage CDN.
   - `npx tsc --noEmit`, `npm run build` (`47/47` rute), dan audit zero-truncate lulus 0 error.
+
+---
+
+### 103. Mobile UI/UX Polish, Target Toko Global Editable (SPV/Developer), & Mode Cut-Off Periode (Tgl 1–Akhir Bulan + Kustom) (21 November 2026)
+
+- **Arahan Pengguna:**
+  1. Merapikan tampilan UI/UX Mobile (`360px–390px`) halaman Laporan Penjualan agar rapi, simetris, bebas overflow, dan tidak ada teks terpotong.
+  2. Menjadikan bar persentase departemen mengacu pada **Target Toko Global** (default **Rp 2 M**, bisa diedit oleh **SPV** atau **Developer** agar seluruh perangkat otomatis ikut menyesuaikan).
+  3. Menambahkan **Mode Cut-Off** default **Tanggal 1 s/d tanggal berakhirnya bulan tersebut** (otomatis 28/29/30/31) plus opsi **Cut-Off Kustom** (`Dari Tanggal` – `Sampai Tanggal`).
+  4. Meluruskan tampilan `SUKO CASUAL ... Rp 6 M` pada kartu lama (yang merupakan **valuasi stok fisik EOH `30.189 pcs × harga retail`**, bukan omzet sales lama) agar label `Omzet` vs `Stok EOH` terpisah tegas.
+
+- **Perubahan yang Diterapkan:**
+  1. **Mobile-First Polish (`fa631ea`) ([`src/app/super-admin/laporan-penjualan/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/laporan-penjualan/page.tsx)):** Penataan ulang header aksi simetris di HP (`grid-cols-2` / `grid-cols-4`), hero omzet, 4 kartu KPI, 4 tab segmented pill, dan daftar departemen tanpa nested scroll & zero truncate.
+  2. **Target Toko Global SPV/Developer (`9c7101c`) ([`src/app/api/admin/store-target/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/store-target/route.ts), [`src/app/super-admin/laporan-penjualan/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/laporan-penjualan/page.tsx)):**
+     - Endpoint `GET/POST /api/admin/store-target` menyimpan target global ke Supabase Storage (`excel-uploads/analytics/store-target.json`, default `Rp 2.000.000.000`, 0 beban tabel Postgres), tervalidasi ketat hanya untuk role `SUPERVISOR` / `ADMIN` / `SUPER_ADMIN` atau NIK Developer `22054178`.
+     - Bar kontribusi departemen secara default mengacu ke **Target Toko** (`Omzet Dept / Target Toko`), menampilkan label jelas `Rp 0 (0.0% dr Target)` + sub-baris `Stok 30.189 pcs • EOH Rp 6 M`, dengan switch opsional ke mode `EOH Stok`.
+  3. **Mode Cut-Off Bulanan (Tgl 1 – Akhir Bulan) & Cut-Off Kustom ([`src/app/api/admin/sales-report/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/sales-report/route.ts), [`src/app/super-admin/laporan-penjualan/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/laporan-penjualan/page.tsx)):**
+     - API `/api/admin/sales-report` mendukung `cutoffStart` & `cutoffEnd` (`YYYY-MM-DD`), default otomatis **Tanggal 1 s/d hari terakhir bulan aktif (`28/29/30/31`)**, dan saat Cut-Off Kustom aktif mengagregasi murni dari tabel `DailySales` untuk `summary`, `categoryBreakdown`, `topFast`, `items`, dan `trendData` (0 full-scan `Product`) serta mengembalikan blok `cutoff: { start, end, isCustom }`.
+     - UI menambahkan Bar Mode Cut-Off (`📅 Cut-Off Tgl 1 – Akhir Bulan` | `✂️ Cut-Off Kustom`) lengkap dengan indikator rentang aktif, pemilih tanggal mobile-friendly, tombol `Terapkan Cut-Off`, dan pencantuman periode Cut-Off di ekspor PDF.
+
+- **Verifikasi Nyata:**
+  - Audit zero-truncate pada `src/app/super-admin/laporan-penjualan/page.tsx`: `0` temuan.
+  - `npx tsc --noEmit` dan `npm run build` lulus `exit code 0`.

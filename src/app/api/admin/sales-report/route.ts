@@ -22,6 +22,12 @@ export async function GET(request: NextRequest) {
     const limit = parseInt(searchParams.get("limit") || "99999");
     const skip = (page - 1) * limit;
     const targetDateParam = searchParams.get("date") || "";
+    const cutoffStartParam = (searchParams.get("cutoffStart") || "").trim();
+    const cutoffEndParam = (searchParams.get("cutoffEnd") || "").trim();
+    const hasCustomCutoff =
+      /^\d{4}-\d{2}-\d{2}$/.test(cutoffStartParam) &&
+      /^\d{4}-\d{2}-\d{2}$/.test(cutoffEndParam) &&
+      cutoffStartParam <= cutoffEndParam;
 
     // Check latest sync to invalidate cache if new data arrived (mendukung MDS_SALES_SYNC, STOCK_SYNC, dan PQ_HARIAN)
     const SALES_SYNC_TYPES = ["MDS_SALES_SYNC", "STOCK_SYNC", "PQ_HARIAN"];
@@ -37,7 +43,7 @@ export async function GET(request: NextRequest) {
     }
 
     const forceRefresh = searchParams.get("refresh") === "1";
-    const cacheKey = `${targetDateParam}_${timeframe}_${deptFilter}_${page}_${limit}`;
+    const cacheKey = `${targetDateParam}_${timeframe}_${deptFilter}_${page}_${limit}_${cutoffStartParam}_${cutoffEndParam}`;
     if (!forceRefresh && routeCache[cacheKey] && Date.now() - routeCache[cacheKey].timestamp < CACHE_TTL) {
       return NextResponse.json(routeCache[cacheKey].data);
     }
@@ -132,42 +138,56 @@ export async function GET(request: NextRequest) {
       ? new Date(selectedSync.createdAt).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' })
       : '-';
 
-    let mtdMonthObj = new Date();
-    if (timeframe === '1Y') {
-      mtdMonthObj = new Date(parseInt(targetDateValue), 11, 31);
-    } else if (timeframe === '1M') {
+    let mtdMonthObj = new Date(`${todayStr}T00:00:00.000Z`);
+    if (timeframe === '1Y' && /^\d{4}$/.test(targetDateValue)) {
+      mtdMonthObj = new Date(parseInt(targetDateValue, 10), 11, 31);
+    } else if (timeframe === '1M' && /^\d{4}-\d{2}/.test(targetDateValue)) {
       const [y, m] = targetDateValue.split('-');
-      mtdMonthObj = new Date(parseInt(y), parseInt(m) - 1, 1);
-    } else {
-      mtdMonthObj = new Date(targetDateValue);
+      mtdMonthObj = new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1);
+    } else if (/^\d{4}-\d{2}-\d{2}/.test(targetDateValue)) {
+      const [y, m, d] = targetDateValue.slice(0, 10).split('-');
+      mtdMonthObj = new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
     }
-    const startOfMonth = new Date(mtdMonthObj.getFullYear(), mtdMonthObj.getMonth(), 1);
-    const endOfMonth = new Date(mtdMonthObj.getFullYear(), mtdMonthObj.getMonth() + 1, 0, 23, 59, 59, 999);
+
+    // Default Cut-Off Bulanan: Tanggal 1 s/d tanggal berakhirnya bulan tersebut (28/29/30/31)
+    const monthStartDefault = new Date(mtdMonthObj.getFullYear(), mtdMonthObj.getMonth(), 1, 0, 0, 0, 0);
+    const monthEndDefault = new Date(mtdMonthObj.getFullYear(), mtdMonthObj.getMonth() + 1, 0, 23, 59, 59, 999);
+    const fmtYmd = (dt: Date) =>
+      `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+
+    const startOfMonth = hasCustomCutoff
+      ? new Date(`${cutoffStartParam}T00:00:00.000Z`)
+      : monthStartDefault;
+    const endOfMonth = hasCustomCutoff
+      ? new Date(`${cutoffEndParam}T23:59:59.999Z`)
+      : monthEndDefault;
+    const cutoffStartStr = hasCustomCutoff ? cutoffStartParam : fmtYmd(monthStartDefault);
+    const cutoffEndStr = hasCustomCutoff ? cutoffEndParam : fmtYmd(monthEndDefault);
 
     let startDateObj: Date;
     let endDateObj: Date;
 
-    if (timeframe === '1Y') {
-      const y = parseInt(targetDateValue);
+    if (hasCustomCutoff) {
+      startDateObj = startOfMonth;
+      endDateObj = endOfMonth;
+    } else if (timeframe === '1Y') {
+      const y = parseInt(targetDateValue, 10) || mtdMonthObj.getFullYear();
       startDateObj = new Date(y, 0, 1);
       endDateObj = new Date(y, 11, 31, 23, 59, 59, 999);
     } else if (timeframe === '1M') {
-      const [y, m] = targetDateValue.split('-');
-      startDateObj = new Date(parseInt(y), parseInt(m) - 1, 1);
-      endDateObj = new Date(parseInt(y), parseInt(m), 0, 23, 59, 59, 999);
+      startDateObj = monthStartDefault;
+      endDateObj = monthEndDefault;
     } else if (timeframe === '1W') {
-      const targetDate = new Date(targetDateValue);
-      endDateObj = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 23, 59, 59, 999);
+      endDateObj = new Date(mtdMonthObj.getFullYear(), mtdMonthObj.getMonth(), mtdMonthObj.getDate(), 23, 59, 59, 999);
       startDateObj = new Date(endDateObj);
       startDateObj.setDate(startDateObj.getDate() - 6);
       startDateObj.setHours(0, 0, 0, 0);
     } else { // 1D
-      const targetDate = new Date(targetDateValue);
-      startDateObj = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 0, 0, 0, 0);
-      endDateObj = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 23, 59, 59, 999);
+      startDateObj = new Date(mtdMonthObj.getFullYear(), mtdMonthObj.getMonth(), mtdMonthObj.getDate(), 0, 0, 0, 0);
+      endDateObj = new Date(mtdMonthObj.getFullYear(), mtdMonthObj.getMonth(), mtdMonthObj.getDate(), 23, 59, 59, 999);
     }
 
-    const targetYearMonth = mtdMonthObj.toISOString().substring(0, 7);
+    const targetYearMonth = cutoffStartStr.substring(0, 7);
 
     // 1. SUMMARY CARDS (Prioritaskan pre-computed JSON Python CDN -> 0 full Product aggregate Disk IO)
     const precomputedSummary = await fetchStorageAnalyticsJson<any>("sales-report-summary.json");
@@ -396,14 +416,14 @@ export async function GET(request: NextRequest) {
       for (const [deptName, rawMetrics] of Object.entries(precomputedDepts as Record<string, any>)) {
         const liveMtd = deptMtdMap.get(deptName);
         categoryBreakdown[deptName] = {
-          omzet:          Math.max(Number(rawMetrics.omzet || 0), liveMtd?.omzet || 0),
-          qty:            Math.max(Number(rawMetrics.qty || 0), liveMtd?.qty || 0),
-          omzet_hari_ini: Math.max(Number(rawMetrics.omzet_hari_ini || 0), liveMtd?.todayOmzet || 0),
-          qty_hari_ini:   Math.max(Number(rawMetrics.qty_hari_ini || 0), liveMtd?.todayQty || 0),
-          omzet_wtd:      Math.max(Number(rawMetrics.omzet_wtd || 0), liveMtd?.omzet || 0),
-          qty_wtd:        Math.max(Number(rawMetrics.qty_wtd || 0), liveMtd?.qty || 0),
-          omzet_ytd:      Math.max(Number(rawMetrics.omzet_ytd || 0), liveMtd?.omzet || 0),
-          qty_ytd:        Math.max(Number(rawMetrics.qty_ytd || 0), liveMtd?.qty || 0),
+          omzet:          hasCustomCutoff ? (liveMtd?.omzet || 0) : Math.max(Number(rawMetrics.omzet || 0), liveMtd?.omzet || 0),
+          qty:            hasCustomCutoff ? (liveMtd?.qty || 0) : Math.max(Number(rawMetrics.qty || 0), liveMtd?.qty || 0),
+          omzet_hari_ini: hasCustomCutoff ? (liveMtd?.todayOmzet || 0) : Math.max(Number(rawMetrics.omzet_hari_ini || 0), liveMtd?.todayOmzet || 0),
+          qty_hari_ini:   hasCustomCutoff ? (liveMtd?.todayQty || 0) : Math.max(Number(rawMetrics.qty_hari_ini || 0), liveMtd?.todayQty || 0),
+          omzet_wtd:      hasCustomCutoff ? (liveMtd?.omzet || 0) : Math.max(Number(rawMetrics.omzet_wtd || 0), liveMtd?.omzet || 0),
+          qty_wtd:        hasCustomCutoff ? (liveMtd?.qty || 0) : Math.max(Number(rawMetrics.qty_wtd || 0), liveMtd?.qty || 0),
+          omzet_ytd:      hasCustomCutoff ? (liveMtd?.omzet || 0) : Math.max(Number(rawMetrics.omzet_ytd || 0), liveMtd?.omzet || 0),
+          qty_ytd:        hasCustomCutoff ? (liveMtd?.qty || 0) : Math.max(Number(rawMetrics.qty_ytd || 0), liveMtd?.qty || 0),
           stok:           Number(rawMetrics.stok || 0),
           eoh:            Number(rawMetrics.eoh || 0),
           bom_unit:       Number(rawMetrics.bom_unit || 0),
@@ -589,19 +609,20 @@ export async function GET(request: NextRequest) {
     // 6. TREND DATA - dari DailySales jika ada, fallback ke 1 titik MTD dari PQ
     let trendData: any[] = [];
     try {
-      const targetDate = selectedSync ? new Date(selectedSync.date) : new Date();
-      
-      let startDate = new Date(targetDate.getFullYear(), targetDate.getMonth(), 1);
-      let endDate = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0, 23, 59, 59, 999);
+      let startDate = startOfMonth;
+      let endDate = endOfMonth;
 
-      if (timeframe === '1W' || timeframe === '1D') {
-        // For 1D, just show the last 7 days leading up to the selected date as the trend context
-        startDate = new Date(targetDate);
-        startDate.setDate(startDate.getDate() - 6);
-        startDate.setHours(0, 0, 0, 0);
-      } else if (timeframe === '1Y') {
-        startDate = new Date(targetDate.getFullYear(), 0, 1);
-        endDate = new Date(targetDate.getFullYear(), 11, 31, 23, 59, 59, 999);
+      if (!hasCustomCutoff) {
+        const targetDate = selectedSync ? new Date(selectedSync.date) : new Date();
+        if (timeframe === '1W' || timeframe === '1D') {
+          startDate = new Date(targetDate);
+          startDate.setDate(startDate.getDate() - 6);
+          startDate.setHours(0, 0, 0, 0);
+          endDate = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 23, 59, 59, 999);
+        } else if (timeframe === '1Y') {
+          startDate = new Date(targetDate.getFullYear(), 0, 1);
+          endDate = new Date(targetDate.getFullYear(), 11, 31, 23, 59, 59, 999);
+        }
       }
 
       const salesByDay = await prisma.dailySales.groupBy({
@@ -659,20 +680,29 @@ export async function GET(request: NextRequest) {
         pqUploadTime,
         pqFileName: selectedSync?.fileName || null,
         availableDates: availableDates,
+        cutoff: {
+          start: cutoffStartStr,
+          end: cutoffEndStr,
+          isCustom: hasCustomCutoff,
+        },
         summary: {
           // SPD (Sales Per Day / Hari Ini) — gabungkan DailySales live agar instan tanpa tunggu CDN
-          spd_omzet:        Math.max(selectedDateOmzet, agg._sum.day_sales_retail || 0),
-          spd_qty:          Math.max(selectedDateQty, agg._sum.day_sales_unit || 0),
+          spd_omzet:        hasCustomCutoff ? calculatedMtdOmzet : Math.max(selectedDateOmzet, agg._sum.day_sales_retail || 0),
+          spd_qty:          hasCustomCutoff ? calculatedMtdQty : Math.max(selectedDateQty, agg._sum.day_sales_unit || 0),
           yesterday_omzet:  yesterdayOmzet,
           yesterday_qty:    yesterdayQty,
 
           // WTD (Week To Date / Minggu Ini)
-          wtd_omzet:        Math.max(calculatedMtdOmzet, agg._sum.sales_wtd_retail || 0),
-          wtd_qty:          Math.max(calculatedMtdQty, agg._sum.sales_wtd || 0),
+          wtd_omzet:        hasCustomCutoff ? calculatedMtdOmzet : Math.max(calculatedMtdOmzet, agg._sum.sales_wtd_retail || 0),
+          wtd_qty:          hasCustomCutoff ? calculatedMtdQty : Math.max(calculatedMtdQty, agg._sum.sales_wtd || 0),
 
-          // MTD (Month To Date / Bulan Ini)
-          mtd_omzet:        isCurrentMonth ? Math.max(calculatedMtdOmzet, agg._sum.sales_mtd_retail || 0) : (agg._sum.sales_mtd_retail || 0),
-          mtd_qty:          isCurrentMonth ? Math.max(calculatedMtdQty, agg._sum.sales_mtd || 0) : (agg._sum.sales_mtd || 0),
+          // MTD (Month To Date / Cut-Off 1 s/d Akhir Bulan)
+          mtd_omzet:        hasCustomCutoff
+            ? calculatedMtdOmzet
+            : (isCurrentMonth ? Math.max(calculatedMtdOmzet, agg._sum.sales_mtd_retail || 0) : calculatedMtdOmzet),
+          mtd_qty:          hasCustomCutoff
+            ? calculatedMtdQty
+            : (isCurrentMonth ? Math.max(calculatedMtdQty, agg._sum.sales_mtd || 0) : calculatedMtdQty),
           last_month_omzet: lastMonthOmzet,
           last_month_qty:   lastMonthQty,
 
