@@ -23,8 +23,8 @@ export const WORK_LOCATION_ZONES: StoreGeofenceZone[] = [
     id: "SUKO_719_PAKUWON_MALL",
     name: "SUKO 719 PAKUWON MALL",
     shortName: "SUKO 719 PAKUWON MALL",
-    lat: -7.28918,
-    lng: 112.67565,
+    lat: -7.2896,
+    lng: 112.6747,
     radiusMeters: 750,
   },
   {
@@ -36,6 +36,23 @@ export const WORK_LOCATION_ZONES: StoreGeofenceZone[] = [
     radiusMeters: 700,
   },
 ];
+
+/**
+ * Tentukan zona mall spesifik berdasarkan penempatan toko karyawan (`user.toko`).
+ * - Jika karyawan ditugaskan ke SUKO 719 PAKUWON MALL -> HANYA boleh login di Pakuwon Mall (ditolak meski ke TP).
+ * - Jika karyawan ditugaskan ke SUKO 720 TUNJUNGAN PLAZA -> HANYA boleh login di Tunjungan Plaza (ditolak meski ke Pakuwon).
+ */
+export function resolveAssignedStoreZone(assignedToko?: string | null): StoreGeofenceZone | null {
+  const norm = String(assignedToko || "").trim().toUpperCase();
+  if (!norm) return null;
+  if (norm.includes("PAKUWON") || norm.includes("719")) {
+    return WORK_LOCATION_ZONES[0];
+  }
+  if (norm.includes("TUNJUNGAN") || norm.includes("720") || /\bTP\b/.test(norm)) {
+    return WORK_LOCATION_ZONES[1];
+  }
+  return null;
+}
 
 export interface GeofenceCheckResult {
   allowed: boolean;
@@ -66,12 +83,14 @@ export function haversineDistanceMeters(
 }
 
 /**
- * Verifikasi apakah koordinat GPS HP berada di dalam area Pakuwon Mall atau Tunjungan Plaza Surabaya.
+ * Verifikasi apakah koordinat GPS HP berada di dalam area toko penempatan karyawan.
+ * Jika `assignedToko` merujuk ke Pakuwon Mall atau Tunjungan Plaza, geofence dikunci ketat HANYA ke toko tersebut.
  */
 export function verifyStoreGeofence(
   lat: number,
   lng: number,
-  accuracyMeters?: number | null
+  accuracyMeters?: number | null,
+  assignedToko?: string | null
 ): GeofenceCheckResult | null {
   if (
     !Number.isFinite(lat) ||
@@ -89,9 +108,12 @@ export function verifyStoreGeofence(
       ? Math.min(accuracyMeters * 0.5, 180)
       : 0;
 
+  const assignedZone = resolveAssignedStoreZone(assignedToko);
+  const candidateZones = assignedZone ? [assignedZone] : WORK_LOCATION_ZONES;
+
   let best: GeofenceCheckResult | null = null;
 
-  for (const zone of WORK_LOCATION_ZONES) {
+  for (const zone of candidateZones) {
     const rawDist = haversineDistanceMeters(lat, lng, zone.lat, zone.lng);
     const effectiveDist = Math.max(0, rawDist - safeAccuracyBonus);
     const allowed = effectiveDist <= zone.radiusMeters;

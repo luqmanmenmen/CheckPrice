@@ -276,10 +276,10 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const { id, redirectMds } = await req.json();
+    const { id, redirectMds, toko } = await req.json();
 
-    if (!id || typeof redirectMds !== "boolean") {
-      return NextResponse.json({ error: "ID dan status redirectMds wajib diisi" }, { status: 400 });
+    if (!id) {
+      return NextResponse.json({ error: "ID Karyawan wajib diisi" }, { status: 400 });
     }
 
     const targetUser = await prisma.user.findUnique({
@@ -289,6 +289,27 @@ export async function PATCH(req: NextRequest) {
 
     if (!targetUser) {
       return NextResponse.json({ error: "Karyawan tidak ditemukan" }, { status: 404 });
+    }
+
+    // Mode 1: Pindah Penempatan Lokasi Toko (SUKO 719 PAKUWON MALL <-> SUKO 720 TUNJUNGAN PLAZA) oleh SPV / Developer
+    if (typeof toko === "string" && toko.trim() !== "") {
+      const updatedUser = await prisma.user.update({
+        where: { id },
+        data: {
+          // @ts-ignore
+          toko: toko.trim(),
+        },
+      });
+      return NextResponse.json({
+        success: true,
+        user: updatedUser,
+        message: `Penempatan lokasi kerja ${targetUser.name} (${targetUser.nik}) berhasil dipindahkan ke ${toko.trim()}.`,
+      });
+    }
+
+    // Mode 2: Toggle Redirect
+    if (typeof redirectMds !== "boolean") {
+      return NextResponse.json({ error: "Parameter toko atau redirectMds wajib diisi" }, { status: 400 });
     }
 
     if (targetUser.nik === "22054178" && redirectMds) {

@@ -65,6 +65,34 @@ export default function UsersManagement() {
 
   const [loggingOutAll, setLoggingOutAll] = useState(false);
   const [forcingUserId, setForcingUserId] = useState<string | null>(null);
+  const [updatingStoreUserId, setUpdatingStoreUserId] = useState<string | null>(null);
+
+  const handleQuickChangeStore = async (targetUser: any, nextToko: string) => {
+    if (!nextToko || targetUser.toko === nextToko) return;
+    setUpdatingStoreUserId(targetUser.id);
+    try {
+      const res = await fetch("/api/admin/users", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: targetUser.id, toko: nextToko }),
+      });
+      const resData = await res.json();
+      if (res.ok && resData.success) {
+        showAlert(
+          "Lokasi Kerja Diperbarui",
+          resData.message || `Lokasi kerja ${targetUser.name} dipindahkan ke ${nextToko}.`,
+          "success"
+        );
+        mutate();
+      } else {
+        showAlert("Gagal", resData.error || "Gagal memindahkan lokasi kerja karyawan.", "error");
+      }
+    } catch {
+      showAlert("Error", "Terjadi kesalahan jaringan.", "error");
+    } finally {
+      setUpdatingStoreUserId(null);
+    }
+  };
 
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -538,27 +566,29 @@ export default function UsersManagement() {
                 </select>
               </div>
 
-              {/* Toggle Redirect ke by luqman org */}
-              <div className="md:col-span-2 p-3.5 bg-amber-50/80 rounded-xl border border-amber-200 flex items-center justify-between gap-3">
-                <div className="flex-1">
-                  <div className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
-                    <ExternalLink className="w-3.5 h-3.5 text-amber-600" />
-                    Redirect ke Portal by luqman org
+              {/* Toggle Redirect ke by luqman org (khusus Developer) */}
+              {isTopBoss && (
+                <div className="md:col-span-2 p-3.5 bg-amber-50/80 rounded-xl border border-amber-200 flex items-center justify-between gap-3">
+                  <div className="flex-1">
+                    <div className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+                      <ExternalLink className="w-3.5 h-3.5 text-amber-600" />
+                      Redirect ke Portal by luqman org
+                    </div>
+                    <p className="text-[11px] text-amber-700/80 mt-0.5">
+                      Jika diaktifkan, saat karyawan ini memasukkan NIK &amp; PIN dan Enter di halaman login, sistem langsung melemparnya ke halaman login by luqman org.
+                    </p>
                   </div>
-                  <p className="text-[11px] text-amber-700/80 mt-0.5">
-                    Jika diaktifkan, saat karyawan ini memasukkan NIK &amp; PIN dan Enter di halaman login, sistem langsung melemparnya ke halaman login by luqman org.
-                  </p>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={!!editingUser.redirectMds}
+                      onChange={e => setEditingUser({ ...editingUser, redirectMds: e.target.checked })}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-600"></div>
+                  </label>
                 </div>
-                <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                  <input
-                    type="checkbox"
-                    checked={!!editingUser.redirectMds}
-                    onChange={e => setEditingUser({ ...editingUser, redirectMds: e.target.checked })}
-                    className="sr-only peer"
-                  />
-                  <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-600"></div>
-                </label>
-              </div>
+              )}
 
               <div className="md:col-span-2 mt-4 flex gap-3">
                 <button disabled={loading} type="submit" className="bg-indigo-600 text-white font-bold py-3 px-6 rounded-xl hover:bg-indigo-700 transition-colors flex-1 disabled:opacity-50">
@@ -652,7 +682,30 @@ export default function UsersManagement() {
                   </td>
                   <td className="p-4 font-mono text-slate-500 bg-slate-50 rounded-lg px-2 text-xs">{user.pin}</td>
                   <td className="p-4">
-                    {user.toko ? (
+                    {isSupervisorOrDev ? (
+                      <div className="relative inline-flex items-center">
+                        <Store className="w-3.5 h-3.5 absolute left-2.5 text-indigo-600 pointer-events-none" />
+                        <select
+                          aria-label={`Lokasi kerja ${user.name}`}
+                          value={user.toko || ""}
+                          disabled={updatingStoreUserId === user.id}
+                          onChange={(e) => handleQuickChangeStore(user, e.target.value)}
+                          className="pl-7 pr-2.5 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-800 font-bold text-xs border border-indigo-200 outline-none focus:ring-2 focus:ring-indigo-400 cursor-pointer disabled:opacity-50"
+                          title="Pindah lokasi kerja karyawan (SUKO 719 Pakuwon Mall ↔ SUKO 720 Tunjungan Plaza)"
+                        >
+                          {(!user.toko || !OFFICIAL_STORES.includes(user.toko)) && (
+                            <option value={user.toko || ""}>
+                              {user.toko ? `${user.toko} (Lama)` : "Pilih Lokasi Toko..."}
+                            </option>
+                          )}
+                          {OFFICIAL_STORES.map((storeName) => (
+                            <option key={storeName} value={storeName}>
+                              {storeName}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ) : user.toko ? (
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-indigo-50 text-indigo-700 font-semibold text-xs border border-indigo-100">
                         <Store className="w-3 h-3" />
                         {user.toko}
@@ -760,6 +813,13 @@ export default function UsersManagement() {
                           <LogOut className="w-4 h-4" />
                         </button>
                       )}
+                      <button 
+                        onClick={() => setEditingUser(user)}
+                        className="text-indigo-500 hover:text-indigo-700 p-2 hover:bg-indigo-50 rounded-lg transition-colors mr-1"
+                        title="Edit Data & Lokasi Kerja Karyawan"
+                      >
+                        <Edit className="w-4 h-4" />
+                      </button>
                       {isTopBoss && (
                         <>
                           {user.nik !== "22054178" && (
@@ -775,13 +835,6 @@ export default function UsersManagement() {
                               <ExternalLink className="w-4 h-4" />
                             </button>
                           )}
-                          <button 
-                            onClick={() => setEditingUser(user)}
-                            className="text-indigo-500 hover:text-indigo-700 p-2 hover:bg-indigo-50 rounded-lg transition-colors mr-1"
-                            title="Edit Pengguna"
-                          >
-                            <Edit className="w-4 h-4" />
-                          </button>
                           <button 
                             onClick={() => confirmDelete(user.id, user.name)}
                             className="text-red-500 hover:text-red-700 p-2 hover:bg-red-50 rounded-lg transition-colors"

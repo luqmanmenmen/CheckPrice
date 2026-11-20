@@ -87,7 +87,7 @@ export async function POST(req: NextRequest) {
           );
         }
 
-        const geo = verifyStoreGeofence(lat, lng, accuracy);
+        const geo = verifyStoreGeofence(lat, lng, accuracy, user.toko);
         if (!geo || !geo.allowed) {
           return NextResponse.json(
             {
