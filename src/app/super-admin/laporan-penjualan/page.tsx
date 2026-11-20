@@ -193,23 +193,72 @@ export default function LaporanPenjualanPage() {
   const [showAllDepts, setShowAllDepts] = useState(false);
   const [deptBarMode, setDeptBarMode] = useState<"target" | "stok">("target");
 
+  // Kalender Masehi 100 Tahun ke Depan (otomatis hitung kabisat 28/29/30/31 hari — tanpa perlu scrap!)
+  const MONTH_NAMES_ID = [
+    "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+    "Juli", "Agustus", "September", "Oktober", "November", "Desember",
+  ];
+  const currentWibYear = new Date(Date.now() + 7 * 60 * 60 * 1000).getUTCFullYear();
+  const YEAR_OPTIONS = useMemo(
+    () => Array.from({ length: 103 }, (_, idx) => currentWibYear - 2 + idx), // 2024 s/d 2126 (100 tahun ke depan)
+    [currentWibYear]
+  );
+
+  const getMonthCutoffBounds = (yearNum: number, month1To12: number) => {
+    const lastDay = new Date(Date.UTC(yearNum, month1To12, 0)).getUTCDate();
+    const mm = String(month1To12).padStart(2, "0");
+    return {
+      start: `${yearNum}-${mm}-01`,
+      end: `${yearNum}-${mm}-${String(lastDay).padStart(2, "0")}`,
+    };
+  };
+
   // Mode Cut-Off Periode (Default: Tanggal 1 s/d Tanggal Berakhirnya Bulan Ini; bisa juga Cut-Off Kustom)
   const getCurrentMonthCutoffBounds = () => {
     const nowWib = new Date(Date.now() + 7 * 60 * 60 * 1000);
-    const y = nowWib.getUTCFullYear();
-    const m = nowWib.getUTCMonth();
-    const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
-    const mm = String(m + 1).padStart(2, "0");
-    return {
-      start: `${y}-${mm}-01`,
-      end: `${y}-${mm}-${String(lastDay).padStart(2, "0")}`,
-    };
+    return getMonthCutoffBounds(nowWib.getUTCFullYear(), nowWib.getUTCMonth() + 1);
   };
   const defaultCutoffBounds = getCurrentMonthCutoffBounds();
   const [cutoffMode, setCutoffMode] = useState<"monthly" | "custom">("monthly");
   const [cutoffStart, setCutoffStart] = useState<string>(defaultCutoffBounds.start);
   const [cutoffEnd, setCutoffEnd] = useState<string>(defaultCutoffBounds.end);
   const [appliedCutoff, setAppliedCutoff] = useState<{ start: string; end: string } | null>(null);
+
+  const parsedSelectedYM = (() => {
+    const base = selectedDate || defaultCutoffBounds.start;
+    const m = base.match(/^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?/);
+    const nowWib = new Date(Date.now() + 7 * 60 * 60 * 1000);
+    const y = m ? parseInt(m[1], 10) : currentWibYear;
+    const mo = m && m[2] ? parseInt(m[2], 10) : nowWib.getUTCMonth() + 1;
+    const dy = m && m[3] ? parseInt(m[3], 10) : nowWib.getUTCDate();
+    return {
+      year: y,
+      month: Math.min(12, Math.max(1, mo)),
+      day: Math.min(31, Math.max(1, dy)),
+    };
+  })();
+
+  const handleSelectMonthYear = (nextYear: number, nextMonth: number) => {
+    const mm = String(nextMonth).padStart(2, "0");
+    const bounds = getMonthCutoffBounds(nextYear, nextMonth);
+    setSelectedDate(`${nextYear}-${mm}`);
+    setCutoffStart(bounds.start);
+    setCutoffEnd(bounds.end);
+    if (cutoffMode === "monthly") {
+      setAppliedCutoff(null);
+    }
+  };
+
+  const handleChangeTimeframe = (nextTf: "1D" | "1W" | "1M" | "1Y") => {
+    setTimeframe(nextTf);
+    const { year, month, day } = parsedSelectedYM;
+    const mm = String(month).padStart(2, "0");
+    const maxDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const dd = String(Math.min(day, maxDay)).padStart(2, "0");
+    if (nextTf === "1Y") setSelectedDate(String(year));
+    else if (nextTf === "1M") setSelectedDate(`${year}-${mm}`);
+    else setSelectedDate(`${year}-${mm}-${dd}`);
+  };
 
   // Theme switcher: default Clean Light Toko, bisa switch ke Executive Dark kapan saja
   const [darkMode, setDarkMode] = useState(false);
@@ -416,6 +465,15 @@ export default function LaporanPenjualanPage() {
     const d = new Date(dateStr);
     if (isNaN(d.getTime())) return dateStr;
     return d.toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" });
+  };
+
+  const formatCutoffDate = (dateStr: string) => {
+    if (!dateStr) return "";
+    const m = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!m) return formatShortDate(dateStr);
+    const months = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+    const moIdx = Math.max(0, Math.min(11, parseInt(m[2], 10) - 1));
+    return `${m[3]} ${months[moIdx]} ${m[1]}`;
   };
 
   const formatShortDate = (dateStr: string) => {
@@ -834,7 +892,7 @@ export default function LaporanPenjualanPage() {
                 <button
                   key={tf}
                   type="button"
-                  onClick={() => setTimeframe(tf)}
+                  onClick={() => handleChangeTimeframe(tf)}
                   className={`py-2 sm:px-3 sm:py-1.5 text-xs font-extrabold rounded-lg transition-all cursor-pointer text-center ${
                     timeframe === tf
                       ? "bg-emerald-600 text-white shadow-xs"
@@ -850,21 +908,74 @@ export default function LaporanPenjualanPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex items-center gap-2 w-full lg:w-auto">
               <div className={`flex items-center gap-2 ${softCls} px-3 py-2 rounded-xl w-full lg:w-auto`}>
                 <Calendar className="w-4 h-4 text-emerald-600 shrink-0" />
-                <select
-                  value={selectedDate}
-                  onChange={(e) => setSelectedDate(e.target.value)}
-                  className={`bg-transparent border-none text-xs font-bold ${textPrimary} focus:ring-0 cursor-pointer outline-none w-full`}
-                >
-                  {(data?.availableDates?.length ? data.availableDates : [selectedDate || "2026-11-21"]).map((date) => (
-                    <option
-                      key={date}
-                      value={date}
-                      className={darkMode ? "bg-slate-900 text-slate-100" : "bg-white text-slate-900"}
+                {timeframe === "1M" ? (
+                  <div className="flex items-center gap-1.5 w-full">
+                    <select
+                      aria-label="Pilih Bulan"
+                      value={parsedSelectedYM.month}
+                      onChange={(e) => handleSelectMonthYear(parsedSelectedYM.year, Number(e.target.value))}
+                      className={`bg-transparent border-none text-xs font-bold ${textPrimary} focus:ring-0 cursor-pointer outline-none flex-1 min-w-0`}
                     >
-                      {formatDate(date)}
-                    </option>
-                  ))}
-                </select>
+                      {MONTH_NAMES_ID.map((mName, idx) => (
+                        <option
+                          key={mName}
+                          value={idx + 1}
+                          className={darkMode ? "bg-slate-900 text-slate-100" : "bg-white text-slate-900"}
+                        >
+                          {mName}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      aria-label="Pilih Tahun"
+                      value={parsedSelectedYM.year}
+                      onChange={(e) => handleSelectMonthYear(Number(e.target.value), parsedSelectedYM.month)}
+                      className={`bg-transparent border-none text-xs font-extrabold ${textPrimary} focus:ring-0 cursor-pointer outline-none shrink-0`}
+                    >
+                      {YEAR_OPTIONS.map((yr) => (
+                        <option
+                          key={yr}
+                          value={yr}
+                          className={darkMode ? "bg-slate-900 text-slate-100" : "bg-white text-slate-900"}
+                        >
+                          {yr}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : timeframe === "1Y" ? (
+                  <select
+                    aria-label="Pilih Tahun"
+                    value={parsedSelectedYM.year}
+                    onChange={(e) => setSelectedDate(String(e.target.value))}
+                    className={`bg-transparent border-none text-xs font-bold ${textPrimary} focus:ring-0 cursor-pointer outline-none w-full`}
+                  >
+                    {YEAR_OPTIONS.map((yr) => (
+                      <option
+                        key={yr}
+                        value={yr}
+                        className={darkMode ? "bg-slate-900 text-slate-100" : "bg-white text-slate-900"}
+                      >
+                        Tahun {yr}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="date"
+                    min={`${YEAR_OPTIONS[0]}-01-01`}
+                    max={`${YEAR_OPTIONS[YEAR_OPTIONS.length - 1]}-12-31`}
+                    value={
+                      /^\d{4}-\d{2}-\d{2}$/.test(selectedDate)
+                        ? selectedDate
+                        : `${parsedSelectedYM.year}-${String(parsedSelectedYM.month).padStart(2, "0")}-${String(parsedSelectedYM.day).padStart(2, "0")}`
+                    }
+                    onChange={(e) => {
+                      if (e.target.value) setSelectedDate(e.target.value);
+                    }}
+                    className={`bg-transparent border-none text-xs font-bold ${textPrimary} focus:ring-0 cursor-pointer outline-none w-full`}
+                  />
+                )}
               </div>
 
               <div className={`flex items-center gap-2 ${softCls} px-3 py-2 rounded-xl w-full lg:w-auto`}>
@@ -918,7 +1029,7 @@ export default function LaporanPenjualanPage() {
               <div className={`text-[11px] sm:text-xs font-bold ${textMuted} flex items-center gap-1.5 flex-wrap`}>
                 <span>Periode Cut-Off Aktif:</span>
                 <span className="px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-600 font-extrabold tabular-nums">
-                  {formatShortDate(data?.cutoff?.start || cutoffStart)} – {formatShortDate(data?.cutoff?.end || cutoffEnd)}
+                  {formatCutoffDate(data?.cutoff?.start || cutoffStart)} – {formatCutoffDate(data?.cutoff?.end || cutoffEnd)}
                 </span>
               </div>
             </div>

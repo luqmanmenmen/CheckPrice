@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
       orderBy: { createdAt: "desc" },
       select: { id: true }
     });
-    
+
     if (latestSync && latestSync.id !== lastSyncId) {
       routeCache = {}; // Invalidate cache
       lastSyncId = latestSync.id;
@@ -63,9 +63,9 @@ export async function GET(request: NextRequest) {
     });
 
     const MONTHS: Record<string, string> = {
-      JANUARI:'01', JANUARY:'01', FEBRUARI:'02', FEBRUARY:'02', MARET:'03', MARCH:'03', APRIL:'04',
-      MEI:'05', MAY:'05', JUNI:'06', JUNE:'06', JULI:'07', JULY:'07', AGUSTUS:'08', AUGUST:'08',
-      SEPTEMBER:'09', OKTOBER:'10', OCTOBER:'10', NOVEMBER:'11', DESEMBER:'12', DECEMBER:'12'
+      JANUARI: '01', JANUARY: '01', FEBRUARI: '02', FEBRUARY: '02', MARET: '03', MARCH: '03', APRIL: '04',
+      MEI: '05', MAY: '05', JUNI: '06', JUNE: '06', JULI: '07', JULY: '07', AGUSTUS: '08', AUGUST: '08',
+      SEPTEMBER: '09', OKTOBER: '10', OCTOBER: '10', NOVEMBER: '11', DESEMBER: '12', DECEMBER: '12'
     };
 
     const parsedSyncs = allPqSyncs.map(sync => {
@@ -73,7 +73,7 @@ export async function GET(request: NextRequest) {
       const match = sync.fileName.match(/(\d{1,2})\s+([A-Z]+)\s+(\d{4})/i);
       if (match) {
         const m = MONTHS[match[2].toUpperCase()] || '01';
-        dateLabel = `${match[3]}-${m}-${match[1].padStart(2,'0')}`;
+        dateLabel = `${match[3]}-${m}-${match[1].padStart(2, '0')}`;
       }
       return {
         date: dateLabel,
@@ -85,7 +85,7 @@ export async function GET(request: NextRequest) {
     // Build options based on timeframe
     let availableDates: string[] = [];
     let availableSyncs: any[] = [];
-    
+
     if (timeframe === "1Y") {
       const uniqueYearsMap = new Map();
       for (const sync of parsedSyncs) {
@@ -113,29 +113,39 @@ export async function GET(request: NextRequest) {
     }
 
     let targetDateValue = availableDates.length > 0 ? availableDates[0] : (
-      timeframe === '1Y' ? todayStr.substring(0,4) :
-      timeframe === '1M' ? todayStr.substring(0,7) :
-      todayStr
+      timeframe === '1Y' ? todayStr.substring(0, 4) :
+        timeframe === '1M' ? todayStr.substring(0, 7) :
+          todayStr
     );
     let selectedSync = availableSyncs.length > 0 ? availableSyncs[0] : null;
 
     if (targetDateParam && targetDateParam !== "") {
+      const cleanParam = targetDateParam.trim();
       const found = availableSyncs.find(s => {
-        if (timeframe === '1Y') return s.date.substring(0,4) === targetDateParam.substring(0,4);
-        if (timeframe === '1M') return s.date.substring(0,7) === targetDateParam.substring(0,7);
-        return s.date === targetDateParam;
+        if (timeframe === '1Y') return s.date.substring(0,4) === cleanParam.substring(0,4);
+        if (timeframe === '1M') return s.date.substring(0,7) === cleanParam.substring(0,7);
+        return s.date === cleanParam;
       });
       if (found) {
         selectedSync = found;
-        if (timeframe === '1Y') targetDateValue = targetDateParam.substring(0,4);
-        else if (timeframe === '1M') targetDateValue = targetDateParam.substring(0,7);
-        else targetDateValue = targetDateParam;
+      } else {
+        selectedSync = null;
+      }
+      // Terima kalender Masehi penuh (2020–2130, 100+ tahun ke depan) meski belum ada data SyncHistory
+      if (timeframe === '1Y' && /^\d{4}/.test(cleanParam)) {
+        targetDateValue = cleanParam.substring(0, 4);
+      } else if (timeframe === '1M' && /^\d{4}-\d{2}/.test(cleanParam)) {
+        targetDateValue = cleanParam.substring(0, 7);
+      } else if (/^\d{4}-\d{2}-\d{2}/.test(cleanParam)) {
+        targetDateValue = cleanParam.substring(0, 10);
+      } else if (found) {
+        targetDateValue = cleanParam;
       }
     }
 
-    let pqDateLabel = targetDateValue; 
+    let pqDateLabel = targetDateValue;
     const pqUploadTime = selectedSync?.createdAt
-      ? new Date(selectedSync.createdAt).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' })
+      ? new Date(selectedSync.createdAt).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
       : '-';
 
     let mtdMonthObj = new Date(`${todayStr}T00:00:00.000Z`);
@@ -188,28 +198,31 @@ export async function GET(request: NextRequest) {
     }
 
     const targetYearMonth = cutoffStartStr.substring(0, 7);
+    const isCurrentMonth = targetYearMonth === todayStr.substring(0, 7);
+    const isCurrentYear = cutoffStartStr.substring(0, 4) === todayStr.substring(0, 4);
+    const useDailySalesOnly = hasCustomCutoff || !isCurrentMonth;
 
     // 1. SUMMARY CARDS (Prioritaskan pre-computed JSON Python CDN -> 0 full Product aggregate Disk IO)
     const precomputedSummary = await fetchStorageAnalyticsJson<any>("sales-report-summary.json");
     const agg = precomputedSummary?.aggSummary
       ? { _sum: precomputedSummary.aggSummary }
       : await prisma.product.aggregate({
-          _sum: {
-            day_sales_retail: true,
-            day_sales_unit:   true,
-            sales_wtd:        true,
-            sales_wtd_retail: true,
-            sales_mtd:        true,
-            sales_mtd_retail: true,
-            sales_ytd:        true,
-            sales_ytd_retail: true,
-            eoh_retail:       true,
-            stok:             true,
-            boy_unit:         true,
-            boy_retail:       true,
-            bom_unit:         true,
-          }
-        });
+        _sum: {
+          day_sales_retail: true,
+          day_sales_unit: true,
+          sales_wtd: true,
+          sales_wtd_retail: true,
+          sales_mtd: true,
+          sales_mtd_retail: true,
+          sales_ytd: true,
+          sales_ytd_retail: true,
+          eoh_retail: true,
+          stok: true,
+          boy_unit: true,
+          boy_retail: true,
+          bom_unit: true,
+        }
+      });
 
     let selectedDateOmzet = 0;
     let selectedDateQty = 0;
@@ -254,13 +267,13 @@ export async function GET(request: NextRequest) {
 
     const [totalProducts, totalWithPromo] = precomputedSummary?.aggSummary
       ? [
-          Number(precomputedSummary.aggSummary.totalProducts || 0),
-          Number(precomputedSummary.aggSummary.totalWithPromo || 0),
-        ]
+        Number(precomputedSummary.aggSummary.totalProducts || 0),
+        Number(precomputedSummary.aggSummary.totalWithPromo || 0),
+      ]
       : await Promise.all([
-          getEstimatedProductCount(),
-          prisma.catalogArticle.count({ where: { articleHasPromo: true } }),
-        ]);
+        getEstimatedProductCount(),
+        prisma.catalogArticle.count({ where: { articleHasPromo: true } }),
+      ]);
 
     // Hitung omzet promo & Siapkan Report Items dari DailySales
     let omzetPromo = 0;
@@ -268,13 +281,13 @@ export async function GET(request: NextRequest) {
     const items = [];
     let anomalyCount = 0;
 
-    if (selectedSync) {
+    if (selectedSync || useDailySalesOnly) {
       const dsAgg = await prisma.dailySales.groupBy({
         by: ['productId'],
         where: { date: { gte: startOfMonth, lte: endOfMonth } },
         _sum: { qtySold: true, omzet: true }
       });
-      
+
       const productIds = dsAgg.map((a: any) => a.productId);
       const dsProducts = await prisma.product.findMany({
         where: { id: { in: productIds } },
@@ -288,10 +301,10 @@ export async function GET(request: NextRequest) {
       for (const d of dsAgg) {
         const p = dsProducts.find((x: any) => x.id === d.productId);
         if (!p) continue;
-        
+
         const qty = d._sum.qtySold || 0;
         const total = d._sum.omzet || 0;
-        
+
         let unitPrice = p.hargaNormal || 0;
         let isPromo = false;
         let status = 'NORMAL';
@@ -303,7 +316,7 @@ export async function GET(request: NextRequest) {
           qtyPromo += qty;
           omzetPromo += total; // Use actual total from PQ for accuracy
         }
-        
+
         if (unitPrice === 0) {
           status = 'NO_PRICE';
           anomalyCount++;
@@ -324,7 +337,7 @@ export async function GET(request: NextRequest) {
           itemTotal: total
         });
       }
-      
+
       // Sort items by total desc
       items.sort((a, b) => b.itemTotal - a.itemTotal);
     } else {
@@ -416,14 +429,14 @@ export async function GET(request: NextRequest) {
       for (const [deptName, rawMetrics] of Object.entries(precomputedDepts as Record<string, any>)) {
         const liveMtd = deptMtdMap.get(deptName);
         categoryBreakdown[deptName] = {
-          omzet:          hasCustomCutoff ? (liveMtd?.omzet || 0) : Math.max(Number(rawMetrics.omzet || 0), liveMtd?.omzet || 0),
-          qty:            hasCustomCutoff ? (liveMtd?.qty || 0) : Math.max(Number(rawMetrics.qty || 0), liveMtd?.qty || 0),
-          omzet_hari_ini: hasCustomCutoff ? (liveMtd?.todayOmzet || 0) : Math.max(Number(rawMetrics.omzet_hari_ini || 0), liveMtd?.todayOmzet || 0),
-          qty_hari_ini:   hasCustomCutoff ? (liveMtd?.todayQty || 0) : Math.max(Number(rawMetrics.qty_hari_ini || 0), liveMtd?.todayQty || 0),
-          omzet_wtd:      hasCustomCutoff ? (liveMtd?.omzet || 0) : Math.max(Number(rawMetrics.omzet_wtd || 0), liveMtd?.omzet || 0),
-          qty_wtd:        hasCustomCutoff ? (liveMtd?.qty || 0) : Math.max(Number(rawMetrics.qty_wtd || 0), liveMtd?.qty || 0),
-          omzet_ytd:      hasCustomCutoff ? (liveMtd?.omzet || 0) : Math.max(Number(rawMetrics.omzet_ytd || 0), liveMtd?.omzet || 0),
-          qty_ytd:        hasCustomCutoff ? (liveMtd?.qty || 0) : Math.max(Number(rawMetrics.qty_ytd || 0), liveMtd?.qty || 0),
+          omzet:          useDailySalesOnly ? (liveMtd?.omzet || 0) : Math.max(Number(rawMetrics.omzet || 0), liveMtd?.omzet || 0),
+          qty:            useDailySalesOnly ? (liveMtd?.qty || 0) : Math.max(Number(rawMetrics.qty || 0), liveMtd?.qty || 0),
+          omzet_hari_ini: useDailySalesOnly ? (liveMtd?.todayOmzet || 0) : Math.max(Number(rawMetrics.omzet_hari_ini || 0), liveMtd?.todayOmzet || 0),
+          qty_hari_ini:   useDailySalesOnly ? (liveMtd?.todayQty || 0) : Math.max(Number(rawMetrics.qty_hari_ini || 0), liveMtd?.todayQty || 0),
+          omzet_wtd:      useDailySalesOnly ? (liveMtd?.omzet || 0) : Math.max(Number(rawMetrics.omzet_wtd || 0), liveMtd?.omzet || 0),
+          qty_wtd:        useDailySalesOnly ? (liveMtd?.qty || 0) : Math.max(Number(rawMetrics.qty_wtd || 0), liveMtd?.qty || 0),
+          omzet_ytd:      useDailySalesOnly ? (liveMtd?.omzet || 0) : Math.max(Number(rawMetrics.omzet_ytd || 0), liveMtd?.omzet || 0),
+          qty_ytd:        useDailySalesOnly ? (liveMtd?.qty || 0) : Math.max(Number(rawMetrics.qty_ytd || 0), liveMtd?.qty || 0),
           stok:           Number(rawMetrics.stok || 0),
           eoh:            Number(rawMetrics.eoh || 0),
           bom_unit:       Number(rawMetrics.bom_unit || 0),
@@ -436,18 +449,18 @@ export async function GET(request: NextRequest) {
         where: { OR: [{ stok: { gt: 0 } }, { sales_mtd: { gt: 0 } }, { day_sales_unit: { gt: 0 } }] },
         _sum: {
           sales_mtd_retail: true,
-          sales_mtd:        true,
+          sales_mtd: true,
           sales_wtd_retail: true,
-          sales_wtd:        true,
+          sales_wtd: true,
           sales_ytd_retail: true,
-          sales_ytd:        true,
-          stok:             true,
-          eoh_retail:       true,
+          sales_ytd: true,
+          stok: true,
+          eoh_retail: true,
           day_sales_retail: true,
-          day_sales_unit:   true,
-          bom_unit:         true,
-          boy_unit:         true,
-          boy_retail:       true,
+          day_sales_unit: true,
+          bom_unit: true,
+          boy_unit: true,
+          boy_retail: true,
         },
         orderBy: { _sum: { sales_mtd_retail: 'desc' } },
       });
@@ -455,14 +468,14 @@ export async function GET(request: NextRequest) {
         const deptName = (d.dept || 'SUKO LAINNYA').trim();
         const liveMtd = deptMtdMap.get(deptName);
         categoryBreakdown[deptName] = {
-          omzet:          Math.max(d._sum.sales_mtd_retail || 0, liveMtd?.omzet || 0),
-          qty:            Math.max(d._sum.sales_mtd || 0, liveMtd?.qty || 0),
-          omzet_hari_ini: Math.max(d._sum.day_sales_retail || 0, liveMtd?.todayOmzet || 0),
-          qty_hari_ini:   Math.max(d._sum.day_sales_unit || 0, liveMtd?.todayQty || 0),
-          omzet_wtd:      d._sum.sales_wtd_retail || 0,
-          qty_wtd:        d._sum.sales_wtd || 0,
-          omzet_ytd:      d._sum.sales_ytd_retail || 0,
-          qty_ytd:        d._sum.sales_ytd || 0,
+          omzet:          useDailySalesOnly ? (liveMtd?.omzet || 0) : Math.max(d._sum.sales_mtd_retail || 0, liveMtd?.omzet || 0),
+          qty:            useDailySalesOnly ? (liveMtd?.qty || 0) : Math.max(d._sum.sales_mtd || 0, liveMtd?.qty || 0),
+          omzet_hari_ini: useDailySalesOnly ? (liveMtd?.todayOmzet || 0) : Math.max(d._sum.day_sales_retail || 0, liveMtd?.todayOmzet || 0),
+          qty_hari_ini:   useDailySalesOnly ? (liveMtd?.todayQty || 0) : Math.max(d._sum.day_sales_unit || 0, liveMtd?.todayQty || 0),
+          omzet_wtd:      useDailySalesOnly ? (liveMtd?.omzet || 0) : (d._sum.sales_wtd_retail || 0),
+          qty_wtd:        useDailySalesOnly ? (liveMtd?.qty || 0) : (d._sum.sales_wtd || 0),
+          omzet_ytd:      useDailySalesOnly ? (liveMtd?.omzet || 0) : (d._sum.sales_ytd_retail || 0),
+          qty_ytd:        useDailySalesOnly ? (liveMtd?.qty || 0) : (d._sum.sales_ytd || 0),
           stok:           Math.max(0, d._sum.stok || 0),
           eoh:            Math.max(0, d._sum.eoh_retail || 0),
           bom_unit:       Math.max(0, d._sum.bom_unit || 0),
@@ -471,15 +484,42 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // 3. TOP FAST MOVE (Dinamis berdasarkan timeframe)
+    // 3. TOP FAST MOVE (Dinamis berdasarkan timeframe & mode Cut-Off)
     let topFast: any[] = [];
     try {
-      if (timeframe === '1D') {
+      if (useDailySalesOnly) {
+        const cutoffAgg = await prisma.dailySales.groupBy({
+          by: ['productId'],
+          where: {
+            date: { gte: startOfMonth, lte: endOfMonth },
+            ...(deptFilter ? { product: { dept: deptFilter } } : {}),
+          },
+          _sum: { qtySold: true, omzet: true },
+          orderBy: { _sum: { qtySold: 'desc' } },
+          take: 10
+        });
+        const productIds = cutoffAgg.map((a: any) => a.productId);
+        const topFastProducts = productIds.length > 0
+          ? await prisma.product.findMany({
+              where: { id: { in: productIds } },
+              select: { id: true, sku: true, description: true }
+            })
+          : [];
+        topFast = cutoffAgg.map((agg: any) => {
+          const p = topFastProducts.find((x: any) => x.id === agg.productId);
+          return {
+            sku: p?.sku || '-',
+            description: p?.description || '-',
+            sales_qty: agg._sum.qtySold || 0,
+            omzet_total: agg._sum.omzet || 0
+          };
+        });
+      } else if (timeframe === '1D') {
         const startDate = selectedSync ? new Date(selectedSync.date) : new Date();
         startDate.setHours(0, 0, 0, 0);
         const endDate = new Date(startDate);
         endDate.setHours(23, 59, 59, 999);
-        
+
         const dailyAgg = await prisma.dailySales.groupBy({
           by: ['productId'],
           where: { date: { gte: startDate, lte: endDate } },
@@ -487,13 +527,13 @@ export async function GET(request: NextRequest) {
           orderBy: { _sum: { qtySold: 'desc' } },
           take: 10
         });
-        
+
         const productIds = dailyAgg.map((a: any) => a.productId);
         const topFastProducts = await prisma.product.findMany({
           where: { id: { in: productIds } },
           select: { id: true, sku: true, description: true }
         });
-        
+
         topFast = dailyAgg.map((agg: any) => {
           const p = topFastProducts.find((x: any) => x.id === agg.productId);
           return {
@@ -505,34 +545,34 @@ export async function GET(request: NextRequest) {
         });
       } else {
         if (isNewMonth && timeframe === '1M') {
-           // Gunakan DailySales
-           const mtdAgg = await prisma.dailySales.groupBy({
-             by: ['productId'],
-             where: { date: { gte: startOfMonth, lte: endOfMonth } },
-             _sum: { qtySold: true, omzet: true },
-             orderBy: { _sum: { qtySold: 'desc' } },
-             take: 10
-           });
-           
-           const productIds = mtdAgg.map((a: any) => a.productId);
-           const topFastProducts = await prisma.product.findMany({
-             where: { id: { in: productIds } },
-             select: { id: true, sku: true, description: true }
-           });
-           
-           topFast = mtdAgg.map((agg: any) => {
-             const p = topFastProducts.find((x: any) => x.id === agg.productId);
-             return {
-               sku: p?.sku || '-',
-               description: p?.description || '-',
-               sales_qty: agg._sum.qtySold || 0,
-               omzet_total: agg._sum.omzet || 0
-             };
-           });
+          // Gunakan DailySales
+          const mtdAgg = await prisma.dailySales.groupBy({
+            by: ['productId'],
+            where: { date: { gte: startOfMonth, lte: endOfMonth } },
+            _sum: { qtySold: true, omzet: true },
+            orderBy: { _sum: { qtySold: 'desc' } },
+            take: 10
+          });
+
+          const productIds = mtdAgg.map((a: any) => a.productId);
+          const topFastProducts = await prisma.product.findMany({
+            where: { id: { in: productIds } },
+            select: { id: true, sku: true, description: true }
+          });
+
+          topFast = mtdAgg.map((agg: any) => {
+            const p = topFastProducts.find((x: any) => x.id === agg.productId);
+            return {
+              sku: p?.sku || '-',
+              description: p?.description || '-',
+              sales_qty: agg._sum.qtySold || 0,
+              omzet_total: agg._sum.omzet || 0
+            };
+          });
         } else {
           let qtyCol = 'sales_mtd';
           let omzetCol = 'sales_mtd_retail';
-          
+
           if (timeframe === '1W') {
             qtyCol = 'sales_wtd';
             omzetCol = 'sales_wtd_retail';
@@ -578,16 +618,16 @@ export async function GET(request: NextRequest) {
     const topSlow = !deptFilter && Array.isArray(precomputedSummary?.topSlow)
       ? precomputedSummary.topSlow
       : await prisma.product.findMany({
-          where: slowWhere,
-          orderBy: [{ stok: 'desc' }, { sales_mtd: 'asc' }],
-          take: 20,
-          select: {
-            sku: true, description: true, article: true, dept: true, brand: true,
-            hargaNormal: true, hargaPromo: true, diskon: true,
-            stok: true, sales_mtd: true, sales_mtd_retail: true,
-            sales_ytd: true, eoh_retail: true, bom_unit: true,
-          }
-        });
+        where: slowWhere,
+        orderBy: [{ stok: 'desc' }, { sales_mtd: 'asc' }],
+        take: 20,
+        select: {
+          sku: true, description: true, article: true, dept: true, brand: true,
+          hargaNormal: true, hargaPromo: true, diskon: true,
+          stok: true, sales_mtd: true, sales_mtd_retail: true,
+          sales_ytd: true, eoh_retail: true, bom_unit: true,
+        }
+      });
 
     // 5. KRITIS (laku tapi stok menipis)
     const kritisWhere: any = deptFilter
@@ -596,15 +636,15 @@ export async function GET(request: NextRequest) {
     const topKritis = !deptFilter && Array.isArray(precomputedSummary?.topKritis)
       ? precomputedSummary.topKritis
       : await prisma.product.findMany({
-          where: kritisWhere,
-          orderBy: [{ stok: 'asc' }, { sales_mtd: 'desc' }],
-          take: 20,
-          select: {
-            sku: true, description: true, article: true, dept: true,
-            hargaNormal: true, hargaPromo: true,
-            stok: true, sales_mtd: true, sales_mtd_retail: true, day_sales_unit: true,
-          }
-        });
+        where: kritisWhere,
+        orderBy: [{ stok: 'asc' }, { sales_mtd: 'desc' }],
+        take: 20,
+        select: {
+          sku: true, description: true, article: true, dept: true,
+          hargaNormal: true, hargaPromo: true,
+          stok: true, sales_mtd: true, sales_mtd_retail: true, day_sales_unit: true,
+        }
+      });
 
     // 6. TREND DATA - dari DailySales jika ada, fallback ke 1 titik MTD dari PQ
     let trendData: any[] = [];
@@ -638,7 +678,7 @@ export async function GET(request: NextRequest) {
         for (const d of salesByDay) {
           const mIdx = d.date.getMonth();
           const mName = months[mIdx];
-          if (!monthMap.has(mName)) monthMap.set(mName, { date: mName, fullDate: `${targetDate.getFullYear()}-${String(mIdx+1).padStart(2,'0')}-01`, omzet: 0, qty: 0 });
+          if (!monthMap.has(mName)) monthMap.set(mName, { date: mName, fullDate: `${targetDate.getFullYear()}-${String(mIdx + 1).padStart(2, '0')}-01`, omzet: 0, qty: 0 });
           const item = monthMap.get(mName);
           item.omzet += d._sum.omzet || 0;
           item.qty += d._sum.qtySold || 0;
@@ -646,28 +686,28 @@ export async function GET(request: NextRequest) {
         trendData = Array.from(monthMap.values());
       } else {
         trendData = salesByDay.map(d => ({
-          date:  new Date(d.date.getTime() - d.date.getTimezoneOffset() * 60000).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' }),
+          date: new Date(d.date.getTime() - d.date.getTimezoneOffset() * 60000).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' }),
           fullDate: d.date.toISOString().split('T')[0],
-          omzet: d._sum.omzet    || 0,
-          qty:   d._sum.qtySold  || 0,
+          omzet: d._sum.omzet || 0,
+          qty: d._sum.qtySold || 0,
         }));
       }
     } catch (_e) { /* DailySales kosong */ }
 
     if (trendData.length === 0) {
-      const fallbackOmzet = hasCustomCutoff
+      const fallbackOmzet = useDailySalesOnly
         ? calculatedMtdOmzet
-        : ((targetYearMonth === todayStr.substring(0, 7)) ? (calculatedMtdOmzet || agg._sum.sales_mtd_retail || 0) : (agg._sum.sales_mtd_retail || 0));
-      const fallbackQty = hasCustomCutoff
+        : (calculatedMtdOmzet || agg._sum.sales_mtd_retail || 0);
+      const fallbackQty = useDailySalesOnly
         ? calculatedMtdQty
-        : ((targetYearMonth === todayStr.substring(0, 7)) ? (calculatedMtdQty || agg._sum.sales_mtd || 0) : (agg._sum.sales_mtd || 0));
-      
+        : (calculatedMtdQty || agg._sum.sales_mtd || 0);
+
       trendData = [{
-        date:  hasCustomCutoff ? `${cutoffStartStr.slice(8, 10)}–${cutoffEndStr.slice(8, 10)}` : new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short' }),
-        fullDate: hasCustomCutoff ? cutoffEndStr : todayStr,
+        date:  useDailySalesOnly ? `${cutoffStartStr.slice(8, 10)}–${cutoffEndStr.slice(8, 10)}` : new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short' }),
+        fullDate: useDailySalesOnly ? cutoffEndStr : todayStr,
         omzet: fallbackOmzet,
-        qty:   fallbackQty,
-        label: hasCustomCutoff ? `Cut-Off ${cutoffStartStr} s/d ${cutoffEndStr}` : ('MTD s/d ' + todayStr),
+        qty: fallbackQty,
+        label: useDailySalesOnly ? `Cut-Off ${cutoffStartStr} s/d ${cutoffEndStr}` : ('MTD s/d ' + todayStr),
       }];
     }
 
@@ -675,15 +715,13 @@ export async function GET(request: NextRequest) {
     const totalTopCount = items.length;
     const paginatedItems = items.slice(skip, skip + limit);
 
-    const isCurrentMonth = targetYearMonth === todayStr.substring(0, 7);
-
     const sanitizeBrandText = (val?: string | null) =>
       val
         ? val
-            .replace(/MDS\s*[-]?\s*BISA/gi, 'luqman org')
-            .replace(/StoreHub/gi, 'luqman org')
-            .replace(/(?:https?:\/\/)?(?:www\.)?matahari\.com/gi, 'luqman org')
-            .replace(/\bMatahari\b/gi, 'luqman org')
+          .replace(/MDS\s*[-]?\s*BISA/gi, 'luqman org')
+          .replace(/StoreHub/gi, 'luqman org')
+          .replace(/(?:https?:\/\/)?(?:www\.)?matahari\.com/gi, 'luqman org')
+          .replace(/\bMatahari\b/gi, 'luqman org')
         : null;
 
     const responseData = {
@@ -700,54 +738,54 @@ export async function GET(request: NextRequest) {
         },
         summary: {
           // SPD (Sales Per Day / Hari Ini) — gabungkan DailySales live agar instan tanpa tunggu CDN
-          spd_omzet:        hasCustomCutoff ? calculatedMtdOmzet : Math.max(selectedDateOmzet, agg._sum.day_sales_retail || 0),
-          spd_qty:          hasCustomCutoff ? calculatedMtdQty : Math.max(selectedDateQty, agg._sum.day_sales_unit || 0),
+          spd_omzet:        useDailySalesOnly ? selectedDateOmzet : Math.max(selectedDateOmzet, agg._sum.day_sales_retail || 0),
+          spd_qty:          useDailySalesOnly ? selectedDateQty : Math.max(selectedDateQty, agg._sum.day_sales_unit || 0),
           yesterday_omzet:  yesterdayOmzet,
           yesterday_qty:    yesterdayQty,
 
           // WTD (Week To Date / Minggu Ini)
-          wtd_omzet:        hasCustomCutoff ? calculatedMtdOmzet : Math.max(calculatedMtdOmzet, agg._sum.sales_wtd_retail || 0),
-          wtd_qty:          hasCustomCutoff ? calculatedMtdQty : Math.max(calculatedMtdQty, agg._sum.sales_wtd || 0),
+          wtd_omzet:        useDailySalesOnly ? calculatedMtdOmzet : Math.max(calculatedMtdOmzet, agg._sum.sales_wtd_retail || 0),
+          wtd_qty:          useDailySalesOnly ? calculatedMtdQty : Math.max(calculatedMtdQty, agg._sum.sales_wtd || 0),
 
           // MTD (Month To Date / Cut-Off 1 s/d Akhir Bulan)
-          mtd_omzet:        hasCustomCutoff
+          mtd_omzet:        useDailySalesOnly
             ? calculatedMtdOmzet
-            : (isCurrentMonth ? Math.max(calculatedMtdOmzet, agg._sum.sales_mtd_retail || 0) : calculatedMtdOmzet),
-          mtd_qty:          hasCustomCutoff
+            : Math.max(calculatedMtdOmzet, agg._sum.sales_mtd_retail || 0),
+          mtd_qty:          useDailySalesOnly
             ? calculatedMtdQty
-            : (isCurrentMonth ? Math.max(calculatedMtdQty, agg._sum.sales_mtd || 0) : calculatedMtdQty),
+            : Math.max(calculatedMtdQty, agg._sum.sales_mtd || 0),
           last_month_omzet: lastMonthOmzet,
-          last_month_qty:   lastMonthQty,
+          last_month_qty: lastMonthQty,
 
           // YTD (Year To Date / Tahun Ini)
-          ytd_omzet:        Math.max(calculatedMtdOmzet, agg._sum.sales_ytd_retail || 0),
-          ytd_qty:          Math.max(calculatedMtdQty, agg._sum.sales_ytd || 0),
+          ytd_omzet:        isCurrentYear ? Math.max(calculatedMtdOmzet, agg._sum.sales_ytd_retail || 0) : selectedDateOmzet,
+          ytd_qty:          isCurrentYear ? Math.max(calculatedMtdQty, agg._sum.sales_ytd || 0) : selectedDateQty,
 
           // Valuasi & Inventori SUKO Aktif
-          nilai_inventori:  agg._sum.eoh_retail         || 0,
-          total_stok:       agg._sum.stok               || 0,
+          nilai_inventori: agg._sum.eoh_retail || 0,
+          total_stok: agg._sum.stok || 0,
           active_stock_skus: precomputedSummary?.aggSummary?.activeStockSkus || 0,
           boy_unit:         agg._sum.boy_unit           || 0,
           boy_retail:       agg._sum.boy_retail         || 0,
           bom_unit:         agg._sum.bom_unit           || 0,
-          data_source:      precomputedSummary?.source  || "MDS_BISA_LIVE",
+          data_source:      precomputedSummary?.source  || "LUQMAN_ORG_LIVE",
 
           // Promo
-          omzet_promo:      omzetPromo,
-          qty_promo:        qtyPromo,
-          total_produk:     totalProducts,
-          total_promo:      totalWithPromo,
+          omzet_promo: omzetPromo,
+          qty_promo: qtyPromo,
+          total_produk: totalProducts,
+          total_promo: totalWithPromo,
 
           // Legacy keys (backward compat)
-          omzet_hari_ini:   selectedDateOmzet || agg._sum.day_sales_retail || 0,
-          qty_hari_ini:     selectedDateQty || agg._sum.day_sales_unit || 0,
-          totalRevenue:     selectedDateOmzet || agg._sum.day_sales_retail || 0,
-          totalQty:         selectedDateQty || agg._sum.day_sales_unit || 0,
+          omzet_hari_ini: selectedDateOmzet || agg._sum.day_sales_retail || 0,
+          qty_hari_ini: selectedDateQty || agg._sum.day_sales_unit || 0,
+          totalRevenue: selectedDateOmzet || agg._sum.day_sales_retail || 0,
+          totalQty: selectedDateQty || agg._sum.day_sales_unit || 0,
           totalPromoRevenue: omzetPromo,
-          totalOmzetPOS:    isCurrentMonth ? (calculatedMtdOmzet || agg._sum.sales_mtd_retail || 0) : (agg._sum.sales_mtd_retail || 0),
-          mtd_omzet_pos:    isCurrentMonth ? (calculatedMtdOmzet || agg._sum.sales_mtd_retail || 0) : (agg._sum.sales_mtd_retail || 0),
-          ytd_sales_unit:   agg._sum.sales_ytd           || 0,
-          anomalyCount:     anomalyCount,
+          totalOmzetPOS: isCurrentMonth ? (calculatedMtdOmzet || agg._sum.sales_mtd_retail || 0) : (agg._sum.sales_mtd_retail || 0),
+          mtd_omzet_pos: isCurrentMonth ? (calculatedMtdOmzet || agg._sum.sales_mtd_retail || 0) : (agg._sum.sales_mtd_retail || 0),
+          ytd_sales_unit: agg._sum.sales_ytd || 0,
+          anomalyCount: anomalyCount,
         },
         categoryBreakdown,
         trendData,
@@ -756,7 +794,7 @@ export async function GET(request: NextRequest) {
         topKritis,
         items: paginatedItems,
         pagination: {
-          total:      totalTopCount,
+          total: totalTopCount,
           page,
           limit,
           totalPages: Math.ceil(totalTopCount / limit),
