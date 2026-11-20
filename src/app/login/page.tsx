@@ -6,7 +6,7 @@ import Link from "next/link";
 import ShiftLoader from "@/components/ShiftLoader";
 import { ShoppingCart, Shirt, Footprints, Package, Lock, LogOut, MapPin, ShieldCheck, Loader2, RefreshCw } from "lucide-react";
 import { APP_VERSION, forceAppUpdate } from "@/lib/version";
-import { verifyStoreGeofence } from "@/lib/storeGeofence";
+import { verifyStoreGeofence, WORK_LOCATION_ZONES, haversineDistanceMeters } from "@/lib/storeGeofence";
 
 export default function Login() {
   const [nik, setNik] = useState("");
@@ -747,6 +747,31 @@ export default function Login() {
                       <RefreshCw className={`w-3.5 h-3.5 ${geoStatus === "checking" ? "animate-spin" : ""}`} />
                     </button>
                   </div>
+
+                  {/* DEMO TEST SEMENTARA: Tampilkan koordinat HP & jarak real ke 2 mall (akan dihapus setelah tes selesai) */}
+                  {geoCoords && (
+                    <div className="rounded-lg bg-white/85 border border-black/10 px-2.5 py-2 text-[11px] font-mono text-slate-700 space-y-1">
+                      <div className="font-sans font-extrabold text-[10px] uppercase tracking-wider text-indigo-700">
+                        🧪 Mode Demo Test GPS (Sementara)
+                      </div>
+                      <div className="whitespace-normal break-words">
+                        Koordinat HP: <strong>{geoCoords.lat.toFixed(6)}, {geoCoords.lng.toFixed(6)}</strong>{" "}
+                        (akurasi ±{Math.round(geoCoords.accuracy || 0)}m)
+                      </div>
+                      {WORK_LOCATION_ZONES.map((z) => {
+                        const distM = Math.round(haversineDistanceMeters(geoCoords.lat, geoCoords.lng, z.lat, z.lng));
+                        const distLabel = distM >= 1000 ? `${(distM / 1000).toFixed(2)} km` : `${distM} m`;
+                        return (
+                          <div key={z.id} className="flex items-center justify-between gap-2 text-[10px]">
+                            <span className="whitespace-normal break-words">{z.shortName}</span>
+                            <strong className={distM <= z.radiusMeters ? "text-emerald-700" : "text-rose-700"}>
+                              {distLabel} {distM <= z.radiusMeters ? "✅" : `(maks ${z.radiusMeters}m)`}
+                            </strong>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
                   {geoStatus !== "verified" && (
                     <button
