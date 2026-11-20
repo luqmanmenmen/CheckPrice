@@ -186,12 +186,16 @@ export default function LaporanPenjualanPage() {
   const [chartMetric, setChartMetric] = useState<"omzet" | "qty">("omzet");
   const [alertPanelFilter, setAlertPanelFilter] = useState<"all" | "fast" | "kritis" | "slow">("all");
   const [showAllDepts, setShowAllDepts] = useState(false);
+  const [deptBarMode, setDeptBarMode] = useState<"target" | "stok">("target");
 
   // Theme switcher: default Clean Light Toko, bisa switch ke Executive Dark kapan saja
   const [darkMode, setDarkMode] = useState(false);
 
-  // Target Bulanan (MTD) yang bisa diedit langsung & tersimpan di localStorage
+  // Target Bulanan Toko Global (disimpan di server, khusus SPV / Developer yang bisa edit agar seragam ke semua perangkat)
   const [targetMtd, setTargetMtd] = useState<number>(2000000000);
+  const [targetUpdatedBy, setTargetUpdatedBy] = useState<string>("");
+  const [canEditTarget, setCanEditTarget] = useState<boolean>(false);
+  const [savingTarget, setSavingTarget] = useState<boolean>(false);
   const [editingTarget, setEditingTarget] = useState(false);
   const [targetInputM, setTargetInputM] = useState("2000");
 
@@ -218,12 +222,20 @@ export default function LaporanPenjualanPage() {
     try {
       const savedTheme = localStorage.getItem("suko_sales_theme");
       if (savedTheme === "dark") setDarkMode(true);
-      const savedTarget = Number(localStorage.getItem("suko_sales_target_mtd") || "0");
-      if (savedTarget >= 10000000) {
-        setTargetMtd(savedTarget);
-        setTargetInputM(String(Math.round(savedTarget / 1000000)));
-      }
     } catch {}
+
+    // Ambil Target Toko Global dari server (sinkron ke semua HP/SPV/Crew)
+    fetch("/api/admin/store-target", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j) => {
+        if (j?.success && typeof j.targetMtd === "number" && j.targetMtd >= 10_000_000) {
+          setTargetMtd(j.targetMtd);
+          setTargetInputM(String(Math.round(j.targetMtd / 1_000_000)));
+          setTargetUpdatedBy(j.updatedBy || "");
+          setCanEditTarget(Boolean(j.canEdit));
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const toggleTheme = (nextDark: boolean) => {
@@ -233,17 +245,37 @@ export default function LaporanPenjualanPage() {
     } catch {}
   };
 
-  const handleSaveTarget = () => {
+  const handleSaveTarget = async () => {
     const juta = Number(String(targetInputM).replace(/[^0-9.]/g, ""));
-    if (!isNaN(juta) && juta >= 10) {
-      const val = Math.round(juta * 1_000_000);
-      setTargetMtd(val);
-      try {
-        localStorage.setItem("suko_sales_target_mtd", String(val));
-      } catch {}
-      showToast(`Target bulanan diperbarui menjadi ${formatCurrency(val)}`, "success");
+    if (isNaN(juta) || juta < 10) {
+      showToast("Target minimal Rp 10 juta.", "error");
+      return;
     }
-    setEditingTarget(false);
+    const val = Math.round(juta * 1_000_000);
+    setSavingTarget(true);
+    try {
+      const res = await fetch("/api/admin/store-target", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetMtd: val }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (res.ok && json.success) {
+        setTargetMtd(json.targetMtd);
+        setTargetUpdatedBy(json.updatedBy || "");
+        setEditingTarget(false);
+        showToast(
+          `Target Toko global diperbarui menjadi ${formatCurrency(json.targetMtd)} (otomatis menyesuaikan semua perangkat & bar departemen)!`,
+          "success"
+        );
+      } else {
+        showToast(json.error || "Gagal menyimpan target toko (khusus SPV/Developer).", "error");
+      }
+    } catch {
+      showToast("Gagal terhubung ke server saat menyimpan target toko.", "error");
+    } finally {
+      setSavingTarget(false);
+    }
   };
 
   const fetchReport = async (dateStr: string, tf: string, forceRefresh = false) => {
@@ -879,11 +911,13 @@ export default function LaporanPenjualanPage() {
                   </div>
                 </div>
 
-                {/* Target MTD yang bisa diedit langsung (rapi di HP) */}
+                {/* Target MTD Global (khusus SPV / Developer yang bisa edit — tersinkron ke seluruh perangkat) */}
                 <div className="bg-white/10 rounded-2xl p-3 border border-white/15 space-y-2">
                   {editingTarget ? (
                     <div className="flex flex-col gap-2">
-                      <span className="text-[11px] font-bold text-slate-200">Ubah Target Bulanan (dalam Juta Rp):</span>
+                      <span className="text-[11px] font-bold text-slate-200">
+                        Ubah Target Toko Global (dalam Juta Rp, mis. 2000 = Rp 2 M):
+                      </span>
                       <div className="flex items-center gap-2">
                         <input
                           type="number"
@@ -895,9 +929,10 @@ export default function LaporanPenjualanPage() {
                         <button
                           type="button"
                           onClick={handleSaveTarget}
-                          className="px-3 py-1.5 rounded-xl bg-emerald-500 text-slate-950 font-extrabold text-xs hover:bg-emerald-400 cursor-pointer shrink-0 flex items-center gap-1"
+                          disabled={savingTarget}
+                          className="px-3 py-1.5 rounded-xl bg-emerald-500 disabled:opacity-60 text-slate-950 font-extrabold text-xs hover:bg-emerald-400 cursor-pointer shrink-0 flex items-center gap-1"
                         >
-                          <Check className="w-3.5 h-3.5" /> Simpan
+                          <Check className="w-3.5 h-3.5" /> {savingTarget ? "Menyimpan..." : "Simpan"}
                         </button>
                         <button
                           type="button"
@@ -910,21 +945,31 @@ export default function LaporanPenjualanPage() {
                     </div>
                   ) : (
                     <div className="flex items-center justify-between gap-2 text-xs">
-                      <span className="text-slate-200 whitespace-normal break-words">
-                        Target MTD: <strong className="text-white">{formatCompactCurrency(targetMtd)}</strong>
-                      </span>
+                      <div className="min-w-0">
+                        <span className="text-slate-200 whitespace-normal break-words">
+                          Target Toko (MTD): <strong className="text-white">{formatCompactCurrency(targetMtd)}</strong>
+                        </span>
+                        {targetUpdatedBy && (
+                          <div className="text-[10px] text-slate-300/80 whitespace-normal break-words">
+                            Diset oleh: {targetUpdatedBy}
+                          </div>
+                        )}
+                      </div>
                       <div className="flex items-center gap-2 shrink-0">
                         <span className="font-black text-emerald-300 tabular-nums">{mtdProgress.toFixed(1)}%</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setTargetInputM(String(Math.round(targetMtd / 1_000_000)));
-                            setEditingTarget(true);
-                          }}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white/15 hover:bg-white/25 text-white text-[11px] font-bold cursor-pointer"
-                        >
-                          <Edit3 className="w-3 h-3" /> Ubah
-                        </button>
+                        {canEditTarget && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setTargetInputM(String(Math.round(targetMtd / 1_000_000)));
+                              setEditingTarget(true);
+                            }}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white/15 hover:bg-white/25 text-white text-[11px] font-bold cursor-pointer"
+                            title="Edit Target Toko Global (SPV / Developer)"
+                          >
+                            <Edit3 className="w-3 h-3" /> Edit SPV
+                          </button>
+                        )}
                       </div>
                     </div>
                   )}
@@ -1276,33 +1321,65 @@ export default function LaporanPenjualanPage() {
                   </div>
                 </div>
 
-                {/* Kolom Kanan: Ranked Department Progress List (BEBAS POTONG TEKS + KLIK UNTUK FILTER) */}
-                <div className={`xl:col-span-5 ${cardCls} rounded-2xl sm:rounded-3xl p-5 flex flex-col gap-4`}>
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <h2 className={`font-extrabold text-base sm:text-lg ${textPrimary}`}>
-                        {hasAnySalesYet ? "Ranking Omzet per Departemen" : "Sebaran Stok SUKO per Departemen"}
-                      </h2>
-                      <p className={`text-xs ${textMuted} mt-0.5`}>
-                        Ketuk salah satu departemen untuk memfilter seluruh laporan
-                      </p>
+                {/* Kolom Kanan: Progress Departemen Mengacu pada Target Toko Global (Default) atau Sebaran Stok */}
+                <div className={`xl:col-span-5 ${cardCls} rounded-2xl sm:rounded-3xl p-4 sm:p-5 flex flex-col gap-3.5`}>
+                  <div className="flex flex-col gap-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <h2 className={`font-extrabold text-base sm:text-lg ${textPrimary} whitespace-normal break-words`}>
+                          {deptBarMode === "target"
+                            ? `Kontribusi Dept vs Target (${formatCompactCurrency(targetMtd)})`
+                            : "Sebaran Stok SUKO per Departemen"}
+                        </h2>
+                        <p className={`text-xs ${textMuted} mt-0.5 whitespace-normal break-words`}>
+                          {deptBarMode === "target"
+                            ? `Bar mengacu langsung pada Target Toko ${formatCurrency(targetMtd)} • Ketuk dept untuk filter`
+                            : "Porsi stok fisik SUKO per departemen • Ketuk dept untuk filter"}
+                        </p>
+                      </div>
+                      {selectedDeptFilter !== "ALL" && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedDeptFilter("ALL")}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-600 text-xs font-extrabold cursor-pointer shrink-0"
+                        >
+                          ✕ Reset
+                        </button>
+                      )}
                     </div>
-                    {selectedDeptFilter !== "ALL" && (
+
+                    {/* Switch Mode Bar Departemen: vs Target Toko (Default) | Sebaran Stok */}
+                    <div className={`grid grid-cols-2 p-1 rounded-xl ${softCls} gap-1 text-xs font-extrabold`}>
                       <button
                         type="button"
-                        onClick={() => setSelectedDeptFilter("ALL")}
-                        className="px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-600 text-xs font-extrabold cursor-pointer shrink-0"
+                        onClick={() => setDeptBarMode("target")}
+                        className={`py-1.5 px-2.5 rounded-lg cursor-pointer transition-all ${
+                          deptBarMode === "target" ? "bg-emerald-600 text-white shadow-xs" : textMuted
+                        }`}
                       >
-                        ✕ Reset
+                        🎯 vs Target ({formatCompactCurrency(targetMtd)})
                       </button>
-                    )}
+                      <button
+                        type="button"
+                        onClick={() => setDeptBarMode("stok")}
+                        className={`py-1.5 px-2.5 rounded-lg cursor-pointer transition-all ${
+                          deptBarMode === "stok" ? "bg-emerald-600 text-white shadow-xs" : textMuted
+                        }`}
+                      >
+                        📦 Porsi Stok Fisik
+                      </button>
+                    </div>
                   </div>
 
                   <div className="space-y-2.5 xl:max-h-[540px] xl:overflow-y-auto xl:pr-1">
                     {visibleDeptData.map((d, idx) => {
-                      const metricVal = hasAnySalesYet ? d.value : d.stok;
-                      const sharePct = ((metricVal / totalDeptValForShare) * 100).toFixed(1);
-                      const barPct = Math.max(4, (metricVal / maxDeptBar) * 100);
+                      const isTargetMode = deptBarMode === "target";
+                      const targetPctRaw = targetMtd > 0 ? (d.value / targetMtd) * 100 : 0;
+                      const stokShareRaw = totalStok > 0 ? (d.stok / totalStok) * 100 : 0;
+                      const displayPct = isTargetMode ? targetPctRaw : stokShareRaw;
+                      const barPct = isTargetMode
+                        ? Math.min(100, targetPctRaw)
+                        : Math.min(100, stokShareRaw);
                       const isSelected = selectedDeptFilter === d.rawDept || selectedDeptFilter === d.name;
 
                       return (
@@ -1324,21 +1401,23 @@ export default function LaporanPenjualanPage() {
                               >
                                 {idx + 1}
                               </span>
-                              <span className={`font-extrabold ${textPrimary} whitespace-normal break-words`}>
-                                {d.name}
-                              </span>
+                              <div className="min-w-0">
+                                <span className={`font-extrabold ${textPrimary} whitespace-normal break-words block`}>
+                                  {d.name}
+                                </span>
+                                <span className={`text-[11px] ${textMuted} tabular-nums`}>
+                                  Stok {d.stok.toLocaleString("id-ID")} pcs • EOH {formatCompactCurrency(d.eoh)}
+                                </span>
+                              </div>
                             </div>
                             <div className="text-right shrink-0 tabular-nums">
                               <div className={`font-black ${textPrimary}`}>
-                                {hasAnySalesYet
+                                {isTargetMode
                                   ? formatCompactCurrency(d.value)
                                   : `${d.stok.toLocaleString("id-ID")} pcs`}
                               </div>
-                              <div className={`text-[11px] ${textMuted}`}>
-                                {sharePct}% •{" "}
-                                {hasAnySalesYet
-                                  ? `${d.qty.toLocaleString("id-ID")} pcs`
-                                  : formatCompactCurrency(d.eoh)}
+                              <div className={`text-[11px] font-bold ${isTargetMode ? "text-emerald-600" : textMuted}`}>
+                                {displayPct.toFixed(1)}% {isTargetMode ? "dr Target" : "dr Stok"}
                               </div>
                             </div>
                           </div>
