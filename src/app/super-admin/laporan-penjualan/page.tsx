@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   ArrowLeft,
   Calendar,
@@ -25,6 +25,7 @@ import {
   X,
   Tag,
   Info,
+  Loader2,
 } from "lucide-react";
 import Link from "next/link";
 import { jsPDF } from "jspdf";
@@ -414,9 +415,216 @@ export default function LaporanPenjualanPage() {
     showToast(`Mode Cut-Off diterapkan: ${formatShortDate(cutoffStart)} – ${formatShortDate(cutoffEnd)}`, "success");
   };
 
+  // Live Loader & Auto-Refresh Tracker untuk Tarik Sales SUKO (0 nebak-nebak, otomatis refresh begitu selesai!)
+  const [salesSyncProgress, setSalesSyncProgress] = useState<{
+    visible: boolean;
+    phase: "dispatching" | "queued" | "running" | "success" | "failed";
+    percent: number;
+    currentStep: string;
+    elapsedSec: number;
+    runNumber?: number;
+    actionsUrl?: string;
+    errorDetail?: string;
+    recentLogs: string[];
+  } | null>(null);
+
+  const syncPollMetaRef = useRef<{
+    prevRunId: number | null;
+    startedAt: number;
+    lastKnownRunId: number | null;
+  }>({ prevRunId: null, startedAt: 0, lastKnownRunId: null });
+
+  const isSyncBusy = Boolean(
+    triggeringSync ||
+      (salesSyncProgress?.visible &&
+        (salesSyncProgress.phase === "dispatching" ||
+          salesSyncProgress.phase === "queued" ||
+          salesSyncProgress.phase === "running"))
+  );
+
+  // Cek saat halaman pertama dibuka: jika mesin sedang aktif di Cloud, otomatis tampilkan live loader
+  useEffect(() => {
+    fetch("/api/admin/trigger/github-status", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j) => {
+        const run = j?.activeRun;
+        if (!run) return;
+        syncPollMetaRef.current.lastKnownRunId = Number(run.id) || null;
+        if (run.status === "queued" || run.status === "in_progress") {
+          const startedMs = run.createdAt ? new Date(run.createdAt).getTime() : Date.now();
+          syncPollMetaRef.current.prevRunId = null;
+          syncPollMetaRef.current.startedAt = startedMs;
+          const logs = Array.isArray(j.consoleLines)
+            ? j.consoleLines.slice(-3).map((l: any) => String(l?.text || "")).filter(Boolean)
+            : [];
+          setSalesSyncProgress({
+            visible: true,
+            phase: run.status === "queued" ? "queued" : "running",
+            percent: run.status === "queued" ? 15 : Math.max(25, Number(run.percent || 25)),
+            currentStep: run.currentStep || "Sedang menarik stok & sales SUKO...",
+            elapsedSec: Math.max(1, Math.round((Date.now() - startedMs) / 1000)),
+            runNumber: run.runNumber,
+            actionsUrl: run.htmlUrl,
+            recentLogs: logs,
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Timer detik + Auto-Polling live status setiap 4 detik selama mesin berjalan
+  useEffect(() => {
+    if (
+      !salesSyncProgress?.visible ||
+      (salesSyncProgress.phase !== "dispatching" &&
+        salesSyncProgress.phase !== "queued" &&
+        salesSyncProgress.phase !== "running")
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const tickTimer = setInterval(() => {
+      const started = syncPollMetaRef.current.startedAt || Date.now();
+      const sec = Math.max(1, Math.round((Date.now() - started) / 1000));
+      setSalesSyncProgress((cur) => (cur ? { ...cur, elapsedSec: sec } : cur));
+    }, 1000);
+
+    const pollStatus = async () => {
+      try {
+        const res = await fetch("/api/admin/trigger/github-status", { cache: "no-store" });
+        const j = await res.json().catch(() => null);
+        if (cancelled || !j?.success || !j?.activeRun) return;
+
+        const run = j.activeRun;
+        const runId = Number(run.id) || null;
+        const prevId = syncPollMetaRef.current.prevRunId;
+        const elapsed = Math.max(1, Math.round((Date.now() - (syncPollMetaRef.current.startedAt || Date.now())) / 1000));
+
+        // Jika masih run lama (baru saja di-dispatch & GitHub belum memunculkan run baru), tunggu dulu
+        if (prevId && runId === prevId && run.status === "completed") {
+          if (elapsed < 50) {
+            setSalesSyncProgress((cur) =>
+              cur
+                ? {
+                    ...cur,
+                    phase: "queued",
+                    percent: Math.min(20, Math.max(cur.percent, 12 + Math.floor(elapsed / 6))),
+                    currentStep: "Menunggu runner Cloud menerima antrean Tarik Sales SUKO...",
+                    elapsedSec: elapsed,
+                  }
+                : cur
+            );
+          }
+          return;
+        }
+
+        syncPollMetaRef.current.lastKnownRunId = runId;
+        const logs = Array.isArray(j.consoleLines)
+          ? j.consoleLines.slice(-3).map((l: any) => String(l?.text || "")).filter(Boolean)
+          : [];
+
+        if (run.status === "queued") {
+          setSalesSyncProgress((cur) => ({
+            visible: true,
+            phase: "queued",
+            percent: Math.max(cur?.percent || 15, 18),
+            currentStep: run.currentStep || "Antre di server Cloud (sebentar lagi mulai)...",
+            elapsedSec: elapsed,
+            runNumber: run.runNumber,
+            actionsUrl: run.htmlUrl || cur?.actionsUrl,
+            recentLogs: logs,
+          }));
+        } else if (run.status === "in_progress") {
+          const pct = Math.min(96, Math.max(25, Number(run.percent || 30)));
+          setSalesSyncProgress((cur) => ({
+            visible: true,
+            phase: "running",
+            percent: Math.max(cur?.percent || 25, pct),
+            currentStep: run.currentStep || "Memindai stok & menghitung delta sales SUKO...",
+            elapsedSec: elapsed,
+            runNumber: run.runNumber,
+            actionsUrl: run.htmlUrl || cur?.actionsUrl,
+            recentLogs: logs,
+          }));
+        } else if (run.status === "completed") {
+          const isOk = run.conclusion === "success";
+          if (isOk) {
+            setSalesSyncProgress((cur) => ({
+              visible: true,
+              phase: "success",
+              percent: 100,
+              currentStep: "Tarik Sales SUKO selesai! Laporan diperbarui otomatis.",
+              elapsedSec: elapsed,
+              runNumber: run.runNumber,
+              actionsUrl: run.htmlUrl || cur?.actionsUrl,
+              recentLogs: logs,
+            }));
+            // Otomatis refresh laporan tanpa user perlu klik tombol Refresh!
+            fetchReport(selectedDate, timeframe, true, appliedCutoff);
+          } else {
+            const errTitle =
+              j.diagnostics?.[0]?.title ||
+              run.errorStep ||
+              `Proses berhenti dengan status: ${run.conclusion || "error"}`;
+            setSalesSyncProgress((cur) => ({
+              visible: true,
+              phase: "failed",
+              percent: 100,
+              currentStep: "Tarik Sales SUKO gagal diselesaikan.",
+              elapsedSec: elapsed,
+              runNumber: run.runNumber,
+              actionsUrl: run.htmlUrl || cur?.actionsUrl,
+              errorDetail: errTitle,
+              recentLogs: logs,
+            }));
+            showToast(`Tarik Sales SUKO gagal: ${errTitle}`, "error");
+          }
+        }
+      } catch {}
+    };
+
+    const pollInterval = setInterval(pollStatus, 4000);
+    // Langsung cek cepat setelah 2.5 detik pertama
+    const initialCheck = setTimeout(pollStatus, 2500);
+
+    return () => {
+      cancelled = true;
+      clearInterval(tickTimer);
+      clearInterval(pollInterval);
+      clearTimeout(initialCheck);
+    };
+  }, [salesSyncProgress?.visible, salesSyncProgress?.phase, selectedDate, timeframe, appliedCutoff]);
+
   const handleTriggerSukoSalesSync = async () => {
-    if (triggeringSync) return;
+    if (isSyncBusy) return;
     setTriggeringSync(true);
+
+    // Catat runId terakhir agar loader tidak salah membaca run sebelumnya
+    let prevId = syncPollMetaRef.current.lastKnownRunId;
+    if (!prevId) {
+      try {
+        const stRes = await fetch("/api/admin/trigger/github-status", { cache: "no-store" });
+        const stJson = await stRes.json().catch(() => null);
+        prevId = Number(stJson?.activeRun?.id) || null;
+      } catch {}
+    }
+    syncPollMetaRef.current = {
+      prevRunId: prevId,
+      startedAt: Date.now(),
+      lastKnownRunId: prevId,
+    };
+
+    setSalesSyncProgress({
+      visible: true,
+      phase: "dispatching",
+      percent: 8,
+      currentStep: "Mengirim perintah ke mesin Python Tarik Sales SUKO...",
+      elapsedSec: 1,
+      recentLogs: [],
+    });
+
     try {
       const res = await fetch("/api/admin/trigger/github-dispatch", {
         method: "POST",
@@ -425,16 +633,40 @@ export default function LaporanPenjualanPage() {
       });
       const json = await res.json().catch(() => ({}));
       if (res.ok && json.success) {
-        showToast(
-          "Mesin Python Tarik Sales & Stok SUKO sudah dinyalakan di GitHub Actions (0 RAM Supabase). Tunggu ~2-3 menit lalu klik Refresh!",
-          "success",
-          json.actionsUrl
-        );
+        setSalesSyncProgress((cur) => ({
+          visible: true,
+          phase: "queued",
+          percent: 15,
+          currentStep: "Mesin aktif di Cloud! Menunggu proses berjalan (laporan otomatis refresh saat selesai)...",
+          elapsedSec: cur?.elapsedSec || 2,
+          actionsUrl: json.actionsUrl,
+          recentLogs: [],
+        }));
       } else {
-        showToast(json.error || "Gagal menyalakan mesin tarik sales SUKO.", "error");
+        const errMsg = json.error || "Gagal menyalakan mesin tarik sales SUKO.";
+        setSalesSyncProgress({
+          visible: true,
+          phase: "failed",
+          percent: 0,
+          currentStep: "Gagal menyalakan mesin Tarik Sales SUKO.",
+          elapsedSec: 1,
+          errorDetail: errMsg,
+          recentLogs: [],
+        });
+        showToast(errMsg, "error");
       }
     } catch {
-      showToast("Gagal menghubungi server trigger GitHub Actions.", "error");
+      const errMsg = "Gagal menghubungi server trigger Cloud.";
+      setSalesSyncProgress({
+        visible: true,
+        phase: "failed",
+        percent: 0,
+        currentStep: errMsg,
+        elapsedSec: 1,
+        errorDetail: errMsg,
+        recentLogs: [],
+      });
+      showToast(errMsg, "error");
     } finally {
       setTriggeringSync(false);
     }
@@ -851,12 +1083,20 @@ export default function LaporanPenjualanPage() {
             <button
               type="button"
               onClick={handleTriggerSukoSalesSync}
-              disabled={triggeringSync}
-              className="col-span-2 sm:col-span-1 h-10 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white text-xs font-extrabold flex items-center justify-center gap-1.5 shadow-xs transition-all cursor-pointer"
-              title="Jalankan mesin Python di GitHub Actions khusus tarik stok & sales SUKO (0 beban RAM Supabase)"
+              disabled={isSyncBusy}
+              className="col-span-2 sm:col-span-1 h-10 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-75 text-white text-xs font-extrabold flex items-center justify-center gap-1.5 shadow-xs transition-all cursor-pointer"
+              title="Jalankan mesin Python khusus tarik stok & sales SUKO — otomatis memperbarui laporan saat selesai"
             >
-              <Zap className={`w-4 h-4 shrink-0 ${triggeringSync ? "animate-pulse" : ""}`} />
-              <span>{triggeringSync ? "Menyalakan Mesin Python..." : "Tarik Sales SUKO Sekarang"}</span>
+              {isSyncBusy ? (
+                <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
+              ) : (
+                <Zap className="w-4 h-4 shrink-0" />
+              )}
+              <span>
+                {isSyncBusy
+                  ? `Menarik Sales SUKO... ${salesSyncProgress?.percent ?? 10}%`
+                  : "Tarik Sales SUKO Sekarang"}
+              </span>
             </button>
 
             <button
@@ -1065,6 +1305,129 @@ export default function LaporanPenjualanPage() {
             )}
           </div>
         </div>
+
+        {/* ================= LIVE PROGRESS LOADER TARIK SALES SUKO ================= */}
+        {salesSyncProgress?.visible && (
+          <div
+            className={`rounded-2xl sm:rounded-3xl p-4 sm:p-5 border shadow-sm transition-all ${
+              salesSyncProgress.phase === "success"
+                ? darkMode
+                  ? "bg-emerald-950/40 border-emerald-700/70 text-emerald-100"
+                  : "bg-emerald-50 border-emerald-200 text-emerald-950"
+                : salesSyncProgress.phase === "failed"
+                ? darkMode
+                  ? "bg-rose-950/40 border-rose-700/70 text-rose-100"
+                  : "bg-rose-50 border-rose-200 text-rose-950"
+                : darkMode
+                ? "bg-indigo-950/40 border-indigo-700/70 text-indigo-100"
+                : "bg-indigo-50/90 border-indigo-200 text-indigo-950"
+            }`}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3 min-w-0 flex-1">
+                <div
+                  className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                    salesSyncProgress.phase === "success"
+                      ? "bg-emerald-500/20 text-emerald-600"
+                      : salesSyncProgress.phase === "failed"
+                      ? "bg-rose-500/20 text-rose-600"
+                      : "bg-indigo-500/20 text-indigo-600"
+                  }`}
+                >
+                  {salesSyncProgress.phase === "success" ? (
+                    <CheckCircle2 className="w-5 h-5" />
+                  ) : salesSyncProgress.phase === "failed" ? (
+                    <AlertTriangle className="w-5 h-5" />
+                  ) : (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  )}
+                </div>
+
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-black text-xs sm:text-sm whitespace-normal break-words">
+                      {salesSyncProgress.phase === "success"
+                        ? "Tarik Sales SUKO Selesai — Laporan Sudah Diperbarui Otomatis!"
+                        : salesSyncProgress.phase === "failed"
+                        ? "Tarik Sales SUKO Gagal"
+                        : salesSyncProgress.phase === "queued"
+                        ? "Menunggu Antrean Mesin Tarik Sales SUKO..."
+                        : salesSyncProgress.phase === "dispatching"
+                        ? "Menyalakan Mesin Tarik Sales SUKO..."
+                        : "Sedang Menarik Data Sales & Stok SUKO..."}
+                    </span>
+                    {salesSyncProgress.runNumber && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-black/10 tabular-nums">
+                        Run #{salesSyncProgress.runNumber}
+                      </span>
+                    )}
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-black/10 tabular-nums">
+                      {Math.floor(salesSyncProgress.elapsedSec / 60)}m{" "}
+                      {String(salesSyncProgress.elapsedSec % 60).padStart(2, "0")}s
+                    </span>
+                  </div>
+
+                  <p className="text-xs opacity-85 whitespace-normal break-words">
+                    {salesSyncProgress.errorDetail || salesSyncProgress.currentStep}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="font-black text-sm sm:text-base tabular-nums">
+                  {salesSyncProgress.percent}%
+                </span>
+                {(salesSyncProgress.phase === "success" || salesSyncProgress.phase === "failed") && (
+                  <button
+                    type="button"
+                    onClick={() => setSalesSyncProgress(null)}
+                    className="p-1.5 rounded-lg bg-black/10 hover:bg-black/20 cursor-pointer"
+                    title="Tutup panel status"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Progress Bar Halus */}
+            <div className="mt-3 w-full h-2.5 rounded-full bg-black/10 overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-700 ${
+                  salesSyncProgress.phase === "success"
+                    ? "bg-emerald-500"
+                    : salesSyncProgress.phase === "failed"
+                    ? "bg-rose-500"
+                    : "bg-gradient-to-r from-indigo-500 via-blue-500 to-emerald-500 animate-pulse"
+                }`}
+                style={{ width: `${Math.max(5, Math.min(100, salesSyncProgress.percent))}%` }}
+              />
+            </div>
+
+            {/* Preview 3 baris log terakhir langsung dari mesin Python */}
+            {salesSyncProgress.recentLogs.length > 0 && (
+              <div className="mt-3 rounded-xl bg-slate-950/90 text-slate-200 px-3 py-2 font-mono text-[10px] sm:text-[11px] space-y-1 border border-white/10">
+                {salesSyncProgress.recentLogs.map((ln, idx) => (
+                  <div key={idx} className="whitespace-pre-wrap break-words leading-snug opacity-90">
+                    {ln}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {salesSyncProgress.phase === "failed" && (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleTriggerSukoSalesSync}
+                  className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-extrabold cursor-pointer"
+                >
+                  Coba Tarik Ulang
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {loading ? (
           <div className={`flex flex-col items-center justify-center py-24 ${cardCls} rounded-3xl`}>
