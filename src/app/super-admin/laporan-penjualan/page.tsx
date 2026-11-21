@@ -556,8 +556,29 @@ export default function LaporanPenjualanPage() {
             recentLogs: logs,
           }));
         } else if (run.status === "completed") {
+          const allLogText = Array.isArray(j.consoleLines)
+            ? j.consoleLines.map((l: any) => String(l?.text || "")).join(" ").toLowerCase()
+            : "";
+          const isStoreOffline =
+            allLogText.includes("toko tutup / offline") ||
+            allLogText.includes("sedang tutup/offline") ||
+            allLogText.includes("sedang istirahat di luar jam operasional");
           const isOk = run.conclusion === "success";
-          if (isOk) {
+          if (isOk && isStoreOffline) {
+            setSalesSyncProgress((cur) => ({
+              visible: true,
+              phase: "failed",
+              percent: 100,
+              currentStep: "Server toko sedang tutup / offline (di luar jam operasional ~09:00 – 21:30 WIB).",
+              elapsedSec: elapsed,
+              runNumber: run.runNumber,
+              actionsUrl: run.htmlUrl || cur?.actionsUrl,
+              errorDetail:
+                "Server toko fisik sudah dimatikan/tutup sehingga belum ada sales yang bisa ditarik. Tarik lagi besok pagi saat toko buka (otomatis masuk ke tanggal kemarin via Alert Susulan).",
+              recentLogs: logs,
+            }));
+            showToast("Server toko sedang tutup/offline. Tarik lagi saat toko buka (~09:00–21:15 WIB).", "info");
+          } else if (isOk) {
             setSalesSyncProgress((cur) => ({
               visible: true,
               phase: "success",

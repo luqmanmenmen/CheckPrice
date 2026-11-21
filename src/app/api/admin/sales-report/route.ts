@@ -99,8 +99,8 @@ export async function GET(request: NextRequest) {
     if (yesterdayWibStr >= SALES_BASELINE_START_DATE) {
       const syncedYesterdayInHistory = parsedSyncs.some((s) => {
         if (s.date !== yesterdayWibStr) return false;
-        // Abaikan entri inisialisasi baseline awal (bukan tarikan sales real)
-        if (/Baseline Sales/i.test(s.fileName)) return false;
+        // Abaikan entri baseline awal atau saat server toko sedang tutup/offline (belum benar-benar tarik sales)
+        if (/Baseline|tutup\/offline|sedang tutup|offline/i.test(s.fileName)) return false;
         return s.type === "MDS_SALES_SYNC" || s.type === "STOCK_SYNC";
       });
       if (!syncedYesterdayInHistory) {
