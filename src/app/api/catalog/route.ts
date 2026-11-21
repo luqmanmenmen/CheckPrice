@@ -4,6 +4,7 @@ import { groupProductsByArticle } from "@/lib/smartSearchEngine";
 import {
   BrandGroupKey,
   CategoryKey,
+  GenderKey,
   CATEGORY_DISPLAY_ORDER,
   CATEGORY_LABELS,
   CATEGORY_OPTIONS,
@@ -11,8 +12,10 @@ import {
   SubBrandCount,
   buildBrandPrismaWhere,
   buildCategoryPrismaWhere,
+  classifyProductGender,
   compareBrowseItems,
   createEmptyCategoryCounts,
+  createEmptyGenderCounts,
   sortSubBrandStats,
 } from "@/lib/productTaxonomy";
 import {
@@ -32,6 +35,7 @@ const VALID_CATEGORIES = new Set<CategoryKey>([
   "JAKET",
   "ATASAN",
   "CELANA",
+  "SPORT",
   "DRESS_ROK",
   "SEPATU_SANDAL",
   "TAS_AKSESORIS",
@@ -39,6 +43,7 @@ const VALID_CATEGORIES = new Set<CategoryKey>([
   "TIDUR_DALAM",
   "OTHER",
 ]);
+const VALID_GENDERS = new Set<GenderKey>(["ALL", "MEN", "LADIES", "BOYS", "GIRLS"]);
 
 const CATALOG_CACHE_TTL_MS = 120_000;
 const CATALOG_CACHE_MAX = 80;
@@ -195,16 +200,18 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const rawBrand = (searchParams.get("brandGroup") || "ALL").toUpperCase() as BrandGroupKey;
     const rawCategory = (searchParams.get("category") || "ALL").toUpperCase() as CategoryKey;
+    const rawGender = (searchParams.get("gender") || "ALL").toUpperCase() as GenderKey;
     const subBrand = (searchParams.get("subBrand") || "").trim().toUpperCase();
     const brandGroup: BrandGroupKey = VALID_BRANDS.has(rawBrand) ? rawBrand : "ALL";
     const category: CategoryKey = VALID_CATEGORIES.has(rawCategory) ? rawCategory : "ALL";
+    const gender: GenderKey = VALID_GENDERS.has(rawGender) ? rawGender : "ALL";
 
     const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
     const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "20", 10)));
     const groupSections = searchParams.get("groupSections") !== "0";
     const onlyPromo = searchParams.get("onlyPromo") === "1";
 
-    const cacheKey = `b=${brandGroup}::c=${category}::s=${subBrand}::p=${page}::l=${limit}::g=${groupSections ? 1 : 0}::pr=${onlyPromo ? 1 : 0}`;
+    const cacheKey = `b=${brandGroup}::c=${category}::s=${subBrand}::gn=${gender}::p=${page}::l=${limit}::g=${groupSections ? 1 : 0}::pr=${onlyPromo ? 1 : 0}`;
     const cached = catalogCache.get(cacheKey);
     if (cached && Date.now() <= cached.expiresAt) {
       return NextResponse.json({
@@ -233,6 +240,59 @@ export async function GET(request: NextRequest) {
       if (brandGroup !== "ALL") baseWhere.brandGroup = brandGroup;
       if (category !== "ALL") baseWhere.categoryKey = category;
       if (subBrand) baseWhere.subBrand = subBrand;
+
+      // Jalur Presisi Segmen Gender (Men / Ladies / Boys / Girls):
+      // Aktif saat user memilih filter gender ATAU saat ruang lingkup kecil (<= 6.500 artikel, mis. SUKO, ZES, SPORT, CELANA)
+      // agar badge jumlah Men / Ladies / Boys / Girls selalu akurat 100%!
+      const shouldComputeGenderScoped = gender !== "ALL" || (totalArticles > 0 && totalArticles <= 6500);
+      if (shouldComputeGenderScoped) {
+        const scopedRows = await db.catalogArticle.findMany({
+          where: baseWhere,
+          orderBy: { sortRank: "asc" },
+          take: gender !== "ALL" ? 12000 : 6500,
+        });
+
+        const genderCounts: Record<GenderKey, number> = {
+          ...createEmptyGenderCounts(),
+          ALL: scopedRows.length,
+        };
+        const enrichedRows = scopedRows.map((row) => {
+          const gKey = classifyProductGender(row);
+          if (gKey in genderCounts) {
+            genderCounts[gKey as GenderKey] += 1;
+          }
+          return { ...row, genderKey: gKey };
+        });
+
+        const matchedRows =
+          gender === "ALL"
+            ? enrichedRows
+            : enrichedRows.filter((r) => r.genderKey === gender);
+
+        const matchedTotalSkus = matchedRows.reduce(
+          (sum, r) => sum + (r.articleGroupCount || 1),
+          0
+        );
+
+        const scopedPayload = buildTaxonomyListPayload({
+          groupedList: matchedRows,
+          totalSkus: matchedTotalSkus,
+          brandGroup,
+          category,
+          subBrand,
+          gender,
+          page,
+          limit,
+          groupSections,
+          isBrowseMode: true,
+          brandCounts,
+          categoryCounts,
+          genderCounts,
+          onlyPromo,
+        });
+        cacheCatalogPayload(cacheKey, scopedPayload);
+        return NextResponse.json(scopedPayload);
+      }
 
       const todayWib = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
       const activePromoWhere: any = {
@@ -266,6 +326,7 @@ export async function GET(request: NextRequest) {
             brandGroup,
             category,
             subBrand,
+            gender,
             brandCounts,
             categoryCounts,
             subBrandCounts,
@@ -425,23 +486,29 @@ export async function GET(request: NextRequest) {
     });
 
     const cleaned = cleanPromoList(rows);
-    const matched = filterByTaxonomy(cleaned, brandGroup, category, subBrand);
-    const groupedArticles = groupProductsByArticle(matched);
+    const baseScoped = filterByTaxonomy(cleaned, brandGroup, category, subBrand, "ALL");
+    const groupedBase = groupProductsByArticle(baseScoped);
+    const { brandCounts, categoryCounts, genderCounts } = summarizeTaxonomyCounts(groupedBase);
+    const groupedArticles =
+      gender === "ALL"
+        ? groupedBase
+        : groupedBase.filter((item) => classifyProductGender(item) === gender);
     groupedArticles.sort(compareBrowseItems);
-    const { brandCounts, categoryCounts } = summarizeTaxonomyCounts(groupedArticles);
 
     const fallbackPayload = buildTaxonomyListPayload({
       groupedList: groupedArticles,
-      totalSkus: matched.length,
+      totalSkus: groupedArticles.reduce((sum, item) => sum + (item.articleGroupCount || 1), 0),
       brandGroup,
       category,
       subBrand,
+      gender,
       page,
       limit,
       groupSections,
       isBrowseMode: true,
       brandCounts,
       categoryCounts,
+      genderCounts,
       onlyPromo,
     });
     cacheCatalogPayload(cacheKey, fallbackPayload);

@@ -10,8 +10,10 @@ import {
 import {
   BrandGroupKey,
   CategoryKey,
+  GenderKey,
   buildBrandPrismaWhere,
   buildCategoryPrismaWhere,
+  classifyProductGender,
 } from "@/lib/productTaxonomy";
 import {
   PRODUCT_LIST_SELECT,
@@ -52,6 +54,7 @@ const searchListCache = new Map<
     aiAssisted: boolean;
     brandCounts: Record<BrandGroupKey, number>;
     categoryCounts: Record<CategoryKey, number>;
+    genderCounts: Record<GenderKey, number>;
     expiresAt: number;
   }
 >();
@@ -62,6 +65,7 @@ const VALID_CATEGORIES = new Set<CategoryKey>([
   "JAKET",
   "ATASAN",
   "CELANA",
+  "SPORT",
   "DRESS_ROK",
   "SEPATU_SANDAL",
   "TAS_AKSESORIS",
@@ -69,6 +73,7 @@ const VALID_CATEGORIES = new Set<CategoryKey>([
   "TIDUR_DALAM",
   "OTHER",
 ]);
+const VALID_GENDERS = new Set<GenderKey>(["ALL", "MEN", "LADIES", "BOYS", "GIRLS"]);
 
 const SIZE_TOKEN_RE = /^(XXS|XS|S|M|L|XL|XXL|2XL|3XL|4XL|5XL|2L|3L|4L|ALL|\d{1,2})$/i;
 
@@ -90,6 +95,7 @@ function setCachedSearchResult(
     aiAssisted: boolean;
     brandCounts: Record<BrandGroupKey, number>;
     categoryCounts: Record<CategoryKey, number>;
+    genderCounts: Record<GenderKey, number>;
   }
 ) {
   if (searchListCache.size >= SEARCH_CACHE_MAX_KEYS) {
@@ -121,10 +127,12 @@ export async function GET(
 
     const rawBrand = (searchParams.get('brandGroup') || 'ALL').toUpperCase() as BrandGroupKey;
     const rawCategory = (searchParams.get('category') || 'ALL').toUpperCase() as CategoryKey;
+    const rawGender = (searchParams.get('gender') || 'ALL').toUpperCase() as GenderKey;
     const subBrand = (searchParams.get('subBrand') || '').trim().toUpperCase();
     const brandGroup: BrandGroupKey = VALID_BRANDS.has(rawBrand) ? rawBrand : 'ALL';
     const category: CategoryKey = VALID_CATEGORIES.has(rawCategory) ? rawCategory : 'ALL';
-    const hasTaxonomyFilter = brandGroup !== 'ALL' || category !== 'ALL' || Boolean(subBrand);
+    const gender: GenderKey = VALID_GENDERS.has(rawGender) ? rawGender : 'ALL';
+    const hasTaxonomyFilter = brandGroup !== 'ALL' || category !== 'ALL' || Boolean(subBrand) || gender !== 'ALL';
 
     // ─────────────────────────────────────────────────────────────
     //  TAHAP 1: EXACT & FLEXIBLE CODE MATCH (SKU / Barcode / BarcodeAlias)
@@ -294,7 +302,7 @@ export async function GET(
     // ─────────────────────────────────────────────────────────────
     //  CACHE KILAT HALAMAN (Page 2 / Sebelumnya / Ulangi Kata = 1ms!)
     // ─────────────────────────────────────────────────────────────
-    const cacheKey = `${rawInput.toLowerCase()}::b=${brandGroup}::s=${subBrand}::c=${category}`;
+    const cacheKey = `${rawInput.toLowerCase()}::b=${brandGroup}::s=${subBrand}::c=${category}::gn=${gender}`;
     const cachedList = getCachedSearchResult(cacheKey);
     if (cachedList) {
       const total = cachedList.groupedArticles.length;
@@ -314,12 +322,14 @@ export async function GET(
         brandGroup,
         category,
         subBrand,
+        gender,
         page,
         limit,
         groupSections,
         isBrowseMode: false,
         brandCounts: cachedList.brandCounts,
         categoryCounts: cachedList.categoryCounts,
+        genderCounts: cachedList.genderCounts,
         onlyPromo,
       });
       return NextResponse.json({
@@ -492,17 +502,23 @@ export async function GET(
     });
 
     const rankedProducts = cleanPromoList(scoredProducts.map(sp => sp.product));
-    const taxonomyFiltered = filterByTaxonomy(rankedProducts, brandGroup, category, subBrand);
-    const groupedArticles = groupProductsByArticle(taxonomyFiltered);
-    const { brandCounts, categoryCounts } = summarizeTaxonomyCounts(groupedArticles);
+    const baseScopedProducts = filterByTaxonomy(rankedProducts, brandGroup, category, subBrand, "ALL");
+    const groupedBase = groupProductsByArticle(baseScopedProducts);
+    const { brandCounts, categoryCounts, genderCounts } = summarizeTaxonomyCounts(groupedBase);
+    const groupedArticles =
+      gender === "ALL"
+        ? groupedBase
+        : groupedBase.filter((item) => classifyProductGender(item) === gender);
+    const totalSkusFiltered = groupedArticles.reduce((sum, item) => sum + (item.articleGroupCount || 1), 0);
 
     // Simpan ke cache server 60s agar klik Selanjutnya/Sebelumnya = 1ms!
     setCachedSearchResult(cacheKey, {
       groupedArticles,
-      totalSkus: taxonomyFiltered.length,
+      totalSkus: totalSkusFiltered,
       aiAssisted: aiExpandedTerms.length > 0,
       brandCounts,
       categoryCounts,
+      genderCounts,
     });
 
     if (groupedArticles.length === 1 && page === 1 && !hasTaxonomyFilter && !onlyPromo) {
@@ -518,16 +534,18 @@ export async function GET(
 
     const payload = buildTaxonomyListPayload({
       groupedList: groupedArticles,
-      totalSkus: taxonomyFiltered.length,
+      totalSkus: totalSkusFiltered,
       brandGroup,
       category,
       subBrand,
+      gender,
       page,
       limit,
       groupSections,
       isBrowseMode: false,
       brandCounts,
       categoryCounts,
+      genderCounts,
       onlyPromo,
     });
 

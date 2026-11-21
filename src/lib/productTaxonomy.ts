@@ -16,6 +16,7 @@ export type CategoryKey =
   | "JAKET"
   | "ATASAN"
   | "CELANA"
+  | "SPORT"
   | "DRESS_ROK"
   | "SEPATU_SANDAL"
   | "TAS_AKSESORIS"
@@ -24,6 +25,91 @@ export type CategoryKey =
   | "OTHER";
 
 export type ResolvedCategoryKey = Exclude<CategoryKey, "ALL">;
+
+export type GenderKey = "ALL" | "MEN" | "LADIES" | "BOYS" | "GIRLS";
+export type ResolvedGenderKey = Exclude<GenderKey, "ALL"> | "UNISEX";
+
+export interface GenderOption {
+  key: GenderKey;
+  label: string;
+  shortLabel: string;
+  activeClass: string;
+  idleClass: string;
+  badgeActiveClass: string;
+  badgeIdleClass: string;
+  cardChipClass: string;
+}
+
+export const GENDER_OPTIONS: GenderOption[] = [
+  {
+    key: "ALL",
+    label: "Semua Segmen",
+    shortLabel: "Semua",
+    activeClass: "bg-slate-900 text-white border-slate-900 shadow-xs",
+    idleClass: "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100",
+    badgeActiveClass: "bg-white/20 text-white",
+    badgeIdleClass: "bg-slate-200/80 text-slate-600",
+    cardChipClass: "bg-slate-100 text-slate-700 border-slate-200",
+  },
+  {
+    key: "MEN",
+    label: "Men / Pria",
+    shortLabel: "Men",
+    activeClass: "bg-sky-700 text-white border-sky-800 shadow-xs",
+    idleClass: "bg-sky-50/70 text-sky-800 border-sky-200 hover:bg-sky-100",
+    badgeActiveClass: "bg-white/20 text-white",
+    badgeIdleClass: "bg-sky-100 text-sky-700",
+    cardChipClass: "bg-sky-50 text-sky-700 border-sky-200",
+  },
+  {
+    key: "LADIES",
+    label: "Ladies / Wanita",
+    shortLabel: "Ladies",
+    activeClass: "bg-rose-600 text-white border-rose-700 shadow-xs",
+    idleClass: "bg-rose-50/70 text-rose-800 border-rose-200 hover:bg-rose-100",
+    badgeActiveClass: "bg-white/20 text-white",
+    badgeIdleClass: "bg-rose-100 text-rose-700",
+    cardChipClass: "bg-rose-50 text-rose-700 border-rose-200",
+  },
+  {
+    key: "BOYS",
+    label: "Boys / Anak Laki",
+    shortLabel: "Boys",
+    activeClass: "bg-indigo-600 text-white border-indigo-700 shadow-xs",
+    idleClass: "bg-indigo-50/70 text-indigo-800 border-indigo-200 hover:bg-indigo-100",
+    badgeActiveClass: "bg-white/20 text-white",
+    badgeIdleClass: "bg-indigo-100 text-indigo-700",
+    cardChipClass: "bg-indigo-50 text-indigo-700 border-indigo-200",
+  },
+  {
+    key: "GIRLS",
+    label: "Girls / Anak Perempuan",
+    shortLabel: "Girls",
+    activeClass: "bg-fuchsia-600 text-white border-fuchsia-700 shadow-xs",
+    idleClass: "bg-fuchsia-50/70 text-fuchsia-800 border-fuchsia-200 hover:bg-fuchsia-100",
+    badgeActiveClass: "bg-white/20 text-white",
+    badgeIdleClass: "bg-fuchsia-100 text-fuchsia-700",
+    cardChipClass: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200",
+  },
+];
+
+export const GENDER_LABELS: Record<GenderKey, string> = {
+  ALL: "Semua Segmen",
+  MEN: "Men",
+  LADIES: "Ladies",
+  BOYS: "Boys",
+  GIRLS: "Girls",
+};
+
+export function createEmptyGenderCounts(): Record<GenderKey, number> {
+  return {
+    ALL: 0,
+    MEN: 0,
+    LADIES: 0,
+    BOYS: 0,
+    GIRLS: 0,
+  };
+}
 
 export interface BrandGroupOption {
   key: BrandGroupKey;
@@ -114,6 +200,7 @@ export const CATEGORY_OPTIONS: CategoryOption[] = [
   { key: "JAKET", label: "Jaket & Outer", shortLabel: "Jaket", icon: "🧥" },
   { key: "ATASAN", label: "Atasan", shortLabel: "Atasan", icon: "👕" },
   { key: "CELANA", label: "Celana", shortLabel: "Celana", icon: "👖" },
+  { key: "SPORT", label: "Sport & Active", shortLabel: "Sport", icon: "🏃" },
   { key: "DRESS_ROK", label: "Dress & Rok", shortLabel: "Dress/Rok", icon: "👗" },
   { key: "SEPATU_SANDAL", label: "Sepatu & Sandal", shortLabel: "Sepatu", icon: "👟" },
   { key: "TAS_AKSESORIS", label: "Tas & Aksesoris", shortLabel: "Tas/Accs", icon: "👜" },
@@ -126,6 +213,7 @@ export const CATEGORY_LABELS: Record<CategoryKey, string> = {
   JAKET: "Jaket & Outer",
   ATASAN: "Atasan",
   CELANA: "Celana",
+  SPORT: "Sport & Active",
   DRESS_ROK: "Dress & Rok",
   SEPATU_SANDAL: "Sepatu & Sandal",
   TAS_AKSESORIS: "Tas & Aksesoris",
@@ -138,6 +226,7 @@ export const CATEGORY_DISPLAY_ORDER: ResolvedCategoryKey[] = [
   "JAKET",
   "ATASAN",
   "CELANA",
+  "SPORT",
   "DRESS_ROK",
   "SEPATU_SANDAL",
   "TAS_AKSESORIS",
@@ -188,6 +277,28 @@ export const CATEGORY_KEYWORDS: Record<Exclude<CategoryKey, "ALL" | "OTHER">, st
     "SHORTS",
     "DENIM LONG",
     "WIDE LEG",
+  ],
+  SPORT: [
+    "SPORT",
+    "SPORTS",
+    "ACTIVE",
+    "ACTIVEWEAR",
+    "GYM",
+    "RUNNING",
+    "YOGA",
+    "FITNESS",
+    "TRAINING",
+    "TRACKPANT",
+    "TRACKPANTS",
+    "TRACKSUIT",
+    "WORKOUT",
+    "QUICK DRY",
+    "QUICKDRY",
+    "CLIMA TECH",
+    "CLIMATECH",
+    "JERSEY",
+    "ATHLETIC",
+    "JOGGING",
   ],
   DRESS_ROK: [
     "DRESS",
@@ -274,6 +385,8 @@ export const CATEGORY_KEYWORDS: Record<Exclude<CategoryKey, "ALL" | "OTHER">, st
     "CANVAS BAG",
     "STICKER",
     "STICKERS",
+    "TOWEL",
+    "HANDUK",
   ],
   BEAUTY: [
     "BLUSH",
@@ -418,27 +531,174 @@ export function classifyProductCategory(p: TaxonomyInput): ResolvedCategoryKey {
     return "TAS_AKSESORIS";
   }
 
-  // 5. Dress, Rok & Skort (sebelum Celana & Atasan agar "ROK JEANS" tidak nyasar ke Celana)
+  // 5. Sport & Activewear (termasuk SUKO SPORTS MEN/LADIES, NEVADA SPORT, Quick Dry, Running, Yoga, Gym)
+  if (
+    dept.includes("SPORT") ||
+    dept.includes("ACTIVE") ||
+    brand.includes("SPORT") ||
+    CATEGORY_REGEX_MAP.SPORT.test(title)
+  ) {
+    return "SPORT";
+  }
+
+  // 6. Dress, Rok & Skort (sebelum Celana & Atasan agar "ROK JEANS" tidak nyasar ke Celana)
   if (CATEGORY_REGEX_MAP.DRESS_ROK.test(title)) {
     return "DRESS_ROK";
   }
 
-  // 6. Jaket, Hoodie, Sweater, Blazer, Vest (sebelum Atasan agar "JACKET OVERSHIRT" masuk Jaket)
+  // 7. Jaket, Hoodie, Sweater, Blazer, Vest (sebelum Atasan agar "JACKET OVERSHIRT" masuk Jaket)
   if (CATEGORY_REGEX_MAP.JAKET.test(title)) {
     return "JAKET";
   }
 
-  // 7. Celana & Jeans
+  // 8. Celana & Jeans
   if (CATEGORY_REGEX_MAP.CELANA.test(title)) {
     return "CELANA";
   }
 
-  // 8. Atasan (Kaos, Kemeja, Blouse, Polo, Tank Top)
+  // 9. Atasan (Kaos, Kemeja, Blouse, Polo, Tank Top)
   if (CATEGORY_REGEX_MAP.ATASAN.test(title)) {
     return "ATASAN";
   }
 
   return "OTHER";
+}
+
+const BOYS_RE = /(?<![A-Z0-9])(?:BOYS?|ANAK\s+LAKI(?:\s*-?\s*LAKI)?|LAKI[\s-]+LAKI|COWOK\s+ANAK|JR\.?\s*BOYS?|JUNIOR\s+BOYS?|TODDLER\s+BOYS?|BABY\s+BOYS?|KIDS?\s+BOYS?|CHILDREN\s+BOYS?)(?![A-Z0-9])/i;
+const GIRLS_RE = /(?<![A-Z0-9])(?:GIRLS?|ANAK\s+PEREMPUAN|CEWEK\s+ANAK|JR\.?\s*GIRLS?|JUNIOR\s+GIRLS?|TODDLER\s+GIRLS?|BABY\s+GIRLS?|KIDS?\s+GIRLS?|CHILDREN\s+GIRLS?)(?![A-Z0-9])/i;
+const MEN_EXPLICIT_RE = /(?<![A-Z0-9])(?:MENS?|MAN|PRIA|COWOK|GENTLEMAN|MEN'S|MENSWEAR|LAKI)(?![A-Z0-9])/i;
+const LADIES_EXPLICIT_RE = /(?<![A-Z0-9])(?:LADIES|LADY|WOMENS?|WOMAN|WANITA|CEWEK|PEREMPUAN|WOMEN'S|WOMENSWEAR)(?![A-Z0-9])/i;
+const MEN_ITEM_HINT_RE = /(?<![A-Z0-9])(?:BOXER|BRIEF|KOKO|BAJU\s+KOKO)(?![A-Z0-9])/i;
+const LADIES_ITEM_HINT_RE = /(?<![A-Z0-9])(?:DRESS|SACKDRESS|GAUN|ROK|SKIRT|SKORT|BLOUSE|BLUS|BRA|BRALETTE|PANTY|CAMISOLE|DASTER|NIGHTGOWN|BABYDOL|HIJAB|CIPUT|GAMIS|TUNIK|TUNIC|KAFTAN|ABAYA|HEELS|WEDGES|BALLERINA|MULES|SLINGBACK|CULOTTE|KULOT|LEGGING|TANK\s+TOP|CROP\s+TOP)(?![A-Z0-9])/i;
+const SUKO_ARTICLE_GENDER_RE = /^[A-Z]\d([MLBG])[A-Z0-9]/i;
+
+const MEN_ONLY_BRANDS = new Set([
+  "COLE",
+  "CARDINAL",
+  "CROCODILE",
+  "ARROW",
+  "LOIS",
+  "PIERRE CARDIN",
+  "JOBB",
+  "JACK NICKLAUS",
+  "STANLEY ADAMS",
+  "EMBA",
+  "JOHNWIN",
+  "MOC",
+  "AMERICAN JEANS",
+  "WATCHOUT",
+  "MEN FORMAL",
+  "MEN CONTEMP CASUAL",
+  "MEN YOUNG CASUAL",
+  "MEN ESSENTIALS",
+  "MEN SHOES",
+]);
+
+const LADIES_ONLY_BRANDS = new Set([
+  "CONNEXION",
+  "ST YVES",
+  "SAINT YVES",
+  "THE GABS",
+  "GABS",
+  "SHE SENSE",
+  "ANNISA",
+  "SIRA",
+  "PHENOMENAL",
+  "DETAILS",
+  "DUSTY",
+  "TRISETS",
+  "NAYOUNG",
+  "LADIES CONTEMP",
+  "LADIES SHOES",
+  "INTIMATE",
+]);
+
+/**
+ * Mengklasifikasikan segmen gender produk: MEN, LADIES, BOYS, GIRLS, atau UNISEX.
+ * Bekerja seragam untuk SUKO (termasuk kode artikel ke-3 M/L/B/G & SUKO SPORTS MEN/LADIES),
+ * ZES (ZES MEN / ZES WOMEN), dan Mu+Ku (dept ERP, deskripsi, serta sub-brand khusus).
+ */
+export function classifyProductGender(p: TaxonomyInput): ResolvedGenderKey {
+  const brand = (p.brand || "").trim().toUpperCase();
+  const dept = (p.dept || "").trim().toUpperCase();
+  const article = (p.article || "").trim().toUpperCase();
+  const title = (p.description || p.name || "").split(":")[0].trim().toUpperCase();
+  const deptBrand = `${dept} ${brand}`;
+  const fullText = `${dept} ${brand} ${title}`;
+
+  // 1. Cek Anak Laki-laki (BOYS) & Anak Perempuan (GIRLS) terlebih dahulu agar tidak tertukar dengan Men/Ladies
+  if (BOYS_RE.test(deptBrand) || BOYS_RE.test(title)) {
+    return "BOYS";
+  }
+  if (GIRLS_RE.test(deptBrand) || GIRLS_RE.test(title)) {
+    return "GIRLS";
+  }
+
+  // 2. Cek SUKO: dept eksplisit (SUKO SPORTS MEN/LADIES, SUKO BOYS/GIRLS) & pola kode artikel huruf ke-3 (M/L/B/G)
+  if (brand.includes("SUKO") || dept.includes("SUKO")) {
+    if (MEN_EXPLICIT_RE.test(dept)) return "MEN";
+    if (LADIES_EXPLICIT_RE.test(dept)) return "LADIES";
+    const artMatch = SUKO_ARTICLE_GENDER_RE.exec(article);
+    if (artMatch) {
+      const code = artMatch[1].toUpperCase();
+      if (code === "M") return "MEN";
+      if (code === "L") return "LADIES";
+      if (code === "B") return "BOYS";
+      if (code === "G") return "GIRLS";
+    }
+    if (/^[A-Z]\dMEN/i.test(article)) return "MEN";
+    if (/^[A-Z]\dLAD/i.test(article)) return "LADIES";
+  }
+
+  // 3. Cek label eksplisit di kolom dept / brand (ZES MEN, ZES WOMEN, AOS MENS, PRIA, WANITA, dll.)
+  if (LADIES_EXPLICIT_RE.test(deptBrand) && !MEN_EXPLICIT_RE.test(deptBrand)) {
+    return "LADIES";
+  }
+  if (MEN_EXPLICIT_RE.test(deptBrand) && !LADIES_EXPLICIT_RE.test(deptBrand)) {
+    return "MEN";
+  }
+
+  // 4. Cek label eksplisit pada judul produk (mis. "CELANA PANJANG PRIA", "JEANS WANITA", "SPORT MEN")
+  if (LADIES_EXPLICIT_RE.test(title) && !MEN_EXPLICIT_RE.test(title)) {
+    return "LADIES";
+  }
+  if (MEN_EXPLICIT_RE.test(title) && !LADIES_EXPLICIT_RE.test(title)) {
+    return "MEN";
+  }
+
+  // 5. Cek kata kunci pakaian khas Ladies / Men (Dress, Rok, Blouse, Bra, Hijab, Kulot vs Boxer, Koko)
+  if (LADIES_ITEM_HINT_RE.test(title)) {
+    return "LADIES";
+  }
+  if (MEN_ITEM_HINT_RE.test(title)) {
+    return "MEN";
+  }
+
+  // 6. Cek sub-brand khusus Pria / Wanita di Mu+Ku (hanya bila tidak ada sinyal anak/gender lain)
+  if (LADIES_ONLY_BRANDS.has(brand) || LADIES_ONLY_BRANDS.has(dept)) {
+    return "LADIES";
+  }
+  if (MEN_ONLY_BRANDS.has(brand) || MEN_ONLY_BRANDS.has(dept)) {
+    return "MEN";
+  }
+  const normSub = getNormalizedSubBrand(p);
+  if (LADIES_ONLY_BRANDS.has(normSub)) return "LADIES";
+  if (MEN_ONLY_BRANDS.has(normSub)) return "MEN";
+
+  // 7. Sinyal gender tersisa pada teks gabungan
+  if (LADIES_EXPLICIT_RE.test(fullText)) return "LADIES";
+  if (MEN_EXPLICIT_RE.test(fullText)) return "MEN";
+
+  return "UNISEX";
+}
+
+export function matchesGenderFilter(
+  p: TaxonomyInput & { genderKey?: ResolvedGenderKey },
+  gender: GenderKey
+): boolean {
+  if (gender === "ALL") return true;
+  const g = p.genderKey || classifyProductGender(p);
+  return g === gender;
 }
 
 // Nama divisi ERP Matahari yang kolom `brand`-nya bukan merk asli (merk asli ada di kolom `dept`)
@@ -588,6 +848,12 @@ export function buildCategoryPrismaWhere(category: CategoryKey): any | undefined
       { dept: { contains: "SHOES" } },
       { dept: { contains: "FW" } }
     );
+  } else if (category === "SPORT") {
+    branches.push(
+      { dept: { contains: "SPORT" } },
+      { dept: { contains: "ACTIVE" } },
+      { brand: { contains: "SPORT" } }
+    );
   } else if (category === "TAS_AKSESORIS") {
     branches.push(
       { dept: { contains: "BAG" } },
@@ -628,6 +894,7 @@ export function createEmptyCategoryCounts(): Record<CategoryKey, number> {
     JAKET: 0,
     ATASAN: 0,
     CELANA: 0,
+    SPORT: 0,
     DRESS_ROK: 0,
     SEPATU_SANDAL: 0,
     TAS_AKSESORIS: 0,

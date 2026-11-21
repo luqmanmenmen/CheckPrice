@@ -2,11 +2,14 @@ import { prisma as db } from "@/lib/prisma";
 import {
   BrandGroupKey,
   CategoryKey,
+  GenderKey,
   SubBrandCount,
   classifyBrandGroup,
   classifyProductCategory,
+  classifyProductGender,
   getNormalizedSubBrand,
   createEmptyCategoryCounts,
+  createEmptyGenderCounts,
   sortSubBrandStats,
   paginateBrandSections,
   paginateCategorySections,
@@ -221,6 +224,10 @@ export function summarizeTaxonomyCounts(groupedArticles: any[]) {
     ...createEmptyCategoryCounts(),
     ALL: groupedArticles.length,
   };
+  const genderCounts: Record<GenderKey, number> = {
+    ...createEmptyGenderCounts(),
+    ALL: groupedArticles.length,
+  };
   const mukuSubBrandTotals = new Map<string, SubBrandCount>();
 
   for (const item of groupedArticles) {
@@ -228,6 +235,10 @@ export function summarizeTaxonomyCounts(groupedArticles: any[]) {
     brandCounts[bg] = (brandCounts[bg] || 0) + 1;
     const cat: CategoryKey = (item.categoryKey as CategoryKey) || classifyProductCategory(item);
     categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
+    const gen = item.genderKey || classifyProductGender(item);
+    if (gen in genderCounts) {
+      genderCounts[gen as GenderKey] = (genderCounts[gen as GenderKey] || 0) + 1;
+    }
 
     if (bg === "MUKU") {
       const sb = item.subBrand || getNormalizedSubBrand(item);
@@ -239,17 +250,18 @@ export function summarizeTaxonomyCounts(groupedArticles: any[]) {
   }
 
   const subBrandCounts = sortSubBrandStats(Array.from(mukuSubBrandTotals.values()), (x) => x.name);
-  return { brandCounts, categoryCounts, subBrandCounts };
+  return { brandCounts, categoryCounts, genderCounts, subBrandCounts };
 }
 
 /**
- * Memastikan hasil sesuai presedensi Brand, Kategori, & Sub-Brand (menghindari edge case SQL LIKE)
+ * Memastikan hasil sesuai presedensi Brand, Kategori, Sub-Brand, & Segmen Gender (menghindari edge case SQL LIKE)
  */
 export function filterByTaxonomy<T extends Record<string, any>>(
   items: T[],
   brandGroup: BrandGroupKey,
   category: CategoryKey,
-  subBrand: string = ""
+  subBrand: string = "",
+  gender: GenderKey = "ALL"
 ): T[] {
   const subUpper = subBrand.trim().toUpperCase();
   return items.filter((item) => {
@@ -264,6 +276,10 @@ export function filterByTaxonomy<T extends Record<string, any>>(
     if (subUpper) {
       const sb = item.subBrand || getNormalizedSubBrand(item);
       if (sb !== subUpper) return false;
+    }
+    if (gender !== "ALL") {
+      const gen = item.genderKey || classifyProductGender(item);
+      if (gen !== gender) return false;
     }
     return true;
   });
@@ -312,12 +328,14 @@ export function buildTaxonomyListPayload({
   brandGroup,
   category,
   subBrand = "",
+  gender = "ALL",
   page = 1,
   limit = 20,
   groupSections = true,
   isBrowseMode = true,
   brandCounts,
   categoryCounts,
+  genderCounts,
   promoCount,
   onlyPromo = false,
 }: {
@@ -326,12 +344,14 @@ export function buildTaxonomyListPayload({
   brandGroup: BrandGroupKey;
   category: CategoryKey;
   subBrand?: string;
+  gender?: GenderKey;
   page?: number;
   limit?: number;
   groupSections?: boolean;
   isBrowseMode?: boolean;
   brandCounts: Record<BrandGroupKey, number>;
   categoryCounts: Record<CategoryKey, number>;
+  genderCounts?: Record<GenderKey, number>;
   promoCount?: number;
   onlyPromo?: boolean;
 }) {
@@ -341,7 +361,8 @@ export function buildTaxonomyListPayload({
       : groupedList.reduce((acc, item) => (isItemPromoActive(item) ? acc + 1 : acc), 0);
   const workingList = onlyPromo ? groupedList.filter((item) => isItemPromoActive(item)) : groupedList;
   const total = workingList.length;
-  const { subBrandCounts } = summarizeTaxonomyCounts(workingList);
+  const { subBrandCounts, genderCounts: fallbackGenderCounts } = summarizeTaxonomyCounts(workingList);
+  const resolvedGenderCounts = genderCounts || fallbackGenderCounts;
 
   if (brandGroup === "MUKU" && !subBrand && groupSections && workingList.length > 0) {
     const brandPages = paginateBrandSections(workingList, page, 8, 5);
@@ -357,8 +378,10 @@ export function buildTaxonomyListPayload({
         brandGroup,
         category,
         subBrand,
+        gender,
         brandCounts,
         categoryCounts,
+        genderCounts: resolvedGenderCounts,
         subBrandCounts,
         brandShowcaseSections: brandPages.sections,
         sectionMode: "BRAND_PAGES" as const,
@@ -386,8 +409,10 @@ export function buildTaxonomyListPayload({
         brandGroup,
         category,
         subBrand,
+        gender,
         brandCounts,
         categoryCounts,
+        genderCounts: resolvedGenderCounts,
         subBrandCounts,
         categoryShowcaseSections: catPages.sections,
         sectionMode: "CATEGORY_PAGES" as const,
@@ -411,8 +436,10 @@ export function buildTaxonomyListPayload({
       brandGroup,
       category,
       subBrand,
+      gender,
       brandCounts,
       categoryCounts,
+      genderCounts: resolvedGenderCounts,
       subBrandCounts,
       sectionMode: "LIST" as const,
     },

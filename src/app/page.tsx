@@ -18,18 +18,23 @@ import { createPortal } from "react-dom";
 import {
   BrandGroupKey,
   CategoryKey,
+  GenderKey,
   ResolvedBrandGroup,
   ResolvedCategoryKey,
+  ResolvedGenderKey,
   BRAND_GROUP_OPTIONS,
   MUKU_SUB_BRANDS,
   CATEGORY_OPTIONS,
   CATEGORY_LABELS,
   CATEGORY_DISPLAY_ORDER,
+  GENDER_OPTIONS,
+  GENDER_LABELS,
   SubBrandCount,
   BrandShowcaseSection,
   CategoryShowcaseSection,
   classifyBrandGroup,
   classifyProductCategory,
+  classifyProductGender,
   getBrandGroupMeta,
   getNormalizedSubBrand,
 } from "@/lib/productTaxonomy";
@@ -66,6 +71,15 @@ function CategoryVectorIcon({ catKey, className = "w-3.5 h-3.5 shrink-0" }: { ca
       return (
         <svg {...props}>
           <path d="M7 3h10l1 18h-4l-2-10-2 10H6L7 3Z" />
+        </svg>
+      );
+    case "SPORT":
+      return (
+        <svg {...props}>
+          <circle cx="15" cy="5" r="2" />
+          <path d="M13 9l-3 4 4 2-1 6" />
+          <path d="M10 13l-4 2-2 4" />
+          <path d="M13 9l4 1 3-2" />
         </svg>
       );
     case "DRESS_ROK":
@@ -138,6 +152,7 @@ type ProductData = {
   articlePromoLabel?: string | null;
   brandGroup?: ResolvedBrandGroup;
   categoryKey?: ResolvedCategoryKey;
+  genderKey?: ResolvedGenderKey;
 };
 
 // Parse product info to get clean product name, color, and size
@@ -312,9 +327,11 @@ export default function Home() {
   const [selectedBrandGroup, setSelectedBrandGroup] = useState<BrandGroupKey>("ALL");
   const [selectedSubBrand, setSelectedSubBrand] = useState<string>("");
   const [selectedCategory, setSelectedCategory] = useState<CategoryKey>("ALL");
+  const [selectedGender, setSelectedGender] = useState<GenderKey>("ALL");
   const [groupByCategory, setGroupByCategory] = useState<boolean>(true);
   const [taxonomyBrandCounts, setTaxonomyBrandCounts] = useState<Record<string, number> | null>(null);
   const [taxonomyCategoryCounts, setTaxonomyCategoryCounts] = useState<Record<string, number> | null>(null);
+  const [taxonomyGenderCounts, setTaxonomyGenderCounts] = useState<Record<string, number> | null>(null);
   const [taxonomySubBrandCounts, setTaxonomySubBrandCounts] = useState<SubBrandCount[] | null>(null);
   const [brandShowcaseSections, setBrandShowcaseSections] = useState<BrandShowcaseSection<ProductData>[] | null>(null);
   const [categoryShowcaseSections, setCategoryShowcaseSections] = useState<CategoryShowcaseSection<ProductData>[] | null>(null);
@@ -803,6 +820,7 @@ export default function Home() {
           if (overview) {
             setTaxonomyBrandCounts(overview.brandCounts);
             setTaxonomyCategoryCounts(overview.categoryCounts);
+            setTaxonomyGenderCounts(overview.genderCounts);
             if (overview.subBrandCounts?.length) setTaxonomySubBrandCounts(overview.subBrandCounts);
           }
         }
@@ -1225,6 +1243,7 @@ export default function Home() {
         totalPages: number;
         brandCounts?: Record<string, number> | null;
         categoryCounts?: Record<string, number> | null;
+        genderCounts?: Record<string, number> | null;
         subBrandCounts?: SubBrandCount[] | null;
         brandShowcaseSections?: BrandShowcaseSection<ProductData>[] | null;
         categoryShowcaseSections?: CategoryShowcaseSection<ProductData>[] | null;
@@ -1385,7 +1404,7 @@ export default function Home() {
   const handlePageChange = (nextPage: number) => {
     if (nextPage < 1 || nextPage > totalPages || loading) return;
     scrollPageToTop();
-    searchProduct(manualInput, nextPage, true, selectedBrandGroup, selectedCategory, selectedSubBrand, groupByCategory, resultFilter);
+    searchProduct(manualInput, nextPage, true, selectedBrandGroup, selectedCategory, selectedSubBrand, groupByCategory, resultFilter, selectedGender);
   };
 
   const buildSearchEndpointUrl = (
@@ -1395,7 +1414,8 @@ export default function Home() {
     category: CategoryKey,
     subBrand: string = "",
     useGroupSections: boolean = groupByCategory,
-    onlyPromo: boolean = false
+    onlyPromo: boolean = false,
+    gender: GenderKey = "ALL"
   ) => {
     if (!trimmedQuery) {
       const params = new URLSearchParams({
@@ -1405,6 +1425,7 @@ export default function Home() {
         groupSections: useGroupSections ? "1" : "0",
       });
       if (subBrand) params.set("subBrand", subBrand);
+      if (gender !== "ALL") params.set("gender", gender);
       if (onlyPromo) params.set("onlyPromo", "1");
       return `/api/catalog?${params.toString()}`;
     }
@@ -1415,6 +1436,7 @@ export default function Home() {
     if (brandGroup !== "ALL") params.set("brandGroup", brandGroup);
     if (category !== "ALL") params.set("category", category);
     if (subBrand) params.set("subBrand", subBrand);
+    if (gender !== "ALL") params.set("gender", gender);
     if (onlyPromo) params.set("onlyPromo", "1");
     return `/api/product/${encodeURIComponent(trimmedQuery)}?${params.toString()}`;
   };
@@ -1436,11 +1458,13 @@ export default function Home() {
       .then((overview) => {
         setTaxonomyBrandCounts(overview?.brandCounts || null);
         setTaxonomyCategoryCounts(overview?.categoryCounts || null);
+        setTaxonomyGenderCounts(overview?.genderCounts || null);
         if (overview?.subBrandCounts?.length) setTaxonomySubBrandCounts(overview.subBrandCounts);
       })
       .catch(() => {
         setTaxonomyBrandCounts(null);
         setTaxonomyCategoryCounts(null);
+        setTaxonomyGenderCounts(null);
       });
   };
 
@@ -1453,11 +1477,11 @@ export default function Home() {
     if (nextGroup !== groupByCategory) setGroupByCategory(nextGroup);
     if (resolvedBrand !== "MUKU" || nextSub) setBrandShowcaseSections(null);
     if (resolvedBrand === "MUKU" && !nextSub) setCategoryShowcaseSections(null);
-    if (!manualInput.trim() && resolvedBrand === "ALL" && selectedCategory === "ALL") {
+    if (!manualInput.trim() && resolvedBrand === "ALL" && selectedCategory === "ALL" && selectedGender === "ALL") {
       clearListToIdle();
       return;
     }
-    searchProduct(manualInput, 1, true, resolvedBrand, selectedCategory, nextSub, nextGroup);
+    searchProduct(manualInput, 1, true, resolvedBrand, selectedCategory, nextSub, nextGroup, resultFilter, selectedGender);
   };
 
   const handleSubBrandFilterChange = (nextSubBrand: string) => {
@@ -1468,37 +1492,48 @@ export default function Home() {
     if (nextGroup !== groupByCategory) setGroupByCategory(nextGroup);
     if (resolvedSub) setBrandShowcaseSections(null);
     else setCategoryShowcaseSections(null);
-    searchProduct(manualInput, 1, true, "MUKU", selectedCategory, resolvedSub, nextGroup);
+    searchProduct(manualInput, 1, true, "MUKU", selectedCategory, resolvedSub, nextGroup, resultFilter, selectedGender);
   };
 
   const handleCategoryFilterChange = (nextCategory: CategoryKey) => {
     const resolvedCat: CategoryKey = selectedCategory === nextCategory && nextCategory !== "ALL" ? "ALL" : nextCategory;
     setSelectedCategory(resolvedCat);
     if (resolvedCat !== "ALL") setCategoryShowcaseSections(null);
-    if (!manualInput.trim() && selectedBrandGroup === "ALL" && resolvedCat === "ALL") {
+    if (!manualInput.trim() && selectedBrandGroup === "ALL" && resolvedCat === "ALL" && selectedGender === "ALL") {
       clearListToIdle();
       return;
     }
-    searchProduct(manualInput, 1, true, selectedBrandGroup, resolvedCat, selectedSubBrand, groupByCategory);
+    searchProduct(manualInput, 1, true, selectedBrandGroup, resolvedCat, selectedSubBrand, groupByCategory, resultFilter, selectedGender);
+  };
+
+  const handleGenderFilterChange = (nextGender: GenderKey) => {
+    const resolvedGender: GenderKey = selectedGender === nextGender && nextGender !== "ALL" ? "ALL" : nextGender;
+    setSelectedGender(resolvedGender);
+    if (!manualInput.trim() && selectedBrandGroup === "ALL" && selectedCategory === "ALL" && resolvedGender === "ALL") {
+      clearListToIdle();
+      return;
+    }
+    searchProduct(manualInput, 1, true, selectedBrandGroup, selectedCategory, selectedSubBrand, groupByCategory, resultFilter, resolvedGender);
   };
 
   const handleResetTaxonomyFilters = () => {
     setSelectedBrandGroup("ALL");
     setSelectedSubBrand("");
     setSelectedCategory("ALL");
+    setSelectedGender("ALL");
     setBrandShowcaseSections(null);
     setCategoryShowcaseSections(null);
     if (!manualInput.trim()) {
       clearListToIdle();
       return;
     }
-    searchProduct(manualInput, 1, true, "ALL", "ALL", "", groupByCategory);
+    searchProduct(manualInput, 1, true, "ALL", "ALL", "", groupByCategory, "ALL", "ALL");
   };
 
   const handleToggleSectionGrouping = () => {
     const nextGroup = !groupByCategory;
     setGroupByCategory(nextGroup);
-    searchProduct(manualInput, 1, false, selectedBrandGroup, selectedCategory, selectedSubBrand, nextGroup);
+    searchProduct(manualInput, 1, false, selectedBrandGroup, selectedCategory, selectedSubBrand, nextGroup, resultFilter, selectedGender);
   };
 
   const isNormalPriceText = (val?: string | null): boolean => {
@@ -1578,16 +1613,18 @@ export default function Home() {
     overrideCategory?: CategoryKey,
     overrideSubBrand?: string,
     overrideGroupSections?: boolean,
-    overrideResultFilter?: "ALL" | "STOCK" | "PROMO"
+    overrideResultFilter?: "ALL" | "STOCK" | "PROMO",
+    overrideGender?: GenderKey
   ) => {
     const trimmed = identifier.trim();
     const activeBrand = overrideBrandGroup ?? selectedBrandGroup;
     const activeCategory = overrideCategory ?? selectedCategory;
     const activeSubBrand = overrideSubBrand ?? (activeBrand === "MUKU" ? selectedSubBrand : "");
+    const activeGender = overrideGender ?? selectedGender;
     const activeGroupSections = overrideGroupSections ?? groupByCategory;
     const activeResultFilter = overrideResultFilter ?? "ALL";
     const onlyPromo = activeResultFilter === "PROMO";
-    const hasTaxonomyFilter = activeBrand !== "ALL" || activeCategory !== "ALL" || Boolean(activeSubBrand);
+    const hasTaxonomyFilter = activeBrand !== "ALL" || activeCategory !== "ALL" || Boolean(activeSubBrand) || activeGender !== "ALL";
 
     if (!trimmed && !hasTaxonomyFilter) return;
 
@@ -1637,7 +1674,7 @@ export default function Home() {
       return;
     }
 
-    const listCacheKey = `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::s=${activeSubBrand}::c=${activeCategory}::g=${activeGroupSections ? 1 : 0}::pr=${onlyPromo ? 1 : 0}::p${page}`;
+    const listCacheKey = `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::s=${activeSubBrand}::c=${activeCategory}::gn=${activeGender}::g=${activeGroupSections ? 1 : 0}::pr=${onlyPromo ? 1 : 0}::p${page}`;
 
     const prefetchNextPage = (
       currentPageNum: number,
@@ -1645,12 +1682,13 @@ export default function Home() {
       fallbackTotal: number,
       fallbackTotalSkus: number,
       fallbackBrands?: Record<string, number> | null,
-      fallbackCats?: Record<string, number> | null
+      fallbackCats?: Record<string, number> | null,
+      fallbackGenders?: Record<string, number> | null
     ) => {
       const nextPageNum = currentPageNum + 1;
-      const nextCacheKey = `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::s=${activeSubBrand}::c=${activeCategory}::g=${activeGroupSections ? 1 : 0}::pr=${onlyPromo ? 1 : 0}::p${nextPageNum}`;
+      const nextCacheKey = `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::s=${activeSubBrand}::c=${activeCategory}::gn=${activeGender}::g=${activeGroupSections ? 1 : 0}::pr=${onlyPromo ? 1 : 0}::p${nextPageNum}`;
       if (currentPageNum < maxPages && !listCacheRef.current.has(nextCacheKey)) {
-        fetch(buildSearchEndpointUrl(trimmed, nextPageNum, activeBrand, activeCategory, activeSubBrand, activeGroupSections, onlyPromo), { cache: 'no-store' })
+        fetch(buildSearchEndpointUrl(trimmed, nextPageNum, activeBrand, activeCategory, activeSubBrand, activeGroupSections, onlyPromo, activeGender), { cache: 'no-store' })
           .then((r) => (r.ok ? r.json() : null))
           .then((nextJson) => {
             if (nextJson && Array.isArray(nextJson.data) && nextJson.data.length > 0) {
@@ -1662,6 +1700,7 @@ export default function Home() {
                 totalPages: nextJson.meta?.totalPages || maxPages,
                 brandCounts: nextJson.meta?.brandCounts || fallbackBrands || null,
                 categoryCounts: nextJson.meta?.categoryCounts || fallbackCats || null,
+                genderCounts: nextJson.meta?.genderCounts || fallbackGenders || null,
                 subBrandCounts: nextJson.meta?.subBrandCounts || null,
                 brandShowcaseSections: nextJson.meta?.brandShowcaseSections || null,
                 categoryShowcaseSections: nextJson.meta?.categoryShowcaseSections || null,
@@ -1693,6 +1732,7 @@ export default function Home() {
       setTotalSkusCount(cachedPage.totalSkus);
       if (cachedPage.brandCounts !== undefined) setTaxonomyBrandCounts(cachedPage.brandCounts || null);
       if (cachedPage.categoryCounts !== undefined) setTaxonomyCategoryCounts(cachedPage.categoryCounts || null);
+      if (cachedPage.genderCounts !== undefined) setTaxonomyGenderCounts(cachedPage.genderCounts || null);
       if (cachedPage.subBrandCounts !== undefined && (!activeSubBrand || (cachedPage.subBrandCounts?.length || 0) > 1)) {
         setTaxonomySubBrandCounts(cachedPage.subBrandCounts || null);
       }
@@ -1716,7 +1756,8 @@ export default function Home() {
         cachedPage.total,
         cachedPage.totalSkus,
         cachedPage.brandCounts,
-        cachedPage.categoryCounts
+        cachedPage.categoryCounts,
+        cachedPage.genderCounts
       );
       if (shouldScrollTop && typeof window !== "undefined") {
         requestAnimationFrame(() => scrollPageToTop());
@@ -1773,7 +1814,8 @@ export default function Home() {
       activeCategory,
       activeSubBrand,
       activeGroupSections,
-      onlyPromo
+      onlyPromo,
+      activeGender
     );
 
     const presentLocalProductAndRefreshBg = async (localItem: LocalOfflineCandidate) => {
@@ -1875,6 +1917,7 @@ export default function Home() {
             brandGroup: activeBrand,
             category: activeCategory,
             subBrand: activeSubBrand,
+            gender: activeGender,
             page,
             limit: 20,
             groupSections: activeGroupSections,
@@ -1891,7 +1934,7 @@ export default function Home() {
           await presentLocalProductAndRefreshBg(hitSku || singleModel);
           return;
         }
-        if (localRes.total > 0 || !trimmed || onlyPromo) {
+        if (localRes.total > 0 || !trimmed || onlyPromo || hasTaxonomyFilter) {
           setProduct(null);
           setSiblings([]);
           setProductsList(localRes.data as unknown as ProductData[]);
@@ -1901,6 +1944,7 @@ export default function Home() {
           setTotalSkusCount(localRes.totalSkus);
           setTaxonomyBrandCounts(localRes.brandCounts);
           setTaxonomyCategoryCounts(localRes.categoryCounts);
+          setTaxonomyGenderCounts(localRes.genderCounts);
           if (localRes.subBrandCounts?.length) setTaxonomySubBrandCounts(localRes.subBrandCounts);
           const nextBrandShowcase =
             (localRes.brandShowcaseSections as unknown as BrandShowcaseSection<ProductData>[]) || null;
@@ -2040,6 +2084,7 @@ export default function Home() {
             setTotalSkusCount(0);
             setTaxonomyBrandCounts(data.meta?.brandCounts || null);
             setTaxonomyCategoryCounts(data.meta?.categoryCounts || null);
+            if (data.meta?.genderCounts !== undefined) setTaxonomyGenderCounts(data.meta.genderCounts || null);
             if (!hasTaxonomyFilter && trimmed && !onlyPromo) {
               const isDigitCode = /^\d{8,14}$/.test(trimmed);
               const msg = isDigitCode && localDbReady
@@ -2061,6 +2106,7 @@ export default function Home() {
               : data.data.filter((it: ProductData) => isCatalogPromoActiveClient(it)).length;
           const resolvedBrandCounts = data.meta?.brandCounts || null;
           const resolvedCategoryCounts = data.meta?.categoryCounts || null;
+          const resolvedGenderCounts = data.meta?.genderCounts || null;
           const resolvedSubBrandCounts = (data.meta?.subBrandCounts as SubBrandCount[] | undefined) || null;
           const resolvedShowcase = (data.meta?.brandShowcaseSections as BrandShowcaseSection<ProductData>[] | undefined) || null;
           const resolvedCatShowcase =
@@ -2075,6 +2121,7 @@ export default function Home() {
           setTotalSkusCount(resolvedTotalSkus);
           setTaxonomyBrandCounts(resolvedBrandCounts);
           setTaxonomyCategoryCounts(resolvedCategoryCounts);
+          if (resolvedGenderCounts) setTaxonomyGenderCounts(resolvedGenderCounts);
           if (resolvedSubBrandCounts?.length && (!activeSubBrand || resolvedSubBrandCounts.length > 1)) {
             setTaxonomySubBrandCounts(resolvedSubBrandCounts);
           }
@@ -2092,7 +2139,7 @@ export default function Home() {
           setCurrentPage(resolvedPage);
           setTotalPages(resolvedTotalPages);
           listCacheRef.current.set(
-            `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::s=${activeSubBrand}::c=${activeCategory}::g=${activeGroupSections ? 1 : 0}::pr=${onlyPromo ? 1 : 0}::p${resolvedPage}`,
+            `${trimmed ? trimmed.toLowerCase() : "CATALOG"}::b=${activeBrand}::s=${activeSubBrand}::c=${activeCategory}::gn=${activeGender}::g=${activeGroupSections ? 1 : 0}::pr=${onlyPromo ? 1 : 0}::p${resolvedPage}`,
             {
               list: data.data,
               total: resolvedTotal,
@@ -2102,6 +2149,7 @@ export default function Home() {
               totalPages: resolvedTotalPages,
               brandCounts: resolvedBrandCounts,
               categoryCounts: resolvedCategoryCounts,
+              genderCounts: resolvedGenderCounts,
               subBrandCounts: resolvedSubBrandCounts,
               brandShowcaseSections: resolvedShowcase,
               categoryShowcaseSections: resolvedCatShowcase,
@@ -2120,7 +2168,8 @@ export default function Home() {
             resolvedTotal,
             resolvedTotalSkus,
             resolvedBrandCounts,
-            resolvedCategoryCounts
+            resolvedCategoryCounts,
+            resolvedGenderCounts
           );
         } else {
           recordRecentSearch(data.data?.article && !["0", "-", "PRODUK BARU"].includes(String(data.data.article).toUpperCase()) ? data.data.article : trimmed);
@@ -2944,7 +2993,7 @@ export default function Home() {
                         Filter per Artikel • {localCacheStats.skuCount.toLocaleString('id-ID')} Total SKU
                       </span>
                     ) : null}
-                    {(selectedBrandGroup !== "ALL" || selectedCategory !== "ALL" || selectedSubBrand) && (
+                    {(selectedBrandGroup !== "ALL" || selectedCategory !== "ALL" || selectedSubBrand || selectedGender !== "ALL") && (
                       <button
                         type="button"
                         onClick={handleResetTaxonomyFilters}
@@ -3128,11 +3177,40 @@ export default function Home() {
                     );
                   })}
                 </div>
+
+                {/* Bar 3: Filter Segmen Gender (Men • Ladies • Boys • Girls) untuk SUKO, Mu+Ku, & ZES */}
+                <div className="flex items-center gap-1.5 overflow-x-auto pt-1.5 border-t border-slate-100">
+                  <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider shrink-0 mr-0.5">
+                    Segmen:
+                  </span>
+                  {GENDER_OPTIONS.map((gen) => {
+                    const isActive = selectedGender === gen.key;
+                    const countVal = taxonomyGenderCounts?.[gen.key];
+                    const isZero = typeof countVal === "number" && countVal === 0 && gen.key !== "ALL";
+                    return (
+                      <button
+                        key={gen.key}
+                        type="button"
+                        onClick={() => handleGenderFilterChange(gen.key)}
+                        className={`text-[11px] font-bold px-2.5 py-1.5 rounded-xl border transition-all whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5 ${
+                          isActive ? gen.activeClass : gen.idleClass
+                        } ${isZero && !isActive ? "opacity-55" : ""}`}
+                      >
+                        <span>{gen.shortLabel}</span>
+                        {typeof countVal === "number" && (
+                          <span className={`text-[9px] px-1.5 py-0.5 rounded-md tabular-nums ${isActive ? gen.badgeActiveClass : gen.badgeIdleClass}`}>
+                            {countVal.toLocaleString('id-ID')}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
             {/* Idle Quick Recent Chips & 2-Column Shortcut Banners */}
-            {!product && productsList.length === 0 && !loading && selectedBrandGroup === "ALL" && selectedCategory === "ALL" && (
+            {!product && productsList.length === 0 && !loading && selectedBrandGroup === "ALL" && selectedCategory === "ALL" && selectedGender === "ALL" && (
               <div className="flex flex-col gap-2.5 pt-0.5">
                 {recentSearches.length > 0 && (
                   <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
@@ -3290,7 +3368,7 @@ export default function Home() {
       )}
 
       {/* Konsep 3: Hasil Pencarian / Katalog Brand & Kategori */}
-      {(productsList.length > 0 || resultFilter === "PROMO") && !product && (() => {
+      {(productsList.length > 0 || resultFilter === "PROMO" || selectedBrandGroup !== "ALL" || selectedCategory !== "ALL" || selectedGender !== "ALL") && !product && !loading && (() => {
         const isProductOnPromo = (item: ProductData) => isCatalogPromoActiveClient(item);
         const getTotalStock = (item: ProductData) => item.articleTotalStok ?? item.stok ?? 0;
 
@@ -3378,6 +3456,7 @@ export default function Home() {
 
         const activeBrandLabel = selectedBrandGroup !== "ALL" ? getBrandGroupMeta(selectedBrandGroup).shortLabel : null;
         const activeCatLabel = selectedCategory !== "ALL" ? CATEGORY_LABELS[selectedCategory] : null;
+        const activeGenderLabel = selectedGender !== "ALL" ? GENDER_LABELS[selectedGender] : null;
         const headerPrefix = manualInput.trim() ? "Hasil Pencarian" : "Katalog Produk";
 
         const renderProductCard = (p: ProductData) => {
@@ -3401,6 +3480,8 @@ export default function Home() {
           const brandMeta = getBrandGroupMeta(brandGroup);
           const catKey = getItemCategory(p);
           const catMeta = CATEGORY_OPTIONS.find((c) => c.key === catKey);
+          const genderKey = p.genderKey || classifyProductGender(p);
+          const genderMeta = genderKey !== "UNISEX" ? GENDER_OPTIONS.find((g) => g.key === genderKey) : null;
           const subBrandLabel = (p as any).subBrand || getNormalizedSubBrand(p);
           const swatchColors =
             p.articleColors && p.articleColors.length > 0
@@ -3437,7 +3518,7 @@ export default function Home() {
                 setProductsList([]);
                 setManualInput(p.sku);
                 scrollPageToTop();
-                searchProduct(p.sku, 1, false, "ALL", "ALL", "");
+                searchProduct(p.sku, 1, false, "ALL", "ALL", "", undefined, undefined, "ALL");
               }}
               className="group text-left bg-white border border-slate-200 hover:border-blue-400 hover:shadow-md rounded-xl overflow-hidden transition-all flex flex-col h-full cursor-pointer"
             >
@@ -3534,6 +3615,11 @@ export default function Home() {
                     <span className="text-[9px] font-semibold bg-indigo-50/70 text-indigo-700 border border-indigo-100 px-1.5 py-0.5 rounded">
                       {CATEGORY_LABELS[catKey]}
                     </span>
+                    {genderMeta && (
+                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${genderMeta.cardChipClass}`}>
+                        {genderMeta.shortLabel}
+                      </span>
+                    )}
                     {colorsSummary && (
                       <span className="text-[9px] font-semibold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded whitespace-normal break-words">
                         {colorsSummary}
@@ -3605,6 +3691,11 @@ export default function Home() {
                       {activeCatLabel}
                     </span>
                   )}
+                  {activeGenderLabel && (
+                    <span className="text-[10px] font-black bg-sky-50 text-sky-700 border border-sky-200 px-2 py-0.5 rounded-full">
+                      {activeGenderLabel}
+                    </span>
+                  )}
                   {totalSkusCount > modelCount && (
                     <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full border border-slate-200">
                       {totalSkusCount.toLocaleString('id-ID')} SKU varian
@@ -3621,7 +3712,7 @@ export default function Home() {
                   type="button"
                   onClick={() => {
                     if (resultFilter === "PROMO") {
-                      searchProduct(manualInput, 1, false, selectedBrandGroup, selectedCategory, selectedSubBrand, groupByCategory, "ALL");
+                      searchProduct(manualInput, 1, false, selectedBrandGroup, selectedCategory, selectedSubBrand, groupByCategory, "ALL", selectedGender);
                     } else {
                       setResultFilter("ALL");
                     }
@@ -3638,7 +3729,7 @@ export default function Home() {
                   type="button"
                   onClick={() => {
                     if (resultFilter === "PROMO") {
-                      searchProduct(manualInput, 1, false, selectedBrandGroup, selectedCategory, selectedSubBrand, groupByCategory, "STOCK");
+                      searchProduct(manualInput, 1, false, selectedBrandGroup, selectedCategory, selectedSubBrand, groupByCategory, "STOCK", selectedGender);
                     } else {
                       setResultFilter("STOCK");
                     }
@@ -3655,9 +3746,9 @@ export default function Home() {
                   type="button"
                   onClick={() => {
                     if (resultFilter === "PROMO") {
-                      searchProduct(manualInput, 1, false, selectedBrandGroup, selectedCategory, selectedSubBrand, groupByCategory, "ALL");
+                      searchProduct(manualInput, 1, false, selectedBrandGroup, selectedCategory, selectedSubBrand, groupByCategory, "ALL", selectedGender);
                     } else {
-                      searchProduct(manualInput, 1, false, selectedBrandGroup, selectedCategory, selectedSubBrand, groupByCategory, "PROMO");
+                      searchProduct(manualInput, 1, false, selectedBrandGroup, selectedCategory, selectedSubBrand, groupByCategory, "PROMO", selectedGender);
                     }
                   }}
                   className={`text-[11px] font-bold px-2.5 py-1.5 rounded-lg border transition-colors whitespace-nowrap cursor-pointer ${
@@ -3715,14 +3806,16 @@ export default function Home() {
                   type="button"
                   onClick={() => {
                     if (resultFilter === "PROMO") {
-                      searchProduct(manualInput, 1, false, selectedBrandGroup, selectedCategory, selectedSubBrand, groupByCategory, "ALL");
+                      searchProduct(manualInput, 1, false, selectedBrandGroup, selectedCategory, selectedSubBrand, groupByCategory, "ALL", selectedGender);
+                    } else if (selectedGender !== "ALL") {
+                      handleGenderFilterChange("ALL");
                     } else {
                       setResultFilter("ALL");
                     }
                   }}
                   className="text-xs font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg border border-blue-200 transition-colors cursor-pointer"
                 >
-                  Tampilkan Semua
+                  {selectedGender !== "ALL" && productsList.length === 0 ? "Tampilkan Semua Segmen" : "Tampilkan Semua"}
                 </button>
               </div>
             ) : shouldRenderBrandSections ? (

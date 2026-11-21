@@ -1928,5 +1928,23 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   - [`src/app/api/product/[identifier]/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/product/%5Bidentifier%5D/route.ts): Scan barcode/SKU (`8–14 digit`) yang belum ada di Turso kini **otomatis langsung menembak MDS BISA + Matahari.com** (timeout 12 detik, lengkap dengan keluarga varian & foto studio) dan langsung menyimpannya ke Turso Cloud.
   - [`src/app/api/admin/trigger/self-heal/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/self-heal/route.ts): Otomatis membatalkan paksa run GitHub Actions yang sedang nyangkut & mereset log error lama di Turso sebelum menjalankan run baru.
 
+---
+
+### 111. Kategori Baru `SPORT` + Filter Segmen Gender (`Men`, `Ladies`, `Boys`, `Girls`) Lintas SUKO, Mu+Ku, & ZES (`v17_sport_gender`) (22 November 2026)
+
+- **Arahan Pengguna:**
+  - Memisahkan produk per segmen **`Men`, `Ladies`, `Boys`, dan `Girls`** di **SUKO, Mu+Ku, dan ZES** (misal saat membuka `Celana`, tidak lagi tercampur Men/Ladies/Boys/Girls).
+  - Menambahkan kategori khusus **`SPORT` (Sport & Active)** beserta pemisahan segmen `Men` / `Ladies` / `Boys` / `Girls`.
+- **Perubahan Menyeluruh (Online Turso API + Offline Dexie + Python Catalog Brain + UI):**
+  1. **Single Source of Truth ([`src/lib/productTaxonomy.ts`](file:///c:/Max%20Display/price-checker/src/lib/productTaxonomy.ts)) & Python Parity ([`python-engine/build_catalog_index.py`](file:///c:/Max%20Display/price-checker/python-engine/build_catalog_index.py)):**
+     - Menambahkan kategori **`SPORT`** (`Sport & Active`, kata kunci `SPORT/ACTIVE/GYM/RUNNING/YOGA/TRAINING/TRACKPANT/QUICKDRY/CLIMATECH/JERSEY/JOGGING` + dept `SUKO SPORTS MEN/LADIES`, menjaga `TOWEL/HANDUK` tetap di `TAS_AKSESORIS`).
+     - Menambahkan `GenderKey` (`ALL` | `MEN` | `LADIES` | `BOYS` | `GIRLS`) & `classifyProductGender()` yang akurat untuk seluruh 3 toko: kode artikel huruf ke-3 SUKO (`^[A-Z]\d([MLBG])`) + dept `SUKO SPORTS MEN/LADIES` & `SUKO BOYS/GIRLS`, `ZES MEN`/`ZES WOMEN`, serta dept ERP/deskripsi/sub-brand `Mu+Ku` (`ANAK LAKI-LAKI`, `ANAK PEREMPUAN`, `PRIA`, `WANITA`, dst.).
+  2. **Backend API & Offline Dexie ([`src/lib/productQueryHelpers.ts`](file:///c:/Max%20Display/price-checker/src/lib/productQueryHelpers.ts), [`src/app/api/catalog/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/catalog/route.ts), [`src/app/api/product/[identifier]/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/product/%5Bidentifier%5D/route.ts), [`src/lib/offlineDb.ts`](file:///c:/Max%20Display/price-checker/src/lib/offlineDb.ts)):**
+     - Mendukung parameter `?gender=MEN|LADIES|BOYS|GIRLS` & `?category=SPORT`, mengembalikan `genderCounts` akurat per segmen pada konteks toko + kategori aktif.
+     - Bump `MODELS_TAXONOMY_VERSION = "v17_sport_gender"` + re-klasifikasi dinamis `categoryKey` & `genderKey` di `sanitizeAndIndexModel()` agar HP offline langsung dapat `Sport` & `Men/Ladies/Boys/Girls` 0ms tanpa perlu re-download 310k SKU.
+  3. **UI/UX Bar Segmen & Chip Kartu ([`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx)):**
+     - Menambahkan tombol kategori **`Sport`** (ikon SVG pelari) di Bar 2, serta **Bar 3 `Segmen:`** (`Semua`, `Men`, `Ladies`, `Boys`, `Girls`) berwarna pembeda + counter jumlah artikel akurat, plus badge segmen pada header filter & setiap kartu produk (0 `truncate` / `line-clamp-*`).
+
+
 
 

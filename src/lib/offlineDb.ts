@@ -9,15 +9,19 @@ import {
 import {
   BrandGroupKey,
   CategoryKey,
+  GenderKey,
   ResolvedBrandGroup,
   ResolvedCategoryKey,
+  ResolvedGenderKey,
   SubBrandCount,
   BrandShowcaseSection,
   CategoryShowcaseSection,
   classifyBrandGroup,
   classifyProductCategory,
+  classifyProductGender,
   getNormalizedSubBrand,
   createEmptyCategoryCounts,
+  createEmptyGenderCounts,
   sortSubBrandStats,
   paginateBrandSections,
   paginateCategorySections,
@@ -70,6 +74,7 @@ export interface CachedArticleModel {
   articlePromoLabel: string | null;
   brandGroup: ResolvedBrandGroup;
   categoryKey: ResolvedCategoryKey;
+  genderKey?: ResolvedGenderKey;
   subBrand?: string;
   _searchHay?: string;
 }
@@ -146,6 +151,7 @@ let modelsBuildPromise: Promise<CachedArticleModel[] | null> | null = null;
 let cachedTaxonomyOverview: {
   brandCounts: Record<BrandGroupKey, number>;
   categoryCounts: Record<CategoryKey, number>;
+  genderCounts: Record<GenderKey, number>;
   subBrandCounts?: LocalSubBrandCount[];
 } | null = null;
 
@@ -340,14 +346,25 @@ function sanitizeAndIndexModel(m: CachedArticleModel): CachedArticleModel {
       }
     : m;
 
-  const withSubBrand = cleanM.subBrand
-    ? cleanM
-    : { ...cleanM, subBrand: getNormalizedSubBrand(cleanM) };
+  const resolvedCategory = classifyProductCategory(cleanM);
+  const resolvedGender = classifyProductGender(cleanM);
+  const resolvedSubBrand = cleanM.subBrand || getNormalizedSubBrand(cleanM);
+  const enriched: CachedArticleModel =
+    cleanM.categoryKey === resolvedCategory &&
+    cleanM.genderKey === resolvedGender &&
+    cleanM.subBrand === resolvedSubBrand
+      ? cleanM
+      : {
+          ...cleanM,
+          categoryKey: resolvedCategory,
+          genderKey: resolvedGender,
+          subBrand: resolvedSubBrand,
+        };
 
-  if (!withSubBrand._searchHay) {
-    withSubBrand._searchHay = `${withSubBrand.article || ""} ${withSubBrand.description || ""} ${withSubBrand.brand || ""} ${withSubBrand.subBrand || ""} ${withSubBrand.dept || ""} ${withSubBrand.articleColors?.join(" ") || withSubBrand.color || ""} ${withSubBrand.sku} ${withSubBrand.barcode || ""}`.toUpperCase();
+  if (!enriched._searchHay) {
+    enriched._searchHay = `${enriched.article || ""} ${enriched.description || ""} ${enriched.brand || ""} ${enriched.subBrand || ""} ${enriched.dept || ""} ${enriched.articleColors?.join(" ") || enriched.color || ""} ${enriched.sku} ${enriched.barcode || ""}`.toUpperCase();
   }
-  return withSubBrand;
+  return enriched;
 }
 
 /** Normalisasi kunci barcode/kode (hilangkan spasi, strip, titik, garis miring) */
@@ -570,7 +587,7 @@ export async function rebuildModelsIndexFromProducts(): Promise<CachedArticleMod
   }
 }
 
-const MODELS_TAXONOMY_VERSION = "v16_zes_clean_dedup";
+const MODELS_TAXONOMY_VERSION = "v17_sport_gender";
 
 export async function ensureModelsIndexReady(): Promise<CachedArticleModel[] | null> {
   if (memoryModelsCache && memoryModelsCache.length >= 1000) {
@@ -1320,6 +1337,7 @@ export interface LocalQueryResponse {
   totalPages: number;
   brandCounts: Record<BrandGroupKey, number>;
   categoryCounts: Record<CategoryKey, number>;
+  genderCounts: Record<GenderKey, number>;
   subBrandCounts?: LocalSubBrandCount[];
   brandShowcaseSections?: LocalBrandShowcaseSection[];
   categoryShowcaseSections?: LocalCategoryShowcaseSection[];
@@ -1363,6 +1381,7 @@ export async function queryLocalModelsInstant({
   brandGroup = "ALL",
   category = "ALL",
   subBrand = "",
+  gender = "ALL",
   page = 1,
   limit = 20,
   groupSections = true,
@@ -1372,6 +1391,7 @@ export async function queryLocalModelsInstant({
   brandGroup?: BrandGroupKey;
   category?: CategoryKey;
   subBrand?: string;
+  gender?: GenderKey;
   page?: number;
   limit?: number;
   groupSections?: boolean;
@@ -1391,7 +1411,7 @@ export async function queryLocalModelsInstant({
     const isPureLongDigitCode = /^\d{8,20}$/.test(trimmed);
 
     // 1. Cek exact article / sku / barcode match jika tidak sedang memfilter taxonomy
-    if (brandGroup === "ALL" && category === "ALL" && !subBrandUpper && page === 1 && !/\s/.test(upper)) {
+    if (brandGroup === "ALL" && category === "ALL" && !subBrandUpper && gender === "ALL" && page === 1 && !/\s/.test(upper)) {
       const candidateSet = new Set<string>([upper]);
       if (/^\d+$/.test(upper)) {
         const stripped = upper.replace(/^0+/, "");
@@ -1407,6 +1427,11 @@ export async function queryLocalModelsInstant({
       );
       if (exactArts.length === 1) {
         const hitSubBrand = exactArts[0].subBrand || getNormalizedSubBrand(exactArts[0]);
+        const hitGender = exactArts[0].genderKey || classifyProductGender(exactArts[0]);
+        const exactGenderCounts = { ...createEmptyGenderCounts(), ALL: 1 };
+        if (hitGender in exactGenderCounts) {
+          exactGenderCounts[hitGender as GenderKey] = 1;
+        }
         return {
           data: exactArts,
           singleMatch: exactArts[0],
@@ -1420,6 +1445,7 @@ export async function queryLocalModelsInstant({
             ALL: 1,
             [exactArts[0].categoryKey]: 1,
           },
+          genderCounts: exactGenderCounts,
           subBrandCounts:
             exactArts[0].brandGroup === "MUKU"
               ? [{ name: hitSubBrand, count: 1, photoCount: exactArts[0].imageUrl ? 1 : 0 }]
@@ -1476,9 +1502,10 @@ export async function queryLocalModelsInstant({
     baseMatched = models.filter((m) => !isIgnoredCatalogProduct(m));
   }
 
-  // Hitung brandCounts lintas semua brand (terfilter oleh kategori jika aktif)
+  // Hitung brandCounts, categoryCounts, & genderCounts secara lintas dimensi
   const brandCounts: Record<BrandGroupKey, number> = { ALL: 0, SUKO: 0, MUKU: 0, ZES: 0 };
   const categoryCounts: Record<CategoryKey, number> = createEmptyCategoryCounts();
+  const genderCounts: Record<GenderKey, number> = createEmptyGenderCounts();
   const mukuSubBrandTotals = new Map<string, LocalSubBrandCount>();
 
   const finalMatched: CachedArticleModel[] = [];
@@ -1488,19 +1515,27 @@ export async function queryLocalModelsInstant({
     const m = baseMatched[i];
     if (!isDummy && isIgnoredCatalogProduct(m)) continue;
     const itemSubBrand = m.subBrand || getNormalizedSubBrand(m);
+    const itemGender = m.genderKey || classifyProductGender(m);
     const matchBrand = brandGroup === "ALL" || m.brandGroup === brandGroup;
     const matchCat = category === "ALL" || m.categoryKey === category;
     const matchSubBrand = !subBrandUpper || itemSubBrand === subBrandUpper;
+    const matchGender = gender === "ALL" || itemGender === gender;
 
-    if (matchCat) {
+    if (matchCat && matchGender) {
       brandCounts.ALL += 1;
       brandCounts[m.brandGroup] += 1;
     }
-    if (matchBrand && matchSubBrand) {
+    if (matchBrand && matchSubBrand && matchGender) {
       categoryCounts.ALL += 1;
       categoryCounts[m.categoryKey] += 1;
     }
-    if (m.brandGroup === "MUKU" && matchCat) {
+    if (matchBrand && matchCat && matchSubBrand) {
+      genderCounts.ALL += 1;
+      if (itemGender in genderCounts) {
+        genderCounts[itemGender as GenderKey] += 1;
+      }
+    }
+    if (m.brandGroup === "MUKU" && matchCat && matchGender) {
       const prev = mukuSubBrandTotals.get(itemSubBrand) || {
         name: itemSubBrand,
         count: 0,
@@ -1510,7 +1545,7 @@ export async function queryLocalModelsInstant({
       if (m.imageUrl) prev.photoCount += 1;
       mukuSubBrandTotals.set(itemSubBrand, prev);
     }
-    if (matchBrand && matchCat && matchSubBrand) {
+    if (matchBrand && matchCat && matchSubBrand && matchGender) {
       finalMatched.push(m);
       totalSkus += m.articleGroupCount || 1;
     }
@@ -1554,6 +1589,7 @@ export async function queryLocalModelsInstant({
       totalPages: brandPages.totalPages,
       brandCounts,
       categoryCounts,
+      genderCounts,
       subBrandCounts,
       brandShowcaseSections: brandPages.sections,
       sectionMode: "BRAND_PAGES",
@@ -1579,6 +1615,7 @@ export async function queryLocalModelsInstant({
       totalPages: catPages.totalPages,
       brandCounts,
       categoryCounts,
+      genderCounts,
       subBrandCounts,
       categoryShowcaseSections: catPages.sections,
       sectionMode: "CATEGORY_PAGES",
@@ -1599,6 +1636,7 @@ export async function queryLocalModelsInstant({
     totalPages,
     brandCounts,
     categoryCounts,
+    genderCounts,
     subBrandCounts,
     sectionMode: "LIST",
   };
@@ -1644,6 +1682,7 @@ export async function browseOfflineCatalog(
 export async function getLocalTaxonomyOverview(): Promise<{
   brandCounts: Record<BrandGroupKey, number>;
   categoryCounts: Record<CategoryKey, number>;
+  genderCounts: Record<GenderKey, number>;
   subBrandCounts?: LocalSubBrandCount[];
 } | null> {
   if (cachedTaxonomyOverview) return cachedTaxonomyOverview;
@@ -1653,6 +1692,7 @@ export async function getLocalTaxonomyOverview(): Promise<{
 
     const brandCounts: Record<BrandGroupKey, number> = { ALL: 0, SUKO: 0, MUKU: 0, ZES: 0 };
     const categoryCounts: Record<CategoryKey, number> = createEmptyCategoryCounts();
+    const genderCounts: Record<GenderKey, number> = createEmptyGenderCounts();
     const mukuSubBrandTotals = new Map<string, LocalSubBrandCount>();
 
     for (let i = 0; i < models.length; i++) {
@@ -1662,6 +1702,11 @@ export async function getLocalTaxonomyOverview(): Promise<{
       brandCounts[m.brandGroup] += 1;
       categoryCounts.ALL += 1;
       categoryCounts[m.categoryKey] += 1;
+      genderCounts.ALL += 1;
+      const gKey = m.genderKey || classifyProductGender(m);
+      if (gKey in genderCounts) {
+        genderCounts[gKey as GenderKey] += 1;
+      }
       if (m.brandGroup === "MUKU") {
         const itemSubBrand = m.subBrand || getNormalizedSubBrand(m);
         const prev = mukuSubBrandTotals.get(itemSubBrand) || {
@@ -1676,7 +1721,7 @@ export async function getLocalTaxonomyOverview(): Promise<{
     }
 
     const subBrandCounts = sortSubBrandStats(Array.from(mukuSubBrandTotals.values()), (x) => x.name);
-    cachedTaxonomyOverview = { brandCounts, categoryCounts, subBrandCounts };
+    cachedTaxonomyOverview = { brandCounts, categoryCounts, genderCounts, subBrandCounts };
     return cachedTaxonomyOverview;
   } catch {
     return null;

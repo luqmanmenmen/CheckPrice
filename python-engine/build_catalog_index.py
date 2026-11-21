@@ -95,6 +95,12 @@ CATEGORY_KEYWORDS: Dict[str, List[str]] = {
         "TROUSER", "TROUSERS", "CULOTTE", "KULOT", "LEGGING",
         "SHORT PANT", "SHORT PANTS", "SHORTS", "DENIM LONG", "WIDE LEG",
     ],
+    "SPORT": [
+        "SPORT", "SPORTS", "ACTIVE", "ACTIVEWEAR", "GYM", "RUNNING",
+        "YOGA", "FITNESS", "TRAINING", "TRACKPANT", "TRACKPANTS",
+        "TRACKSUIT", "WORKOUT", "QUICK DRY", "QUICKDRY", "CLIMA TECH",
+        "CLIMATECH", "JERSEY", "ATHLETIC", "JOGGING",
+    ],
     "DRESS_ROK": [
         "DRESS", "SACKDRESS", "GAUN", "SKIRT", "ROK", "SKORT",
         "GAMIS", "KAFTAN", "ABAYA", "TUNIK", "TUNIC", "JUMPSUIT", "OVERALL",
@@ -116,7 +122,7 @@ CATEGORY_KEYWORDS: Dict[str, List[str]] = {
         "RANSEL", "WALLET", "DOMPET", "TOPI", "CAP", "HAT",
         "BELT", "SABUK", "HAIR CLIP", "HAIRPIN", "HIJAB", "CIPUT",
         "MUG", "TUMBLER", "CUSHION", "DOLL", "PLUSH",
-        "PAPERBAG", "CANVAS BAG", "STICKER", "STICKERS",
+        "PAPERBAG", "CANVAS BAG", "STICKER", "STICKERS", "TOWEL", "HANDUK",
     ],
     "BEAUTY": [
         "BLUSH", "LIP", "LIPSTICK", "LIPTINT", "SERUM", "TONER",
@@ -306,6 +312,14 @@ def classify_product_category(brand: Optional[str], dept: Optional[str], desc: O
         or CATEGORY_REGEX["TAS_AKSESORIS"].search(title)
     ):
         return "TAS_AKSESORIS"
+
+    if (
+        "SPORT" in d
+        or "ACTIVE" in d
+        or "SPORT" in b
+        or CATEGORY_REGEX["SPORT"].search(title)
+    ):
+        return "SPORT"
 
     for cat in ("DRESS_ROK", "JAKET", "CELANA", "ATASAN"):
         if CATEGORY_REGEX[cat].search(title):
