@@ -192,7 +192,7 @@ jobs:
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
       - name: 🧠 [KATEGORI 4 - CATALOG BRAIN & OFFLINE SNAPSHOT v2.7] Susun CatalogArticle + Kompilasi DB Offline .json.gz
-        if: ${{ (success() && github.event.inputs.action != 'analytics' && github.event.inputs.action != 'trigger-analytics' && github.event.inputs.action != 'upcoming-promo' && github.event.inputs.action != 'trigger-upcoming-promo') || github.event.inputs.action == 'catalog' || github.event.action == 'trigger-catalog' }}
+        if: ${{ (success() && github.event.inputs.action != 'analytics' && github.event.inputs.action != 'trigger-analytics' && github.event.inputs.action != 'upcoming-promo' && github.event.inputs.action != 'trigger-upcoming-promo' && github.event.inputs.action != 'suko-sales' && github.event.action != 'trigger-suko-sales') || github.event.inputs.action == 'catalog' || github.event.action == 'trigger-catalog' }}
         run: |
           if [ -n "$DATABASE_URL" ]; then
             STOCK_ONLY_FLAG=""

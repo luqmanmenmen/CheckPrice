@@ -1454,7 +1454,7 @@ def execute_live_stock_sync(
             continue
 
         offline_hits = 0
-        with ThreadPoolExecutor(max_workers=16) as executor:
+        with ThreadPoolExecutor(max_workers=28) as executor:
             future_map = {
                 executor.submit(query_storehub_multi, "sku", sku_cand, cookie): sku_cand
                 for sku_cand in chunk
@@ -1540,10 +1540,11 @@ def execute_live_stock_sync(
         if len(buffer_by_sku) >= 200:
             flush_buffer(buffer_by_sku, write_md_report=False)
 
-        if (c_start // chunk_size) % 10 == 0:
+        if (c_start // chunk_size) % 3 == 0 or c_start + chunk_size >= len(ordered_skus):
+            pct_now = min(100, int((checked_count / max(len(ordered_skus), 1)) * 100))
             print(
-                f"   ⚡ [PROGRES STOK LIVE] Terperiksa: {checked_count:,} / {total_mapped:,} SKU | "
-                f"Perubahan Stok/Harga Disimpan: {changed_count:,} SKU"
+                f"   ⚡ [PROGRES SALES SUKO] {pct_now}% • Terperiksa: {checked_count:,} / {len(ordered_skus):,} SKU | "
+                f"Berubah: {changed_count:,} SKU | Terdeteksi Terjual: {len(sales_deltas):,} SKU"
             )
 
     if buffer_by_sku:
@@ -1569,7 +1570,7 @@ def execute_live_stock_sync(
             run_admin_analytics.generate_po_suggestions(conn_an)
             sales_payload = run_admin_analytics.build_sales_report_summary_payload(conn_an)
             sales_bytes = json.dumps(sales_payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-            _storage_upload(s_url, s_key, "analytics/sales-report-summary.json", sales_bytes, "application/json", "300")
+            _storage_upload(s_url, s_key, "analytics/sales-report-summary.json", sales_bytes, "application/json", "max-age=300")
             print(f"   📊 [ANALYTICS CDN] analytics/sales-report-summary.json diperbarui ({len(sales_bytes)/1024:.1f} KB)")
         finally:
             conn_an.close()
@@ -1946,7 +1947,7 @@ if __name__ == "__main__":
         cat, _, _ = load_existing_catalog_full()
         save_mapped_paths_registry(cat)
     elif "--suko-sales-only" in args:
-        execute_live_stock_sync(max_minutes=max_min_arg or 20, suko_sales_only=True, sales_date=sales_date_arg)
+        execute_live_stock_sync(max_minutes=max_min_arg or 45, suko_sales_only=True, sales_date=sales_date_arg)
     elif "--stock-only" in args:
         execute_live_stock_sync(max_minutes=max_min_arg or 45, suko_sales_only=False, sales_date=sales_date_arg)
     elif "--census-sku" in args or "--brutal" in args or "--run-once" in args or "--force" in args or "--upc-first" in args or custom_range_arg or is_gh_actions:
