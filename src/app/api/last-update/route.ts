@@ -17,16 +17,9 @@ const CATALOG_SYNC_TYPES = [
 ];
 
 async function fetchStorageManifest() {
-  const supaUrl = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim().replace(/\/+$/, '');
-  if (!supaUrl) return null;
   try {
-    const res = await fetch(
-      `${supaUrl}/storage/v1/object/public/excel-uploads/offline-db/manifest.json?t=${Date.now()}`,
-      { cache: 'no-store', signal: AbortSignal.timeout(2500) }
-    );
-    if (!res.ok) return null;
-    const json = await res.json();
-    return json && typeof json === 'object' ? json : null;
+    const { readTursoStorageJson } = await import('@/lib/tursoStorage');
+    return await readTursoStorageJson('offline-db/manifest.json');
   } catch {
     return null;
   }

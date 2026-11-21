@@ -1255,7 +1255,7 @@ export default function UpdateProdukPage() {
                 </h3>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                Rekapitulasi data riil yang tersimpan di Supabase dari ketiga kategori mesin
+                Rekapitulasi data riil yang tersimpan di Turso Cloud dari ketiga kategori mesin
               </p>
             </div>
             <button

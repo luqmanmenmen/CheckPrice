@@ -53,31 +53,20 @@ async function readStoreTargetFromStorage(): Promise<StoreTargetConfig> {
     return cachedTarget.config;
   }
 
-  const supaUrl = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "")
-    .trim()
-    .replace(/\/+$/, "");
-
-  if (supaUrl) {
-    try {
-      const res = await fetch(
-        `${supaUrl}/storage/v1/object/public/excel-uploads/${TARGET_STORAGE_PATH}?t=${Date.now()}`,
-        { cache: "no-store", signal: AbortSignal.timeout(3500) }
-      );
-      if (res.ok) {
-        const json = await res.json();
-        const val = Number(json?.targetMtd || 0);
-        if (val >= 1_000_000) {
-          const cfg: StoreTargetConfig = {
-            targetMtd: val,
-            updatedBy: String(json.updatedBy || "SPV / Developer"),
-            updatedAt: String(json.updatedAt || ""),
-          };
-          cachedTarget = { config: cfg, fetchedAt: now };
-          return cfg;
-        }
-      }
-    } catch {}
-  }
+  try {
+    const { readTursoStorageJson } = await import("@/lib/tursoStorage");
+    const json = await readTursoStorageJson(TARGET_STORAGE_PATH);
+    const val = Number(json?.targetMtd || 0);
+    if (val >= 1_000_000) {
+      const cfg: StoreTargetConfig = {
+        targetMtd: val,
+        updatedBy: String(json.updatedBy || "SPV / Developer"),
+        updatedAt: String(json.updatedAt || ""),
+      };
+      cachedTarget = { config: cfg, fetchedAt: now };
+      return cfg;
+    }
+  } catch {}
 
   return (
     cachedTarget?.config || {

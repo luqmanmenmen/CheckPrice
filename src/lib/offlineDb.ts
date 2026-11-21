@@ -769,43 +769,84 @@ async function trySyncFromPythonSnapshot(
     const t0 = Date.now();
     const knownTotal = Number(checkData.snapshotTotalSkus || expectedTotalHint || 307000);
     const knownGzipBytes = Number(checkData.snapshotGzipBytes || 0);
-    emit(true, 6, 0, knownTotal, null, "Mengunduh paket katalog Python (CDN)...", "downloading");
+    const snapshotChunkCount = Number(checkData.snapshotChunkCount || 0);
+    emit(true, 6, 0, knownTotal, null, "Mengunduh paket katalog Python (Turso Cloud)...", "downloading");
 
-    const res = await fetch(snapshotUrl, { cache: "force-cache" });
-    if (!res.ok) return false;
-
-    const totalBytes = Number(res.headers.get("content-length") || knownGzipBytes || 0);
     let gzBlob: Blob;
 
-    if (res.body && typeof res.body.getReader === "function") {
-      const reader = res.body.getReader();
-      const chunks: BlobPart[] = [];
+    // Mode multi-chunk Turso Storage (1.5 MB/chunk — 100% bebas batas payload 4.5 MB Vercel!)
+    if (snapshotUrl.startsWith("/api/storage/") && snapshotChunkCount > 1) {
+      const orderedParts: ArrayBuffer[] = new Array(snapshotChunkCount);
       let loadedBytes = 0;
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value) {
-          chunks.push(value);
-          loadedBytes += value.byteLength;
-          const mbDone = (loadedBytes / (1024 * 1024)).toFixed(1);
-          const mbTot = totalBytes > 0 ? (totalBytes / (1024 * 1024)).toFixed(1) : "?";
-          const dlRatio = totalBytes > 0 ? Math.min(0.99, loadedBytes / totalBytes) : 0.5;
-          const elapsed = Math.max(0.2, (Date.now() - t0) / 1000);
-          const eta = totalBytes > 0 && dlRatio > 0.05 ? Math.max(1, (elapsed / dlRatio) - elapsed + 4) : null;
-          emit(
-            true,
-            6 + dlRatio * 30,
-            Math.round(knownTotal * dlRatio * 0.2),
-            knownTotal,
-            eta,
-            `Unduh snapshot Python: ${mbDone} / ${mbTot} MB`,
-            "downloading"
-          );
+      const CONCURRENCY = 3;
+      for (let start = 0; start < snapshotChunkCount; start += CONCURRENCY) {
+        const batchIndices: number[] = [];
+        for (let k = start; k < Math.min(snapshotChunkCount, start + CONCURRENCY); k++) {
+          batchIndices.push(k);
         }
+        await Promise.all(
+          batchIndices.map(async (idx) => {
+            const sep = snapshotUrl.includes("?") ? "&" : "?";
+            const r = await fetch(`${snapshotUrl}${sep}chunk=${idx}`, { cache: "force-cache" });
+            if (!r.ok) throw new Error(`Chunk ${idx} HTTP ${r.status}`);
+            const ab = await r.arrayBuffer();
+            orderedParts[idx] = ab;
+            loadedBytes += ab.byteLength;
+            const totalBytes = knownGzipBytes > 0 ? knownGzipBytes : snapshotChunkCount * 1_500_000;
+            const mbDone = (loadedBytes / (1024 * 1024)).toFixed(1);
+            const mbTot = (totalBytes / (1024 * 1024)).toFixed(1);
+            const dlRatio = Math.min(0.99, loadedBytes / Math.max(1, totalBytes));
+            const elapsed = Math.max(0.2, (Date.now() - t0) / 1000);
+            const eta = dlRatio > 0.05 ? Math.max(1, elapsed / dlRatio - elapsed + 4) : null;
+            emit(
+              true,
+              6 + dlRatio * 30,
+              Math.round(knownTotal * dlRatio * 0.2),
+              knownTotal,
+              eta,
+              `Unduh snapshot Python: ${mbDone} / ${mbTot} MB`,
+              "downloading"
+            );
+          })
+        );
       }
-      gzBlob = new Blob(chunks);
+      gzBlob = new Blob(orderedParts);
     } else {
-      gzBlob = await res.blob();
+      const res = await fetch(snapshotUrl, { cache: "force-cache" });
+      if (!res.ok) return false;
+
+      const totalBytes = Number(res.headers.get("content-length") || knownGzipBytes || 0);
+
+      if (res.body && typeof res.body.getReader === "function") {
+        const reader = res.body.getReader();
+        const chunks: BlobPart[] = [];
+        let loadedBytes = 0;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) {
+            chunks.push(value);
+            loadedBytes += value.byteLength;
+            const mbDone = (loadedBytes / (1024 * 1024)).toFixed(1);
+            const mbTot = totalBytes > 0 ? (totalBytes / (1024 * 1024)).toFixed(1) : "?";
+            const dlRatio = totalBytes > 0 ? Math.min(0.99, loadedBytes / totalBytes) : 0.5;
+            const elapsed = Math.max(0.2, (Date.now() - t0) / 1000);
+            const eta = totalBytes > 0 && dlRatio > 0.05 ? Math.max(1, (elapsed / dlRatio) - elapsed + 4) : null;
+            emit(
+              true,
+              6 + dlRatio * 30,
+              Math.round(knownTotal * dlRatio * 0.2),
+              knownTotal,
+              eta,
+              `Unduh snapshot Python: ${mbDone} / ${mbTot} MB`,
+              "downloading"
+            );
+          }
+        }
+        gzBlob = new Blob(chunks);
+      } else {
+        gzBlob = await res.blob();
+      }
     }
 
     emit(true, 38, 0, knownTotal, 5, "Membuka paket terkompresi Python...", "indexing");

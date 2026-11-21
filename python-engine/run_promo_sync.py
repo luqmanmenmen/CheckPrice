@@ -24,7 +24,6 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 import httpx
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
-from supabase import create_client, Client
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(line_buffering=True)
@@ -33,26 +32,18 @@ if hasattr(sys.stdout, 'reconfigure'):
 load_dotenv()
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
-# Import fungsi parser promo dari parser.py & helper storage CDN dari build_offline_snapshot.py
+# Import fungsi parser promo dari parser.py & Turso Cloud DB/Storage (0% Supabase)
 sys.path.append(os.path.dirname(__file__))
 from parser import parse_promo_file
 from build_offline_snapshot import _storage_upload, _supabase_credentials
-
-SUPABASE_URL = (
-    os.getenv("SUPABASE_URL")
-    or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
-    or "https://lzynugpistiyhxqkgwmk.supabase.co"
-)
-SUPABASE_KEY = (
-    os.getenv("SUPABASE_KEY")
-    or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-    or os.getenv("SUPABASE_ANON_KEY", "")
+from turso_db import (
+    get_turso_table_client,
+    storage_download,
+    storage_list,
+    storage_upload,
 )
 
-from turso_db import get_turso_table_client, is_turso_configured
-
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-db = get_turso_table_client(timeout=60) if is_turso_configured() else supabase
+db = get_turso_table_client(timeout=60)
 
 
 MONTH_MAP = {
@@ -238,18 +229,17 @@ def _extract_storage_folder_from_url(url: str) -> tuple[str | None, str]:
 
 
 def _list_files_in_promo_folder(folder_name: str) -> list[dict]:
-    """Mengembalikan seluruh berkas promo valid di Storage subfolder PROMO/<folder_name>."""
+    """Mengembalikan seluruh berkas promo valid di Turso Storage subfolder PROMO/<folder_name>."""
     files = []
     if not folder_name:
         return files
     try:
-        sub_res = supabase.storage.from_("excel-uploads").list(f"PROMO/{folder_name}")
+        sub_res = storage_list(f"PROMO/{folder_name}")
         for item in (sub_res or []):
             name = item.get("name", "")
             if name.lower().endswith((".xlsx", ".csv", ".xls")):
                 path = f"PROMO/{folder_name}/{name}"
-                url = _safe_encode_url(supabase.storage.from_("excel-uploads").get_public_url(path))
-                files.append({"name": name, "url": url})
+                files.append({"name": name, "url": f"turso://{path}"})
     except Exception as e:
         print(f"⚠️ Gagal membaca daftar berkas folder PROMO/{folder_name}: {e}")
     return files
@@ -369,7 +359,7 @@ def list_promo_folders_from_storage():
     """Mengembalikan daftar folder PROMO diurutkan kronologis terbaru (paling tinggi di index 0)."""
     folders = []
     try:
-        res = supabase.storage.from_("excel-uploads").list("PROMO")
+        res = storage_list("PROMO")
         if not res:
             return []
         subfolders = [item for item in res if "." not in item.get("name", "")]
@@ -398,12 +388,12 @@ def list_promo_folders_from_storage():
                 })
         folders.sort(key=lambda x: (1 if x["is_upcoming_tag"] else 0, x["score"]), reverse=True)
     except Exception as e:
-        print(f"⚠️ Gagal membaca daftar folder PROMO di Storage: {e}")
+        print(f"⚠️ Gagal membaca daftar folder PROMO di Turso Storage: {e}")
     return folders
 
 
 def get_latest_promo_files_from_storage():
-    """Mencari file promo dari folder terbaru bucket excel-uploads/PROMO/."""
+    """Mencari file promo dari folder terbaru Turso Storage PROMO/."""
     folders = list_promo_folders_from_storage()
     if folders:
         top = folders[0]
@@ -411,17 +401,16 @@ def get_latest_promo_files_from_storage():
         return top["files"]
 
     try:
-        res = supabase.storage.from_("excel-uploads").list("PROMO")
+        res = storage_list("PROMO")
         direct_files = []
         for item in (res or []):
             name = item.get("name", "")
             if name.lower().endswith((".xlsx", ".csv", ".xls")):
                 path = f"PROMO/{name}"
-                url = supabase.storage.from_("excel-uploads").get_public_url(path)
-                direct_files.append({"name": name, "url": url})
+                direct_files.append({"name": name, "url": f"turso://{path}"})
         return direct_files
     except Exception as e:
-        print(f"⚠️ Gagal mencari file promo di Storage: {e}")
+        print(f"⚠️ Gagal mencari file promo di Turso Storage: {e}")
         return []
 
 
@@ -664,15 +653,28 @@ def _load_parsed_rows_from_source(file_url: str, file_name: str = None):
     safe_name = _sanitize_temp_filename(file_name or os.path.basename(unquote(file_url or "")))
     temp_path = f"temp_promo_{uuid.uuid4().hex[:8]}_{safe_name}"
     try:
-        if file_url.startswith("http://") or file_url.startswith("https://"):
-            encoded_url = _safe_encode_url(file_url)
+        raw_url = str(file_url or "").strip()
+        turso_rel_path = None
+        if raw_url.startswith("turso://"):
+            turso_rel_path = unquote(raw_url[len("turso://"):]).lstrip("/")
+        elif "/api/storage/" in raw_url:
+            turso_rel_path = unquote(raw_url.split("/api/storage/", 1)[1].split("?", 1)[0]).lstrip("/")
+
+        if turso_rel_path:
+            raw_bytes = storage_download(turso_rel_path)
+            if not raw_bytes:
+                raise RuntimeError(f"File tidak ditemukan di Turso Storage: {turso_rel_path}")
+            with open(temp_path, "wb") as f:
+                f.write(raw_bytes)
+        elif raw_url.startswith("http://") or raw_url.startswith("https://"):
+            encoded_url = _safe_encode_url(raw_url)
             with httpx.Client(timeout=60, follow_redirects=True) as client:
                 res = client.get(encoded_url)
                 res.raise_for_status()
                 with open(temp_path, "wb") as f:
                     f.write(res.content)
         else:
-            temp_path = file_url
+            temp_path = raw_url
         return parse_promo_file(temp_path)
     finally:
         if os.path.exists(temp_path) and temp_path.startswith("temp_promo_"):

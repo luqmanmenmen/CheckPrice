@@ -124,7 +124,7 @@ export async function dispatchToGitHubRunner(params: {
     'mds-bisa': `KATEGORI 1A: Brutal Scrab by luqman org [v${APP_VERSION}]`,
     'photos': `KATEGORI 1B: Brutal Scrab Foto & Pulihkan URL 404 [v${APP_VERSION}]`,
     'stock-only': `KATEGORI 2: Update Stock Live (Mapping 84.763 SKU + Sales) [v${APP_VERSION}]`,
-    'suko-sales': `KATEGORI 2B: Tarik Sales & Stok Cepat SUKO (0 RAM Supabase) [v${APP_VERSION}]`,
+    'suko-sales': `KATEGORI 2B: Tarik Sales & Stok Cepat SUKO (Turso Cloud) [v${APP_VERSION}]`,
     'promo': `KATEGORI 3: Update Promo Email (Parser v2 + Gemini 2.5) [v${APP_VERSION}]`,
     'upcoming-promo': `KATEGORI 6: Persiapan POP H-2/H-1 (Aman, Tidak Ubah Promo Berjalan) [v${APP_VERSION}]`,
     'catalog': `KATEGORI 4: Catalog Brain & Offline Snapshot (.json.gz) [v${APP_VERSION}]`,

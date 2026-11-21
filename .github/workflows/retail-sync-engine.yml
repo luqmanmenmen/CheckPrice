@@ -1,14 +1,10 @@
-name: Retail Sync Engine (3 Kategori Python Turbo Engine)
+name: Retail Sync Engine (3 Kategori Python Turbo Engine — 100% Turso Cloud)
 
-# ARSITEKTUR MURNI PYTHON DI GITHUB ACTIONS (BUKAN DI VERCEL!)
+# ARSITEKTUR MURNI PYTHON DI GITHUB ACTIONS + TURSO CLOUD (0% SUPABASE!)
 # Cron otomatis tetap dimatikan agar quota menit GitHub (2.000 menit/bulan) hemat.
 # Seluruh eksekusi dipicu instan dari Frontend UI (/super-admin/sinkronisasi-harian) atau Webhook Email Promo.
 
 on:
-  # schedule:
-  #   - cron: '45 2 * * *'
-  #   - cron: '0 14 * * *'
-
   workflow_dispatch:
     inputs:
       action:
@@ -28,7 +24,7 @@ on:
           - analytics
           - all
       promo_url:
-        description: 'URL file promo (opsional, jika kosong akan ambil semua file di folder terbaru Storage PROMO/)'
+        description: 'URL/Path file promo di Turso Storage (opsional, jika kosong akan ambil folder terbaru PROMO/)'
         required: false
         default: ''
         type: string
@@ -38,7 +34,7 @@ on:
         default: false
         type: boolean
       session_cookie:
-        description: 'Session Cookie (opsional, jika kosong otomatis ambil dari Storage / Auto-Login)'
+        description: 'Session Cookie (opsional, jika kosong otomatis ambil dari Turso Storage / Auto-Login)'
         required: false
         default: ''
         type: string
@@ -57,7 +53,7 @@ concurrency:
 
 jobs:
   sync:
-    name: Run Python Retail Engine (3 Kategori)
+    name: Run Python Retail Engine (100% Turso Cloud)
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -76,16 +72,12 @@ jobs:
         run: |
           pip install -r python-engine/requirements.txt
 
-      - name: 🛡️ [INIT] Inisialisasi Guardian Live Console & Baseline DB
+      - name: 🛡️ [INIT] Inisialisasi Guardian Live Console & Baseline DB Turso
         run: |
           python -u python-engine/runner_guardian.py --init-run --action "${{ github.event.inputs.action || github.event.action || 'all' }}"
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
@@ -96,48 +88,36 @@ jobs:
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           MDS_SESSION_COOKIE: ${{ github.event.inputs.session_cookie || secrets.MDS_SESSION_COOKIE }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
       - name: 📦 [KATEGORI 1B - EKSPANSI & AUDIT ARTIKEL] Collect, Audit & Masak Artikel/Barcode (SUKO, Mu+Ku, ZES)
         if: ${{ github.event.inputs.action == 'scrab' || github.event.inputs.action == 'photos' || github.event.inputs.action == 'all' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-photos' || github.event.action == 'trigger-sync-engine' }}
         run: |
-          if [ -n "$TURSO_DATABASE_URL" ] || [ -n "$DATABASE_URL" ]; then
+          if [ -n "$TURSO_DATABASE_URL" ]; then
             python -u python-engine/runner_guardian.py --step "KATEGORI 1B (Collector): Ekspansi Vendor & Audit" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 --track-new-products -- python python-engine/raw_vault_collector.py --collect-vendors --collect-web --audit
-            python -u python-engine/runner_guardian.py --step "KATEGORI 1B (Expander): Katalog Matahari.com" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 --track-new-products -- python python-engine/matahari_catalog_expander.py
+            python -u python-engine/runner_guardian.py --step "KATEGORI 1B (Expander): Katalog luqman org" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 --track-new-products -- python python-engine/matahari_catalog_expander.py
           else
-            echo "DATABASE_URL belum dikonfigurasi, lewati ekspansi artikel online."
+            echo "TURSO_DATABASE_URL belum dikonfigurasi, lewati ekspansi artikel online."
           fi
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           MDS_SESSION_COOKIE: ${{ github.event.inputs.session_cookie || secrets.MDS_SESSION_COOKIE }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
-      - name: 📸 [KATEGORI 1C - SCRAB GAMBAR & HEAL 404] Brutal Image Scraper + Pemulih URL Foto Matahari.com
+      - name: 📸 [KATEGORI 1C - SCRAB GAMBAR & HEAL 404] Brutal Image Scraper + Pemulih URL Foto
         if: ${{ github.event.inputs.action == 'scrab' || github.event.inputs.action == 'photos' || github.event.inputs.action == 'all' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-photos' || github.event.action == 'trigger-sync-engine' }}
         run: |
-          python -u python-engine/runner_guardian.py --step "KATEGORI 1C: Brutal Image Scraper Matahari.com" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 -- python python-engine/brutal_image_scraper.py
-          if [ -n "$TURSO_DATABASE_URL" ] || [ -n "$DATABASE_URL" ]; then
+          python -u python-engine/runner_guardian.py --step "KATEGORI 1C: Brutal Image Scraper" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 -- python python-engine/brutal_image_scraper.py
+          if [ -n "$TURSO_DATABASE_URL" ]; then
             python -u python-engine/runner_guardian.py --step "KATEGORI 1C: Pemulih URL Foto 404" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 1 -- python python-engine/repair_broken_images.py --scan-limit 350 --workers 32 || true
           fi
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
@@ -157,15 +137,11 @@ jobs:
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           MDS_SESSION_COOKIE: ${{ github.event.inputs.session_cookie || secrets.MDS_SESSION_COOKIE }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
-      - name: 🏷️ [KATEGORI 3 - UPDATE PROMO EMAIL v2.7] Python Promo Parser Engine (Storage PROMO/ + Gemini AI)
+      - name: 🏷️ [KATEGORI 3 - UPDATE PROMO EMAIL] Python Promo Parser Engine (Turso Storage PROMO/ + Gemini AI)
         if: ${{ github.event.inputs.action == 'promo' || github.event.inputs.action == 'all' || github.event.action == 'trigger-promo' || github.event.action == 'trigger-sync-engine' }}
         run: |
           PROMO_URL="${{ github.event.inputs.promo_url }}"
@@ -177,10 +153,6 @@ jobs:
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
@@ -197,50 +169,38 @@ jobs:
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
-      - name: 🧠 [KATEGORI 4 - CATALOG BRAIN & OFFLINE SNAPSHOT v2.7] Susun CatalogArticle + Kompilasi DB Offline .json.gz
+      - name: 🧠 [KATEGORI 4 - CATALOG BRAIN & OFFLINE SNAPSHOT] Susun CatalogArticle + Kompilasi DB Offline .json.gz
         if: ${{ (success() && github.event.inputs.action != 'analytics' && github.event.inputs.action != 'trigger-analytics' && github.event.inputs.action != 'upcoming-promo' && github.event.inputs.action != 'trigger-upcoming-promo' && github.event.inputs.action != 'suko-sales' && github.event.action != 'trigger-suko-sales') || github.event.inputs.action == 'catalog' || github.event.action == 'trigger-catalog' }}
         run: |
-          if [ -n "$TURSO_DATABASE_URL" ] || [ -n "$DATABASE_URL" ]; then
+          if [ -n "$TURSO_DATABASE_URL" ]; then
             STOCK_ONLY_FLAG=""
             if [ "${{ github.event.inputs.action }}" = "stock-only" ] || [ "${{ github.event.action }}" = "trigger-stock-only" ]; then
               STOCK_ONLY_FLAG="--stock-only"
             fi
             python -u python-engine/runner_guardian.py --step "KATEGORI 4: Catalog Brain & Offline Snapshot" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 -- python python-engine/build_catalog_index.py $STOCK_ONLY_FLAG
           else
-            echo "DATABASE_URL belum dikonfigurasi di GitHub Secrets, lewati rebuild CatalogArticle."
+            echo "TURSO_DATABASE_URL belum dikonfigurasi di GitHub Secrets, lewati rebuild CatalogArticle."
           fi
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
-      - name: 📊 [KATEGORI 5 - ADMIN ANALYTICS & CLEANUP] Clean Promo, Generate PO, & Precompute CDN JSON
+      - name: 📊 [KATEGORI 5 - ADMIN ANALYTICS & CLEANUP] Clean Promo, Generate PO, & Precompute JSON Turso
         if: ${{ github.event.inputs.action == 'analytics' || github.event.inputs.action == 'promo' || github.event.inputs.action == 'stock-only' || github.event.inputs.action == 'catalog' || github.event.inputs.action == 'all' || github.event.action == 'trigger-analytics' || github.event.action == 'trigger-promo' || github.event.action == 'trigger-sync-engine' }}
         run: |
-          if [ -n "$TURSO_DATABASE_URL" ] || [ -n "$DATABASE_URL" ]; then
+          if [ -n "$TURSO_DATABASE_URL" ]; then
             python -u python-engine/runner_guardian.py --step "KATEGORI 5: Admin Analytics & Cleanup" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 -- python python-engine/run_admin_analytics.py --clean-promo --generate-po --analytics
           else
-            echo "DATABASE_URL belum dikonfigurasi, lewati admin analytics precompute."
+            echo "TURSO_DATABASE_URL belum dikonfigurasi, lewati admin analytics precompute."
           fi
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://lzynugpistiyhxqkgwmk.supabase.co' }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_ANON_KEY }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_KEY }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}

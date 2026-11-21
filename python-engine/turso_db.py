@@ -12,9 +12,11 @@ Universal Turso (LibSQL / SQLite Cloud) HTTP Pipeline Adapter untuk Python Engin
 =============================================================================
 """
 
+import base64
 import json
 import os
 import time
+import urllib.parse
 from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -595,3 +597,165 @@ def connect_turso(timeout: int = 60) -> TursoConnection:
 
 def get_turso_table_client(timeout: int = 60) -> TursoTableClient:
     return TursoTableClient(connect_turso(timeout=timeout))
+
+
+# =============================================================================
+# 100% Turso Cloud Object Storage (`StorageObject` + `StorageChunk`)
+# Pengganti penuh Supabase Storage (0% koneksi ke supabase.co)
+# =============================================================================
+STORAGE_CHUNK_RAW_BYTES = 1_500_000  # 1.5 MB raw (~2.0 MB base64)
+
+
+def _clean_storage_path(path: str) -> str:
+    return str(path or "").strip().lstrip("/").replace("//", "/")
+
+
+def _ensure_storage_tables(conn: TursoConnection) -> None:
+    conn.execute_batch(
+        [
+            (
+                '''
+                CREATE TABLE IF NOT EXISTS "StorageObject" (
+                    "path" TEXT NOT NULL PRIMARY KEY,
+                    "contentType" TEXT NOT NULL DEFAULT 'application/octet-stream',
+                    "sizeBytes" INTEGER NOT NULL DEFAULT 0,
+                    "chunkCount" INTEGER NOT NULL DEFAULT 1,
+                    "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                ''',
+                None,
+            ),
+            (
+                '''
+                CREATE TABLE IF NOT EXISTS "StorageChunk" (
+                    "path" TEXT NOT NULL,
+                    "chunkIndex" INTEGER NOT NULL,
+                    "dataBase64" TEXT NOT NULL,
+                    PRIMARY KEY ("path", "chunkIndex")
+                )
+                ''',
+                None,
+            ),
+            ('CREATE INDEX IF NOT EXISTS "StorageChunk_path_idx" ON "StorageChunk"("path")', None),
+        ],
+        transactional=True,
+    )
+
+
+def storage_upload(
+    object_path: str,
+    data: bytes,
+    content_type: str = "application/octet-stream",
+    timeout: int = 90,
+) -> Tuple[str, int]:
+    """Simpan file (kecil atau besar multi-chunk 1.5 MB) langsung ke Turso Cloud."""
+    clean_path = _clean_storage_path(object_path)
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    conn = connect_turso(timeout=timeout)
+    chunks = [data[i : i + STORAGE_CHUNK_RAW_BYTES] for i in range(0, len(data), STORAGE_CHUNK_RAW_BYTES)] or [b""]
+    now_iso = format_prisma_iso(datetime.now(timezone.utc))
+    cur = conn.cursor()
+    try:
+        cur.execute('DELETE FROM "StorageChunk" WHERE path = ?', (clean_path,))
+    except Exception:
+        _ensure_storage_tables(conn)
+        cur.execute('DELETE FROM "StorageChunk" WHERE path = ?', (clean_path,))
+    for idx, ch in enumerate(chunks):
+        b64 = base64.b64encode(ch).decode("ascii")
+        cur.execute(
+            'INSERT INTO "StorageChunk" (path, "chunkIndex", "dataBase64") VALUES (?, ?, ?)',
+            (clean_path, idx, b64),
+        )
+    cur.execute(
+        '''
+        INSERT INTO "StorageObject" (path, "contentType", "sizeBytes", "chunkCount", "updatedAt")
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (path) DO UPDATE SET
+            "contentType" = excluded."contentType",
+            "sizeBytes" = excluded."sizeBytes",
+            "chunkCount" = excluded."chunkCount",
+            "updatedAt" = excluded."updatedAt"
+        ''',
+        (clean_path, content_type, len(data), len(chunks), now_iso),
+    )
+    cur.close()
+    encoded = "/".join(urllib.parse.quote(seg, safe="") for seg in clean_path.split("/"))
+    return f"/api/storage/{encoded}", len(chunks)
+
+
+def storage_download(object_path: str, timeout: int = 60) -> Optional[bytes]:
+    """Unduh raw bytes sebuah file dari Turso StorageObject/StorageChunk."""
+    clean_path = _clean_storage_path(object_path)
+    conn = connect_turso(timeout=timeout)
+    cur = conn.cursor()
+    cur.execute(
+        'SELECT "dataBase64" FROM "StorageChunk" WHERE path = ? ORDER BY "chunkIndex" ASC',
+        (clean_path,),
+    )
+    rows = cur.fetchall()
+    cur.close()
+    if not rows:
+        return None
+    parts = [base64.b64decode(r[0]) for r in rows if r and r[0] is not None]
+    return b"".join(parts)
+
+
+def storage_download_json(object_path: str, timeout: int = 45) -> Dict[str, Any]:
+    raw = storage_download(object_path, timeout=timeout)
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def storage_list(prefix: str = "", timeout: int = 45) -> List[Dict[str, Any]]:
+    """Daftar file & subfolder langsung di bawah prefix (kompatibel gaya Storage.list)."""
+    clean_prefix = _clean_storage_path(prefix).rstrip("/")
+    like_prefix = f"{clean_prefix}/" if clean_prefix else ""
+    conn = connect_turso(timeout=timeout)
+    cur = conn.cursor()
+    if like_prefix:
+        cur.execute(
+            'SELECT path, "sizeBytes", "contentType", "updatedAt" FROM "StorageObject" WHERE path LIKE ? ORDER BY "updatedAt" DESC',
+            (f"{like_prefix}%",),
+        )
+    else:
+        cur.execute('SELECT path, "sizeBytes", "contentType", "updatedAt" FROM "StorageObject" ORDER BY "updatedAt" DESC')
+    rows = cur.fetchall()
+    cur.close()
+
+    direct: Dict[str, Dict[str, Any]] = {}
+    for p, sz, ct, upd in rows:
+        rel = p[len(like_prefix):] if like_prefix else p
+        if not rel:
+            continue
+        if "/" in rel:
+            folder = rel.split("/", 1)[0]
+            if folder not in direct:
+                direct[folder] = {"name": folder, "id": None, "updated_at": upd, "metadata": None}
+        else:
+            direct[rel] = {
+                "name": rel,
+                "id": p,
+                "updated_at": upd,
+                "metadata": {"size": int(sz or 0), "mimetype": ct},
+            }
+    return list(direct.values())
+
+
+def storage_delete(paths: Sequence[str], timeout: int = 45) -> int:
+    clean_paths = [_clean_storage_path(p) for p in paths if _clean_storage_path(p)]
+    if not clean_paths:
+        return 0
+    conn = connect_turso(timeout=timeout)
+    ph = ", ".join(["?"] * len(clean_paths))
+    cur = conn.cursor()
+    cur.execute(f'DELETE FROM "StorageChunk" WHERE path IN ({ph})', clean_paths)
+    cur.execute(f'DELETE FROM "StorageObject" WHERE path IN ({ph})', clean_paths)
+    deleted = cur.rowcount or 0
+    cur.close()
+    return deleted

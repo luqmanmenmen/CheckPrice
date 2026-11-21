@@ -44,7 +44,6 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from dotenv import load_dotenv
-from supabase import create_client, Client
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from build_catalog_index import (
@@ -63,23 +62,11 @@ load_dotenv()
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env.local"))
 
-SUPABASE_URL = (
-    os.getenv("SUPABASE_URL")
-    or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
-    or "https://lzynugpistiyhxqkgwmk.supabase.co"
-)
-SUPABASE_KEY = (
-    os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-    or os.getenv("SUPABASE_KEY")
-    or os.getenv("SUPABASE_ANON_KEY")
-    or ""
-)
-
-if not SUPABASE_KEY:
-    print("❌ Error: SUPABASE_KEY tidak ditemukan.")
+if not is_turso_configured():
+    print("❌ Error: TURSO_DATABASE_URL / TURSO_AUTH_TOKEN tidak ditemukan.")
     sys.exit(1)
 
-sb: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+sb = get_turso_table_client(timeout=60)
 
 CDN_BASE = "https://cdn.shopify.com/s/files/1/0666/9212/0727/files"
 REPORT_IMG_PATH = os.path.join(os.path.dirname(__file__), "LAPORAN_SCRAP_GAMBAR.md")

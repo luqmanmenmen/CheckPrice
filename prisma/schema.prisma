@@ -221,3 +221,21 @@ model SyncHistory {
 
   @@index([status, type, createdAt(sort: Desc)])
 }
+
+/// Penyimpanan berkas internal 100% di Turso Cloud (pengganti penuh Supabase Storage)
+model StorageObject {
+  path        String   @id
+  contentType String   @default("application/octet-stream")
+  sizeBytes   Int      @default(0)
+  chunkCount  Int      @default(1)
+  updatedAt   DateTime @default(now()) @updatedAt
+}
+
+model StorageChunk {
+  path       String
+  chunkIndex Int
+  dataBase64 String
+
+  @@id([path, chunkIndex])
+  @@index([path])
+}

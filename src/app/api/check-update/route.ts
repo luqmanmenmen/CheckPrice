@@ -19,6 +19,7 @@ interface CheckUpdatePayload {
   catalogVersion: number;
   stockLastUpdate: number;
   snapshotUrl: string | null;
+  snapshotChunkCount: number | null;
   snapshotRevision: number | null;
   snapshotGzipBytes: number | null;
   snapshotTotalSkus: number | null;
@@ -31,15 +32,9 @@ let lastKnownManifest: any = null;
 const CHECK_CACHE_TTL_MS = 60_000;
 
 async function fetchStorageManifest() {
-  const supaUrl = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim().replace(/\/+$/, "");
-  if (!supaUrl) return lastKnownManifest;
   try {
-    const res = await fetch(
-      `${supaUrl}/storage/v1/object/public/excel-uploads/offline-db/manifest.json`,
-      { cache: "no-store", signal: AbortSignal.timeout(4500) }
-    );
-    if (!res.ok) return lastKnownManifest;
-    const json = await res.json();
+    const { readTursoStorageJson } = await import("@/lib/tursoStorage");
+    const json = await readTursoStorageJson("offline-db/manifest.json");
     if (json && typeof json === "object") {
       lastKnownManifest = json;
       return json;
@@ -92,6 +87,7 @@ export async function GET() {
       catalogVersion,
       stockLastUpdate,
       snapshotUrl: typeof manifest?.snapshotUrl === "string" ? manifest.snapshotUrl : null,
+      snapshotChunkCount: manifest?.snapshotChunkCount ? Number(manifest.snapshotChunkCount) : null,
       snapshotRevision: manifest?.bundleRevision ? Number(manifest.bundleRevision) : null,
       snapshotGzipBytes: manifest?.gzipBytes ? Number(manifest.gzipBytes) : null,
       snapshotTotalSkus: manifest?.totalSkus ? Number(manifest.totalSkus) : null,

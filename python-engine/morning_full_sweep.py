@@ -41,7 +41,6 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from dotenv import load_dotenv
-from supabase import create_client, Client
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from raw_vault_collector import (
@@ -51,6 +50,13 @@ from raw_vault_collector import (
     normalize_sku_token,
     record_raw_items_batch,
 )
+from turso_db import (
+    format_prisma_iso,
+    get_turso_table_client,
+    is_turso_configured,
+    storage_download,
+    storage_upload,
+)
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
@@ -59,30 +65,12 @@ load_dotenv()
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env.local"))
 
-SUPABASE_URL = (
-    os.getenv("SUPABASE_URL")
-    or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
-    or "https://lzynugpistiyhxqkgwmk.supabase.co"
-)
-SUPABASE_KEY = (
-    os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-    or os.getenv("SUPABASE_KEY")
-    or os.getenv("SUPABASE_ANON_KEY")
-    or ""
-)
-
-if not SUPABASE_KEY:
-    print("❌ Error: SUPABASE_KEY tidak ditemukan.")
+if not is_turso_configured():
+    print("❌ Error: TURSO_DATABASE_URL / TURSO_AUTH_TOKEN tidak ditemukan.")
     sys.exit(1)
 
-from turso_db import (
-    format_prisma_iso,
-    get_turso_table_client,
-    is_turso_configured,
-)
-
-sb: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-db = get_turso_table_client(timeout=60) if is_turso_configured() else sb
+db = get_turso_table_client(timeout=60)
+sb = db
 
 STOREHUB_BASE = "https://storehub.mdsretailing.id"
 LOGIN_URL = f"{STOREHUB_BASE}/login?next=%2F"
@@ -237,15 +225,11 @@ def resolve_action_login(default_action: str = ACTION_LOGIN) -> str:
 
 
 def save_valid_cookie(cookie_str: str) -> None:
-    """Menyimpan cookie valid (WAJIB berisi mso_session=) ke Supabase Storage dan .mds_cookie lokal."""
+    """Menyimpan cookie valid (WAJIB berisi mso_session=) ke Turso Storage dan .mds_cookie lokal."""
     if not cookie_str or "mso_session=" not in cookie_str:
         return
     try:
-        sb.storage.from_("excel-uploads").upload(
-            "secrets/mds_cookie.txt",
-            cookie_str.encode("utf-8"),
-            {"content-type": "text/plain", "upsert": "true"},
-        )
+        storage_upload("secrets/mds_cookie.txt", cookie_str.encode("utf-8"), content_type="text/plain")
     except Exception:
         pass
     try:
@@ -316,12 +300,13 @@ def get_active_cookie() -> str:
         return env_cookie
 
     try:
-        data = sb.storage.from_("excel-uploads").download("secrets/mds_cookie.txt")
-        cookie = data.decode("utf-8").strip()
-        if "mso_session=" in cookie:
-            return cookie
+        data = storage_download("secrets/mds_cookie.txt")
+        if data:
+            cookie = data.decode("utf-8").strip()
+            if "mso_session=" in cookie:
+                return cookie
     except Exception as e:
-        print(f"⚠️ Gagal membaca cookie dari Storage: {e}")
+        print(f"⚠️ Gagal membaca cookie dari Turso Storage: {e}")
 
     local_cookie_path = os.path.join(os.path.dirname(__file__), "..", ".mds_cookie")
     if os.path.exists(local_cookie_path):

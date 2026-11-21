@@ -1594,7 +1594,7 @@ export default function LaporanPenjualanPage() {
           <div className={`flex flex-col items-center justify-center py-24 ${cardCls} rounded-3xl`}>
             <ChipLoader />
             <p className={`text-sm font-bold ${textMuted} mt-4 animate-pulse`}>
-              Memuat rekap penjualan &amp; inventori SUKO (0 beban RAM Supabase)...
+              Memuat rekap penjualan &amp; inventori SUKO (Turso Cloud)...
             </p>
           </div>
         ) : (
@@ -2067,7 +2067,7 @@ export default function LaporanPenjualanPage() {
                         <h3 className={`font-extrabold text-sm sm:text-base ${textPrimary}`}>
                           Kesehatan Katalog &amp; Sumber
                         </h3>
-                        <p className={`text-xs ${textMuted} mt-0.5`}>Agregasi Python CDN (0 beban RAM Supabase)</p>
+                        <p className={`text-xs ${textMuted} mt-0.5`}>Agregasi Python (Turso Cloud)</p>
                       </div>
                       <div className="space-y-2 text-xs">
                         <div className={`flex items-center justify-between p-2.5 rounded-xl ${softCls}`}>

@@ -141,40 +141,26 @@ def classify_line_level(text: str) -> str:
 
 
 def fetch_existing_log(log_path: str) -> Dict[str, Any]:
-    """Unduh file log JSON eksisting dari Supabase Storage jika masih untuk runId yang sama."""
+    """Unduh file log JSON eksisting dari Turso Cloud Storage jika masih untuk runId yang sama."""
     try:
-        supa_url, supa_key = _supabase_credentials()
-        clean_path = log_path.lstrip("/")
-        endpoint = f"{supa_url}/storage/v1/object/authenticated/excel-uploads/{clean_path}?t={int(time.time())}"
-        req = urllib.request.Request(
-            endpoint,
-            headers={
-                "apikey": supa_key,
-                "Authorization": f"Bearer {supa_key}",
-                "Cache-Control": "no-cache",
-            },
-            method="GET",
-        )
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            if resp.status == 200:
-                return json.loads(resp.read().decode("utf-8"))
+        from turso_db import storage_download_json
+        return storage_download_json(log_path)
     except Exception:
-        pass
-    return {}
+        return {}
 
 
 def push_log_state(log_state: Dict[str, Any], log_path: str) -> bool:
-    """Unggah live runner log JSON ke Supabase Storage."""
+    """Unggah live runner log JSON ke Turso Cloud Storage."""
     try:
-        supa_url, supa_key = _supabase_credentials()
+        from turso_db import storage_upload
         log_state["updatedAt"] = _now_iso()
         if len(log_state.get("lines", [])) > MAX_LOG_LINES:
             log_state["lines"] = log_state["lines"][-MAX_LOG_LINES:]
         raw = json.dumps(log_state, ensure_ascii=False).encode("utf-8")
-        _storage_upload(supa_url, supa_key, log_path, raw, "application/json", cache_control="0")
+        storage_upload(log_path, raw, content_type="application/json")
         return True
     except Exception as exc:
-        print(f"⚠️ [GUARDIAN] Gagal mengunggah live console log ke Storage: {exc}", flush=True)
+        print(f"⚠️ [GUARDIAN] Gagal mengunggah live console log ke Turso Storage: {exc}", flush=True)
         return False
 
 

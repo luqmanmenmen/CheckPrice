@@ -74,21 +74,8 @@ def _connect_postgres():
 
 
 def _supabase_credentials() -> Tuple[str, str]:
-    url = (
-        os.environ.get("SUPABASE_URL")
-        or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
-        or ""
-    ).strip().rstrip("/")
-    key = (
-        os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-        or os.environ.get("SUPABASE_KEY")
-        or os.environ.get("SUPABASE_ANON_KEY")
-        or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
-        or ""
-    ).strip()
-    if not url or not key:
-        raise RuntimeError("SUPABASE_URL atau SUPABASE_ANON_KEY / SERVICE_ROLE_KEY tidak ditemukan.")
-    return url, key
+    """Kompatibilitas signature: penyimpanan kini 100% di Turso Cloud (0% Supabase)."""
+    return "turso", "turso"
 
 
 def _is_promo_expired(to_date: Optional[str], now_local_date: str) -> bool:
@@ -105,91 +92,36 @@ def _is_promo_expired(to_date: Optional[str], now_local_date: str) -> bool:
 
 
 def _storage_upload(
-    supa_url: str,
-    supa_key: str,
+    _unused_url: str,
+    _unused_key: str,
     object_path: str,
     data: bytes,
     content_type: str,
     cache_control: str = "3600",
 ) -> str:
-    bucket = "excel-uploads"
-    clean_path = object_path.lstrip("/")
-    endpoint = f"{supa_url}/storage/v1/object/{bucket}/{clean_path}"
-    cc_header = cache_control if "max-age=" in str(cache_control) else f"max-age={cache_control}"
-    headers = {
-        "apikey": supa_key,
-        "Authorization": f"Bearer {supa_key}",
-        "Content-Type": content_type,
-        "Cache-Control": cc_header,
-        "x-upsert": "true",
-    }
-    last_err = None
-    for method in ("POST", "PUT"):
-        req = urllib.request.Request(endpoint, data=data, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                if resp.status in (200, 201):
-                    return f"{supa_url}/storage/v1/object/public/{bucket}/{clean_path}"
-        except urllib.error.HTTPError as e:
-            body = ""
-            try:
-                body = e.read().decode("utf-8", errors="ignore")[:300]
-            except Exception:
-                pass
-            last_err = RuntimeError(f"Gagal upload Storage {clean_path} ({method}): HTTP {e.code} {body}")
-            if method == "POST" and e.code in (400, 409):
-                continue
-            raise last_err
-    raise last_err or RuntimeError(f"Gagal upload Storage {clean_path}")
+    from turso_db import storage_upload
+    public_url, _chunks = storage_upload(object_path, data, content_type=content_type)
+    return public_url
 
 
-def _fetch_existing_manifest(supa_url: str) -> Dict[str, Any]:
-    manifest_url = f"{supa_url}/storage/v1/object/public/excel-uploads/offline-db/manifest.json?t={int(time.time())}"
-    req = urllib.request.Request(manifest_url, headers={"Cache-Control": "no-cache"})
+def _fetch_existing_manifest(_unused_url: str) -> Dict[str, Any]:
+    from turso_db import storage_download_json
+    return storage_download_json("offline-db/manifest.json")
+
+
+def _cleanup_old_snapshots(_unused_url: str, _unused_key: str, keep_filenames: List[str]) -> None:
+    from turso_db import storage_delete, storage_list
     try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        return {}
-
-
-def _cleanup_old_snapshots(supa_url: str, supa_key: str, keep_filenames: List[str]) -> None:
-    list_url = f"{supa_url}/storage/v1/object/list/excel-uploads"
-    payload = json.dumps({"prefix": "offline-db/", "limit": 50}).encode("utf-8")
-    req = urllib.request.Request(
-        list_url,
-        data=payload,
-        headers={
-            "apikey": supa_key,
-            "Authorization": f"Bearer {supa_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            items = json.loads(resp.read().decode("utf-8"))
-        to_remove = []
+        items = storage_list("offline-db")
         keep_set = set(keep_filenames) | {"manifest.json"}
+        to_remove = []
         for item in items:
             name = str(item.get("name") or "").strip()
             if name and name not in keep_set and (name.startswith("snapshot-") or name.startswith("_probe")):
                 to_remove.append(f"offline-db/{name}")
         if to_remove:
-            del_url = f"{supa_url}/storage/v1/object/excel-uploads"
-            del_req = urllib.request.Request(
-                del_url,
-                data=json.dumps({"prefixes": to_remove}).encode("utf-8"),
-                headers={
-                    "apikey": supa_key,
-                    "Authorization": f"Bearer {supa_key}",
-                    "Content-Type": "application/json",
-                },
-                method="DELETE",
-            )
-            with urllib.request.urlopen(del_req, timeout=10) as _:
-                pass
-            print(f"[SNAPSHOT] Bersihkan {len(to_remove)} snapshot lama dari Storage.")
+            storage_delete(to_remove)
+            print(f"[SNAPSHOT] Bersihkan {len(to_remove)} snapshot lama dari Turso Storage.")
     except Exception as ex:
         print(f"[SNAPSHOT] Skip cleanup snapshot lama: {ex}")
 
@@ -580,13 +512,11 @@ def build_and_upload_offline_snapshot(stock_only: bool = False) -> Dict[str, Any
         f"{len(models_packed):,} Model, {len(aliases_packed):,} Alias). Mengunggah ke CDN..."
     )
 
-    snapshot_url = _storage_upload(
-        supa_url,
-        supa_key,
+    from turso_db import storage_upload as _turso_put
+    snapshot_url, snapshot_chunks = _turso_put(
         snap_path,
         gz_bytes,
         content_type="application/octet-stream",
-        cache_control="31536000",
     )
 
     manifest = {
@@ -606,6 +536,7 @@ def build_and_upload_offline_snapshot(stock_only: bool = False) -> Dict[str, Any
         "gzipBytes": len(gz_bytes),
         "snapshotPath": snap_path,
         "snapshotUrl": snapshot_url,
+        "snapshotChunkCount": snapshot_chunks,
     }
     manifest_url = _storage_upload(
         supa_url,
