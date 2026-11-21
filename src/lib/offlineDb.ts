@@ -720,6 +720,7 @@ export interface SyncProgressDetails {
   etaSeconds: number | null;
   statusText: string;
   stage: "checking" | "downloading" | "indexing" | "done" | "error";
+  activeWorkers?: number;
 }
 
 export type SyncProgressCallback = (
@@ -760,9 +761,138 @@ export async function checkIfUpdateAvailable(): Promise<boolean> {
 }
 
 /**
- * Jalur Kilat Tier 1: Unduh SATU file Python Compressed Snapshot (.json.gz) dari CDN
- * + Dekompresi native C++ `DecompressionStream('gzip')` (~5-15 detik vs 15 menit!).
+ * Jalur Kilat Tier 1: Multi-Worker Turbo Sync Engine (`offline-sync-worker.js`)
+ * - 8 Jalur Download Paralel -> Native GZIP Decompress di Worker -> Pool 4-6 Sub-Worker
+ *   dengan Native IndexedDB `{ durability: "relaxed" }` + Paralel 3 Object Store (`products`, `models`, `aliases`).
+ * - Fallback otomatis ke Fast Native IDB Relaxed di Main Thread bila Web Worker tidak tersedia.
  */
+async function trySyncViaWorkerPool(
+  snapshotUrl: string,
+  snapshotChunkCount: number,
+  knownTotal: number,
+  knownGzipBytes: number,
+  emit: (
+    isSyncing: boolean,
+    rawPercent: number,
+    downloadedSkus: number,
+    totalSkus: number,
+    etaSeconds: number | null,
+    statusText: string,
+    stage: SyncProgressDetails["stage"],
+    activeWorkers?: number
+  ) => void
+): Promise<{ savedSkus: number; elapsedSec: string } | null> {
+  if (typeof window === "undefined" || typeof Worker === "undefined") {
+    return null;
+  }
+
+  // Pastikan schema SukoScannerDB v13 sudah dibuat oleh Dexie sebelum Worker membuka IDB
+  await ensureDbOpenSafe();
+
+  const hwCores = typeof navigator !== "undefined" && navigator.hardwareConcurrency ? navigator.hardwareConcurrency : 4;
+  const workerCount = Math.min(6, Math.max(4, hwCores));
+  const workerScriptUrl = `${window.location.origin}/workers/offline-sync-worker.js?v=2`;
+
+  return new Promise((resolve) => {
+    let worker: Worker | null = null;
+    let settled = false;
+    const finish = (val: { savedSkus: number; elapsedSec: string } | null) => {
+      if (settled) return;
+      settled = true;
+      if (worker) {
+        try {
+          worker.terminate();
+        } catch {}
+        worker = null;
+      }
+      resolve(val);
+    };
+
+    try {
+      worker = new Worker(workerScriptUrl);
+    } catch {
+      finish(null);
+      return;
+    }
+
+    worker.onmessage = (ev) => {
+      const msg = ev.data || {};
+      if (msg.type === "progress") {
+        emit(
+          true,
+          msg.rawPercent,
+          msg.downloadedSkus,
+          msg.totalSkus,
+          msg.etaSeconds,
+          msg.statusText,
+          msg.stage,
+          msg.activeWorkers
+        );
+      } else if (msg.type === "complete") {
+        finish({ savedSkus: msg.savedSkus || 0, elapsedSec: msg.elapsedSec || "0" });
+      } else if (msg.type === "error") {
+        console.warn("[OfflineDB-Worker] Master worker gagal, fallback ke main-thread fast IDB:", msg.error);
+        finish(null);
+      }
+    };
+
+    worker.onerror = (err) => {
+      console.warn("[OfflineDB-Worker] Worker runtime error, fallback ke main-thread fast IDB:", err?.message);
+      finish(null);
+    };
+
+    worker.postMessage({
+      mode: "master",
+      snapshotUrl,
+      snapshotChunkCount,
+      knownTotal,
+      knownGzipBytes,
+      dbName: "SukoScannerDB",
+      workerCount,
+      workerScriptUrl,
+    });
+  });
+}
+
+function writeStoreRelaxedNative(storeName: string, objs: any[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const openReq = indexedDB.open("SukoScannerDB");
+    openReq.onerror = () => reject(openReq.error || new Error("IDB open failed"));
+    openReq.onsuccess = () => {
+      const idb = openReq.result;
+      try {
+        let tx: IDBTransaction;
+        try {
+          tx = (idb as any).transaction([storeName], "readwrite", { durability: "relaxed" });
+        } catch {
+          tx = idb.transaction([storeName], "readwrite");
+        }
+        const store = tx.objectStore(storeName);
+        for (let i = 0; i < objs.length; i++) {
+          store.put(objs[i]);
+        }
+        tx.oncomplete = () => {
+          idb.close();
+          resolve();
+        };
+        tx.onerror = () => {
+          const err = tx.error;
+          idb.close();
+          reject(err || new Error(`IDB tx error (${storeName})`));
+        };
+        tx.onabort = () => {
+          const err = tx.error;
+          idb.close();
+          reject(err || new Error(`IDB tx abort (${storeName})`));
+        };
+      } catch (e) {
+        idb.close();
+        reject(e);
+      }
+    };
+  });
+}
+
 async function trySyncFromPythonSnapshot(
   checkData: any,
   emit: (
@@ -772,7 +902,8 @@ async function trySyncFromPythonSnapshot(
     totalSkus: number,
     etaSeconds: number | null,
     statusText: string,
-    stage: SyncProgressDetails["stage"]
+    stage: SyncProgressDetails["stage"],
+    activeWorkers?: number
   ) => void,
   serverVersion: string,
   expectedTotalHint: number
@@ -787,46 +918,91 @@ async function trySyncFromPythonSnapshot(
     const knownTotal = Number(checkData.snapshotTotalSkus || expectedTotalHint || 307000);
     const knownGzipBytes = Number(checkData.snapshotGzipBytes || 0);
     const snapshotChunkCount = Number(checkData.snapshotChunkCount || 0);
-    emit(true, 6, 0, knownTotal, null, "Mengunduh paket katalog Python (Turso Cloud)...", "downloading");
+
+    // ── JALUR TOL UTAMA (TIER 1A): Multi-Worker Pool (4-6 Worker Paralel + 8 Jalur Download + Relaxed IDB) ──
+    const workerRes = await trySyncViaWorkerPool(
+      snapshotUrl,
+      snapshotChunkCount,
+      knownTotal,
+      knownGzipBytes,
+      emit
+    );
+
+    if (workerRes && workerRes.savedSkus >= 1000) {
+      localStorage.setItem("suko_server_version", serverVersion);
+      localStorage.setItem("suko_dismissed_update", serverVersion);
+      localStorage.setItem("suko_db_schema_version", LOCAL_DB_SCHEMA_VERSION);
+      localStorage.setItem("suko_models_taxonomy_ver", MODELS_TAXONOMY_VERSION);
+      if (checkData.snapshotRevision) {
+        localStorage.setItem("suko_snapshot_revision", String(checkData.snapshotRevision));
+      }
+      if (typeof window !== "undefined") {
+        sessionStorage.removeItem(SYNC_BACKOFF_STORAGE_KEY);
+      }
+
+      emit(true, 96, workerRes.savedSkus, workerRes.savedSkus, 1, "Menyegarkan indeks cepat di RAM...", "indexing");
+      memoryModelsCache = null;
+      cachedTaxonomyOverview = null;
+      await ensureModelsIndexReady().catch(() => null);
+
+      const totalSec = ((Date.now() - t0) / 1000).toFixed(1);
+      emit(
+        false,
+        100,
+        workerRes.savedSkus,
+        workerRes.savedSkus,
+        0,
+        `Selesai dalam ${totalSec}d! (${workerRes.savedSkus.toLocaleString("id-ID")} SKU siap scan).`,
+        "done"
+      );
+      console.log(
+        `[OfflineDB-MultiWorker] Sukses sinkron ${workerRes.savedSkus.toLocaleString()} SKU dalam ${totalSec}s`
+      );
+      return true;
+    }
+
+    // ── JALAN ALTERNATIF (TIER 1B): Main-Thread 8-Jalur Paralel + Native IDB Relaxed ──
+    emit(true, 6, 0, knownTotal, null, "Mengunduh paket katalog Python (Turso Cloud)...", "downloading", 6);
 
     let gzBlob: Blob;
 
-    // Mode multi-chunk Turso Storage (1.5 MB/chunk — 100% bebas batas payload 4.5 MB Vercel!)
+    // Mode multi-chunk Turso Storage (1.5 MB/chunk — 6-8 koneksi paralel!)
     if (snapshotUrl.startsWith("/api/storage/") && snapshotChunkCount > 1) {
       const orderedParts: ArrayBuffer[] = new Array(snapshotChunkCount);
       let loadedBytes = 0;
-      const CONCURRENCY = 3;
-      for (let start = 0; start < snapshotChunkCount; start += CONCURRENCY) {
-        const batchIndices: number[] = [];
-        for (let k = start; k < Math.min(snapshotChunkCount, start + CONCURRENCY); k++) {
-          batchIndices.push(k);
+      let nextIdx = 0;
+      const CONCURRENCY = Math.min(8, snapshotChunkCount);
+      const sep = snapshotUrl.includes("?") ? "&" : "?";
+
+      const runLane = async () => {
+        while (true) {
+          const idx = nextIdx++;
+          if (idx >= snapshotChunkCount) break;
+          const r = await fetch(`${snapshotUrl}${sep}chunk=${idx}`, { cache: "force-cache" });
+          if (!r.ok) throw new Error(`Chunk ${idx} HTTP ${r.status}`);
+          const ab = await r.arrayBuffer();
+          orderedParts[idx] = ab;
+          loadedBytes += ab.byteLength;
+          const totalBytes = knownGzipBytes > 0 ? knownGzipBytes : snapshotChunkCount * 1_500_000;
+          const mbDone = (loadedBytes / (1024 * 1024)).toFixed(1);
+          const mbTot = (totalBytes / (1024 * 1024)).toFixed(1);
+          const dlRatio = Math.min(0.99, loadedBytes / Math.max(1, totalBytes));
+          const elapsed = Math.max(0.2, (Date.now() - t0) / 1000);
+          const eta = dlRatio > 0.05 ? Math.max(1, elapsed / dlRatio - elapsed + 4) : null;
+          emit(
+            true,
+            6 + dlRatio * 30,
+            Math.round(knownTotal * dlRatio * 0.2),
+            knownTotal,
+            eta,
+            `Unduh snapshot Python (${CONCURRENCY} jalur): ${mbDone} / ${mbTot} MB`,
+            "downloading",
+            CONCURRENCY
+          );
         }
-        await Promise.all(
-          batchIndices.map(async (idx) => {
-            const sep = snapshotUrl.includes("?") ? "&" : "?";
-            const r = await fetch(`${snapshotUrl}${sep}chunk=${idx}`, { cache: "force-cache" });
-            if (!r.ok) throw new Error(`Chunk ${idx} HTTP ${r.status}`);
-            const ab = await r.arrayBuffer();
-            orderedParts[idx] = ab;
-            loadedBytes += ab.byteLength;
-            const totalBytes = knownGzipBytes > 0 ? knownGzipBytes : snapshotChunkCount * 1_500_000;
-            const mbDone = (loadedBytes / (1024 * 1024)).toFixed(1);
-            const mbTot = (totalBytes / (1024 * 1024)).toFixed(1);
-            const dlRatio = Math.min(0.99, loadedBytes / Math.max(1, totalBytes));
-            const elapsed = Math.max(0.2, (Date.now() - t0) / 1000);
-            const eta = dlRatio > 0.05 ? Math.max(1, elapsed / dlRatio - elapsed + 4) : null;
-            emit(
-              true,
-              6 + dlRatio * 30,
-              Math.round(knownTotal * dlRatio * 0.2),
-              knownTotal,
-              eta,
-              `Unduh snapshot Python: ${mbDone} / ${mbTot} MB`,
-              "downloading"
-            );
-          })
-        );
-      }
+      };
+
+      await Promise.all(Array.from({ length: CONCURRENCY }, () => runLane()));
       gzBlob = new Blob(orderedParts);
     } else {
       const res = await fetch(snapshotUrl, { cache: "force-cache" });
@@ -887,60 +1063,61 @@ async function trySyncFromPythonSnapshot(
     const rawProds: any[][] = bundle.products;
     const totalSkus = rawProds.length;
     await ensureDbOpenSafe();
-    await db.products.clear();
+    await Promise.all([db.products.clear(), db.models.clear(), db.aliases.clear()]);
 
-    const PROD_BATCH = 15000;
+    const PROD_BATCH = 25000;
     let savedSkus = 0;
     const writeStart = Date.now();
 
-    for (let i = 0; i < totalSkus; i += PROD_BATCH) {
-      const end = Math.min(i + PROD_BATCH, totalSkus);
-      const batchObjs: CachedProduct[] = new Array(end - i);
-      for (let j = i; j < end; j++) {
-        const r = rawProds[j];
-        const imgUrl = decodeImg(r[15]);
-        const desc = r[3] || "";
-        const colonIdx = desc.indexOf(":");
-        batchObjs[j - i] = {
-          sku: r[0],
-          barcode: r[1] || null,
-          article: r[2] || null,
-          name: colonIdx > 0 ? desc.slice(0, colonIdx).trim() : desc,
-          description: desc,
-          brand: getDict(dicts.brands, r[4]),
-          dept: getDict(dicts.depts, r[5]),
-          color: r[6] || "",
-          size: r[7] || "",
-          hargaNormal: r[8] ?? 0,
-          hargaPromo: r[9] ?? null,
-          diskon: getDict(dicts.discounts, r[10]),
-          discountType: getDict(dicts.discountTypes, r[11]),
-          acara: getDict(dicts.acaras, r[12]),
-          stok: r[13] ?? 0,
-          toDate: getDict(dicts.toDates, r[14]),
-          imageUrl: imgUrl,
-          images: imgUrl ? [imgUrl] : [],
-        };
+    const writeProductsTask = (async () => {
+      for (let i = 0; i < totalSkus; i += PROD_BATCH) {
+        const end = Math.min(i + PROD_BATCH, totalSkus);
+        const batchObjs: CachedProduct[] = new Array(end - i);
+        for (let j = i; j < end; j++) {
+          const r = rawProds[j];
+          const imgUrl = decodeImg(r[15]);
+          const desc = r[3] || "";
+          const colonIdx = desc.indexOf(":");
+          batchObjs[j - i] = {
+            sku: r[0],
+            barcode: r[1] || null,
+            article: r[2] || null,
+            name: colonIdx > 0 ? desc.slice(0, colonIdx).trim() : desc,
+            description: desc,
+            brand: getDict(dicts.brands, r[4]),
+            dept: getDict(dicts.depts, r[5]),
+            color: r[6] || "",
+            size: r[7] || "",
+            hargaNormal: r[8] ?? 0,
+            hargaPromo: r[9] ?? null,
+            diskon: getDict(dicts.discounts, r[10]),
+            discountType: getDict(dicts.discountTypes, r[11]),
+            acara: getDict(dicts.acaras, r[12]),
+            stok: r[13] ?? 0,
+            toDate: getDict(dicts.toDates, r[14]),
+            imageUrl: imgUrl,
+          };
+        }
+        await writeStoreRelaxedNative("products", batchObjs);
+        savedSkus += batchObjs.length;
+        const elapsedWrite = Math.max(0.2, (Date.now() - writeStart) / 1000);
+        const wRatio = Math.min(0.99, savedSkus / totalSkus);
+        const etaWrite = wRatio > 0.05 ? Math.max(1, (elapsedWrite / wRatio) - elapsedWrite + 1.5) : null;
+        emit(
+          true,
+          40 + wRatio * 52,
+          savedSkus,
+          totalSkus,
+          etaWrite,
+          `Menyimpan ${savedSkus.toLocaleString("id-ID")} / ${totalSkus.toLocaleString("id-ID")} SKU (Turbo IDB)...`,
+          "indexing",
+          3
+        );
       }
-      await db.products.bulkPut(batchObjs);
-      savedSkus += batchObjs.length;
-      const elapsedWrite = Math.max(0.2, (Date.now() - writeStart) / 1000);
-      const wRatio = Math.min(0.99, savedSkus / totalSkus);
-      const etaWrite = wRatio > 0.05 ? Math.max(1, (elapsedWrite / wRatio) - elapsedWrite + 1.5) : null;
-      emit(
-        true,
-        40 + wRatio * 44,
-        savedSkus,
-        totalSkus,
-        etaWrite,
-        `Menyimpan ${savedSkus.toLocaleString("id-ID")} / ${totalSkus.toLocaleString("id-ID")} SKU ke HP...`,
-        "indexing"
-      );
-    }
+    })();
 
-    // Simpan CatalogArticle pre-compiled Python (tanpa perlu rebuild JS di HP!)
-    if (Array.isArray(bundle.models) && bundle.models.length > 0) {
-      emit(true, 86, savedSkus, totalSkus, 2, "Memasang indeks model cepat Python...", "indexing");
+    const writeModelsTask = (async () => {
+      if (!Array.isArray(bundle.models) || bundle.models.length === 0) return;
       const rawModels: any[][] = bundle.models;
       const inRamModels: CachedArticleModel[] = new Array(rawModels.length);
       const dbModels: CachedArticleModel[] = new Array(rawModels.length);
@@ -979,29 +1156,28 @@ async function trySyncFromPythonSnapshot(
         inRamModels[i] = sanitizeAndIndexModel(baseObj);
       }
 
-      await db.models.clear();
-      const MODEL_BATCH = 12000;
+      const MODEL_BATCH = 18000;
       for (let i = 0; i < dbModels.length; i += MODEL_BATCH) {
-        await db.models.bulkPut(dbModels.slice(i, i + MODEL_BATCH));
+        await writeStoreRelaxedNative("models", dbModels.slice(i, i + MODEL_BATCH));
       }
       memoryModelsCache = inRamModels;
       cachedTaxonomyOverview = null;
-    }
+    })();
 
-    // Simpan BarcodeAlias multi-barcode
-    if (Array.isArray(bundle.aliases) && bundle.aliases.length > 0) {
-      emit(true, 94, savedSkus, totalSkus, 1, "Menyimpan indeks alias barcode...", "indexing");
+    const writeAliasesTask = (async () => {
+      if (!Array.isArray(bundle.aliases) || bundle.aliases.length === 0) return;
       const aliasObjs: CachedBarcodeAlias[] = bundle.aliases.map((a: any[]) => ({
         barcode: a[0],
         barcodeNorm: a[1],
         sku: a[2],
       }));
-      await db.aliases.clear();
-      const ALIAS_BATCH = 20000;
+      const ALIAS_BATCH = 25000;
       for (let i = 0; i < aliasObjs.length; i += ALIAS_BATCH) {
-        await db.aliases.bulkPut(aliasObjs.slice(i, i + ALIAS_BATCH));
+        await writeStoreRelaxedNative("aliases", aliasObjs.slice(i, i + ALIAS_BATCH));
       }
-    }
+    })();
+
+    await Promise.all([writeProductsTask, writeModelsTask, writeAliasesTask]);
 
     localStorage.setItem("suko_server_version", serverVersion);
     localStorage.setItem("suko_dismissed_update", serverVersion);
@@ -1016,7 +1192,7 @@ async function trySyncFromPythonSnapshot(
 
     const totalSec = ((Date.now() - t0) / 1000).toFixed(1);
     emit(false, 100, savedSkus, savedSkus, 0, `Selesai dalam ${totalSec}d! (${savedSkus.toLocaleString("id-ID")} SKU siap scan).`, "done");
-    console.log(`[OfflineDB-Python] Sukses sinkron ${savedSkus.toLocaleString()} SKU via CDN Snapshot dalam ${totalSec}s`);
+    console.log(`[OfflineDB-Turbo] Sukses sinkron ${savedSkus.toLocaleString()} SKU via Turbo IDB dalam ${totalSec}s`);
     return true;
   } catch (err) {
     console.warn("[OfflineDB-Python] Gagal memakai CDN snapshot, fallback ke API chunk:", err);
@@ -1065,7 +1241,8 @@ export async function syncOfflineDatabase(
       totalSkus: number,
       etaSeconds: number | null,
       statusText: string,
-      stage: SyncProgressDetails["stage"]
+      stage: SyncProgressDetails["stage"],
+      activeWorkers?: number
     ) => {
       if (stage === "done") {
         highestPercent = 100;
@@ -1091,6 +1268,7 @@ export async function syncOfflineDatabase(
         etaSeconds: stage === "checking" ? null : stage === "done" ? 0 : smoothedEta ?? etaSeconds,
         statusText,
         stage,
+        activeWorkers,
       };
       notifyAll(isSyncing, details.percent, details);
     };

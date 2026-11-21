@@ -28,17 +28,40 @@ export async function GET(
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const meta = await getTursoStorageObjectMeta(rawPath);
-    if (!meta) {
-      return NextResponse.json({ error: "File tidak ditemukan" }, { status: 404 });
-    }
-
     const chunkParam = request.nextUrl.searchParams.get("chunk");
     const isImmutableSnapshot =
       rawPath.startsWith("offline-db/snapshot-") && rawPath.endsWith(".json.gz");
     const cacheHeader = isImmutableSnapshot
       ? "public, max-age=31536000, immutable"
       : "no-store";
+
+    // Jalur Kilat 1-Query untuk chunk snapshot immutable (bebas extra meta query + langsung di-cache Vercel Edge CDN!)
+    if (chunkParam !== null && isImmutableSnapshot) {
+      const idx = parseInt(chunkParam, 10);
+      if (isNaN(idx) || idx < 0 || idx > 200) {
+        return NextResponse.json({ error: "Chunk index di luar batas" }, { status: 400 });
+      }
+      const chunkBuf = await readTursoStorageChunk(rawPath, idx);
+      if (!chunkBuf) {
+        return NextResponse.json({ error: "Chunk tidak ditemukan" }, { status: 404 });
+      }
+      return new NextResponse(new Uint8Array(chunkBuf), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/gzip",
+          "Content-Length": String(chunkBuf.length),
+          "X-Chunk-Index": String(idx),
+          "Cache-Control": cacheHeader,
+          "CDN-Cache-Control": cacheHeader,
+          "Vercel-CDN-Cache-Control": cacheHeader,
+        },
+      });
+    }
+
+    const meta = await getTursoStorageObjectMeta(rawPath);
+    if (!meta) {
+      return NextResponse.json({ error: "File tidak ditemukan" }, { status: 404 });
+    }
 
     // Mode chunk presisi (1.5 MB/request — 100% bebas batas payload 4.5 MB Vercel)
     if (chunkParam !== null) {

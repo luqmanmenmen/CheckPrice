@@ -1,5 +1,5 @@
 import React from 'react';
-import { Clock } from 'lucide-react';
+import { Clock, Zap } from 'lucide-react';
 import type { SyncProgressDetails } from '@/lib/offlineDb';
 
 export function formatEtaText(etaSeconds?: number | null, percent?: number): string {
@@ -63,9 +63,17 @@ export function SyncProgressModal({
             {subtitle}
           </p>
 
-          <div className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-500 bg-slate-50 border border-slate-200/80 px-2.5 py-1 rounded-full tabular-nums mt-0.5">
-            <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-            <span>{etaLabel}</span>
+          <div className="flex flex-wrap items-center justify-center gap-1.5 mt-0.5">
+            <div className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-500 bg-slate-50 border border-slate-200/80 px-2.5 py-1 rounded-full tabular-nums">
+              <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              <span>{etaLabel}</span>
+            </div>
+            {typeof details?.activeWorkers === 'number' && details.activeWorkers > 1 && pct < 100 && (
+              <div className="inline-flex items-center gap-1 text-[10px] font-black text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-1 rounded-full tabular-nums">
+                <Zap className="w-3 h-3 text-indigo-600 shrink-0" />
+                <span>{details.activeWorkers} Worker Paralel</span>
+              </div>
+            )}
           </div>
         </div>
       </div>

@@ -1945,6 +1945,23 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   3. **UI/UX Bar Segmen & Chip Kartu ([`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx)):**
      - Menambahkan tombol kategori **`Sport`** (ikon SVG pelari) di Bar 2, serta **Bar 3 `Segmen:`** (`Semua`, `Men`, `Ladies`, `Boys`, `Girls`) berwarna pembeda + counter jumlah artikel akurat, plus badge segmen pada header filter & setiap kartu produk (0 `truncate` / `line-clamp-*`).
 
+---
+
+### 112. Akselerasi Sinkronisasi Offline 320rb SKU: Multi-Worker Pool + Native IndexedDB Relaxed + Edge CDN Chunk Fast-Path (22 November 2026)
+
+- **Akar Masalah Sebelumnya (~2 menit + main thread lag saat membuka paket & menyimpan 319.848 SKU):**
+  1. Download chunk snapshot hanya `CONCURRENCY = 3` (2 query Turso per chunk).
+  2. Dekompresi GZIP + `JSON.parse()` + transformasi 320rb objek dijalankan di Main Thread.
+  3. `db.products.bulkPut()` Dexie memakai `durability: "default"` (`strict` `fsync()` ke disk tiap 15.000 SKU), plus `models` dan `aliases` menunggu `products` selesai dulu.
+- **Upgrade Jalur Tol Utama + Fallback Otomatis:**
+  - [`public/workers/offline-sync-worker.js`](file:///c:/Max%20Display/price-checker/public/workers/offline-sync-worker.js) & [`src/lib/offlineDb.ts`](file:///c:/Max%20Display/price-checker/src/lib/offlineDb.ts):
+    - **8 Jalur Download Paralel** + auto-retry 2x/chunk di Coordinator Worker.
+    - **Native GZIP Decompression + JSON.parse** 100% di luar Main Thread (UI 60 FPS bebas freeze).
+    - **Pool 4–6 Sub-Worker Paralel** (*dynamic work-stealing queue* 20.000 SKU/paket agar RAM irit) dengan **Native IndexedDB `{ durability: "relaxed" }`** + tight-loop `store.put()` tanpa per-item listener, menulis 3 object store (`products`, `models`, `aliases`) **secara paralel serentak**, dengan fallback otomatis ke 3-Store Parallel Native IDB Relaxed bila nested/Web Worker tidak tersedia.
+  - [`src/app/api/storage/[...path]/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/storage/%5B...path%5D/route.ts): Fast-path 1-query untuk chunk snapshot immutable + header `CDN-Cache-Control` & `Vercel-CDN-Cache-Control` (`max-age=31536000, immutable`).
+  - [`src/components/ShiftLoader.tsx`](file:///c:/Max%20Display/price-checker/src/components/ShiftLoader.tsx): Menampilkan badge **`⚡ N Worker Paralel`** langsung di modal sinkronisasi.
+
+
 
 
 
