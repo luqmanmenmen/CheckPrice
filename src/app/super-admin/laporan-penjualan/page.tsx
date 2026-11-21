@@ -569,15 +569,15 @@ export default function LaporanPenjualanPage() {
               visible: true,
               phase: "failed",
               percent: 100,
-              currentStep: "Server toko sedang tutup / offline (di luar jam operasional ~09:00 – 21:30 WIB).",
+              currentStep: "Server database stok toko sedang offline / tidak merespons.",
               elapsedSec: elapsed,
               runNumber: run.runNumber,
               actionsUrl: run.htmlUrl || cur?.actionsUrl,
               errorDetail:
-                "Server toko fisik sudah dimatikan/tutup sehingga belum ada sales yang bisa ditarik. Tarik lagi besok pagi saat toko buka (otomatis masuk ke tanggal kemarin via Alert Susulan).",
+                "Server database stok toko tidak merespons saat ini (koneksi ditolak/offline). Selama server aktif, kamu bisa tarik sales kapan saja tanpa batas jam.",
               recentLogs: logs,
             }));
-            showToast("Server toko sedang tutup/offline. Tarik lagi saat toko buka (~09:00–21:15 WIB).", "info");
+            showToast("Server database stok toko sedang offline / tidak merespons. Coba lagi saat server aktif.", "info");
           } else if (isOk) {
             setSalesSyncProgress((cur) => ({
               visible: true,

@@ -1352,7 +1352,7 @@ def execute_live_stock_sync(
     if not online:
         log_sync_history(
             "STOCK_SYNC",
-            "Server toko sedang tutup/offline di luar jam operasional (Stok tersimpan tetap aman)",
+            "Server database stok toko sedang offline / tidak merespons (Stok tersimpan tetap aman)",
             0,
             "OFFLINE",
         )
