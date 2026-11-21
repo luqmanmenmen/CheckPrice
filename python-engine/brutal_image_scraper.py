@@ -565,10 +565,11 @@ def execute_brutal_image_scrape():
         print(f"   ⚠️ Fallback ke wave REST pagination ({e})")
 
     if not loaded_direct:
+        db_fb = get_turso_table_client(timeout=60) if is_turso_configured() else sb
         def fetch_db_chunk(off: int) -> List[Dict[str, Any]]:
             for _ in range(3):
                 try:
-                    res = sb.table("Product").select("*").order("sku").range(off, off + 999).execute()
+                    res = db_fb.table("Product").select("*").order("sku").range(off, off + 999).execute()
                     return res.data or []
                 except Exception:
                     time.sleep(0.5)
@@ -763,17 +764,18 @@ def execute_brutal_image_scrape():
             batch_size = 250
             batches = [rows_to_upsert[i:i + batch_size] for i in range(0, len(rows_to_upsert), batch_size)]
 
+            db_fb2 = get_turso_table_client(timeout=60) if is_turso_configured() else sb
             def upsert_batch(batch: List[Dict[str, Any]]) -> int:
                 for _ in range(3):
                     try:
-                        sb.table("Product").upsert(batch, on_conflict="sku").execute()
+                        db_fb2.table("Product").upsert(batch, on_conflict="sku").execute()
                         return len(batch)
                     except Exception:
                         time.sleep(0.4)
                 ok = 0
                 for item in batch:
                     try:
-                        sb.table("Product").update({
+                        db_fb2.table("Product").update({
                             "imageUrl": item["imageUrl"],
                             "images": item["images"],
                             "updatedAt": item["updatedAt"],

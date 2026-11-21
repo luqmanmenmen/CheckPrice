@@ -630,7 +630,21 @@ def process_single_promo_file(
                 total_updated += len(payload)
                 print(f"  [Chunk {i // CHUNK_SIZE + 1}] Berhasil memperbarui {len(payload)} produk promo.")
             except Exception as up_err:
-                print(f"❌ Error saat upsert chunk {i}: {up_err}")
+                saved_safe = 0
+                for rec in payload:
+                    try:
+                        db.table("Product").upsert(rec, on_conflict="sku").execute()
+                        saved_safe += 1
+                    except Exception:
+                        try:
+                            rec_safe = dict(rec)
+                            rec_safe.pop("barcode", None)
+                            db.table("Product").upsert(rec_safe, on_conflict="sku").execute()
+                            saved_safe += 1
+                        except Exception:
+                            pass
+                total_updated += saved_safe
+                print(f"  [Chunk {i // CHUNK_SIZE + 1} SAFE] Berhasil memperbarui {saved_safe}/{len(payload)} produk promo ({up_err}).")
 
         return total_updated
     except Exception as e:

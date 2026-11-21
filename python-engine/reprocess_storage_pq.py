@@ -31,7 +31,10 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     print("[ERROR] Konfigurasi SUPABASE_URL atau SUPABASE_KEY tidak ditemukan!")
     sys.exit(1)
 
+from turso_db import get_turso_table_client, is_turso_configured
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+db_client = get_turso_table_client(timeout=60) if is_turso_configured() else supabase
 
 def get_storage_pq_files(bucket_name: str = "excel-uploads", folder_path: str = "PQ/POWER QUERY") -> List[Dict[str, Any]]:
     """Mengambil dan mengurutkan seluruh file PQ di Supabase Storage dari tanggal tertua ke terbaru."""
@@ -124,7 +127,7 @@ def run_sequential_reprocess(start_date_str: str = "2026-10-10"):
 
                 # Ambil existing untuk proteksi promo & source
                 try:
-                    existing_res = supabase.table("Product").select("*").in_("sku", chunk_skus).execute()
+                    existing_res = db_client.table("Product").select("*").in_("sku", chunk_skus).execute()
                     existing_map = {str(item["sku"]): item for item in (existing_res.data or [])}
                 except Exception as ex:
                     print(f"    [WARN] Gagal fetch chunk existing: {ex}")
@@ -192,7 +195,7 @@ def run_sequential_reprocess(start_date_str: str = "2026-10-10"):
                     supabase_payload.append(payload)
 
                 try:
-                    supabase.table("Product").upsert(supabase_payload, on_conflict="sku").execute()
+                    db_client.table("Product").upsert(supabase_payload, on_conflict="sku").execute()
                     total_upserted += len(supabase_payload)
                 except Exception as ex:
                     print(f"    [ERROR] Gagal upsert batch {i // CHUNK_SIZE + 1}: {ex}")

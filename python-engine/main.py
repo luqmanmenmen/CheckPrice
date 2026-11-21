@@ -31,13 +31,17 @@ SUPABASE_KEY  = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KE
 VERCEL_URL    = os.getenv("VERCEL_URL", "")
 SECRET_TOKEN  = os.getenv("WEBHOOK_SECRET", "B4mb4ng123!Aman")
 
+from turso_db import get_turso_table_client, is_turso_configured
+
 supabase: Optional[Client] = None
 if SUPABASE_URL and SUPABASE_KEY:
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        print("[ENGINE] Berhasil terhubung ke Supabase.")
+        print("[ENGINE] Berhasil terhubung ke Supabase Storage.")
     except Exception as e:
         print(f"[ENGINE ERROR] Gagal inisialisasi client Supabase: {e}")
+
+db_client = get_turso_table_client(timeout=60) if is_turso_configured() else supabase
 
 app = FastAPI(
     title="Price Checker — High Performance Python Data Engine",
@@ -69,13 +73,13 @@ def get_supervisor_user_id() -> str:
         return fallback_id
 
     try:
-        res = supabase.table("User").select("id").eq("role", "SUPERVISOR").limit(1).execute()
+        res = db_client.table("User").select("id").eq("role", "SUPERVISOR").limit(1).execute()
         if res.data and len(res.data) > 0:
             _cached_supervisor_id = res.data[0]["id"]
             return _cached_supervisor_id
         
         # Coba ambil sembarang user jika tidak ada supervisor
-        res_any = supabase.table("User").select("id").limit(1).execute()
+        res_any = db_client.table("User").select("id").limit(1).execute()
         if res_any.data and len(res_any.data) > 0:
             _cached_supervisor_id = res_any.data[0]["id"]
             return _cached_supervisor_id
@@ -105,7 +109,7 @@ def create_sync_history_record(file_name: str, file_url: str, folder: str) -> Op
             "records": 0,
             "createdAt": datetime.now(timezone.utc).isoformat()
         }
-        res = supabase.table("SyncHistory").insert(payload).execute()
+        res = db_client.table("SyncHistory").insert(payload).execute()
         if res.data:
             return record_id
     except Exception as ex:
@@ -118,7 +122,7 @@ def update_sync_history_record(record_id: Optional[str], status: str, records_co
     if not supabase or not record_id:
         return
     try:
-        supabase.table("SyncHistory").update({
+        db_client.table("SyncHistory").update({
             "status": status,
             "records": records_count
         }).eq("id", record_id).execute()
@@ -167,7 +171,7 @@ def process_daily_sales(parsed_pq_data: List[Dict[str, Any]], file_name: str):
         skus = [str(x["sku"]) for x in chunk]
 
         try:
-            prod_res = supabase.table("Product").select("id, sku").in_("sku", skus).execute()
+            prod_res = db_client.table("Product").select("id, sku").in_("sku", skus).execute()
             sku_to_id = {str(p["sku"]): p["id"] for p in (prod_res.data or [])}
 
             daily_payload = []
@@ -188,7 +192,7 @@ def process_daily_sales(parsed_pq_data: List[Dict[str, Any]], file_name: str):
                 })
 
             if daily_payload:
-                supabase.table("DailySales").upsert(daily_payload, on_conflict="productId,date").execute()
+                db_client.table("DailySales").upsert(daily_payload, on_conflict="productId,date").execute()
                 total_inserted += len(daily_payload)
 
         except Exception as ex:
@@ -220,7 +224,7 @@ def health_check():
     supabase_ok = False
     if supabase:
         try:
-            test_res = supabase.table("Product").select("id").limit(1).execute()
+            test_res = db_client.table("Product").select("id").limit(1).execute()
             supabase_ok = True
         except Exception:
             supabase_ok = False
@@ -314,7 +318,7 @@ async def _process_and_notify(file_url: str, file_name: str, folder: str):
 
                 # Ambil data existing untuk preservasi proteksi harga & atribut
                 try:
-                    existing_res = supabase.table("Product").select("*").in_("sku", chunk_skus).execute()
+                    existing_res = db_client.table("Product").select("*").in_("sku", chunk_skus).execute()
                     existing_map = {str(item["sku"]): item for item in (existing_res.data or [])}
                 except Exception as ex:
                     print(f"[ENGINE] Peringatan: Gagal fetch data existing chunk {i}: {ex}")
@@ -440,7 +444,7 @@ async def _process_and_notify(file_url: str, file_name: str, folder: str):
 
                 # Eksekusi upsert ke Supabase
                 try:
-                    supabase.table("Product").upsert(supabase_payload, on_conflict="sku").execute()
+                    db_client.table("Product").upsert(supabase_payload, on_conflict="sku").execute()
                     total_upserted += len(supabase_payload)
                     print(f"[ENGINE] Sukses upsert batch {i // CHUNK_SIZE + 1}: {len(supabase_payload)} produk.")
                 except Exception as ex:
@@ -539,7 +543,7 @@ async def gmail_webhook(
                 chunk_skus = [str(x["sku"]) for x in chunk]
 
                 try:
-                    ex_res = supabase.table("Product").select("sku, hargaNormal, hargaNormalSource, stok").in_("sku", chunk_skus).execute()
+                    ex_res = db_client.table("Product").select("sku, hargaNormal, hargaNormalSource, stok").in_("sku", chunk_skus).execute()
                     ex_map = {str(item["sku"]): item for item in (ex_res.data or [])}
                 except Exception:
                     ex_map = {}
@@ -577,7 +581,7 @@ async def gmail_webhook(
                     payload.append(p_item)
 
                 try:
-                    supabase.table("Product").upsert(payload, on_conflict="sku").execute()
+                    db_client.table("Product").upsert(payload, on_conflict="sku").execute()
                 except Exception as ex:
                     print(f"[DIRECT-UPLOAD ERROR] Gagal upsert chunk: {ex}")
 
