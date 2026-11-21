@@ -389,24 +389,61 @@ export const CATEGORY_KEYWORDS: Record<Exclude<CategoryKey, "ALL" | "OTHER">, st
     "HANDUK",
   ],
   BEAUTY: [
-    "BLUSH",
-    "LIP",
+    "BLUSH ON",
+    "BLUSH VEIL",
+    "FIT ME BLUSH",
+    "PRESSED BLUSH",
+    "TINT BLUSH",
+    "CHEEK BLUSH",
+    "COLORFIT BLUSH",
+    "BLOOM BLUSH",
     "LIPSTICK",
     "LIPTINT",
+    "LIP TINT",
+    "LIP GLOSS",
+    "LIPGLOSS",
+    "GLOSS LIP",
+    "LIQUID LIP",
+    "LIP BALM",
+    "LIPBALM",
+    "LIP CREAM",
+    "LIPCREAM",
+    "LIP MATTE",
+    "LIPMATTE",
+    "LIP VELVET",
+    "LIP SERUM",
+    "LIP OIL",
+    "LIP LINER",
+    "EYEBROW",
+    "BROW PENCIL",
+    "BROW MASCARA",
+    "BROWCARA",
+    "BROW GEL",
+    "MASCARA",
+    "EYELINER",
+    "EYESHADOW",
+    "FOUNDATION",
     "SERUM",
     "TONER",
     "CONCEALER",
     "MOISTURIZER",
     "SUNSCREEN",
-    "POWDER",
-    "BROW",
+    "POWDER PUFF",
+    "POWDER FOUNDATION",
+    "COMPACT POWDER",
+    "LOOSE POWDER",
+    "BEDAK",
     "EYE CARE",
     "ACNE",
     "PEEL OFF MASK",
     "FACIAL",
     "SKINCARE",
     "PERFUME",
+    "PERFUMERY",
+    "EAU DE",
     "RETINOL",
+    "MAKE-UP",
+    "MAKEUP",
   ],
   TIDUR_DALAM: [
     "SLEEPWEAR",
@@ -480,17 +517,61 @@ export function classifyProductCategory(p: TaxonomyInput): ResolvedCategoryKey {
   const brand = (p.brand || "").toUpperCase();
   const combined = `${title} ${dept}`;
 
-  // 1. Kosmetik, Fragrance & Skincare (mencegah "BLUSH" / "TOP COAT" nyasar ke pakaian)
-  if (
+  // 1. Kosmetik, Fragrance & Skincare (mencegah "BLUSH VEIL LIQUID" masuk ATASAN,
+  //    sekaligus mencegah "TWILL PANTS LIP", "TOPI BROW", "SLIP ON" -> "LIP ON", & "PYJAMA BLUSH" nyasar ke BEAUTY)
+  const isExplicitBeautyDeptOrBrand =
     dept.includes("NAYOUNG") ||
     dept.includes("COSMETIC") ||
+    dept.includes("MAKE-UP") ||
+    dept.includes("MAKEUP") ||
+    dept.includes("PERAWATAN KULIT") ||
+    dept.includes("KECANTIKAN") ||
+    dept.includes("PERFUM") ||
     dept.includes("LA TULIPE") ||
     dept.includes("LT PRO") ||
     dept.includes("SOMETHINC") ||
     dept.includes("AMATERASUN") ||
+    dept.includes("DERMA ANGEL") ||
+    dept.includes("MAYBELLINE") ||
+    dept.includes("WARDAH") ||
+    dept.includes("EMINA") ||
+    dept.includes("MAKE OVER") ||
+    dept.includes("LUXCRIME") ||
+    dept.includes("L'OREAL") ||
+    dept.includes("LANCOME") ||
+    dept.includes("AVOSKIN") ||
+    dept.includes("INSTAPERFECT") ||
+    dept.includes("SILKYGIRL") ||
+    dept.includes("HOLIKA HOLIKA") ||
+    dept.includes("ROSSA BEAUTY") ||
+    dept.includes("KAHF") ||
+    dept.includes("SCENTALGIA") ||
+    dept.includes("EVERSINCE") ||
+    dept.includes("ROSE ALL DAY") ||
     brand === "ELFORMULA" ||
-    brand === "FRAGRANCE" ||
-    CATEGORY_REGEX_MAP.BEAUTY.test(combined)
+    brand === "FRAGRANCE";
+
+  const isExplicitNonBeautyDept =
+    brand.includes("SUKO") ||
+    dept.includes("SUKO") ||
+    brand.includes("ZES") ||
+    dept.includes("ZES") ||
+    dept.includes("SLEEPWEAR") ||
+    dept.includes("PAKAIAN DALAM") ||
+    dept.includes("BAJU TIDUR") ||
+    dept.includes("UNDERWEAR") ||
+    dept.includes("INTIMATE") ||
+    dept.includes("SHOES") ||
+    dept.includes(" FW") ||
+    dept.endsWith("FW") ||
+    dept.includes("BAWAHAN") ||
+    dept.includes("OUTERWEAR") ||
+    dept.includes("KINTAKUN") ||
+    brand.includes("KINTAKUN");
+
+  if (
+    isExplicitBeautyDeptOrBrand ||
+    (!isExplicitNonBeautyDept && CATEGORY_REGEX_MAP.BEAUTY.test(combined))
   ) {
     return "BEAUTY";
   }

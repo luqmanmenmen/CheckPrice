@@ -125,10 +125,18 @@ CATEGORY_KEYWORDS: Dict[str, List[str]] = {
         "PAPERBAG", "CANVAS BAG", "STICKER", "STICKERS", "TOWEL", "HANDUK",
     ],
     "BEAUTY": [
-        "BLUSH", "LIP", "LIPSTICK", "LIPTINT", "SERUM", "TONER",
-        "CONCEALER", "MOISTURIZER", "SUNSCREEN", "POWDER", "BROW",
-        "EYE CARE", "ACNE", "PEEL OFF MASK", "FACIAL", "SKINCARE",
-        "PERFUME", "RETINOL",
+        "BLUSH ON", "BLUSH VEIL", "FIT ME BLUSH", "PRESSED BLUSH",
+        "TINT BLUSH", "CHEEK BLUSH", "COLORFIT BLUSH", "BLOOM BLUSH",
+        "LIPSTICK", "LIPTINT", "LIP TINT", "LIP GLOSS", "LIPGLOSS",
+        "GLOSS LIP", "LIQUID LIP", "LIP BALM", "LIPBALM", "LIP CREAM",
+        "LIPCREAM", "LIP MATTE", "LIPMATTE", "LIP VELVET", "LIP SERUM",
+        "LIP OIL", "LIP LINER", "EYEBROW", "BROW PENCIL", "BROW MASCARA",
+        "BROWCARA", "BROW GEL", "MASCARA", "EYELINER", "EYESHADOW",
+        "FOUNDATION", "SERUM", "TONER", "CONCEALER", "MOISTURIZER",
+        "SUNSCREEN", "POWDER PUFF", "POWDER FOUNDATION", "COMPACT POWDER",
+        "LOOSE POWDER", "BEDAK", "EYE CARE", "ACNE", "PEEL OFF MASK",
+        "FACIAL", "SKINCARE", "PERFUME", "PERFUMERY", "EAU DE",
+        "RETINOL", "MAKE-UP", "MAKEUP",
     ],
     "TIDUR_DALAM": [
         "SLEEPWEAR", "PAJAMA", "PAJAMAS", "PYJAMA", "PYJAMAS", "PIYAMA",
@@ -272,17 +280,57 @@ def classify_product_category(brand: Optional[str], dept: Optional[str], desc: O
     b = (brand or "").upper()
     combined = f"{title} {d}"
 
-    if (
+    is_explicit_beauty = (
         "NAYOUNG" in d
         or "COSMETIC" in d
+        or "MAKE-UP" in d
+        or "MAKEUP" in d
+        or "PERAWATAN KULIT" in d
+        or "KECANTIKAN" in d
+        or "PERFUM" in d
         or "LA TULIPE" in d
         or "LT PRO" in d
         or "SOMETHINC" in d
         or "AMATERASUN" in d
+        or "DERMA ANGEL" in d
+        or "MAYBELLINE" in d
+        or "WARDAH" in d
+        or "EMINA" in d
+        or "MAKE OVER" in d
+        or "LUXCRIME" in d
+        or "L'OREAL" in d
+        or "LANCOME" in d
+        or "AVOSKIN" in d
+        or "INSTAPERFECT" in d
+        or "SILKYGIRL" in d
+        or "HOLIKA HOLIKA" in d
+        or "ROSSA BEAUTY" in d
+        or "KAHF" in d
+        or "SCENTALGIA" in d
+        or "EVERSINCE" in d
+        or "ROSE ALL DAY" in d
         or b == "ELFORMULA"
         or b == "FRAGRANCE"
-        or CATEGORY_REGEX["BEAUTY"].search(combined)
-    ):
+    )
+    is_non_beauty_dept = (
+        "SUKO" in b
+        or "SUKO" in d
+        or "ZES" in b
+        or "ZES" in d
+        or "SLEEPWEAR" in d
+        or "PAKAIAN DALAM" in d
+        or "BAJU TIDUR" in d
+        or "UNDERWEAR" in d
+        or "INTIMATE" in d
+        or "SHOES" in d
+        or " FW" in d
+        or d.endswith("FW")
+        or "BAWAHAN" in d
+        or "OUTERWEAR" in d
+        or "KINTAKUN" in d
+        or "KINTAKUN" in b
+    )
+    if is_explicit_beauty or (not is_non_beauty_dept and CATEGORY_REGEX["BEAUTY"].search(combined)):
         return "BEAUTY"
 
     if (
