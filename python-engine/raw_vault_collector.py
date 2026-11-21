@@ -399,7 +399,11 @@ def collect_local_sources(
         )
         stats["pg_products"] = len(batch_items)
 
-    sync_ts = pg_max_updated_dt.isoformat() if pg_max_updated_dt else now_iso
+    sync_ts = (
+        pg_max_updated_dt.isoformat()
+        if hasattr(pg_max_updated_dt, "isoformat")
+        else (str(pg_max_updated_dt).strip() if pg_max_updated_dt else now_iso)
+    )
     cur_v.execute(
         """
         INSERT OR REPLACE INTO raw_collections_state (handle, products_count, fetched_count, last_fetched_at)
@@ -472,6 +476,14 @@ def collect_storehub_vendors(db_path: str = VAULT_DB_PATH) -> int:
             cookie_val = f.read().strip()
     if not cookie_val:
         cookie_val = (os.getenv("MDS_SESSION_COOKIE") or "").strip()
+    if not cookie_val:
+        try:
+            from turso_db import storage_download
+            raw_c = storage_download("secrets/mds_cookie.txt")
+            if raw_c:
+                cookie_val = raw_c.decode("utf-8", errors="ignore").strip()
+        except Exception:
+            pass
     if not cookie_val:
         print("⚠️ [STOREHUB VENDORS] Cookie .mds_cookie tidak tersedia, melewati sedot vendor CV.")
         return 0
