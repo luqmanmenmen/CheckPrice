@@ -25,16 +25,6 @@ export async function getEstimatedProductCount(): Promise<number> {
     return cachedEstimatedCount.value;
   }
   try {
-    const rows = await db.$queryRawUnsafe<Array<{ approx: bigint | number | null }>>(
-      `SELECT GREATEST(reltuples::bigint, 0) AS approx FROM pg_class WHERE relname = 'Product' LIMIT 1`
-    );
-    const val = Number(rows?.[0]?.approx || 0);
-    if (val > 0) {
-      cachedEstimatedCount = { value: val, fetchedAt: now };
-      return val;
-    }
-  } catch {}
-  try {
     const exact = await db.product.count();
     cachedEstimatedCount = { value: exact, fetchedAt: now };
     return exact;
@@ -297,33 +287,33 @@ export function buildSubBrandPrismaClause(subBrand: string): any | undefined {
   const clean = subBrand.trim().toUpperCase();
   if (!clean) return undefined;
   const subClauses: any[] = [
-    { brand: { contains: clean, mode: "insensitive" } },
-    { dept: { contains: clean, mode: "insensitive" } },
+    { brand: { contains: clean } },
+    { dept: { contains: clean } },
   ];
   if (clean === "MUKU") {
     subClauses.push(
-      { article: { startsWith: "MK-", mode: "insensitive" } },
-      { description: { contains: "MUKU", mode: "insensitive" } }
+      { article: { startsWith: "MK-" } },
+      { description: { contains: "MUKU" } }
     );
   } else if (clean === "BYRCH & CO") {
     subClauses.push(
-      { brand: { contains: "BYRCH", mode: "insensitive" } },
-      { dept: { contains: "BYRCH", mode: "insensitive" } }
+      { brand: { contains: "BYRCH" } },
+      { dept: { contains: "BYRCH" } }
     );
   } else if (clean === "ST YVES") {
     subClauses.push(
-      { brand: { contains: "SAINT YVES", mode: "insensitive" } },
-      { dept: { contains: "SAINT YVES", mode: "insensitive" } }
+      { brand: { contains: "SAINT YVES" } },
+      { dept: { contains: "SAINT YVES" } }
     );
   } else if (clean === "NAYOUNG") {
     subClauses.push(
-      { brand: { equals: "ELFORMULA", mode: "insensitive" } },
-      { description: { contains: "NA-YOUNG", mode: "insensitive" } }
+      { brand: { equals: "ELFORMULA" } },
+      { description: { contains: "NA-YOUNG" } }
     );
   } else if (clean === "DISNEY") {
-    subClauses.push({ dept: { contains: "THATS DONALD", mode: "insensitive" } });
+    subClauses.push({ dept: { contains: "THATS DONALD" } });
   } else if (clean === "CHARACTER") {
-    subClauses.push({ dept: { contains: "LICENSE", mode: "insensitive" } });
+    subClauses.push({ dept: { contains: "LICENSE" } });
   }
   return { OR: subClauses };
 }

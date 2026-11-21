@@ -24,8 +24,8 @@ export async function POST() {
           "toDate" = NULL
       WHERE ("hargaPromo" IS NOT NULL OR diskon IS NOT NULL OR acara IS NOT NULL)
         AND "toDate" IS NOT NULL
-        AND SUBSTRING(TRIM("toDate"), 1, 10) ~ '^\\d{4}-\\d{2}-\\d{2}$'
-        AND SUBSTRING(TRIM("toDate"), 1, 10) < $1
+        AND substr(trim("toDate"), 1, 10) GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+        AND substr(trim("toDate"), 1, 10) < ?
       `,
       todayWib
     );

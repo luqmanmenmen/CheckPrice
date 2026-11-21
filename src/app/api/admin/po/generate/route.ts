@@ -14,22 +14,22 @@ export async function POST() {
     const generatedCount = await prisma.$executeRawUnsafe(`
       INSERT INTO "PoSuggestion" (id, "productId", "suggestedQty", reason, status, "createdAt", "updatedAt")
       SELECT
-        'po_' || md5(p.id::text || '_' || extract(epoch from now())::text),
+        'po_' || lower(hex(randomblob(8))),
         p.id,
-        GREATEST(0, CEIL((p.sales_mtd::numeric / 14.0) * 24.0)::int - p.stok),
+        MAX(0, CAST((p.sales_mtd * 24 + 13) / 14 AS INTEGER) - p.stok),
         'Dalam 14 hari terakhir terjual ' || p.sales_mtd || ' pcs (Rata-rata '
-          || TO_CHAR(p.sales_mtd::numeric / 14.0, 'FM999990.0')
+          || printf('%.1f', CAST(p.sales_mtd AS REAL) / 14.0)
           || ' pcs/hari). Sisa stok ' || p.stok
           || ' pcs. Disarankan pesan '
-          || GREATEST(0, CEIL((p.sales_mtd::numeric / 14.0) * 24.0)::int - p.stok)
+          || MAX(0, CAST((p.sales_mtd * 24 + 13) / 14 AS INTEGER) - p.stok)
           || ' pcs untuk target 14 hari.',
         'OPEN',
-        NOW(),
-        NOW()
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       FROM "Product" p
       WHERE p.sales_mtd > 5
-        AND p.stok <= CEIL((p.sales_mtd::numeric / 14.0) * 10.0)
-        AND GREATEST(0, CEIL((p.sales_mtd::numeric / 14.0) * 24.0)::int - p.stok) > 0
+        AND p.stok <= CAST((p.sales_mtd * 10 + 13) / 14 AS INTEGER)
+        AND (CAST((p.sales_mtd * 24 + 13) / 14 AS INTEGER) - p.stok) > 0
         AND NOT EXISTS (
           SELECT 1 FROM "PoSuggestion" s
           WHERE s."productId" = p.id AND s.status = 'OPEN'

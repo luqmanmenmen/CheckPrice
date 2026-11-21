@@ -33,9 +33,9 @@ export async function GET(request: Request) {
     if (search) {
       where = {
         OR: [
-          { sku: { contains: search, mode: 'insensitive' } },
-          { description: { contains: search, mode: 'insensitive' } },
-          { article: { contains: search, mode: 'insensitive' } },
+          { sku: { contains: search } },
+          { description: { contains: search } },
+          { article: { contains: search } },
         ],
       };
     }

@@ -1,60 +1,60 @@
 generator client {
   provider        = "prisma-client-js"
-  previewFeatures = ["postgresqlExtensions"]
+  previewFeatures = ["driverAdapters"]
 }
 
 datasource db {
-  provider   = "postgresql"
-  url        = env("DATABASE_URL")
-  directUrl  = env("DIRECT_URL")
-  extensions = [pg_trgm]
+  provider = "sqlite"
+  url      = "file:./dev.db"
 }
 
 model Product {
-  id            Int      @id @default(autoincrement())
-  sku           String   @unique
-  barcode       String?  @unique
-  article       String?
-  description   String
-  acara         String?
-  fromDate      String?
-  toDate        String?
-  hargaNormal   Float    @default(0)
+  id                Int      @id @default(autoincrement())
+  sku               String   @unique
+  barcode           String?  @unique
+  article           String?
+  description       String
+  acara             String?
+  fromDate          String?
+  toDate            String?
+  hargaNormal       Float    @default(0)
   hargaNormalSource String? // "PROMO" | "PQ_STOCK" | "MANUAL" — PQ tidak boleh menimpa harga dari PROMO
-  hargaPromo    Float?
-  diskon        String?
-  discountType  String?
-  promoFileName String?
-  brand         String?
-  dept          String?
-  color         String?
-  size          String?
-  imageUrl      String?  // URL foto model resmi produk dari Matahari CDN
-  images        String[] @default([]) // Daftar seluruh foto varian (depan, samping, belakang, detail tekstur)
-  lastPurchaseDate String?
-  stok          Int      @default(0)   // EOH_UNIT — stok saat ini (unit)
-  eoh_retail    Float    @default(0)   // EOH_RETAIL — nilai stok saat ini (Rp)
-  sales_mtd     Int      @default(0)   // MTD_SALES_UNIT — terjual bulan ini (unit)
-  sales_mtd_retail Float @default(0)  // MTD_SALES_RETAIL — omzet bulan ini langsung dari POS (Rp)
-  sales_wtd     Int      @default(0)   // WTD_SALES_UNIT — terjual minggu ini (unit)
-  sales_wtd_retail Float @default(0)  // WTD_SALES_RETAIL — omzet minggu ini (Rp)
-  sales_ytd     Int      @default(0)   // YTD_SALES_UNIT — terjual tahun ini (unit)
-  sales_ytd_retail Float @default(0)  // YTD_SALES_RETAIL — omzet tahun ini (Rp) — sumber kebenaran tertinggi
-  boy_unit      Int      @default(0)   // BOY_UNIT — stok awal tahun (unit)
-  boy_retail    Float    @default(0)   // BOY_RETAIL — nilai stok awal tahun (Rp)
-  bom_unit      Int      @default(0)
-  day_sales_unit Int     @default(0)
-  day_sales_retail Float @default(0)
-  poSuggestions PoSuggestion[]
-  dailySales    DailySales[]
-  updatedAt     DateTime @updatedAt
-  createdAt     DateTime @default(now())
+  hargaPromo        Float?
+  diskon            String?
+  discountType      String?
+  promoFileName     String?
+  brand             String?
+  dept              String?
+  color             String?
+  size              String?
+  imageUrl          String? // URL foto model resmi produk dari CDN
+  images            String   @default("[]") // JSON array string daftar foto varian (auto-parsed oleh prisma.ts $extends)
+  lastPurchaseDate  String?
+  stok              Int      @default(0) // EOH_UNIT — stok saat ini (unit)
+  eoh_retail        Float    @default(0) // EOH_RETAIL — nilai stok saat ini (Rp)
+  sales_mtd         Int      @default(0) // MTD_SALES_UNIT — terjual bulan ini (unit)
+  sales_mtd_retail  Float    @default(0) // MTD_SALES_RETAIL — omzet bulan ini langsung dari POS (Rp)
+  sales_wtd         Int      @default(0) // WTD_SALES_UNIT — terjual minggu ini (unit)
+  sales_wtd_retail  Float    @default(0) // WTD_SALES_RETAIL — omzet minggu ini (Rp)
+  sales_ytd         Int      @default(0) // YTD_SALES_UNIT — terjual tahun ini (unit)
+  sales_ytd_retail  Float    @default(0) // YTD_SALES_RETAIL — omzet tahun ini (Rp) — sumber kebenaran tertinggi
+  boy_unit          Int      @default(0) // BOY_UNIT — stok awal tahun (unit)
+  boy_retail        Float    @default(0) // BOY_RETAIL — nilai stok awal tahun (Rp)
+  bom_unit          Int      @default(0)
+  day_sales_unit    Int      @default(0)
+  day_sales_retail  Float    @default(0)
+  poSuggestions     PoSuggestion[]
+  dailySales        DailySales[]
+  updatedAt         DateTime @updatedAt
+  createdAt         DateTime @default(now())
 
   @@index([article])
   @@index([stok(sort: Desc), sku(sort: Asc)])
   @@index([updatedAt(sort: Desc)])
-  @@index([description(ops: raw("gin_trgm_ops"))], type: Gin, map: "Product_description_trgm_idx")
-  @@index([article(ops: raw("gin_trgm_ops"))], type: Gin, map: "Product_article_trgm_idx")
+  @@index([brand])
+  @@index([dept])
+  @@index([hargaPromo])
+  @@index([toDate])
 }
 
 /// Tabel Katalog Pre-Grouped & Ternormalisasi yang dibangun oleh Python Engine (`build_catalog_index.py`)
@@ -66,9 +66,9 @@ model CatalogArticle {
   description       String
   brand             String?
   dept              String?
-  brandGroup        String   // "SUKO" | "MUKU" | "ZES"
-  subBrand          String   // Merk asli ter-normalisasi (bebas label divisi seperti CHILDREN BOYS)
-  categoryKey       String   // JAKET | ATASAN | CELANA | DRESS_ROK | SEPATU_SANDAL | TAS_AKSESORIS | BEAUTY | TIDUR_DALAM | OTHER
+  brandGroup        String // "SUKO" | "MUKU" | "ZES"
+  subBrand          String // Merk asli ter-normalisasi (bebas label divisi seperti CHILDREN BOYS)
+  categoryKey       String // JAKET | ATASAN | CELANA | DRESS_ROK | SEPATU_SANDAL | TAS_AKSESORIS | BEAUTY | TIDUR_DALAM | OTHER
   color             String?
   size              String?
   stok              Int      @default(0)
@@ -81,8 +81,8 @@ model CatalogArticle {
   imageUrl          String?
   articleGroupCount Int      @default(1)
   articleTotalStok  Int      @default(0)
-  articleColors     String[] @default([])
-  articleSizes      String[] @default([])
+  articleColors     String   @default("[]") // JSON array string (auto-parsed oleh prisma.ts $extends)
+  articleSizes      String   @default("[]") // JSON array string (auto-parsed oleh prisma.ts $extends)
   articleHasPromo   Boolean  @default(false)
   articlePromoLabel String?
   sortRank          Int      @default(0)
@@ -94,11 +94,9 @@ model CatalogArticle {
   @@index([brandGroup, categoryKey, sortRank])
   @@index([brandGroup, subBrand, sortRank])
   @@index([brandGroup, subBrand, categoryKey, sortRank])
-  @@index([description(ops: raw("gin_trgm_ops"))], type: Gin, map: "CatalogArticle_description_trgm_idx")
-  @@index([subBrand(ops: raw("gin_trgm_ops"))], type: Gin, map: "CatalogArticle_subBrand_trgm_idx")
 }
 
-/// Tabel alias multi-barcode per SKU agar 1 SKU bisa menyimpan banyak barcode (MDS internal + vendor EAN/alfanumerik)
+/// Tabel alias multi-barcode per SKU agar 1 SKU bisa menyimpan banyak barcode (internal + vendor EAN/alfanumerik)
 model BarcodeAlias {
   barcode     String   @id
   barcodeNorm String
@@ -116,31 +114,32 @@ model DailySales {
   product   Product  @relation(fields: [productId], references: [id])
   date      DateTime
   qtySold   Int
-  omzet     Float    @default(0)  // Omzet aktual dari POS (MTD_SALES_RETAIL delta harian)
+  omzet     Float    @default(0) // Omzet aktual dari POS (MTD_SALES_RETAIL delta harian)
   createdAt DateTime @default(now())
 
   @@unique([productId, date]) // Only one record per product per day
+  @@index([date])
 }
 
 model User {
-  id        String   @id @default(cuid())
-  nik       String   @unique
-  pin       String
-  name      String
-  role      Role     @default(CREW_STORE)
-  status    UserStatus @default(ACTIVE)
-  toko      String?
-  redirectMds Boolean  @default(false) // Alihkan langsung ke MDS BISA saat berkunjung
-  sessionId String?
-  lastLogin DateTime?
-  lastActive DateTime?
-  loginCount Int      @default(0)
-  loginLogs  LoginLog[]
-  shifts    Shift[]
-  tickets   Ticket[]
+  id          String        @id @default(cuid())
+  nik         String        @unique
+  pin         String
+  name        String
+  role        String        @default("CREW_STORE") // "SUPERVISOR" | "CREW_STORE"
+  status      String        @default("ACTIVE") // "ACTIVE" | "BREAK" | "OFFLINE"
+  toko        String?
+  redirectMds Boolean       @default(false)
+  sessionId   String?
+  lastLogin   DateTime?
+  lastActive  DateTime?
+  loginCount  Int           @default(0)
+  loginLogs   LoginLog[]
+  shifts      Shift[]
+  tickets     Ticket[]
   syncHistory SyncHistory[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
 }
 
 model LoginLog {
@@ -149,9 +148,9 @@ model LoginLog {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   nik       String
   name      String
-  role      Role     @default(CREW_STORE)
-  shift     Int?     // 1 or 2
-  jobTitle  String?  // Posisi yang dipilih saat login
+  role      String   @default("CREW_STORE") // "SUPERVISOR" | "CREW_STORE"
+  shift     Int? // 1 or 2
+  jobTitle  String? // Posisi yang dipilih saat login
   toko      String?
   ipAddress String?
   userAgent String?
@@ -161,22 +160,11 @@ model LoginLog {
   @@index([createdAt])
 }
 
-enum UserStatus {
-  ACTIVE
-  BREAK
-  OFFLINE
-}
-
-enum Role {
-  SUPERVISOR
-  CREW_STORE
-}
-
 model Shift {
   id        String    @id @default(cuid())
   userId    String
   user      User      @relation(fields: [userId], references: [id])
-  type      Int       // 1 or 2
+  type      Int // 1 or 2
   startTime DateTime  @default(now())
   endTime   DateTime?
   tickets   Ticket[]
@@ -188,69 +176,46 @@ model Ticket {
   shift       Shift    @relation(fields: [shiftId], references: [id])
   requesterId String
   requester   User     @relation(fields: [requesterId], references: [id])
-  
-  type        TicketType
-  priority    Priority @default(LOW)
-  status      Status   @default(PENDING)
-  
-  sku         String
-  size        String?
-  qty         Int?
-  photoUrl    String?  // URL to the physical price tag photo
-  ocrData     String?  // JSON string of OCR raw data
-  
-  reason      String?  // OOS reason from warehouse
-  
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+
+  type     String // "STOCK_CHECK" | "REQUEST" | "FACING_OUT"
+  priority String @default("LOW") // "LOW" | "HIGH"
+  status   String @default("PENDING") // "PENDING" | "READY" | "OOS" | "COMPLETED"
+
+  sku      String
+  size     String?
+  qty      Int?
+  photoUrl String? // URL to the physical price tag photo
+  ocrData  String? // JSON string of OCR raw data
+
+  reason String? // OOS reason from warehouse
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([status, createdAt(sort: Desc)])
-}
-
-enum TicketType {
-  STOCK_CHECK // Tanya Stok
-  REQUEST     // Request Barang
-  FACING_OUT  // Barang dibeli atau dikeluarkan dari display
-}
-
-enum Priority {
-  LOW
-  HIGH
-}
-
-enum Status {
-  PENDING
-  READY
-  OOS
-  COMPLETED // When SA accepts the ready item
 }
 
 model PoSuggestion {
-  id          String   @id @default(cuid())
-  productId   Int
-  product     Product  @relation(fields: [productId], references: [id])
+  id           String   @id @default(cuid())
+  productId    Int
+  product      Product  @relation(fields: [productId], references: [id])
   suggestedQty Int
-  reason      String
-  status      PoStatus @default(OPEN)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  reason       String
+  status       String   @default("OPEN") // "OPEN" | "CLOSED"
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@index([status, createdAt(sort: Desc)])
-}
-
-enum PoStatus {
-  OPEN
-  CLOSED
 }
 
 model SyncHistory {
   id        String   @id @default(cuid())
   userId    String
   user      User     @relation(fields: [userId], references: [id])
-  type      String   // "PQ_HARIAN", "PROMO_MINGGUAN"
+  type      String // "PQ_HARIAN", "PROMO_MINGGUAN", "MDS_SALES_SYNC", etc.
   fileName  String
   fileUrl   String?
-  status    String   // "SUCCESS", "FAILED"
+  status    String // "SUCCESS", "FAILED"
   records   Int
   createdAt DateTime @default(now())
 

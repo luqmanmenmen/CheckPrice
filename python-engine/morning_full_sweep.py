@@ -75,7 +75,14 @@ if not SUPABASE_KEY:
     print("❌ Error: SUPABASE_KEY tidak ditemukan.")
     sys.exit(1)
 
+from turso_db import (
+    format_prisma_iso,
+    get_turso_table_client,
+    is_turso_configured,
+)
+
 sb: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+db = get_turso_table_client(timeout=60) if is_turso_configured() else sb
 
 STOREHUB_BASE = "https://storehub.mdsretailing.id"
 LOGIN_URL = f"{STOREHUB_BASE}/login?next=%2F"
@@ -175,22 +182,22 @@ def load_vault_image_map() -> Dict[str, List[str]]:
 def log_sync_history(sync_type: str, file_name: str, total_records: int, status: str = "SUCCESS"):
     """Mencatat hasil eksekusi ke tabel SyncHistory agar tampil di Dashboard Frontend."""
     try:
-        user_res = sb.table("User").select("id").eq("nik", "22054178").limit(1).execute()
+        user_res = db.table("User").select("id").eq("nik", "22054178").limit(1).execute()
         user_id = user_res.data[0]["id"] if user_res.data else None
         if not user_id:
-            u_fallback = sb.table("User").select("id").limit(1).execute()
+            u_fallback = db.table("User").select("id").limit(1).execute()
             user_id = u_fallback.data[0]["id"] if u_fallback.data else None
 
         if user_id:
             sync_id = f"sync_{uuid.uuid4().hex[:20]}"
-            sb.table("SyncHistory").insert({
+            db.table("SyncHistory").insert({
                 "id": sync_id,
                 "userId": user_id,
                 "type": sync_type,
                 "fileName": file_name,
                 "status": status,
                 "records": int(total_records),
-                "createdAt": datetime.now(timezone.utc).isoformat(),
+                "createdAt": format_prisma_iso(datetime.now(timezone.utc)),
             }).execute()
             print(f"📝 [SyncHistory] Tercatat: {sync_type} | {file_name} | {total_records:,} item ({status})")
     except Exception as e:
@@ -625,14 +632,37 @@ def load_existing_catalog_full() -> Tuple[Dict[str, Dict[str, Any]], Set[str], D
     try:
         pg_conn = connect_pg()
         pg_cur = pg_conn.cursor()
-        pg_cur.execute(
-            '''
-            SELECT sku, barcode, article, description, brand, dept, color, size,
-                   "hargaNormal", stok, "imageUrl", "hargaPromo", "discountType", acara, "toDate"
-            FROM "Product"
-            '''
-        )
-        for row in pg_cur.fetchall():
+        if getattr(pg_conn, "is_turso", False):
+            last_id = 0
+            raw_rows = []
+            while True:
+                pg_cur.execute(
+                    '''
+                    SELECT id, sku, barcode, article, description, brand, dept, color, size,
+                           "hargaNormal", stok, "imageUrl", "hargaPromo", "discountType", acara, "toDate"
+                    FROM "Product"
+                    WHERE id > ?
+                    ORDER BY id ASC
+                    LIMIT 20000
+                    ''',
+                    (last_id,),
+                )
+                batch = pg_cur.fetchall()
+                if not batch:
+                    break
+                raw_rows.extend([r[1:] for r in batch])
+                last_id = int(batch[-1][0])
+        else:
+            pg_cur.execute(
+                '''
+                SELECT sku, barcode, article, description, brand, dept, color, size,
+                       "hargaNormal", stok, "imageUrl", "hargaPromo", "discountType", acara, "toDate"
+                FROM "Product"
+                '''
+            )
+            raw_rows = pg_cur.fetchall()
+
+        for row in raw_rows:
             sku, bc, art, desc, brand, dept, color, size, hn, stok, img, hp, dt, ac, td = row
             s = str(sku or "").strip()
             b = str(bc or "").strip()
@@ -1112,53 +1142,65 @@ def flush_buffer(
     except Exception:
         pass
 
-    # 2. Simpan Product ke Supabase
+    # 2. Simpan Product ke Database (Turso / Supabase)
     try:
-        sb.table("Product").upsert(records, on_conflict="sku").execute()
-        print(f"   💾 [DB TURBO] Berhasil menyimpan batch {len(records)} produk ke Supabase! (Baru: +{new_discovered:,} | Update: {updated_count:,})")
+        db.table("Product").upsert(records, on_conflict="sku").execute()
+        print(f"   💾 [DB TURBO] Berhasil menyimpan batch {len(records)} produk ke Database! (Baru: +{new_discovered:,} | Update: {updated_count:,})")
     except Exception as e:
         saved_one = 0
         for rec in records:
             try:
-                sb.table("Product").upsert(rec, on_conflict="sku").execute()
+                db.table("Product").upsert(rec, on_conflict="sku").execute()
                 saved_one += 1
             except Exception:
                 try:
                     rec_no_bc = dict(rec)
                     rec_no_bc.pop("barcode", None)
-                    sb.table("Product").upsert(rec_no_bc, on_conflict="sku").execute()
+                    db.table("Product").upsert(rec_no_bc, on_conflict="sku").execute()
                     saved_one += 1
                 except Exception:
                     pass
-        print(f"   💾 [DB SAFE] Berhasil menyimpan {saved_one}/{len(records)} produk ke Supabase! ({e})")
+        print(f"   💾 [DB SAFE] Berhasil menyimpan {saved_one}/{len(records)} produk ke Database! ({e})")
 
     # 3. Simpan SEMUA multi-barcode ke BarcodeAlias agar tidak ada 1 barcode pun yang terbuang
     if alias_records:
         try:
-            sb.table("BarcodeAlias").upsert(alias_records, on_conflict="barcode").execute()
+            db.table("BarcodeAlias").upsert(alias_records, on_conflict="barcode").execute()
         except Exception:
             pass
 
     # 4. Sinkronkan foto yang baru ditemukan untuk SKU tanpa foto (aman tidak menimpa galeri eksisting)
     if new_img_updates:
         try:
-            from psycopg2.extras import execute_values
             pg_conn = connect_pg()
-            pg_cur = pg_conn.cursor()
-            execute_values(
-                pg_cur,
-                '''
-                UPDATE "Product" AS p
-                SET "imageUrl" = COALESCE(NULLIF(p."imageUrl", ''), v.img),
-                    images = CASE WHEN cardinality(p.images) = 0 THEN v.imgs::text[] ELSE p.images END
-                FROM (VALUES %s) AS v(sku, img, imgs)
-                WHERE p.sku = v.sku
-                ''',
-                new_img_updates,
-                page_size=200,
-            )
-            pg_conn.commit()
-            pg_conn.close()
+            if getattr(pg_conn, "is_turso", False):
+                stmts = [
+                    (
+                        'UPDATE "Product" SET "imageUrl" = COALESCE(NULLIF("imageUrl", \'\'), ?), images = CASE WHEN images IS NULL OR images = \'\' OR images = \'[]\' THEN ? ELSE images END WHERE sku = ?',
+                        (img, imgs, sku),
+                    )
+                    for sku, img, imgs in new_img_updates
+                ]
+                for idx in range(0, len(stmts), 250):
+                    pg_conn.execute_batch(stmts[idx : idx + 250], transactional=True)
+                pg_conn.close()
+            else:
+                from psycopg2.extras import execute_values
+                pg_cur = pg_conn.cursor()
+                execute_values(
+                    pg_cur,
+                    '''
+                    UPDATE "Product" AS p
+                    SET "imageUrl" = COALESCE(NULLIF(p."imageUrl", ''), v.img),
+                        images = CASE WHEN cardinality(p.images) = 0 THEN v.imgs::text[] ELSE p.images END
+                    FROM (VALUES %s) AS v(sku, img, imgs)
+                    WHERE p.sku = v.sku
+                    ''',
+                    new_img_updates,
+                    page_size=200,
+                )
+                pg_conn.commit()
+                pg_conn.close()
         except Exception:
             pass
 
@@ -1228,15 +1270,28 @@ def record_mds_delta_sales(
 
         conn = _connect_postgres()
         cur = conn.cursor()
+        is_turso = getattr(conn, "is_turso", False)
         skus = list(sales_deltas.keys())
-        cur.execute('SELECT id, sku FROM "Product" WHERE sku = ANY(%s)', (skus,))
-        sku_to_id = {str(r[1]): int(r[0]) for r in cur.fetchall()}
+        sku_to_id: Dict[str, int] = {}
+        if is_turso:
+            for i in range(0, len(skus), 400):
+                chunk = skus[i : i + 400]
+                ph = ", ".join(["?"] * len(chunk))
+                cur.execute(f'SELECT id, sku FROM "Product" WHERE sku IN ({ph})', chunk)
+                for r in cur.fetchall():
+                    sku_to_id[str(r[1])] = int(r[0])
+        else:
+            cur.execute('SELECT id, sku FROM "Product" WHERE sku = ANY(%s)', (skus,))
+            sku_to_id = {str(r[1]): int(r[0]) for r in cur.fetchall()}
 
         total_skus = 0
         total_qty = 0
         total_omzet = 0.0
         touched_ids: List[int] = []
+        booking_iso = f"{booking_str}T00:00:00.000Z"
+        now_iso_dt = format_prisma_iso(datetime.now(timezone.utc))
 
+        turso_ds_stmts: List[Tuple[str, Tuple[Any, ...]]] = []
         for sku, info in sales_deltas.items():
             pid = sku_to_id.get(sku)
             if not pid:
@@ -1246,67 +1301,148 @@ def record_mds_delta_sales(
             if qty <= 0:
                 continue
             ds_id = f"mds_{booking_str}_{pid}"
-            cur.execute(
-                '''
-                INSERT INTO "DailySales" (id, "productId", date, "qtySold", omzet, "createdAt")
-                VALUES (%s, %s, %s::date, %s, %s, NOW())
-                ON CONFLICT ("productId", date)
-                DO UPDATE SET
-                    "qtySold" = "DailySales"."qtySold" + EXCLUDED."qtySold",
-                    omzet = "DailySales".omzet + EXCLUDED.omzet
-                ''',
-                (ds_id, pid, booking_str, qty, omzet),
-            )
+            if is_turso:
+                turso_ds_stmts.append((
+                    '''
+                    INSERT INTO "DailySales" (id, "productId", date, "qtySold", omzet, "createdAt")
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT ("productId", date)
+                    DO UPDATE SET
+                        "qtySold" = "DailySales"."qtySold" + excluded."qtySold",
+                        omzet = "DailySales".omzet + excluded.omzet
+                    ''',
+                    (ds_id, pid, booking_iso, qty, omzet, now_iso_dt),
+                ))
+            else:
+                cur.execute(
+                    '''
+                    INSERT INTO "DailySales" (id, "productId", date, "qtySold", omzet, "createdAt")
+                    VALUES (%s, %s, %s::date, %s, %s, NOW())
+                    ON CONFLICT ("productId", date)
+                    DO UPDATE SET
+                        "qtySold" = "DailySales"."qtySold" + EXCLUDED."qtySold",
+                        omzet = "DailySales".omzet + EXCLUDED.omzet
+                    ''',
+                    (ds_id, pid, booking_str, qty, omzet),
+                )
             touched_ids.append(pid)
             total_skus += 1
             total_qty += qty
             total_omzet += omzet
 
+        if is_turso and turso_ds_stmts:
+            for idx in range(0, len(turso_ds_stmts), 250):
+                conn.execute_batch(turso_ds_stmts[idx : idx + 250], transactional=True)
+
         if touched_ids:
-            # Recalculate kolom ringkas HANYA untuk SKU yang terjual hari ini (super ringan, 0 full scan!)
-            cur.execute(
-                '''
-                UPDATE "Product" p
-                SET
-                    day_sales_unit   = COALESCE(agg.d_qty, 0),
-                    day_sales_retail = COALESCE(agg.d_omz, 0),
-                    sales_wtd        = COALESCE(agg.w_qty, 0),
-                    sales_wtd_retail = COALESCE(agg.w_omz, 0),
-                    sales_mtd        = COALESCE(agg.m_qty, 0),
-                    sales_mtd_retail = COALESCE(agg.m_omz, 0),
-                    sales_ytd        = COALESCE(agg.y_qty, 0),
-                    sales_ytd_retail = COALESCE(agg.y_omz, 0),
-                    eoh_retail       = GREATEST(p.stok, 0) * COALESCE(
-                        CASE WHEN p."hargaPromo" IS NOT NULL AND p."hargaPromo" > 0 AND (p."hargaNormal" <= 0 OR p."hargaPromo" < p."hargaNormal")
-                             THEN p."hargaPromo" ELSE NULL END,
-                        NULLIF(p."hargaNormal", 0),
-                        0
+            if is_turso:
+                agg_by_pid: Dict[int, Dict[str, Any]] = {}
+                for i in range(0, len(touched_ids), 400):
+                    chunk = touched_ids[i : i + 400]
+                    ph = ", ".join(["?"] * len(chunk))
+                    cur.execute(
+                        f'SELECT "productId", substr(date, 1, 10), "qtySold", omzet FROM "DailySales" WHERE "productId" IN ({ph})',
+                        chunk,
                     )
-                FROM (
-                    SELECT
-                        "productId",
-                        SUM(CASE WHEN date::date = %s::date THEN "qtySold" ELSE 0 END) AS d_qty,
-                        SUM(CASE WHEN date::date = %s::date THEN omzet ELSE 0 END) AS d_omz,
-                        SUM(CASE WHEN date::date >= %s::date THEN "qtySold" ELSE 0 END) AS w_qty,
-                        SUM(CASE WHEN date::date >= %s::date THEN omzet ELSE 0 END) AS w_omz,
-                        SUM(CASE WHEN date::date >= %s::date THEN "qtySold" ELSE 0 END) AS m_qty,
-                        SUM(CASE WHEN date::date >= %s::date THEN omzet ELSE 0 END) AS m_omz,
-                        SUM(CASE WHEN date::date >= %s::date THEN "qtySold" ELSE 0 END) AS y_qty,
-                        SUM(CASE WHEN date::date >= %s::date THEN omzet ELSE 0 END) AS y_omz
-                    FROM "DailySales"
-                    WHERE "productId" = ANY(%s)
-                    GROUP BY "productId"
-                ) agg
-                WHERE p.id = agg."productId"
-                ''',
-                (
-                    today_str, today_str,
-                    week_start_str, week_start_str,
-                    month_start_str, month_start_str,
-                    year_start_str, year_start_str,
-                    touched_ids,
-                ),
-            )
+                    for r_pid, r_day, r_qty, r_omz in cur.fetchall():
+                        pid_i = int(r_pid)
+                        d_s = str(r_day or "")[:10]
+                        q_i = int(r_qty or 0)
+                        o_f = float(r_omz or 0.0)
+                        st = agg_by_pid.setdefault(
+                            pid_i,
+                            {"d_qty": 0, "d_omz": 0.0, "w_qty": 0, "w_omz": 0.0, "m_qty": 0, "m_omz": 0.0, "y_qty": 0, "y_omz": 0.0},
+                        )
+                        if d_s == today_str:
+                            st["d_qty"] += q_i
+                            st["d_omz"] += o_f
+                        if d_s >= week_start_str:
+                            st["w_qty"] += q_i
+                            st["w_omz"] += o_f
+                        if d_s >= month_start_str:
+                            st["m_qty"] += q_i
+                            st["m_omz"] += o_f
+                        if d_s >= year_start_str:
+                            st["y_qty"] += q_i
+                            st["y_omz"] += o_f
+
+                upd_stmts = []
+                for pid_i, st in agg_by_pid.items():
+                    upd_stmts.append((
+                        '''
+                        UPDATE "Product"
+                        SET
+                            day_sales_unit   = ?,
+                            day_sales_retail = ?,
+                            sales_wtd        = ?,
+                            sales_wtd_retail = ?,
+                            sales_mtd        = ?,
+                            sales_mtd_retail = ?,
+                            sales_ytd        = ?,
+                            sales_ytd_retail = ?,
+                            eoh_retail       = MAX(stok, 0) * COALESCE(
+                                CASE WHEN "hargaPromo" IS NOT NULL AND "hargaPromo" > 0 AND ("hargaNormal" <= 0 OR "hargaPromo" < "hargaNormal")
+                                     THEN "hargaPromo" ELSE NULL END,
+                                NULLIF("hargaNormal", 0),
+                                0
+                            )
+                        WHERE id = ?
+                        ''',
+                        (
+                            st["d_qty"], st["d_omz"],
+                            st["w_qty"], st["w_omz"],
+                            st["m_qty"], st["m_omz"],
+                            st["y_qty"], st["y_omz"],
+                            pid_i,
+                        ),
+                    ))
+                for idx in range(0, len(upd_stmts), 250):
+                    conn.execute_batch(upd_stmts[idx : idx + 250], transactional=True)
+            else:
+                # Recalculate kolom ringkas HANYA untuk SKU yang terjual hari ini (super ringan, 0 full scan!)
+                cur.execute(
+                    '''
+                    UPDATE "Product" p
+                    SET
+                        day_sales_unit   = COALESCE(agg.d_qty, 0),
+                        day_sales_retail = COALESCE(agg.d_omz, 0),
+                        sales_wtd        = COALESCE(agg.w_qty, 0),
+                        sales_wtd_retail = COALESCE(agg.w_omz, 0),
+                        sales_mtd        = COALESCE(agg.m_qty, 0),
+                        sales_mtd_retail = COALESCE(agg.m_omz, 0),
+                        sales_ytd        = COALESCE(agg.y_qty, 0),
+                        sales_ytd_retail = COALESCE(agg.y_omz, 0),
+                        eoh_retail       = GREATEST(p.stok, 0) * COALESCE(
+                            CASE WHEN p."hargaPromo" IS NOT NULL AND p."hargaPromo" > 0 AND (p."hargaNormal" <= 0 OR p."hargaPromo" < p."hargaNormal")
+                                 THEN p."hargaPromo" ELSE NULL END,
+                            NULLIF(p."hargaNormal", 0),
+                            0
+                        )
+                    FROM (
+                        SELECT
+                            "productId",
+                            SUM(CASE WHEN date::date = %s::date THEN "qtySold" ELSE 0 END) AS d_qty,
+                            SUM(CASE WHEN date::date = %s::date THEN omzet ELSE 0 END) AS d_omz,
+                            SUM(CASE WHEN date::date >= %s::date THEN "qtySold" ELSE 0 END) AS w_qty,
+                            SUM(CASE WHEN date::date >= %s::date THEN omzet ELSE 0 END) AS w_omz,
+                            SUM(CASE WHEN date::date >= %s::date THEN "qtySold" ELSE 0 END) AS m_qty,
+                            SUM(CASE WHEN date::date >= %s::date THEN omzet ELSE 0 END) AS m_omz,
+                            SUM(CASE WHEN date::date >= %s::date THEN "qtySold" ELSE 0 END) AS y_qty,
+                            SUM(CASE WHEN date::date >= %s::date THEN omzet ELSE 0 END) AS y_omz
+                        FROM "DailySales"
+                        WHERE "productId" = ANY(%s)
+                        GROUP BY "productId"
+                    ) agg
+                    WHERE p.id = agg."productId"
+                    ''',
+                    (
+                        today_str, today_str,
+                        week_start_str, week_start_str,
+                        month_start_str, month_start_str,
+                        year_start_str, year_start_str,
+                        touched_ids,
+                    ),
+                )
 
         conn.commit()
         cur.close()

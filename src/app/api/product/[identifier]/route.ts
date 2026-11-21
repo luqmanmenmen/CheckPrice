@@ -236,7 +236,7 @@ export async function GET(
         // Untuk kode alfanumerik (mis. PSNYC01), jangan skip ke live MDS jika artikel DB sudah ada
         const hasDbArticleMatch = isAlphaVendorCode
           ? await db.product.findFirst({
-              where: { article: { contains: rawInput, mode: 'insensitive' as const } },
+              where: { article: { contains: rawInput } },
               select: { sku: true }
             })
           : null;
@@ -337,11 +337,11 @@ export async function GET(
     if (!isSearchingDummy) {
       extraAndFilters.push({
         NOT: [
-          { article: { contains: "DUMMY", mode: 'insensitive' as const } },
-          { description: { contains: "SKU DUMMY", mode: 'insensitive' as const } },
-          { description: { contains: "ITEM TIDAK DIGUNAKAN", mode: 'insensitive' as const } },
-          { description: { contains: "ITEM TIDAK DAPAT", mode: 'insensitive' as const } },
-          { description: { contains: "TIDAK DI GUNAKAN", mode: 'insensitive' as const } }
+          { article: { contains: "DUMMY" } },
+          { description: { contains: "SKU DUMMY" } },
+          { description: { contains: "ITEM TIDAK DIGUNAKAN" } },
+          { description: { contains: "ITEM TIDAK DAPAT" } },
+          { description: { contains: "TIDAK DI GUNAKAN" } }
         ]
       });
     }
@@ -353,11 +353,9 @@ export async function GET(
     if (categoryWhere) extraAndFilters.push(categoryWhere);
 
     const buildTermOrClause = (term: string) => {
-      // Hanya query kolom ber-index GIN (description, article) + prefix B-tree (sku, barcode)
-      // agar DIJAMIN 0 Sequential Scan 260MB pada tabel Product (hemat Disk IO Budget Supabase)
       const clauses: any[] = [
-        { description: { contains: term, mode: 'insensitive' as const } },
-        { article: { contains: term, mode: 'insensitive' as const } },
+        { description: { contains: term } },
+        { article: { contains: term } },
       ];
       if (/\d/.test(term)) {
         clauses.push(
@@ -384,8 +382,8 @@ export async function GET(
     if (expanded.spaceless.length >= 3 && expanded.spaceless !== rawInput.toUpperCase()) {
       strictOrBranches.push({
         OR: [
-          { article: { contains: expanded.spaceless, mode: 'insensitive' as const } },
-          { description: { contains: expanded.spaceless, mode: 'insensitive' as const } }
+          { article: { contains: expanded.spaceless } },
+          { description: { contains: expanded.spaceless } }
         ]
       });
     }
@@ -413,8 +411,8 @@ export async function GET(
       if (meaningfulTerms.length > 0) {
         const relaxedWhere: any = {
           OR: meaningfulTerms.flatMap(term => [
-            { description: { contains: term, mode: 'insensitive' as const } },
-            { article: { contains: term, mode: 'insensitive' as const } },
+            { description: { contains: term } },
+            { article: { contains: term } },
           ])
         };
         if (extraAndFilters.length > 0) relaxedWhere.AND = extraAndFilters;
@@ -444,8 +442,8 @@ export async function GET(
 
         const aiWhere: any = {
           OR: aiExpandedTerms.flatMap(term => [
-            { description: { contains: term, mode: 'insensitive' as const } },
-            { article: { contains: term, mode: 'insensitive' as const } },
+            { description: { contains: term } },
+            { article: { contains: term } },
           ])
         };
         if (extraAndFilters.length > 0) aiWhere.AND = extraAndFilters;

@@ -59,10 +59,17 @@ def _clean_postgres_dsn(raw_url: str) -> str:
 
 
 def _connect_postgres():
+    _load_env_files()
+    try:
+        from turso_db import connect_turso, is_turso_configured
+        if is_turso_configured():
+            return connect_turso(timeout=90)
+    except Exception:
+        pass
     import psycopg2
     raw = os.environ.get("DATABASE_URL") or os.environ.get("DIRECT_URL") or ""
     if not raw:
-        raise RuntimeError("DATABASE_URL / DIRECT_URL belum tersedia di environment.")
+        raise RuntimeError("TURSO_DATABASE_URL / DATABASE_URL belum tersedia di environment.")
     return psycopg2.connect(_clean_postgres_dsn(raw), connect_timeout=15)
 
 
@@ -324,12 +331,13 @@ def build_and_upload_offline_snapshot(stock_only: bool = False) -> Dict[str, Any
             return "~" + s[len(IMG_SHOPIFY_PREFIX):]
         return s
 
-    print("[SNAPSHOT] Membaca tabel Product dari PostgreSQL (chunk PK id)...")
+    print("[SNAPSHOT] Membaca tabel Product dari Database (chunk PK id)...")
     prod_rows = []
     last_id = 0
+    chunk_limit = 20000 if getattr(conn, "is_turso", False) else 50000
     while True:
         cur.execute(
-            '''
+            f'''
             SELECT
                 id, sku, barcode, article, description, brand, dept, color, size,
                 "hargaNormal", "hargaPromo", diskon, "discountType", acara,
@@ -337,7 +345,7 @@ def build_and_upload_offline_snapshot(stock_only: bool = False) -> Dict[str, Any
             FROM "Product"
             WHERE id > %s
             ORDER BY id ASC
-            LIMIT 50000
+            LIMIT {chunk_limit}
             ''',
             (last_id,),
         )
@@ -408,19 +416,46 @@ def build_and_upload_offline_snapshot(stock_only: bool = False) -> Dict[str, Any
     )
 
     print(f"[SNAPSHOT] Terbaca {len(products_packed):,} SKU. Membaca CatalogArticle & BarcodeAlias...")
-    cur.execute(
-        '''
-        SELECT
-            key, sku, barcode, article, description, brand, dept,
-            "brandGroup", "subBrand", "categoryKey", color, size, stok,
-            "hargaNormal", "hargaPromo", diskon, "discountType", acara, "toDate",
-            "imageUrl", "articleGroupCount", "articleTotalStok",
-            "articleColors", "articleSizes", "articleHasPromo", "articlePromoLabel"
-        FROM "CatalogArticle"
-        ORDER BY "sortRank" ASC
-        '''
-    )
-    model_rows = cur.fetchall()
+    from turso_db import parse_json_array
+    model_rows = []
+    if getattr(conn, "is_turso", False):
+        last_rank = -1
+        while True:
+            cur.execute(
+                '''
+                SELECT
+                    key, sku, barcode, article, description, brand, dept,
+                    "brandGroup", "subBrand", "categoryKey", color, size, stok,
+                    "hargaNormal", "hargaPromo", diskon, "discountType", acara, "toDate",
+                    "imageUrl", "articleGroupCount", "articleTotalStok",
+                    "articleColors", "articleSizes", "articleHasPromo", "articlePromoLabel",
+                    "sortRank"
+                FROM "CatalogArticle"
+                WHERE "sortRank" > %s
+                ORDER BY "sortRank" ASC
+                LIMIT 15000
+                ''',
+                (last_rank,),
+            )
+            mbatch = cur.fetchall()
+            if not mbatch:
+                break
+            model_rows.extend([row[:-1] for row in mbatch])
+            last_rank = int(mbatch[-1][-1])
+    else:
+        cur.execute(
+            '''
+            SELECT
+                key, sku, barcode, article, description, brand, dept,
+                "brandGroup", "subBrand", "categoryKey", color, size, stok,
+                "hargaNormal", "hargaPromo", diskon, "discountType", acara, "toDate",
+                "imageUrl", "articleGroupCount", "articleTotalStok",
+                "articleColors", "articleSizes", "articleHasPromo", "articlePromoLabel"
+            FROM "CatalogArticle"
+            ORDER BY "sortRank" ASC
+            '''
+        )
+        model_rows = cur.fetchall()
     models_packed: List[Any] = []
     for r in model_rows:
         (
@@ -465,8 +500,8 @@ def build_and_upload_offline_snapshot(stock_only: bool = False) -> Dict[str, Any
             encode_img(img_url),
             int(grp_cnt or 1),
             int(tot_stok or 0),
-            list(colors or []),
-            list(sizes or []),
+            parse_json_array(colors),
+            parse_json_array(sizes),
             1 if has_promo else 0,
             promo_lbl or "",
         ])

@@ -221,7 +221,11 @@ def record_raw_items_batch(rows: List[Dict[str, Any]], source: str, db_path: str
 
 
 def connect_pg():
-    """Koneksi PostgreSQL tangguh: prioritaskan Direct Session (5432) dengan statement_timeout 300s, fallback 6543."""
+    """Koneksi DB tangguh: prioritaskan Turso Cloud jika TURSO_DATABASE_URL tersedia, fallback PostgreSQL."""
+    from turso_db import connect_turso, is_turso_configured
+    if is_turso_configured():
+        return connect_turso(timeout=90)
+
     import psycopg2
     from dotenv import load_dotenv
 
@@ -666,9 +670,6 @@ def audit_and_cook(
     3. Masukkan artikel/varian pelengkap yang paling dibutuhkan ke Supabase dalam batas kuota aman.
     4. Tulis laporan audit lengkap ke `LAPORAN_AUDIT_KOLEKSI.md`.
     """
-    import psycopg2
-    from psycopg2.extras import execute_values
-
     t0 = time.time()
     print("=" * 80)
     print("🧠 [AUDIT & COOK ENGINE] MENGGABUNGKAN & MEMASAK DATA DARI RAW VAULT")
@@ -687,8 +688,12 @@ def audit_and_cook(
     pg_conn = connect_pg()
     pg_cur = pg_conn.cursor()
 
-    pg_cur.execute("SELECT pg_database_size(current_database())")
-    db_mb = int(pg_cur.fetchone()[0] or 0) / (1024 * 1024)
+    if getattr(pg_conn, "is_turso", False):
+        db_mb = pg_conn.get_db_size_mb()
+        max_supabase_mb = max(max_supabase_mb, 4500.0)
+    else:
+        pg_cur.execute("SELECT pg_database_size(current_database())")
+        db_mb = int(pg_cur.fetchone()[0] or 0) / (1024 * 1024)
 
     pg_sku_info: Dict[str, Tuple[Optional[str], str, Optional[str]]] = {}
     pg_used_barcodes: Set[str] = set()
@@ -783,61 +788,94 @@ def audit_and_cook(
     now_dt = datetime.now(timezone.utc)
 
     if push_to_supabase:
+        is_turso = getattr(pg_conn, "is_turso", False)
+        if not is_turso:
+            from psycopg2.extras import execute_values
+
         if product_bc_patches:
-            for i in range(0, len(product_bc_patches), 2000):
-                batch = product_bc_patches[i:i + 2000]
-                execute_values(
-                    pg_cur,
-                    'UPDATE "Product" AS p SET barcode = v.bc, "updatedAt" = NOW() FROM (VALUES %s) AS v(sku, bc) WHERE p.sku = v.sku AND p.barcode IS NULL',
-                    batch,
-                    page_size=1000,
-                )
-                pg_conn.commit()
+            if is_turso:
+                for i in range(0, len(product_bc_patches), 500):
+                    batch = product_bc_patches[i:i + 500]
+                    stmts = [
+                        ('UPDATE "Product" SET barcode = ?, "updatedAt" = ? WHERE sku = ? AND barcode IS NULL', (bc, now_dt, sku))
+                        for sku, bc in batch
+                    ]
+                    pg_conn.execute_batch(stmts, transactional=True)
+            else:
+                for i in range(0, len(product_bc_patches), 2000):
+                    batch = product_bc_patches[i:i + 2000]
+                    execute_values(
+                        pg_cur,
+                        'UPDATE "Product" AS p SET barcode = v.bc, "updatedAt" = NOW() FROM (VALUES %s) AS v(sku, bc) WHERE p.sku = v.sku AND p.barcode IS NULL',
+                        batch,
+                        page_size=1000,
+                    )
+                    pg_conn.commit()
             patched_bcs = len(product_bc_patches)
 
         if alias_upserts:
-            for i in range(0, len(alias_upserts), 2000):
-                batch = [(b, bn, s, src, now_dt) for b, bn, s, src in alias_upserts[i:i + 2000]]
-                execute_values(
-                    pg_cur,
-                    '''
-                    INSERT INTO "BarcodeAlias" (barcode, "barcodeNorm", sku, source, "updatedAt")
-                    VALUES %s
-                    ON CONFLICT (barcode) DO UPDATE
-                    SET "barcodeNorm" = EXCLUDED."barcodeNorm", sku = EXCLUDED.sku,
-                        source = EXCLUDED.source, "updatedAt" = EXCLUDED."updatedAt"
-                    ''',
-                    batch,
-                    page_size=1000,
-                )
-                pg_conn.commit()
+            if is_turso:
+                rows_al = [(b, bn, s, src, now_dt) for b, bn, s, src in alias_upserts]
+                pg_conn.bulk_insert_rows("BarcodeAlias", ["barcode", "barcodeNorm", "sku", "source", "updatedAt"], rows_al, on_conflict="barcode", rows_per_stmt=250, stmts_per_http=4)
+            else:
+                for i in range(0, len(alias_upserts), 2000):
+                    batch = [(b, bn, s, src, now_dt) for b, bn, s, src in alias_upserts[i:i + 2000]]
+                    execute_values(
+                        pg_cur,
+                        '''
+                        INSERT INTO "BarcodeAlias" (barcode, "barcodeNorm", sku, source, "updatedAt")
+                        VALUES %s
+                        ON CONFLICT (barcode) DO UPDATE
+                        SET "barcodeNorm" = EXCLUDED."barcodeNorm", sku = EXCLUDED.sku,
+                            source = EXCLUDED.source, "updatedAt" = EXCLUDED."updatedAt"
+                        ''',
+                        batch,
+                        page_size=1000,
+                    )
+                    pg_conn.commit()
             pushed_aliases = len(alias_upserts)
 
         if to_insert:
-            for i in range(0, len(to_insert), 2000):
-                batch = [r + (now_dt, now_dt) for r in to_insert[i:i + 2000]]
-                execute_values(
-                    pg_cur,
-                    '''
-                    INSERT INTO "Product" (
-                        sku, barcode, article, description, "hargaNormal", "hargaNormalSource",
-                        brand, dept, color, size, "imageUrl", images, stok, "updatedAt", "createdAt"
-                    ) VALUES %s
-                    ON CONFLICT (sku) DO NOTHING
-                    ''',
-                    batch,
-                    page_size=1000,
+            if is_turso:
+                rows_ins = [r + (now_dt, now_dt) for r in to_insert]
+                pg_conn.bulk_insert_rows(
+                    "Product",
+                    ["sku", "barcode", "article", "description", "hargaNormal", "hargaNormalSource", "brand", "dept", "color", "size", "imageUrl", "images", "stok", "updatedAt", "createdAt"],
+                    rows_ins,
+                    on_conflict="sku",
+                    do_nothing=True,
+                    rows_per_stmt=150,
+                    stmts_per_http=4,
                 )
-                pg_conn.commit()
-                pushed_skus += len(batch)
+                pushed_skus = len(rows_ins)
+            else:
+                for i in range(0, len(to_insert), 2000):
+                    batch = [r + (now_dt, now_dt) for r in to_insert[i:i + 2000]]
+                    execute_values(
+                        pg_cur,
+                        '''
+                        INSERT INTO "Product" (
+                            sku, barcode, article, description, "hargaNormal", "hargaNormalSource",
+                            brand, dept, color, size, "imageUrl", images, stok, "updatedAt", "createdAt"
+                        ) VALUES %s
+                        ON CONFLICT (sku) DO NOTHING
+                        ''',
+                        batch,
+                        page_size=1000,
+                    )
+                    pg_conn.commit()
+                    pushed_skus += len(batch)
 
-    # Hitung statistik akhir dari snapshot vault/memori (bebas seq-scan 275k baris Postgres) & rebuild CatalogArticle bila perlu
+    # Hitung statistik akhir dari snapshot vault/memori & rebuild CatalogArticle bila perlu
     pg_total_skus = len(pg_sku_info) + pushed_skus
     pg_total_bcs = len(pg_used_barcodes)
     pg_total_imgs = sum(1 for v in pg_sku_info.values() if v[2]) + sum(1 for r in to_insert[:pushed_skus] if r[10])
     pg_total_aliases = len(pg_alias_bcs)
-    pg_cur.execute("SELECT pg_size_pretty(pg_database_size(current_database()))")
-    db_size_pretty = pg_cur.fetchone()[0]
+    if getattr(pg_conn, "is_turso", False):
+        db_size_pretty = f"{pg_conn.get_db_size_mb():.1f} MB (Turso)"
+    else:
+        pg_cur.execute("SELECT pg_size_pretty(pg_database_size(current_database()))")
+        db_size_pretty = pg_cur.fetchone()[0]
 
     pg_cur.close()
     pg_conn.close()

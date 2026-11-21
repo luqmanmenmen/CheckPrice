@@ -36,7 +36,7 @@ from build_offline_snapshot import (  # noqa: E402
 
 def _ensure_env_loaded() -> None:
     _load_env_files()
-    if os.environ.get("DATABASE_URL") or os.environ.get("DIRECT_URL"):
+    if os.environ.get("TURSO_DATABASE_URL") or os.environ.get("DATABASE_URL") or os.environ.get("DIRECT_URL"):
         return
     root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     for name in (".env", ".env.production", ".env.local"):
@@ -64,22 +64,40 @@ def clean_expired_promos(conn) -> int:
     """Bersihkan promo kedaluwarsa berdasarkan tanggal WIB dengan 1 UPDATE SQL terarah."""
     today_wib = _today_wib_str()
     cur = conn.cursor()
-    cur.execute(
-        '''
-        UPDATE "Product"
-        SET "hargaPromo" = NULL,
-            diskon = NULL,
-            "discountType" = NULL,
-            acara = NULL,
-            "fromDate" = NULL,
-            "toDate" = NULL
-        WHERE ("hargaPromo" IS NOT NULL OR diskon IS NOT NULL OR acara IS NOT NULL)
-          AND "toDate" IS NOT NULL
-          AND SUBSTRING(TRIM("toDate"), 1, 10) ~ '^\\d{4}-\\d{2}-\\d{2}$'
-          AND SUBSTRING(TRIM("toDate"), 1, 10) < %s
-        ''',
-        (today_wib,),
-    )
+    if getattr(conn, "is_turso", False):
+        cur.execute(
+            '''
+            UPDATE "Product"
+            SET "hargaPromo" = NULL,
+                diskon = NULL,
+                "discountType" = NULL,
+                acara = NULL,
+                "fromDate" = NULL,
+                "toDate" = NULL
+            WHERE ("hargaPromo" IS NOT NULL OR diskon IS NOT NULL OR acara IS NOT NULL)
+              AND "toDate" IS NOT NULL
+              AND substr(trim("toDate"), 1, 10) GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+              AND substr(trim("toDate"), 1, 10) < ?
+            ''',
+            (today_wib,),
+        )
+    else:
+        cur.execute(
+            '''
+            UPDATE "Product"
+            SET "hargaPromo" = NULL,
+                diskon = NULL,
+                "discountType" = NULL,
+                acara = NULL,
+                "fromDate" = NULL,
+                "toDate" = NULL
+            WHERE ("hargaPromo" IS NOT NULL OR diskon IS NOT NULL OR acara IS NOT NULL)
+              AND "toDate" IS NOT NULL
+              AND SUBSTRING(TRIM("toDate"), 1, 10) ~ '^\\d{4}-\\d{2}-\\d{2}$'
+              AND SUBSTRING(TRIM("toDate"), 1, 10) < %s
+            ''',
+            (today_wib,),
+        )
     cleaned = cur.rowcount or 0
     conn.commit()
     cur.close()
@@ -90,32 +108,60 @@ def clean_expired_promos(conn) -> int:
 def generate_po_suggestions(conn) -> int:
     """Bangun saran PO Min-Max atomik dalam 1 query SQL (bebas loop N+1)."""
     cur = conn.cursor()
-    cur.execute(
-        '''
-        INSERT INTO "PoSuggestion" (id, "productId", "suggestedQty", reason, status, "createdAt", "updatedAt")
-        SELECT
-            'po_' || md5(p.id::text || '_' || extract(epoch from now())::text),
-            p.id,
-            GREATEST(0, CEIL((p.sales_mtd::numeric / 14.0) * 24.0)::int - p.stok),
-            'Dalam 14 hari terakhir terjual ' || p.sales_mtd || ' pcs (Rata-rata '
-                || TO_CHAR(p.sales_mtd::numeric / 14.0, 'FM999990.0')
-                || ' pcs/hari). Sisa stok ' || p.stok
-                || ' pcs. Disarankan pesan '
-                || GREATEST(0, CEIL((p.sales_mtd::numeric / 14.0) * 24.0)::int - p.stok)
-                || ' pcs untuk target 14 hari.',
-            'OPEN',
-            NOW(),
-            NOW()
-        FROM "Product" p
-        WHERE p.sales_mtd > 5
-          AND p.stok <= CEIL((p.sales_mtd::numeric / 14.0) * 10.0)
-          AND GREATEST(0, CEIL((p.sales_mtd::numeric / 14.0) * 24.0)::int - p.stok) > 0
-          AND NOT EXISTS (
-              SELECT 1 FROM "PoSuggestion" s
-              WHERE s."productId" = p.id AND s.status = 'OPEN'
-          )
-        '''
-    )
+    if getattr(conn, "is_turso", False):
+        cur.execute(
+            '''
+            INSERT INTO "PoSuggestion" (id, "productId", "suggestedQty", reason, status, "createdAt", "updatedAt")
+            SELECT
+                'po_' || lower(hex(randomblob(8))),
+                p.id,
+                MAX(0, CAST((p.sales_mtd * 24 + 13) / 14 AS INTEGER) - p.stok),
+                'Dalam 14 hari terakhir terjual ' || p.sales_mtd || ' pcs (Rata-rata '
+                    || printf('%.1f', CAST(p.sales_mtd AS REAL) / 14.0)
+                    || ' pcs/hari). Sisa stok ' || p.stok
+                    || ' pcs. Disarankan pesan '
+                    || MAX(0, CAST((p.sales_mtd * 24 + 13) / 14 AS INTEGER) - p.stok)
+                    || ' pcs untuk target 14 hari.',
+                'OPEN',
+                strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            FROM "Product" p
+            WHERE p.sales_mtd > 5
+              AND p.stok <= CAST((p.sales_mtd * 10 + 13) / 14 AS INTEGER)
+              AND (CAST((p.sales_mtd * 24 + 13) / 14 AS INTEGER) - p.stok) > 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM "PoSuggestion" s
+                  WHERE s."productId" = p.id AND s.status = 'OPEN'
+              )
+            '''
+        )
+    else:
+        cur.execute(
+            '''
+            INSERT INTO "PoSuggestion" (id, "productId", "suggestedQty", reason, status, "createdAt", "updatedAt")
+            SELECT
+                'po_' || md5(p.id::text || '_' || extract(epoch from now())::text),
+                p.id,
+                GREATEST(0, CEIL((p.sales_mtd::numeric / 14.0) * 24.0)::int - p.stok),
+                'Dalam 14 hari terakhir terjual ' || p.sales_mtd || ' pcs (Rata-rata '
+                    || TO_CHAR(p.sales_mtd::numeric / 14.0, 'FM999990.0')
+                    || ' pcs/hari). Sisa stok ' || p.stok
+                    || ' pcs. Disarankan pesan '
+                    || GREATEST(0, CEIL((p.sales_mtd::numeric / 14.0) * 24.0)::int - p.stok)
+                    || ' pcs untuk target 14 hari.',
+                'OPEN',
+                NOW(),
+                NOW()
+            FROM "Product" p
+            WHERE p.sales_mtd > 5
+              AND p.stok <= CEIL((p.sales_mtd::numeric / 14.0) * 10.0)
+              AND GREATEST(0, CEIL((p.sales_mtd::numeric / 14.0) * 24.0)::int - p.stok) > 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM "PoSuggestion" s
+                  WHERE s."productId" = p.id AND s.status = 'OPEN'
+              )
+            '''
+        )
     inserted = cur.rowcount or 0
     conn.commit()
     cur.close()
@@ -140,16 +186,27 @@ def build_promo_analysis_payload(conn) -> Dict[str, Any]:
 
     sales_by_pid: Dict[int, List[tuple]] = {}
     if promo_ids:
-        cur.execute(
-            '''
-            SELECT "productId", date, "qtySold"
-            FROM "DailySales"
-            WHERE "productId" = ANY(%s)
-            ''',
-            (promo_ids,),
-        )
-        for pid, sdate, qty in cur.fetchall():
-            sales_by_pid.setdefault(pid, []).append((sdate, int(qty or 0)))
+        if getattr(conn, "is_turso", False):
+            for i in range(0, len(promo_ids), 400):
+                chunk = promo_ids[i : i + 400]
+                ph = ", ".join(["?"] * len(chunk))
+                cur.execute(
+                    f'SELECT "productId", date, "qtySold" FROM "DailySales" WHERE "productId" IN ({ph})',
+                    chunk,
+                )
+                for pid, sdate, qty in cur.fetchall():
+                    sales_by_pid.setdefault(int(pid), []).append((sdate, int(qty or 0)))
+        else:
+            cur.execute(
+                '''
+                SELECT "productId", date, "qtySold"
+                FROM "DailySales"
+                WHERE "productId" = ANY(%s)
+                ''',
+                (promo_ids,),
+            )
+            for pid, sdate, qty in cur.fetchall():
+                sales_by_pid.setdefault(pid, []).append((sdate, int(qty or 0)))
     cur.close()
 
     items: List[Dict[str, Any]] = []
@@ -173,7 +230,15 @@ def build_promo_analysis_payload(conn) -> Dict[str, Any]:
         s_during = 0
         d_during = 0
         for sdate, qty in sales:
-            sd = sdate.date() if hasattr(sdate, "date") else sdate
+            if hasattr(sdate, "date"):
+                sd = sdate.date()
+            elif isinstance(sdate, str):
+                try:
+                    sd = datetime.strptime(sdate.strip()[:10], "%Y-%m-%d").date()
+                except Exception:
+                    continue
+            else:
+                sd = sdate
             if sd < promo_dt:
                 s_before += qty
                 d_before += 1
@@ -268,11 +333,17 @@ def build_sales_report_summary_payload(conn) -> Dict[str, Any]:
     """
     cur = conn.cursor()
 
-    # 1. Total katalog (O(1) dari pg_class.reltuples) + promo aktif dari CatalogArticle (0 scan Product!)
-    cur.execute("SELECT GREATEST(reltuples::bigint, 0) FROM pg_class WHERE relname = 'Product' LIMIT 1")
-    total_products = int((cur.fetchone() or [0])[0] or 0)
-    cur.execute('SELECT COUNT(*) FROM "CatalogArticle" WHERE "articleHasPromo" = true')
-    total_with_promo = int((cur.fetchone() or [0])[0] or 0)
+    # 1. Total katalog + promo aktif dari CatalogArticle
+    if getattr(conn, "is_turso", False):
+        cur.execute('SELECT COUNT(*) FROM "Product"')
+        total_products = int((cur.fetchone() or [0])[0] or 0)
+        cur.execute('SELECT COUNT(*) FROM "CatalogArticle" WHERE "articleHasPromo" = 1')
+        total_with_promo = int((cur.fetchone() or [0])[0] or 0)
+    else:
+        cur.execute("SELECT GREATEST(reltuples::bigint, 0) FROM pg_class WHERE relname = 'Product' LIMIT 1")
+        total_products = int((cur.fetchone() or [0])[0] or 0)
+        cur.execute('SELECT COUNT(*) FROM "CatalogArticle" WHERE "articleHasPromo" = true')
+        total_with_promo = int((cur.fetchone() or [0])[0] or 0)
 
     # 2. Tarik HANYA SKU SUKO/aktif dengan stok > 0 (~5.956 baris via index Product_stok_sku_idx -> < 200ms!)
     cur.execute(
@@ -304,18 +375,37 @@ def build_sales_report_summary_payload(conn) -> Dict[str, Any]:
     cur.execute('SELECT DISTINCT "productId" FROM "DailySales"')
     sold_pids = [int(r[0]) for r in cur.fetchall() if int(r[0]) not in rows_by_id]
     if sold_pids:
-        cur.execute(
-            '''
-            SELECT id, sku, description, article, dept, brand, "hargaNormal", "hargaPromo",
-                   diskon, stok, day_sales_unit, day_sales_retail,
-                   sales_wtd, sales_wtd_retail, sales_mtd, sales_mtd_retail,
-                   sales_ytd, sales_ytd_retail, eoh_retail, bom_unit, boy_unit, boy_retail
-            FROM "Product"
-            WHERE id = ANY(%s)
-            ''',
-            (sold_pids,),
-        )
-        for r in cur.fetchall():
+        sold_rows = []
+        if getattr(conn, "is_turso", False):
+            for i in range(0, len(sold_pids), 400):
+                chunk = sold_pids[i : i + 400]
+                ph = ", ".join(["?"] * len(chunk))
+                cur.execute(
+                    f'''
+                    SELECT id, sku, description, article, dept, brand, "hargaNormal", "hargaPromo",
+                           diskon, stok, day_sales_unit, day_sales_retail,
+                           sales_wtd, sales_wtd_retail, sales_mtd, sales_mtd_retail,
+                           sales_ytd, sales_ytd_retail, eoh_retail, bom_unit, boy_unit, boy_retail
+                    FROM "Product"
+                    WHERE id IN ({ph})
+                    ''',
+                    chunk,
+                )
+                sold_rows.extend(cur.fetchall())
+        else:
+            cur.execute(
+                '''
+                SELECT id, sku, description, article, dept, brand, "hargaNormal", "hargaPromo",
+                       diskon, stok, day_sales_unit, day_sales_retail,
+                       sales_wtd, sales_wtd_retail, sales_mtd, sales_mtd_retail,
+                       sales_ytd, sales_ytd_retail, eoh_retail, bom_unit, boy_unit, boy_retail
+                FROM "Product"
+                WHERE id = ANY(%s)
+                ''',
+                (sold_pids,),
+            )
+            sold_rows = cur.fetchall()
+        for r in sold_rows:
             rows_by_id[int(r[0])] = {
                 "id": int(r[0]), "sku": r[1], "description": r[2] or "", "article": r[3],
                 "dept": (r[4] or "SUKO LAINNYA").strip(), "brand": r[5] or "",

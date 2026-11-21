@@ -377,19 +377,13 @@ export async function GET(req: Request) {
           select: { id: true, type: true, fileName: true, status: true, records: true, createdAt: true },
         })
         .catch(() => [] as any[]),
-      prisma
-        .$queryRawUnsafe<Array<{ relname: string; cnt: bigint }>>(
-          `SELECT relname, GREATEST(reltuples::bigint, 0)::bigint AS cnt FROM pg_class WHERE relname IN ('Product', 'CatalogArticle')`
-        )
-        .then((rows) => {
-          const productRow = rows.find((r) => r.relname === 'Product');
-          const catRow = rows.find((r) => r.relname === 'CatalogArticle');
-          return {
-            totalProducts: Number(productRow?.cnt || 0),
-            totalArticles: Number(catRow?.cnt || 0),
-          };
-        })
-        .catch(() => ({ totalProducts: 0, totalArticles: 0 })),
+      Promise.all([
+        prisma.product.count().catch(() => 0),
+        prisma.catalogArticle.count().catch(() => 0),
+      ]).then(([totalProducts, totalArticles]) => ({
+        totalProducts,
+        totalArticles,
+      })),
       (async () => {
         try {
           const { supabase } = await import('@/lib/supabaseClient');

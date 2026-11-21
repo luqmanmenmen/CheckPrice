@@ -401,11 +401,11 @@ export async function GET(request: NextRequest) {
 
     // Fallback aman jika `CatalogArticle` belum terisi
     const andClauses: any[] = [
-      { NOT: { article: { contains: "DUMMY", mode: "insensitive" } } },
-      { NOT: { description: { contains: "SKU DUMMY", mode: "insensitive" } } },
-      { NOT: { description: { contains: "ITEM TIDAK DIGUNAKAN", mode: "insensitive" } } },
-      { NOT: { description: { contains: "ITEM TIDAK DAPAT", mode: "insensitive" } } },
-      { NOT: { description: { contains: "TIDAK DI GUNAKAN", mode: "insensitive" } } },
+      { NOT: { article: { contains: "DUMMY" } } },
+      { NOT: { description: { contains: "SKU DUMMY" } } },
+      { NOT: { description: { contains: "ITEM TIDAK DIGUNAKAN" } } },
+      { NOT: { description: { contains: "ITEM TIDAK DAPAT" } } },
+      { NOT: { description: { contains: "TIDAK DI GUNAKAN" } } },
     ];
 
     const brandWhere = buildBrandPrismaWhere(brandGroup);

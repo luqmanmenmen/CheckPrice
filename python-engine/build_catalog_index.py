@@ -357,24 +357,49 @@ def resolve_db_url() -> str:
 
 
 def build_and_verify_catalog(stock_only: bool = False, upload_snapshot: bool = True) -> Dict[str, Any]:
-    import psycopg2
-    from psycopg2.extras import execute_values
+    from turso_db import connect_turso, is_turso_configured
 
     t0 = time.time()
-    db_url = resolve_db_url()
-    conn = psycopg2.connect(db_url)
-    cur = conn.cursor()
-
-    cur.execute(
-        '''
-        SELECT sku, barcode, article, description, brand, dept, color, size,
-               stok, "hargaNormal", "hargaPromo", diskon, "discountType",
-               acara, "toDate", "imageUrl"
-        FROM "Product"
-        '''
-    )
-    raw_rows = cur.fetchall()
-    print(f"[PYTHON-CATALOG] Memuat {len(raw_rows):,} SKU mentah dari PostgreSQL dalam {time.time() - t0:.2f}s")
+    use_turso = is_turso_configured()
+    if use_turso:
+        conn = connect_turso(timeout=90)
+        cur = conn.cursor()
+        raw_rows = []
+        last_id = 0
+        while True:
+            cur.execute(
+                '''
+                SELECT id, sku, barcode, article, description, brand, dept, color, size,
+                       stok, "hargaNormal", "hargaPromo", diskon, "discountType",
+                       acara, "toDate", "imageUrl"
+                FROM "Product"
+                WHERE id > ?
+                ORDER BY id ASC
+                LIMIT 20000
+                ''',
+                (last_id,),
+            )
+            batch = cur.fetchall()
+            if not batch:
+                break
+            raw_rows.extend([r[1:] for r in batch])
+            last_id = int(batch[-1][0])
+        print(f"[PYTHON-CATALOG] Memuat {len(raw_rows):,} SKU mentah dari Turso Cloud dalam {time.time() - t0:.2f}s")
+    else:
+        import psycopg2
+        db_url = resolve_db_url()
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
+        cur.execute(
+            '''
+            SELECT sku, barcode, article, description, brand, dept, color, size,
+                   stok, "hargaNormal", "hargaPromo", diskon, "discountType",
+                   acara, "toDate", "imageUrl"
+            FROM "Product"
+            '''
+        )
+        raw_rows = cur.fetchall()
+        print(f"[PYTHON-CATALOG] Memuat {len(raw_rows):,} SKU mentah dari PostgreSQL dalam {time.time() - t0:.2f}s")
 
     now_ts = time.time()
     groups: Dict[str, List[Tuple[Any, ...]]] = {}
@@ -538,22 +563,35 @@ def build_and_verify_catalog(stock_only: bool = False, upload_snapshot: bool = T
     assert len(fake_div_hits) == 0, f"Ditemukan divisi nyasar sebagai brand: {set(fake_div_hits)}"
     assert len({x["key"] for x in compiled}) == len(compiled), "Terdapat key artikel duplikat!"
 
-    cur.execute('TRUNCATE TABLE "CatalogArticle"')
-    execute_values(
-        cur,
-        '''
-        INSERT INTO "CatalogArticle" (
-            key, sku, barcode, article, description, brand, dept,
-            "brandGroup", "subBrand", "categoryKey", color, size, stok,
-            "hargaNormal", "hargaPromo", diskon, "discountType", acara, "toDate",
+    if getattr(conn, "is_turso", False):
+        cur.execute('DELETE FROM "CatalogArticle"')
+        cat_cols = [
+            "key", "sku", "barcode", "article", "description", "brand", "dept",
+            "brandGroup", "subBrand", "categoryKey", "color", "size", "stok",
+            "hargaNormal", "hargaPromo", "diskon", "discountType", "acara", "toDate",
             "imageUrl", "articleGroupCount", "articleTotalStok",
             "articleColors", "articleSizes", "articleHasPromo", "articlePromoLabel",
-            "sortRank", "updatedAt"
-        ) VALUES %s
-        ''',
-        records,
-        page_size=2000,
-    )
+            "sortRank", "updatedAt",
+        ]
+        conn.bulk_insert_rows("CatalogArticle", cat_cols, records, on_conflict="key", rows_per_stmt=180, stmts_per_http=4)
+    else:
+        from psycopg2.extras import execute_values
+        cur.execute('TRUNCATE TABLE "CatalogArticle"')
+        execute_values(
+            cur,
+            '''
+            INSERT INTO "CatalogArticle" (
+                key, sku, barcode, article, description, brand, dept,
+                "brandGroup", "subBrand", "categoryKey", color, size, stok,
+                "hargaNormal", "hargaPromo", diskon, "discountType", acara, "toDate",
+                "imageUrl", "articleGroupCount", "articleTotalStok",
+                "articleColors", "articleSizes", "articleHasPromo", "articlePromoLabel",
+                "sortRank", "updatedAt"
+            ) VALUES %s
+            ''',
+            records,
+            page_size=2000,
+        )
     conn.commit()
     cur.close()
     conn.close()

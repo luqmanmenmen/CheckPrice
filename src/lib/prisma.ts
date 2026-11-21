@@ -1,42 +1,113 @@
 import { PrismaClient } from "@prisma/client";
+import { PrismaLibSQL } from "@prisma/adapter-libsql";
+import { createClient } from "@libsql/client";
 
-const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
+const JSON_ARRAY_FIELDS = new Set(["images", "articleColors", "articleSizes"]);
 
-function buildPoolSafeDatabaseUrl(): string {
-  const raw =
-    process.env.DATABASE_URL ||
-    "postgresql://postgres.lzynugpistiyhxqkgwmk:Kuman123!%4021@aws-0-ap-southeast-2.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1&pool_timeout=20";
-
-  try {
-    const u = new URL(raw);
-    // connection_limit=1 membuat semua query paralel live stock (puluhan upsert/alias) mengantre di 1 koneksi
-    // sehingga sangat lambat & memicu timeout P2024. Supavisor (port 6543) aman untuk 5 koneksi per instance.
-    const curLimit = parseInt(u.searchParams.get("connection_limit") || "0", 10);
-    if (!curLimit || curLimit < 5) {
-      u.searchParams.set("connection_limit", "5");
+export function parseJsonStringArray(val: unknown): string[] {
+  if (Array.isArray(val)) return val.map(String);
+  if (typeof val === "string") {
+    const trimmed = val.trim();
+    if (!trimmed || trimmed === "[]" || trimmed === "{}") return [];
+    if (trimmed.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        return Array.isArray(parsed) ? parsed.map(String) : [];
+      } catch {
+        return [];
+      }
     }
-    if (!u.searchParams.has("pool_timeout")) {
-      u.searchParams.set("pool_timeout", "10");
-    }
-    if (!u.searchParams.has("connect_timeout")) {
-      u.searchParams.set("connect_timeout", "8");
-    }
-    if ((u.port === "6543" || raw.includes("pooler.supabase.com")) && !u.searchParams.has("pgbouncer")) {
-      u.searchParams.set("pgbouncer", "true");
-    }
-    return u.toString();
-  } catch {
-    return raw;
+    return [trimmed];
   }
+  return [];
 }
 
-export const prisma =
-  globalForPrisma.prisma ||
-  new PrismaClient({
-    datasourceUrl: buildPoolSafeDatabaseUrl(),
-  });
+function serializeArrayFieldsInPlace(obj: any): any {
+  if (!obj || typeof obj !== "object") return obj;
+  if (Array.isArray(obj)) {
+    for (let i = 0; i < obj.length; i++) serializeArrayFieldsInPlace(obj[i]);
+    return obj;
+  }
+  for (const key of Object.keys(obj)) {
+    const val = obj[key];
+    if (JSON_ARRAY_FIELDS.has(key) && Array.isArray(val)) {
+      obj[key] = JSON.stringify(val);
+    } else if (val && typeof val === "object" && !(val instanceof Date)) {
+      serializeArrayFieldsInPlace(val);
+    }
+  }
+  return obj;
+}
 
-// Selalu simpan instance di globalThis agar tidak membuat koneksi baru berulang kali di Vercel/Railway
+function hydrateArrayFieldsInPlace(obj: any): any {
+  if (!obj || typeof obj !== "object") return obj;
+  if (Array.isArray(obj)) {
+    for (let i = 0; i < obj.length; i++) hydrateArrayFieldsInPlace(obj[i]);
+    return obj;
+  }
+  for (const key of Object.keys(obj)) {
+    const val = obj[key];
+    if (JSON_ARRAY_FIELDS.has(key) && typeof val === "string") {
+      obj[key] = parseJsonStringArray(val);
+    } else if (val && typeof val === "object" && !(val instanceof Date)) {
+      hydrateArrayFieldsInPlace(val);
+    }
+  }
+  return obj;
+}
+
+function createPrismaClient() {
+  const tursoUrl = (process.env.TURSO_DATABASE_URL || "").trim();
+  const tursoToken = (process.env.TURSO_AUTH_TOKEN || "").trim();
+
+  let baseClient: PrismaClient;
+  if (tursoUrl) {
+    const libsql = createClient({
+      url: tursoUrl,
+      authToken: tursoToken || undefined,
+    });
+    const adapter = new PrismaLibSQL(libsql);
+    baseClient = new PrismaClient({ adapter });
+  } else {
+    // Fallback aman saat static build tanpa env Turso
+    baseClient = new PrismaClient();
+  }
+
+  return baseClient.$extends({
+    query: {
+      $allModels: {
+        async $allOperations({ operation, args, query }) {
+          if (
+            args &&
+            (operation === "create" ||
+              operation === "createMany" ||
+              operation === "update" ||
+              operation === "updateMany" ||
+              operation === "upsert")
+          ) {
+            serializeArrayFieldsInPlace(args);
+          }
+          const result = await query(args);
+          if (result && typeof result === "object") {
+            hydrateArrayFieldsInPlace(result);
+          }
+          return result;
+        },
+      },
+    },
+  });
+}
+
+type ExtendedPrismaClient = ReturnType<typeof createPrismaClient>;
+
+const globalForPrisma = globalThis as unknown as {
+  prisma?: ExtendedPrismaClient;
+};
+
+export const prisma: ExtendedPrismaClient =
+  globalForPrisma.prisma || createPrismaClient();
+
+// Selalu simpan instance di globalThis agar tidak membuat koneksi baru berulang kali di Vercel/Node
 globalForPrisma.prisma = prisma;
 
 export default prisma;

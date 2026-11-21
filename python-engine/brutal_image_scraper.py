@@ -57,6 +57,8 @@ from build_catalog_index import (
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
 
+from turso_db import get_turso_table_client, is_turso_configured
+
 load_dotenv()
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env.local"))
@@ -508,16 +510,39 @@ def execute_brutal_image_scrape():
     loaded_direct = False
     try:
         from raw_vault_collector import connect_pg
+        from turso_db import parse_json_array
         pg_conn = connect_pg()
         pg_cur = pg_conn.cursor()
-        pg_cur.execute(
-            '''
-            SELECT sku, barcode, article, description, brand, dept, color, size,
-                   "hargaNormal", stok, "imageUrl", images
-            FROM "Product"
-            '''
-        )
-        for row in pg_cur.fetchall():
+        if getattr(pg_conn, "is_turso", False):
+            last_id = 0
+            raw_rows = []
+            while True:
+                pg_cur.execute(
+                    '''
+                    SELECT id, sku, barcode, article, description, brand, dept, color, size,
+                           "hargaNormal", stok, "imageUrl", images
+                    FROM "Product"
+                    WHERE id > ?
+                    ORDER BY id ASC
+                    LIMIT 20000
+                    ''',
+                    (last_id,),
+                )
+                batch = pg_cur.fetchall()
+                if not batch:
+                    break
+                raw_rows.extend([r[1:] for r in batch])
+                last_id = int(batch[-1][0])
+        else:
+            pg_cur.execute(
+                '''
+                SELECT sku, barcode, article, description, brand, dept, color, size,
+                       "hargaNormal", stok, "imageUrl", images
+                FROM "Product"
+                '''
+            )
+            raw_rows = pg_cur.fetchall()
+        for row in raw_rows:
             sku_v, bc_v, art_v, desc_v, br_v, dp_v, col_v, sz_v, hn_v, st_v, img_v, imgs_v = row
             if sku_v:
                 all_products.append({
@@ -532,7 +557,7 @@ def execute_brutal_image_scrape():
                     "hargaNormal": hn_v,
                     "stok": st_v,
                     "imageUrl": img_v,
-                    "images": imgs_v or [],
+                    "images": parse_json_array(imgs_v),
                 })
         pg_conn.close()
         loaded_direct = bool(all_products)
@@ -687,38 +712,50 @@ def execute_brutal_image_scrape():
     print(f"   - Sibling (Kode Artikel Induk) : +{sibling_article_matched:,} SKU")
     print(f"   🔥 TOTAL SIAP UPDATE KE DB     : +{len(rows_to_upsert):,} SKU BARU BERFOTO!")
 
-    # 7. Simpan ke Supabase (direct PG batch update kilat, fallback REST)
+    # 7. Simpan ke Database (Turso / direct PG batch update kilat, fallback REST)
     if rows_to_upsert:
-        print(f"\n💾 Menyimpan {len(rows_to_upsert):,} foto produk ke Supabase...")
+        print(f"\n💾 Menyimpan {len(rows_to_upsert):,} foto produk ke Database...")
         saved_pg = False
         try:
-            from psycopg2.extras import execute_values
             from raw_vault_collector import connect_pg
             pg_conn = connect_pg()
-            pg_cur = pg_conn.cursor()
             tuples = [
                 (item["sku"], item["imageUrl"], item["images"], item["updatedAt"])
                 for item in rows_to_upsert
             ]
-            for i in range(0, len(tuples), 500):
-                chunk = tuples[i:i + 500]
-                execute_values(
-                    pg_cur,
-                    '''
-                    UPDATE "Product" AS p
-                    SET "imageUrl" = v.img,
-                        images = v.imgs::text[],
-                        "updatedAt" = v.upd::timestamp
-                    FROM (VALUES %s) AS v(sku, img, imgs, upd)
-                    WHERE p.sku = v.sku
-                    ''',
-                    chunk,
-                    page_size=500,
-                )
-                pg_conn.commit()
-                print(f"   💾 Progress Simpan Foto: {min(i + 500, len(tuples)):,} / {len(tuples):,} SKU tersimpan...")
-            pg_conn.close()
-            saved_pg = True
+            if getattr(pg_conn, "is_turso", False):
+                for i in range(0, len(tuples), 400):
+                    chunk = tuples[i:i + 400]
+                    stmts = [
+                        ('UPDATE "Product" SET "imageUrl" = ?, images = ?, "updatedAt" = ? WHERE sku = ?', (img, imgs, upd, sku))
+                        for sku, img, imgs, upd in chunk
+                    ]
+                    pg_conn.execute_batch(stmts, transactional=True)
+                    print(f"   💾 Progress Simpan Foto (Turso): {min(i + 400, len(tuples)):,} / {len(tuples):,} SKU tersimpan...")
+                pg_conn.close()
+                saved_pg = True
+            else:
+                from psycopg2.extras import execute_values
+                pg_cur = pg_conn.cursor()
+                for i in range(0, len(tuples), 500):
+                    chunk = tuples[i:i + 500]
+                    execute_values(
+                        pg_cur,
+                        '''
+                        UPDATE "Product" AS p
+                        SET "imageUrl" = v.img,
+                            images = v.imgs::text[],
+                            "updatedAt" = v.upd::timestamp
+                        FROM (VALUES %s) AS v(sku, img, imgs, upd)
+                        WHERE p.sku = v.sku
+                        ''',
+                        chunk,
+                        page_size=500,
+                    )
+                    pg_conn.commit()
+                    print(f"   💾 Progress Simpan Foto: {min(i + 500, len(tuples)):,} / {len(tuples):,} SKU tersimpan...")
+                pg_conn.close()
+                saved_pg = True
         except Exception as e:
             print(f"   ⚠️ Fallback ke REST upsert foto ({e})")
 
@@ -774,17 +811,18 @@ def execute_brutal_image_scrape():
     )
 
     try:
-        user_res = sb.table("User").select("id").eq("nik", "22054178").limit(1).execute()
+        db_log = get_turso_table_client(timeout=60) if is_turso_configured() else sb
+        user_res = db_log.table("User").select("id").eq("nik", "22054178").limit(1).execute()
         user_id = user_res.data[0]["id"] if user_res.data else None
         if not user_id:
-            u_fallback = sb.table("User").select("id").limit(1).execute()
+            u_fallback = db_log.table("User").select("id").limit(1).execute()
             user_id = u_fallback.data[0]["id"] if u_fallback.data else None
         if user_id:
-            sb.table("SyncHistory").insert({
+            db_log.table("SyncHistory").insert({
                 "id": f"sync_{uuid.uuid4().hex[:20]}",
                 "userId": user_id,
                 "type": "PHOTO_SYNC",
-                "fileName": f"Brutal Image Scraper Matahari.com ({final_with_img:,} SKU Berfoto)",
+                "fileName": f"Brutal Image Scraper ({final_with_img:,} SKU Berfoto)",
                 "status": "SUCCESS",
                 "records": int(final_with_img),
                 "createdAt": datetime.now(timezone.utc).isoformat(),

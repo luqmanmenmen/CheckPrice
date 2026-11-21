@@ -543,8 +543,8 @@ export function buildBrandPrismaWhere(brandGroup: BrandGroupKey): any | undefine
   if (brandGroup === "SUKO") {
     return {
       OR: [
-        { brand: { contains: "SUKO", mode: "insensitive" } },
-        { dept: { contains: "SUKO", mode: "insensitive" } },
+        { brand: { contains: "SUKO" } },
+        { dept: { contains: "SUKO" } },
       ],
     };
   }
@@ -552,8 +552,8 @@ export function buildBrandPrismaWhere(brandGroup: BrandGroupKey): any | undefine
   if (brandGroup === "ZES") {
     return {
       OR: [
-        { brand: { contains: "ZES", mode: "insensitive" } },
-        { dept: { contains: "ZES", mode: "insensitive" } },
+        { brand: { contains: "ZES" } },
+        { dept: { contains: "ZES" } },
       ],
     };
   }
@@ -561,10 +561,10 @@ export function buildBrandPrismaWhere(brandGroup: BrandGroupKey): any | undefine
   // MUKU: toko multibrand (seluruh produk di luar Monostore SUKO & ZES)
   return {
     AND: [
-      { NOT: { brand: { contains: "SUKO", mode: "insensitive" } } },
-      { NOT: { dept: { contains: "SUKO", mode: "insensitive" } } },
-      { NOT: { brand: { contains: "ZES", mode: "insensitive" } } },
-      { NOT: { dept: { contains: "ZES", mode: "insensitive" } } },
+      { NOT: { brand: { contains: "SUKO" } } },
+      { NOT: { dept: { contains: "SUKO" } } },
+      { NOT: { brand: { contains: "ZES" } } },
+      { NOT: { dept: { contains: "ZES" } } },
     ],
   };
 }
@@ -574,26 +574,26 @@ export function buildCategoryPrismaWhere(category: CategoryKey): any | undefined
 
   const keywords = CATEGORY_KEYWORDS[category];
   const branches: any[] = keywords.map((kw) => ({
-    description: { contains: kw, mode: "insensitive" as const },
+    description: { contains: kw },
   }));
 
   if (category === "TIDUR_DALAM") {
     branches.push(
-      { dept: { contains: "SLEEPWEAR", mode: "insensitive" } },
-      { dept: { contains: "UNDERWEAR", mode: "insensitive" } },
-      { dept: { contains: "INTIMATE", mode: "insensitive" } }
+      { dept: { contains: "SLEEPWEAR" } },
+      { dept: { contains: "UNDERWEAR" } },
+      { dept: { contains: "INTIMATE" } }
     );
   } else if (category === "SEPATU_SANDAL") {
     branches.push(
-      { dept: { contains: "SHOES", mode: "insensitive" } },
-      { dept: { contains: "FW", mode: "insensitive" } }
+      { dept: { contains: "SHOES" } },
+      { dept: { contains: "FW" } }
     );
   } else if (category === "TAS_AKSESORIS") {
     branches.push(
-      { dept: { contains: "BAG", mode: "insensitive" } },
-      { dept: { contains: "ACCS", mode: "insensitive" } },
-      { dept: { contains: "HOME", mode: "insensitive" } },
-      { dept: { contains: "TOYS", mode: "insensitive" } }
+      { dept: { contains: "BAG" } },
+      { dept: { contains: "ACCS" } },
+      { dept: { contains: "HOME" } },
+      { dept: { contains: "TOYS" } }
     );
   }
 

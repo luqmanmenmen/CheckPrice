@@ -95,7 +95,7 @@ def sanitize_log_line(line: str) -> str:
     text = re.sub(r"\bgithub_pat_[A-Za-z0-9_]{16,}", "github_pat_***MASKED***", text)
     text = re.sub(r"\bAIza[A-Za-z0-9_\-]{16,}", "AIza***MASKED***", text)
 
-    for secret_env in ("DATABASE_URL", "DIRECT_URL", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_KEY", "GEMINI_API_KEY", "GITHUB_TOKEN", "MDS_PASSWORD"):
+    for secret_env in ("TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN", "DATABASE_URL", "DIRECT_URL", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_KEY", "GEMINI_API_KEY", "GITHUB_TOKEN", "MDS_PASSWORD"):
         val = (os.environ.get(secret_env) or "").strip()
         if val and len(val) >= 8 and val in text:
             text = text.replace(val, f"***{secret_env}***")
@@ -179,16 +179,19 @@ def push_log_state(log_state: Dict[str, Any], log_path: str) -> bool:
 
 
 def query_db_baseline() -> Tuple[int, int]:
-    """Ambil MAX(id) dan estimasi total Product secara O(1)."""
-    if not (os.environ.get("DATABASE_URL") or os.environ.get("DIRECT_URL")):
+    """Ambil MAX(id) dan total Product secara O(1)."""
+    if not (os.environ.get("TURSO_DATABASE_URL") or os.environ.get("DATABASE_URL") or os.environ.get("DIRECT_URL")):
         return 0, 0
     conn = None
     try:
         conn = _connect_postgres()
         cur = conn.cursor()
-        cur.execute('SELECT COALESCE(MAX(id), 0)::bigint FROM "Product"')
+        cur.execute('SELECT COALESCE(MAX(id), 0) FROM "Product"')
         max_id = int(cur.fetchone()[0] or 0)
-        cur.execute("SELECT GREATEST(reltuples::bigint, 0)::bigint FROM pg_class WHERE relname = 'Product'")
+        if getattr(conn, "is_turso", False):
+            cur.execute('SELECT COUNT(*) FROM "Product"')
+        else:
+            cur.execute("SELECT GREATEST(reltuples::bigint, 0)::bigint FROM pg_class WHERE relname = 'Product'")
         row = cur.fetchone()
         total_est = int(row[0] or 0) if row else 0
         cur.close()
@@ -211,7 +214,7 @@ def query_new_products_since(baseline_id: int) -> Dict[str, Any]:
         "newArticlesAdded": 0,
         "samples": [],
     }
-    if baseline_id <= 0 or not (os.environ.get("DATABASE_URL") or os.environ.get("DIRECT_URL")):
+    if baseline_id <= 0 or not (os.environ.get("TURSO_DATABASE_URL") or os.environ.get("DATABASE_URL") or os.environ.get("DIRECT_URL")):
         return result
     conn = None
     try:
@@ -220,8 +223,8 @@ def query_new_products_since(baseline_id: int) -> Dict[str, Any]:
         cur.execute(
             '''
             SELECT
-              COUNT(*)::int,
-              COUNT(DISTINCT NULLIF(TRIM(article), ''))::int
+              COUNT(*),
+              COUNT(DISTINCT NULLIF(TRIM(article), ''))
             FROM "Product"
             WHERE id > %s
             ''',

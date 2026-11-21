@@ -920,7 +920,7 @@ async function upsertStoreHubItemToDb(
     if (normalizedDept) updateData.dept = normalizedDept;
     if (hargaNormal && hargaNormal > 0) updateData.hargaNormal = hargaNormal;
     if (!existingProduct?.imageUrl && resolvedImg) updateData.imageUrl = resolvedImg;
-    if (resolvedGallery.length > existingImagesLen) updateData.images = resolvedGallery;
+    if (resolvedGallery.length > existingImagesLen) updateData.images = JSON.stringify(resolvedGallery);
 
     await prisma.product.upsert({
       where: { sku: itemSku },
@@ -937,7 +937,7 @@ async function upsertStoreHubItemToDb(
         hargaNormal: hargaNormal || 0,
         stok: currentSkuStok,
         imageUrl: resolvedImg,
-        images: resolvedGallery,
+        images: JSON.stringify(resolvedGallery),
         updatedAt: new Date(),
       },
     });
@@ -1086,7 +1086,7 @@ async function finalizeProductFamilyResponse(params: {
           prisma.product
             .update({
               where: { sku: sib.sku },
-              data: { imageUrl: sib.imageUrl, images: sibGal, updatedAt: new Date() },
+              data: { imageUrl: sib.imageUrl, images: JSON.stringify(sibGal), updatedAt: new Date() },
             })
             .catch(() => {})
         );
@@ -1150,8 +1150,8 @@ async function finalizeProductFamilyResponse(params: {
             ...(repImg ? { imageUrl: repImg } : {}),
             articleGroupCount: enrichedSiblings.length,
             articleTotalStok: updatedTotalStok,
-            articleColors: colors,
-            articleSizes: sizes,
+            articleColors: JSON.stringify(colors),
+            articleSizes: JSON.stringify(sizes),
             articleHasPromo: hasPromo,
             updatedAt: new Date(),
           },
@@ -1173,8 +1173,8 @@ async function finalizeProductFamilyResponse(params: {
             imageUrl: repImg,
             articleGroupCount: enrichedSiblings.length,
             articleTotalStok: updatedTotalStok,
-            articleColors: colors,
-            articleSizes: sizes,
+            articleColors: JSON.stringify(colors),
+            articleSizes: JSON.stringify(sizes),
             articleHasPromo: hasPromo,
             sortRank: updatedTotalStok > 0 ? 500 : 50000,
           },
@@ -2438,7 +2438,7 @@ export async function healProductImagesInDb(params: {
             where: { sku: skuKey },
             data: {
               imageUrl: targetPrimary,
-              images: finalList,
+              images: JSON.stringify(finalList),
             },
           })
           .catch(() => {})

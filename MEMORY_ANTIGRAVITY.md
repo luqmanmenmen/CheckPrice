@@ -1872,3 +1872,24 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   2. **Tes Live Tarik Sales SUKO (`Tarik Sales SUKO Sekarang`):** Pantau Live Loader (`0% → 100%`), auto-refresh laporan, angka omzet/qty/Top 10/Stok Kritis terisi real-time, serta verifikasi alur Alert Susulan Kemarin jika keesokan harinya terlewat.
   3. **Tes Edit Target Toko (Rupiah Penuh) & Cut-Off Kalender 100 Tahun + Ekspor PDF/CSV.**
   4. **Opsional:** Penyesuaian jam operasional buka/tutup toko di `storeGeofence.ts` bila ingin dipersempit dari `08:00–23:00 WIB` (mis. `09:00–22:30 WIB`).
+
+---
+
+### 108. Migrasi Total Database Utama dari Supabase PostgreSQL (500 MB) ke Turso Cloud Singapore (5 GB Free Tier) + Backup Lokal & Rollback Instan (22 November 2026)
+
+- **Latar Belakang & Tujuan:** Database Supabase sebelumnya terpakai `435 MB / 500 MB` (87% penuh, sering `unhealthy`/overload). Sesuai arahan User, seluruh database utama dipindahkan 100% ke **Turso Cloud (`suko-retail`, region AWS Singapore `ap-southeast-1`, kapasitas gratis 5 GB)**, sementara **Supabase Storage** tetap dipertahankan hanya untuk file lampiran Excel promo Gmail GAS & file statis CDN (~beberapa MB, 0% beban DB).
+- **Jaminan Keamanan & Rollback Instan ke Supabase:**
+  1. **Branch Git Pengaman:** `origin/backup/supabase-stable` (menunjuk ke commit stabil terakhir Supabase `3bf98d5`).
+  2. **Backup Lokal Lengkap (`c:\Max Display\backups\supabase-2026-11-22\`):** Seluruh 10 tabel (`388.470` baris dalam format `.jsonl.gz`) + `schema.prisma.bak`, `prisma.ts.bak`, `env.bak`, dan `BACKUP_MANIFEST.json`.
+  3. **Database Supabase Produksi Utuh:** Tidak dihapus/diubah sama sekali (berfungsi sebagai cadangan dingin / *cold standby*).
+- **Perubahan Arsitektur yang Diterapkan:**
+  1. **Migrasi Data 100% Identik ke Turso (`suko-retail`):** Seluruh `388.470` baris berhasil dimigrasi & diverifikasi 100% cocok (`Product: 310.536`, `CatalogArticle: 57.367`, `BarcodeAlias: 19.800`, `User: 29`, `Shift: 111`, `Ticket: 226`, `LoginLog: 158`, `SyncHistory: 243`, `DailySales: 0`, `PoSuggestion: 0`). Total ukuran di Turso hanya **`319.33 MB / 5.120 MB` (6,2% kuota)**.
+  2. **Backend Next.js + Prisma LibSQL (`prisma/schema.prisma`, [`src/lib/prisma.ts`](file:///c:/Max%20Display/price-checker/src/lib/prisma.ts)):**
+     - Menggunakan `@prisma/adapter-libsql@5.22.0` + `@libsql/client` (`previewFeatures = ["driverAdapters"]`, `provider = "sqlite"`).
+     - Dilengkapi `$extends` middleware otomatis yang menserialisasi & mem-parse kolom array JSON (`images`, `articleColors`, `articleSizes`) secara transparan antara SQLite `TEXT` dan `string[]`.
+     - Menyesuaikan query raw SQL (`clean-promo`, `po/generate`, `github-status`, `productQueryHelpers.ts`) dan menghapus `mode: "insensitive"` (SQLite `LIKE` sudah case-insensitive untuk ASCII).
+  3. **Python Engine Turso Adapter ([`python-engine/turso_db.py`](file:///c:/Max%20Display/price-checker/python-engine/turso_db.py)) & Seluruh Skrip Runner:**
+     - Menggunakan Turso HTTP Pipeline API v2 (`requests` standar, tanpa masalah native build) + `TursoTableClient` drop-in adapter.
+     - Memperbarui `build_offline_snapshot.py`, `runner_guardian.py`, `run_admin_analytics.py`, `build_catalog_index.py`, `morning_full_sweep.py`, `run_promo_sync.py`, `raw_vault_collector.py`, `matahari_catalog_expander.py`, `brutal_image_scraper.py`, `repair_broken_images.py`, dan [`.github/workflows/retail-sync-engine.yml`](file:///c:/Max%20Display/price-checker/.github/workflows/retail-sync-engine.yml) agar otomatis memakai `TURSO_DATABASE_URL` & `TURSO_AUTH_TOKEN` (dengan fallback aman ke PostgreSQL jika suatu saat ingin balik).
+- **Wajib Diisi Sebelum/Saat Deploy Produksi:** Tambahkan `TURSO_DATABASE_URL` dan `TURSO_AUTH_TOKEN` di **Vercel Environment Variables** dan **GitHub Repository Secrets**.
+

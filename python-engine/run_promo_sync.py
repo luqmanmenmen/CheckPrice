@@ -49,7 +49,10 @@ SUPABASE_KEY = (
     or os.getenv("SUPABASE_ANON_KEY", "")
 )
 
+from turso_db import get_turso_table_client, is_turso_configured
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+db = get_turso_table_client(timeout=60) if is_turso_configured() else supabase
 
 
 MONTH_MAP = {
@@ -424,15 +427,15 @@ def get_latest_promo_files_from_storage():
 
 def log_sync_history(file_name: str, total_records: int, file_url: str = None):
     try:
-        user_res = supabase.table("User").select("id").eq("nik", "22054178").limit(1).execute()
+        user_res = db.table("User").select("id").eq("nik", "22054178").limit(1).execute()
         user_id = user_res.data[0]["id"] if user_res.data else None
         if not user_id:
-            u_fallback = supabase.table("User").select("id").limit(1).execute()
+            u_fallback = db.table("User").select("id").limit(1).execute()
             user_id = u_fallback.data[0]["id"] if u_fallback.data else None
 
         if user_id:
             sync_id = f"sync_{uuid.uuid4().hex[:20]}"
-            supabase.table("SyncHistory").insert({
+            db.table("SyncHistory").insert({
                 "id": sync_id,
                 "userId": user_id,
                 "type": "UPDATE_PROMO",
@@ -520,7 +523,7 @@ def process_single_promo_file(
             try:
                 if candidate_skus:
                     ex_res = (
-                        supabase.table("Product")
+                        db.table("Product")
                         .select("sku, barcode, article, brand, dept, color, size, description, hargaNormal, stok, imageUrl, images, createdAt")
                         .in_("sku", list(candidate_skus))
                         .execute()
@@ -532,7 +535,7 @@ def process_single_promo_file(
 
                 if candidate_barcodes:
                     bc_res = (
-                        supabase.table("Product")
+                        db.table("Product")
                         .select("sku, barcode, article, brand, dept, color, size, description, hargaNormal, stok, imageUrl, images, createdAt")
                         .in_("barcode", list(candidate_barcodes))
                         .execute()
@@ -623,7 +626,7 @@ def process_single_promo_file(
 
             payload = list(payload_by_sku.values())
             try:
-                up_res = supabase.table("Product").upsert(payload, on_conflict="sku").execute()
+                up_res = db.table("Product").upsert(payload, on_conflict="sku").execute()
                 total_updated += len(payload)
                 print(f"  [Chunk {i // CHUNK_SIZE + 1}] Berhasil memperbarui {len(payload)} produk promo.")
             except Exception as up_err:
@@ -675,7 +678,7 @@ def _lookup_existing_products(candidate_skus: set, candidate_barcodes: set):
     for i in range(0, len(sku_list), 400):
         batch = sku_list[i:i + 400]
         try:
-            ex_res = supabase.table("Product").select(cols).in_("sku", batch).execute()
+            ex_res = db.table("Product").select(cols).in_("sku", batch).execute()
             for row_ex in (ex_res.data or []):
                 ex_map[str(row_ex["sku"])] = row_ex
                 if row_ex.get("barcode"):
@@ -686,7 +689,7 @@ def _lookup_existing_products(candidate_skus: set, candidate_barcodes: set):
     for i in range(0, len(bc_list), 400):
         batch = bc_list[i:i + 400]
         try:
-            bc_res = supabase.table("Product").select(cols).in_("barcode", batch).execute()
+            bc_res = db.table("Product").select(cols).in_("barcode", batch).execute()
             for row_bc in (bc_res.data or []):
                 ex_map[str(row_bc["sku"])] = row_bc
                 if row_bc.get("barcode"):
@@ -944,7 +947,7 @@ def _cleanup_expired_promos_wib(today_wib: str):
     """Membersihkan promo lama di PostgreSQL yang toDate-nya sudah lewat dari hari ini WIB."""
     try:
         cleanup_res = (
-            supabase.table("Product")
+            db.table("Product")
             .update({
                 "hargaPromo": None,
                 "diskon": None,

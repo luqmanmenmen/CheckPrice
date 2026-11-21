@@ -23,7 +23,7 @@ async function recordAuditLog(params: {
   userId: string;
   nik: string;
   name: string;
-  role: "SUPERVISOR" | "CREW_STORE";
+  role: string;
   toko: string | null;
   actionLabel: string;
   ipAddress: string | null;

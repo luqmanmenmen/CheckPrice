@@ -396,33 +396,56 @@ def fetch_target_collections(products_by_id: Dict[int, Dict[str, Any]], max_coll
 
 
 def execute_catalog_expansion(collections_only: bool = False, max_collections: int = 160):
-    import psycopg2
-    from psycopg2.extras import execute_values
+    from turso_db import connect_turso, is_turso_configured
 
     t_start = time.time()
     print("=" * 80)
-    print("🚀 [CATALOG ARTICLE EXPANDER] PERBANYAK ARTIKEL & VARIAN LENGKAP DARI MATAHARI.COM")
+    print("🚀 [CATALOG ARTICLE EXPANDER] PERBANYAK ARTIKEL & VARIAN LENGKAP")
     print("=" * 80)
 
-    db_url = resolve_db_url()
-    conn = psycopg2.connect(db_url)
-    cur = conn.cursor()
+    use_turso = is_turso_configured()
+    if use_turso:
+        conn = connect_turso(timeout=90)
+        cur = conn.cursor()
+        db_mb = conn.get_db_size_mb()
+        max_db_mb = 4500.0
+    else:
+        import psycopg2
+        db_url = resolve_db_url()
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
+        cur.execute("SELECT pg_database_size(current_database())")
+        db_bytes = int(cur.fetchone()[0] or 0)
+        db_mb = db_bytes / (1024 * 1024)
+        max_db_mb = 440.0
 
-    cur.execute("SELECT pg_database_size(current_database())")
-    db_bytes = int(cur.fetchone()[0] or 0)
-    db_mb = db_bytes / (1024 * 1024)
-
-    cur.execute('SELECT sku, barcode, "imageUrl" FROM "Product"')
     existing_skus: Set[str] = set()
     existing_skus_with_img: Set[str] = set()
     existing_barcodes: Set[str] = set()
-    for sku, bc, img in cur.fetchall():
-        if sku:
-            existing_skus.add(sku)
-            if img:
-                existing_skus_with_img.add(sku)
-        if bc:
-            existing_barcodes.add(bc)
+    if use_turso:
+        last_id = 0
+        while True:
+            cur.execute('SELECT id, sku, barcode, "imageUrl" FROM "Product" WHERE id > ? ORDER BY id ASC LIMIT 25000', (last_id,))
+            batch = cur.fetchall()
+            if not batch:
+                break
+            for _pid, sku, bc, img in batch:
+                if sku:
+                    existing_skus.add(sku)
+                    if img:
+                        existing_skus_with_img.add(sku)
+                if bc:
+                    existing_barcodes.add(bc)
+            last_id = int(batch[-1][0])
+    else:
+        cur.execute('SELECT sku, barcode, "imageUrl" FROM "Product"')
+        for sku, bc, img in cur.fetchall():
+            if sku:
+                existing_skus.add(sku)
+                if img:
+                    existing_skus_with_img.add(sku)
+            if bc:
+                existing_barcodes.add(bc)
 
     cur.execute('SELECT DISTINCT UPPER(article) FROM "Product" WHERE article IS NOT NULL')
     existing_articles: Set[str] = {r[0] for r in cur.fetchall() if r[0]}
@@ -433,8 +456,8 @@ def execute_catalog_expansion(collections_only: bool = False, max_collections: i
         f"Ukuran DB: {db_mb:.1f} MB"
     )
 
-    if db_mb >= 440.0:
-        print(f"⚠️ Ukuran DB ({db_mb:.1f} MB) mendekati batas 500 MB Supabase -> Skip insert masal untuk jaga kesehatan DB.")
+    if db_mb >= max_db_mb:
+        print(f"⚠️ Ukuran DB ({db_mb:.1f} MB) mendekati batas {max_db_mb:.0f} MB -> Skip insert masal.")
         cur.close()
         conn.close()
         return
@@ -532,19 +555,31 @@ def execute_catalog_expansion(collections_only: bool = False, max_collections: i
                 for r in batch
             ]
             try:
-                execute_values(
-                    cur,
-                    '''
-                    INSERT INTO "Product" (
-                        sku, barcode, article, description, "hargaNormal", "hargaNormalSource",
-                        brand, dept, color, size, "imageUrl", images, stok, "updatedAt", "createdAt"
-                    ) VALUES %s
-                    ON CONFLICT (sku) DO NOTHING
-                    ''',
-                    values,
-                    page_size=1000,
-                )
-                conn.commit()
+                if use_turso:
+                    conn.bulk_insert_rows(
+                        "Product",
+                        ["sku", "barcode", "article", "description", "hargaNormal", "hargaNormalSource", "brand", "dept", "color", "size", "imageUrl", "images", "stok", "updatedAt", "createdAt"],
+                        values,
+                        on_conflict="sku",
+                        do_nothing=True,
+                        rows_per_stmt=150,
+                        stmts_per_http=4,
+                    )
+                else:
+                    from psycopg2.extras import execute_values
+                    execute_values(
+                        cur,
+                        '''
+                        INSERT INTO "Product" (
+                            sku, barcode, article, description, "hargaNormal", "hargaNormalSource",
+                            brand, dept, color, size, "imageUrl", images, stok, "updatedAt", "createdAt"
+                        ) VALUES %s
+                        ON CONFLICT (sku) DO NOTHING
+                        ''',
+                        values,
+                        page_size=1000,
+                    )
+                    conn.commit()
                 inserted_total += len(batch)
                 print(f"   💾 Progress Insert: {inserted_total:,} / {len(insert_list):,} SKU...")
             except Exception as e:
@@ -557,19 +592,31 @@ def execute_catalog_expansion(collections_only: bool = False, max_collections: i
                     )
                     for v in values
                 ]
-                execute_values(
-                    cur,
-                    '''
-                    INSERT INTO "Product" (
-                        sku, barcode, article, description, "hargaNormal", "hargaNormalSource",
-                        brand, dept, color, size, "imageUrl", images, stok, "updatedAt", "createdAt"
-                    ) VALUES %s
-                    ON CONFLICT (sku) DO NOTHING
-                    ''',
-                    safe_values,
-                    page_size=1000,
-                )
-                conn.commit()
+                if use_turso:
+                    conn.bulk_insert_rows(
+                        "Product",
+                        ["sku", "barcode", "article", "description", "hargaNormal", "hargaNormalSource", "brand", "dept", "color", "size", "imageUrl", "images", "stok", "updatedAt", "createdAt"],
+                        safe_values,
+                        on_conflict="sku",
+                        do_nothing=True,
+                        rows_per_stmt=150,
+                        stmts_per_http=4,
+                    )
+                else:
+                    from psycopg2.extras import execute_values
+                    execute_values(
+                        cur,
+                        '''
+                        INSERT INTO "Product" (
+                            sku, barcode, article, description, "hargaNormal", "hargaNormalSource",
+                            brand, dept, color, size, "imageUrl", images, stok, "updatedAt", "createdAt"
+                        ) VALUES %s
+                        ON CONFLICT (sku) DO NOTHING
+                        ''',
+                        safe_values,
+                        page_size=1000,
+                    )
+                    conn.commit()
                 inserted_total += len(batch)
                 print(f"   💾 Progress Insert (Safe Barcode): {inserted_total:,} / {len(insert_list):,} SKU ({e})")
 
@@ -577,24 +624,35 @@ def execute_catalog_expansion(collections_only: bool = False, max_collections: i
     patch_list = list(to_patch_img.values())
     if patch_list:
         print(f"\n📸 [TAHAP 4B] Melengkapi foto studio untuk {len(patch_list):,} SKU lama tanpa gambar...")
-        batch_size = 2000
+        batch_size = 500 if use_turso else 2000
         for i in range(0, len(patch_list), batch_size):
             batch = patch_list[i:i + batch_size]
-            values = [(r["sku"], r["imageUrl"], r["images"], now_dt) for r in batch]
-            execute_values(
-                cur,
-                '''
-                UPDATE "Product" AS p
-                SET "imageUrl" = COALESCE(p."imageUrl", v.img),
-                    images = CASE WHEN array_length(p.images, 1) IS NULL OR array_length(p.images, 1) = 0 THEN v.imgs ELSE p.images END,
-                    "updatedAt" = v.upd
-                FROM (VALUES %s) AS v(sku, img, imgs, upd)
-                WHERE p.sku = v.sku
-                ''',
-                values,
-                page_size=1000,
-            )
-            conn.commit()
+            if use_turso:
+                stmts = [
+                    (
+                        'UPDATE "Product" SET "imageUrl" = COALESCE("imageUrl", ?), images = CASE WHEN images IS NULL OR images = \'\' OR images = \'[]\' THEN ? ELSE images END, "updatedAt" = ? WHERE sku = ?',
+                        (r["imageUrl"], r["images"], now_dt, r["sku"]),
+                    )
+                    for r in batch
+                ]
+                conn.execute_batch(stmts, transactional=True)
+            else:
+                from psycopg2.extras import execute_values
+                values = [(r["sku"], r["imageUrl"], r["images"], now_dt) for r in batch]
+                execute_values(
+                    cur,
+                    '''
+                    UPDATE "Product" AS p
+                    SET "imageUrl" = COALESCE(p."imageUrl", v.img),
+                        images = CASE WHEN array_length(p.images, 1) IS NULL OR array_length(p.images, 1) = 0 THEN v.imgs ELSE p.images END,
+                        "updatedAt" = v.upd
+                    FROM (VALUES %s) AS v(sku, img, imgs, upd)
+                    WHERE p.sku = v.sku
+                    ''',
+                    values,
+                    page_size=1000,
+                )
+                conn.commit()
 
     # Catat ke SyncHistory
     try:

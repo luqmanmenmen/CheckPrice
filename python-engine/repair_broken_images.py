@@ -47,6 +47,13 @@ def _load_env_files() -> None:
 
 
 def _connect_postgres():
+    _load_env_files()
+    try:
+        from turso_db import connect_turso, is_turso_configured
+        if is_turso_configured():
+            return connect_turso(timeout=60)
+    except Exception:
+        pass
     import psycopg2
     raw = os.environ.get("DATABASE_URL") or os.environ.get("DIRECT_URL") or ""
     parsed = urllib.parse.urlparse(raw)
@@ -227,7 +234,10 @@ def heal_broken_articles(articles: Optional[List[str]] = None, scan_limit: int =
                 art_val = row[2] or row[0]
                 broken_articles[art_val] = (row[0], row[1])
     else:
-        sql = 'SELECT DISTINCT ON (article, "imageUrl") article, sku, barcode, "imageUrl" FROM "Product" WHERE "imageUrl" IS NOT NULL AND article IS NOT NULL ORDER BY article, "imageUrl"'
+        if getattr(conn, "is_turso", False):
+            sql = 'SELECT article, MIN(sku), MIN(barcode), "imageUrl" FROM "Product" WHERE "imageUrl" IS NOT NULL AND article IS NOT NULL GROUP BY article, "imageUrl" ORDER BY article, "imageUrl"'
+        else:
+            sql = 'SELECT DISTINCT ON (article, "imageUrl") article, sku, barcode, "imageUrl" FROM "Product" WHERE "imageUrl" IS NOT NULL AND article IS NOT NULL ORDER BY article, "imageUrl"'
         if scan_limit > 0:
             sql += f" LIMIT {int(scan_limit)}"
         cur.execute(sql)
