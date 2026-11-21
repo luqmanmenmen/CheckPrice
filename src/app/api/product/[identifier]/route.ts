@@ -229,7 +229,8 @@ export async function GET(
       }
     }
 
-    const allowLiveFallback = searchParams.get('live') === '1';
+    // Jika scan barcode/SKU (8-14 digit) tidak ada di DB Turso, OTOMATIS langsung tembak MDS BISA + Matahari.com!
+    const allowLiveFallback = isPureDigitCode || searchParams.get('live') === '1';
 
     if (isPureDigitCode || isAlphaVendorCode) {
       if (allowLiveFallback) {
@@ -243,9 +244,13 @@ export async function GET(
 
         if (!hasDbArticleMatch) {
           try {
-            const liveTimeoutMs = 2500;
+            const liveTimeoutMs = isPureDigitCode ? 12000 : 6000;
             const liveRes: any = await Promise.race([
-              checkSingleItemStock(rawInput),
+              checkSingleItemStock(rawInput, {
+                discoverFamily: true,
+                withImages: true,
+                syncAllSizes: true,
+              }),
               new Promise((resolve) => setTimeout(() => resolve({ success: false, timeout: true }), liveTimeoutMs))
             ]);
             if (liveRes?.success && liveRes?.data) {

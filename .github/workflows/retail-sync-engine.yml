@@ -92,8 +92,8 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
-      - name: 📦 [KATEGORI 1B - EKSPANSI & AUDIT ARTIKEL] Collect, Audit & Masak Artikel/Barcode (SUKO, Mu+Ku, ZES)
-        if: ${{ github.event.inputs.action == 'scrab' || github.event.inputs.action == 'photos' || github.event.inputs.action == 'all' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-photos' || github.event.action == 'trigger-sync-engine' }}
+      - name: 📦 [KATEGORI 1B - EKSPANSI & AUDIT ARTIKEL BARU] Collect & Tambah Artikel/SKU Belum Ada (SUKO, Mu+Ku, ZES)
+        if: ${{ github.event.inputs.action == 'scrab' || github.event.inputs.action == 'all' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-sync-engine' }}
         run: |
           if [ -n "$TURSO_DATABASE_URL" ]; then
             python -u python-engine/runner_guardian.py --step "KATEGORI 1B (Collector): Ekspansi Vendor & Audit" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 --track-new-products -- python python-engine/raw_vault_collector.py --collect-vendors --collect-web --audit

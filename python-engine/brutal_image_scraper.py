@@ -490,127 +490,118 @@ def execute_brutal_image_scrape():
     print("🛡️  FILTER AKTIF: 100% Foto Produk Studio (Blokir Logo, Banner, Ikon, Size Chart)")
     print("=" * 80)
 
-    # 1. Muat seluruh baris produk via PostgreSQL langsung (bebas timeout, <15s) atau Wave Pagination fallback
-    print("📥 Memuat seluruh produk dari Database (direct Postgres / wave fallback)...")
+    # 1. Muat HANYA produk yang BELUM PUNYA FOTO (`imageUrl IS NULL OR imageUrl = ''`) + foto donor 1 artikel
+    # Produk yang sudah punya foto DILEWATI 100% (0 audit ulang produk yang sudah komplit!)
+    print("📥 Memuat HANYA produk yang BELUM berfoto dari Turso Cloud (skip produk komplit)...")
 
-    all_products: List[Dict[str, Any]] = []
+    missing_products: List[Dict[str, Any]] = []
+    donor_sku_galleries: Dict[str, List[str]] = {}
+    donor_art_color: Dict[Tuple[str, str, str, str], List[str]] = {}
+    donor_art: Dict[Tuple[str, str, str], List[str]] = {}
+    total_db = 0
+    initial_with_img = 0
     loaded_direct = False
     try:
         from raw_vault_collector import connect_pg
         from turso_db import parse_json_array
         pg_conn = connect_pg()
         pg_cur = pg_conn.cursor()
-        if getattr(pg_conn, "is_turso", False):
-            last_id = 0
-            raw_rows = []
-            while True:
-                pg_cur.execute(
-                    '''
-                    SELECT id, sku, barcode, article, description, brand, dept, color, size,
-                           "hargaNormal", stok, "imageUrl", images
-                    FROM "Product"
-                    WHERE id > ?
-                    ORDER BY id ASC
-                    LIMIT 20000
-                    ''',
-                    (last_id,),
-                )
-                batch = pg_cur.fetchall()
-                if not batch:
-                    break
-                raw_rows.extend([r[1:] for r in batch])
-                last_id = int(batch[-1][0])
-        else:
+        pg_cur.execute('SELECT COUNT(*) FROM "Product"')
+        total_db = int((pg_cur.fetchone() or [0])[0] or 0)
+        pg_cur.execute('SELECT COUNT(*) FROM "Product" WHERE "imageUrl" IS NOT NULL AND TRIM("imageUrl") != \'\'')
+        initial_with_img = int((pg_cur.fetchone() or [0])[0] or 0)
+
+        last_id = 0
+        while True:
             pg_cur.execute(
                 '''
-                SELECT sku, barcode, article, description, brand, dept, color, size,
-                       "hargaNormal", stok, "imageUrl", images
+                SELECT id, sku, barcode, article, description, brand, dept, color, size,
+                       "hargaNormal", stok
                 FROM "Product"
-                '''
+                WHERE id > ?
+                  AND ("imageUrl" IS NULL OR TRIM("imageUrl") = '')
+                ORDER BY id ASC
+                LIMIT 20000
+                ''',
+                (last_id,),
             )
-            raw_rows = pg_cur.fetchall()
-        for row in raw_rows:
-            sku_v, bc_v, art_v, desc_v, br_v, dp_v, col_v, sz_v, hn_v, st_v, img_v, imgs_v = row
-            if sku_v:
-                all_products.append({
-                    "sku": sku_v,
-                    "barcode": bc_v,
-                    "article": art_v,
-                    "description": desc_v,
-                    "brand": br_v,
-                    "dept": dp_v,
-                    "color": col_v,
-                    "size": sz_v,
-                    "hargaNormal": hn_v,
-                    "stok": st_v,
-                    "imageUrl": img_v,
-                    "images": parse_json_array(imgs_v),
-                })
-        pg_conn.close()
-        loaded_direct = bool(all_products)
-    except Exception as e:
-        print(f"   ⚠️ Fallback ke wave REST pagination ({e})")
-
-    if not loaded_direct:
-        db_fb = get_turso_table_client(timeout=60) if is_turso_configured() else sb
-        def fetch_db_chunk(off: int) -> List[Dict[str, Any]]:
-            for _ in range(3):
-                try:
-                    res = db_fb.table("Product").select("*").order("sku").range(off, off + 999).execute()
-                    return res.data or []
-                except Exception:
-                    time.sleep(0.5)
-            return []
-
-        offset = 0
-        wave_size = 16
-        while True:
-            offsets = [offset + i * 1000 for i in range(wave_size)]
-            reached_end = False
-            wave_rows = 0
-            with ThreadPoolExecutor(max_workers=8) as executor:
-                for rows in executor.map(fetch_db_chunk, offsets):
-                    if not rows:
-                        reached_end = True
-                        continue
-                    wave_rows += len(rows)
-                    all_products.extend(rows)
-                    if len(rows) < 1000:
-                        reached_end = True
-            if reached_end or wave_rows == 0:
+            batch = pg_cur.fetchall()
+            if not batch:
                 break
-            offset += wave_size * 1000
+            for row in batch:
+                _pid, sku_v, bc_v, art_v, desc_v, br_v, dp_v, col_v, sz_v, hn_v, st_v = row
+                if sku_v:
+                    missing_products.append({
+                        "sku": sku_v,
+                        "barcode": bc_v,
+                        "article": art_v,
+                        "description": desc_v,
+                        "brand": br_v,
+                        "dept": dp_v,
+                        "color": col_v,
+                        "size": sz_v,
+                        "hargaNormal": hn_v,
+                        "stok": int(st_v or 0),
+                        "imageUrl": None,
+                        "images": [],
+                    })
+            last_id = int(batch[-1][0])
 
-    # Deduplikasi jika ada pergeseran range
-    unique_map: Dict[str, Dict[str, Any]] = {}
-    for p in all_products:
-        s = str(p.get("sku") or "").strip()
-        if s:
-            unique_map[s] = p
-    all_products = list(unique_map.values())
+        # Tarik foto donor HANYA untuk kode artikel yang masih punya varian kosong foto (hemat 90% baca DB!)
+        INVALID_ARTICLES_INIT = CATALOG_INVALID_ARTICLES | {"NONE", "NULL"}
+        missing_articles = sorted({
+            str(p.get("article") or "").strip()
+            for p in missing_products
+            if str(p.get("article") or "").strip().upper() not in INVALID_ARTICLES_INIT
+        })
+        for i in range(0, len(missing_articles), 350):
+            art_chunk = missing_articles[i : i + 350]
+            ph = ", ".join(["?"] * len(art_chunk))
+            pg_cur.execute(
+                f'''
+                SELECT sku, article, description, brand, dept, color, "imageUrl", images
+                FROM "Product"
+                WHERE article IN ({ph})
+                  AND "imageUrl" IS NOT NULL
+                  AND TRIM("imageUrl") != ''
+                ''',
+                art_chunk,
+            )
+            for d_sku, d_art, d_desc, d_br, d_dp, d_col, d_img, d_imgs in pg_cur.fetchall():
+                img_c = clean_img_url(str(d_img or ""))
+                if not img_c:
+                    continue
+                imgs_list = [clean_img_url(u) for u in parse_json_array(d_imgs) if clean_img_url(u)]
+                gal = imgs_list if imgs_list else [img_c]
+                if d_sku:
+                    donor_sku_galleries[str(d_sku).strip()] = gal
+                art_up = str(d_art or "").strip().upper()
+                col_up = str(d_col or "").strip().upper()
+                bg = classify_brand_group(d_br, d_dp)
+                ck = classify_product_category(d_br, d_dp, str(d_desc or ""))
+                if art_up:
+                    if col_up and col_up not in ("", "-", "NO COLOR"):
+                        donor_art_color.setdefault((bg, ck, art_up, col_up), gal)
+                    donor_art.setdefault((bg, ck, art_up), gal)
 
-    total_db = len(all_products)
-    initial_with_img = sum(1 for p in all_products if p.get("imageUrl"))
+        pg_conn.close()
+        loaded_direct = True
+    except Exception as e:
+        print(f"   ⚠️ Fallback baca produk tanpa foto ({e})")
+
+    all_products = missing_products
+    if not loaded_direct:
+        all_products = []
+
     print(
-        f"📊 Total Produk di DB: {total_db:,} SKU | "
-        f"Sudah Berfoto: {initial_with_img:,} | Belum Berfoto: {total_db - initial_with_img:,}"
+        f"📊 Status Foto DB: Total={total_db:,} SKU | "
+        f"Sudah Berfoto (DI-SKIP): {initial_with_img:,} | "
+        f"🎯 Target Belum Berfoto: {len(all_products):,} SKU (Donor sibling ditemukan: {len(donor_art):,} artikel)"
     )
 
-    sku_galleries: Dict[str, List[str]] = {}
-    shopify_art_color_galleries: Dict[Tuple[str, str, str, str], List[str]] = {}
-    shopify_art_galleries: Dict[Tuple[str, str, str], List[str]] = {}
-
-    for p in all_products:
-        desc = str(p.get("description") or "")
-        art = str(p.get("article") or "").strip().upper()
-        if is_ignored_product(desc, art):
-            continue
-        sku = str(p.get("sku") or "").strip()
-        img = clean_img_url(str(p.get("imageUrl") or ""))
-        raw_imgs = p.get("images") or ([] if not img else [img])
-        clean_imgs = [clean_img_url(u) for u in raw_imgs if clean_img_url(u)]
-        if sku and img:
-            sku_galleries[sku] = clean_imgs if clean_imgs else [img]
+    sku_galleries: Dict[str, List[str]] = dict(donor_sku_galleries)
+    shopify_art_color_galleries: Dict[Tuple[str, str, str, str], List[str]] = dict(donor_art_color)
+    shopify_art_galleries: Dict[Tuple[str, str, str], List[str]] = dict(donor_art)
 
     # 2. Jalankan JALUR 1 (95 Sitemap XML)
     sweep_sitemaps(sku_galleries)
@@ -787,7 +778,7 @@ def execute_brutal_image_scrape():
         w, t = brand_img_stats.get(b, (0, 0))
         brand_img_stats[b] = (w + (1 if p.get("imageUrl") else 0), t + 1)
 
-    final_with_img = sum(1 for p in all_products if p.get("imageUrl"))
+    final_with_img = initial_with_img + len(rows_to_upsert)
     write_image_report(
         start_time,
         total_db,

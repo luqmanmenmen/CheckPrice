@@ -2313,6 +2313,32 @@ export async function healProductImagesInDb(params: {
     };
   }
 
+  const artToUse0 = sanitizeArticleCode(dbMain.article) || cleanArticle;
+  let mdsMetadataUpdated = false;
+  let mdsNewVariants = 0;
+
+  // Jika dipicu manual ("Update Gambar"), sekalian sinkronkan Artikel, SKU, Barcode, & Varian dari MDS BISA (luqman org)
+  if (params.force) {
+    try {
+      const mdsSync = await Promise.race([
+        checkSingleItemStock(dbMain.sku || dbMain.barcode || artToUse0 || cleanSku, {
+          discoverFamily: true,
+          withImages: false,
+          syncAllSizes: true,
+        }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 9000)),
+      ]);
+      if (mdsSync && mdsSync.success) {
+        mdsMetadataUpdated = true;
+        mdsNewVariants = Number(mdsSync.newVariantsDiscovered || 0);
+        const refreshed = await prisma.product.findUnique({ where: { sku: dbMain.sku } });
+        if (refreshed) dbMain = refreshed;
+      }
+    } catch (mdsErr) {
+      console.warn('[HEAL-IMAGE] Lewati sync artikel/SKU MDS:', mdsErr);
+    }
+  }
+
   let siblings = await getProductSiblings(checkAndCleanPromo(dbMain));
   if (!siblings || siblings.length === 0) {
     siblings = [checkAndCleanPromo(dbMain)];
@@ -2483,20 +2509,27 @@ export async function healProductImagesInDb(params: {
   const activeColorMatched = activeNormColor ? matchedNormColors.has(activeNormColor) : matchedColors.length > 0;
 
   let message = '';
+  const mdsNote = mdsMetadataUpdated
+    ? mdsNewVariants > 0
+      ? ` + ${mdsNewVariants} varian SKU/artikel baru tersinkron`
+      : ' + info artikel/SKU tersinkron'
+    : '';
   if (healedCount > 0) {
     const extraMissing =
       unmatchedColors.length > 0 ? ` (${unmatchedColors.join(', ')} belum tersedia di katalog luqman org)` : '';
-    message = `📸 ${healedCount} varian diperbarui foto resminya (${matchedColors.join(', ') || 'tersinkron'}).${extraMissing}`;
+    message = `📸 ${healedCount} varian diperbarui foto resminya (${matchedColors.join(', ') || 'tersinkron'})${mdsNote}.${extraMissing}`;
   } else if (activeColorMatched) {
-    message = `Foto warna ${activeColorLabel || 'aktif'} sudah paling baru & sinkron.`;
+    message = `Foto warna ${activeColorLabel || 'aktif'} sudah paling baru${mdsNote}.`;
+  } else if (mdsMetadataUpdated && mdsNewVariants > 0) {
+    message = `✅ Artikel & ${mdsNewVariants} varian SKU baru berhasil diperbarui dari luqman org (foto warna ${activeColorLabel || 'terpilih'} belum tersedia di katalog online).`;
   } else {
-    message = `Foto warna ${activeColorLabel || 'terpilih'} belum tersedia di katalog online luqman org (${matchedColors.length > 0 ? `warna tersedia: ${matchedColors.join(', ')}` : 'tidak ditemukan'}).`;
+    message = `${mdsMetadataUpdated ? 'Info artikel/SKU tersinkron, namun f' : 'F'}oto warna ${activeColorLabel || 'terpilih'} belum tersedia di katalog online luqman org (${matchedColors.length > 0 ? `warna tersedia: ${matchedColors.join(', ')}` : 'tidak ditemukan'}).`;
   }
 
   return {
     success: true,
-    healed: healedCount > 0 || matchedColors.length > 0,
-    updatedCount: healedCount,
+    healed: healedCount > 0 || matchedColors.length > 0 || mdsNewVariants > 0,
+    updatedCount: healedCount + mdsNewVariants,
     matchedColors,
     unmatchedColors,
     activeColorMatched,

@@ -1909,4 +1909,21 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   3. **Global Live Banner ([`src/components/PromoSyncBanner.tsx`](file:///c:/Max%20Display/price-checker/src/components/PromoSyncBanner.tsx) di [`src/components/LayoutWrapper.tsx`](file:///c:/Max%20Display/price-checker/src/components/LayoutWrapper.tsx)):**
      - Tampil di seluruh halaman terautentikasi: progress bar biru animasi real-time (polling 5 detik saat aktif) & otomatis berubah menjadi banner hijau **100% Selesai / Promo Terbaru Aktif** lengkap dengan nama promo, jumlah SKU, jam WIB, tombol **Muat Harga Terbaru**, dan tombol tutup per-`syncKey` (muncul lagi otomatis bila promo baru masuk).
 
+---
+
+### 110. Optimasi Laser-Focused Scraping (Skip Produk Komplit), Auto-Cancel Self-Heal, Manual Update Gambar = Update Foto + Artikel/SKU, & Scan Barcode Baru Auto-Tembak MDS + Matahari (22 November 2026)
+
+- **Arahan Pengguna:**
+  1. Saat trigger scrab foto / SKU dijalankan, **fokus HANYA pada produk yang belum punya foto / belum ada di tabel DB** (jangan audit ulang produk yang sudah lengkap foto & barcodenya).
+  2. Tombol manual **`Update Gambar`** sekaligus memperbarui **Foto + Artikel + SKU + Barcode + Varian** produk tersebut.
+  3. Saat scan barcode yang belum ada di DB, **otomatis langsung nembak MDS BISA + Matahari.com** dan menyimpan hasilnya ke Turso.
+  4. Tombol **`Benahi & Ulangi`** otomatis membatalkan run GitHub Actions yang sedang nyangkut agar tidak pernah antre macet lagi.
+- **Perubahan yang Diterapkan:**
+  - [`.github/workflows/retail-sync-engine.yml`](file:///c:/Max%20Display/price-checker/.github/workflows/retail-sync-engine.yml) & [`python-engine/brutal_image_scraper.py`](file:///c:/Max%20Display/price-checker/python-engine/brutal_image_scraper.py): Trigger `photos` kini **melewati `KATEGORI 1B`** (hemat ~11 menit) dan langsung menjalankan `brutal_image_scraper.py` yang hanya memuat produk `WHERE "imageUrl" IS NULL OR TRIM("imageUrl") = ''` (+ foto donor khusus artikel yang masih bolong — 0% audit produk yang sudah komplit!).
+  - [`python-engine/raw_vault_collector.py`](file:///c:/Max%20Display/price-checker/python-engine/raw_vault_collector.py): Fix SQLite `MAX("updatedAt")` string ISO, fallback baca cookie dari Turso Storage, dan perampingan default koleksi aktif (`120`).
+  - [`src/lib/mdsBisaClient.ts`](file:///c:/Max%20Display/price-checker/src/lib/mdsBisaClient.ts) & [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx): Klik manual **`Update Gambar`** (`force: true`) kini otomatis menyinkronkan **Artikel + SKU + Barcode + Varian + Stok** dari MDS BISA sekaligus **Foto Studio** dari Matahari.com lalu memperbarui UI & Dexie lokal.
+  - [`src/app/api/product/[identifier]/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/product/%5Bidentifier%5D/route.ts): Scan barcode/SKU (`8–14 digit`) yang belum ada di Turso kini **otomatis langsung menembak MDS BISA + Matahari.com** (timeout 12 detik, lengkap dengan keluarga varian & foto studio) dan langsung menyimpannya ke Turso Cloud.
+  - [`src/app/api/admin/trigger/self-heal/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/self-heal/route.ts): Otomatis membatalkan paksa run GitHub Actions yang sedang nyangkut & mereset log error lama di Turso sebelum menjalankan run baru.
+
+
 

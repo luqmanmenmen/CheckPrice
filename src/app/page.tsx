@@ -585,16 +585,42 @@ export default function Home() {
             if (!match && (!cur.article || cur.article !== healedMain.article)) return cur;
             const img = match?.imageUrl || healedMain.imageUrl;
             const imgs = match?.images || healedMain.images;
-            return { ...cur, imageUrl: img || cur.imageUrl, images: imgs && imgs.length > 0 ? imgs : cur.images };
+            return {
+              ...cur,
+              ...(match ? {
+                article: match.article || cur.article,
+                barcode: match.barcode || cur.barcode,
+                brand: match.brand || cur.brand,
+                dept: match.dept || cur.dept,
+                color: match.color || cur.color,
+                size: match.size || cur.size,
+                stok: typeof match.stok === "number" ? match.stok : cur.stok,
+                hargaNormal: match.hargaNormal || cur.hargaNormal,
+              } : {}),
+              imageUrl: img || cur.imageUrl,
+              images: imgs && imgs.length > 0 ? imgs : cur.images,
+            };
           });
         }
         if (healedSibs.length > 0) {
-          setSiblings((prev) =>
-            prev.map((s) => {
+          setSiblings((prev) => {
+            if (isManual && healedSibs.length >= prev.length) {
+              return healedSibs;
+            }
+            return prev.map((s) => {
               const m = sibMap.get(s.sku);
-              return m ? { ...s, imageUrl: m.imageUrl || s.imageUrl, images: m.images?.length ? m.images : s.images } : s;
-            })
-          );
+              return m
+                ? {
+                    ...s,
+                    article: m.article || s.article,
+                    barcode: m.barcode || s.barcode,
+                    stok: typeof m.stok === "number" ? m.stok : s.stok,
+                    imageUrl: m.imageUrl || s.imageUrl,
+                    images: m.images?.length ? m.images : s.images,
+                  }
+                : s;
+            });
+          });
           setProductsList((prev) =>
             prev.map((p) => {
               const m = sibMap.get(p.sku) || (p.article && healedMain?.article === p.article ? healedMain : undefined);
@@ -603,6 +629,9 @@ export default function Home() {
           );
           if ((json.updatedCount ?? 0) > 0) {
             listCacheRef.current.clear();
+          }
+          if (healedMain) {
+            persistServerFamilyToLocal(healedMain, healedSibs, healedMain.sku || target.sku || "");
           }
           const { updateOfflineFamilyImages } = await import("@/lib/offlineDb");
           await updateOfflineFamilyImages(healedSibs, healedMain?.article || target.article);
@@ -1927,8 +1956,8 @@ export default function Home() {
       setNotFoundCode("");
 
       const fastCtrl = new AbortController();
-      const fastTimer = setTimeout(() => fastCtrl.abort(), 4500);
-      const fastUrl = endpointUrl + (endpointUrl.includes("?") ? "&fast=1" : "?fast=1");
+      const fastTimer = setTimeout(() => fastCtrl.abort(), 14000);
+      const fastUrl = endpointUrl + (endpointUrl.includes("?") ? "&fast=1&live=1" : "?fast=1&live=1");
       let foundOnServer = false;
 
       try {

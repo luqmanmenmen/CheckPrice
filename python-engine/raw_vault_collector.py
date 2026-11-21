@@ -529,7 +529,7 @@ def collect_storehub_vendors(db_path: str = VAULT_DB_PATH) -> int:
     return len(vendors_map)
 
 
-def collect_matahari_deep(max_collections: int = 360, code_red: bool = False) -> int:
+def collect_matahari_deep(max_collections: int = 120, code_red: bool = False) -> int:
     """
     Kumpulkan katalog Matahari.com seluas-luasnya langsung ke Raw Vault SQLite
     (tidak memakan kuota Supabase!) agar tidak ada artikel/varian/anomali yang terlewat.
@@ -939,7 +939,7 @@ if __name__ == "__main__":
     parser.add_argument("--collect-web", action="store_true", help="Sedot katalog luas Matahari.com ke raw_vault.db")
     parser.add_argument("--code-red", action="store_true", help="Mode KODE MERAH: sedot SEMUA koleksi Matahari.com + StoreHub vendor tanpa batas ke raw_vault.db")
     parser.add_argument("--collect-vendors", action="store_true", help="Sedot daftar vendor konsinyasi & brand dari StoreHub ke raw_vault.db")
-    parser.add_argument("--max-collections", type=int, default=360, help="Jumlah koleksi Matahari.com (0 = tak terbatas)")
+    parser.add_argument("--max-collections", type=int, default=120, help="Jumlah koleksi Matahari.com (0 = tak terbatas)")
     parser.add_argument("--audit", action="store_true", help="Audit & masak seluruh raw_vault.db lalu sinkron ke Supabase")
     parser.add_argument("--dry-run", action="store_true", help="Audit tanpa menulis ke Supabase")
     parser.add_argument("--include-csv", action="store_true", help="Ikut mem-parse temp_*.csv Power Query lokal")
