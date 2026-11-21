@@ -1892,3 +1892,21 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   4. **Gmail GAS Bebas Supabase ([`scripts/gas_turso_uploader.js`](file:///c:/Max%20Display/price-checker/scripts/gas_turso_uploader.js)):** Mengirim lampiran Excel promo langsung ke `https://luqmanganteng.my.id/api/webhook/gmail` → tersimpan ke Turso `StorageObject` → memicu `run_promo_sync.py`.
 - **Wajib Diisi Sebelum/Saat Deploy Produksi:** Tambahkan `TURSO_DATABASE_URL` dan `TURSO_AUTH_TOKEN` di **Vercel Environment Variables** dan **GitHub Repository Secrets** (variabel Supabase lama boleh dihapus).
 
+---
+
+### 109. Direct Webhook Promo Email/GAS → Turso + Global Live Promo Progress Loader (`PromoSyncBanner`) untuk Semua User Login (22 November 2026)
+
+- **Arahan Pengguna:**
+  1. Ketika Turso menerima file promo dari Email / Google Apps Script (GAS), mesin langsung bekerja memperbarui semuanya otomatis (`Product` promo → `CatalogArticle` → Offline Snapshot `.json.gz` → Analytics JSON).
+  2. Setiap user yang sedang login (Crew maupun Super Admin) langsung melihat **Loader Progres Update Promo real-time** saat promo sedang berjalan, maupun status **Promo Baru Sudah Masuk (100%)** untuk promo yang baru/sudah selesai masuk.
+- **Perubahan yang Diterapkan:**
+  1. **Direct Webhook Tanpa Extra HTTP Hop ([`src/app/api/webhook/gmail/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/webhook/gmail/route.ts), [`src/lib/githubDispatcher.ts`](file:///c:/Max%20Display/price-checker/src/lib/githubDispatcher.ts), [`scripts/gas_turso_uploader.js`](file:///c:/Max%20Display/price-checker/scripts/gas_turso_uploader.js)):**
+     - `/api/webhook/gmail` langsung menyimpan lampiran ke Turso `StorageObject`, menulis marker live instan `logs/promo-sync-live.json`, dan langsung memanggil `dispatchToGitHubRunner({ action: 'promo' })` di proses yang sama.
+     - Mendukung `skipTrigger` + `triggerFolder` untuk email multi-lampiran Excel agar seluruh lampiran dalam 1 email diproses serentak dalam 1 run GitHub Actions.
+  2. **API Status Progres Ringan ([`src/app/api/promo-sync-status/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/promo-sync-status/route.ts)):**
+     - Cache memori 4 detik, membaca `logs/promo-sync-live.json` + `logs/live-runner-log.json` dari Turso Storage + `SyncHistory` terbaru secara paralel.
+     - Menghitung persentase akurat (`10% → 96% → 100%`) lintas 3 tahap (`Parse Excel Promo` → `Susun Katalog & Snapshot` → `Finalisasi Turso`).
+  3. **Global Live Banner ([`src/components/PromoSyncBanner.tsx`](file:///c:/Max%20Display/price-checker/src/components/PromoSyncBanner.tsx) di [`src/components/LayoutWrapper.tsx`](file:///c:/Max%20Display/price-checker/src/components/LayoutWrapper.tsx)):**
+     - Tampil di seluruh halaman terautentikasi: progress bar biru animasi real-time (polling 5 detik saat aktif) & otomatis berubah menjadi banner hijau **100% Selesai / Promo Terbaru Aktif** lengkap dengan nama promo, jumlah SKU, jam WIB, tombol **Muat Harga Terbaru**, dan tombol tutup per-`syncKey` (muncul lagi otomatis bila promo baru masuk).
+
+

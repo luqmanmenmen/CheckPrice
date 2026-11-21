@@ -6,9 +6,10 @@
  *  1. Mencari email masuk bertema "Promo" yang memiliki lampiran Excel/CSV.
  *  2. Mengunggah langsung file lampiran ke Vercel Webhook:
  *     `https://luqmanganteng.my.id/api/webhook/gmail`
- *  3. Vercel langsung menyimpan file tersebut ke Turso Cloud (`StorageObject`)
- *     dan otomatis memicu GitHub Actions `run_promo_sync.py` untuk memperbarui
- *     harga promo di Turso Cloud tanpa menyentuh stok fisik/barcode!
+ *  3. Jika 1 email berisi banyak lampiran Excel, lampiran 1..(N-1) diunggah
+ *     lebih dulu lalu lampiran terakhir otomatis memicu 1x update serentak
+ *     ke GitHub Actions + Turso Cloud (`Product` + `CatalogArticle` + Snapshot + Analytics)!
+ *  4. Semua user yang sedang login langsung melihat Loader Progres Update Promo real-time!
  * ============================================================
  */
 
@@ -57,12 +58,24 @@ function processEmailsAndUpload() {
           continue;
         }
 
-        for (const attachment of attachments) {
+        const totalAtt = attachments.length;
+        for (let idx = 0; idx < totalAtt; idx++) {
+          const attachment = attachments[idx];
           const fileName = attachment.getName();
           const dynamicFolder = rule.folder + "/" + safeSubject;
+          const isLast = idx === totalAtt - 1;
 
-          Logger.log("  Mengirim promo ke Turso via Vercel: " + fileName + " -> " + dynamicFolder);
-          const ok = uploadPromoDirectlyToVercelTurso(attachment, fileName, dynamicFolder);
+          Logger.log(
+            "  Mengirim promo [" + (idx + 1) + "/" + totalAtt + "] ke Turso: " +
+              fileName + " -> " + dynamicFolder
+          );
+          const ok = uploadPromoDirectlyToVercelTurso(
+            attachment,
+            fileName,
+            dynamicFolder,
+            !isLast,
+            totalAtt > 1 && isLast
+          );
           if (ok) {
             totalUploaded++;
           }
@@ -76,7 +89,7 @@ function processEmailsAndUpload() {
   Logger.log("Selesai. Total promo terkirim ke Turso Cloud: " + totalUploaded);
 }
 
-function uploadPromoDirectlyToVercelTurso(attachment, fileName, folder) {
+function uploadPromoDirectlyToVercelTurso(attachment, fileName, folder, skipTrigger, triggerFolder) {
   try {
     const webhookUrl = CONFIG.APP_URL + "/api/webhook/gmail";
     const blob = attachment.copyBlob().setName(fileName);
@@ -87,6 +100,8 @@ function uploadPromoDirectlyToVercelTurso(attachment, fileName, folder) {
         token: CONFIG.WEBHOOK_TOKEN,
         folder: folder,
         fileName: fileName,
+        skipTrigger: skipTrigger ? "1" : "0",
+        triggerFolder: triggerFolder ? "1" : "0",
         file: blob,
       },
       muteHttpExceptions: true,

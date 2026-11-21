@@ -562,7 +562,7 @@ def attempt_self_heal(
         delay = min(40, 12 * attempt)
         time.sleep(delay)
         db_ok = True
-        if os.environ.get("DATABASE_URL") or os.environ.get("DIRECT_URL"):
+        if os.environ.get("TURSO_DATABASE_URL") or os.environ.get("DATABASE_URL") or os.environ.get("DIRECT_URL"):
             conn = None
             try:
                 conn = _connect_postgres()

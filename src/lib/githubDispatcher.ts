@@ -148,6 +148,32 @@ export async function dispatchToGitHubRunner(params: {
     }
   }
 
+  // Catat marker live instan ke Turso Storage saat promo dipicu agar banner progress langsung muncul (< 5 detik)
+  if (action === 'promo' || action === 'upcoming-promo') {
+    try {
+      const { writeTursoStorage } = await import('@/lib/tursoStorage');
+      const nowIso = new Date().toISOString();
+      const rawName = promoUrl
+        ? decodeURIComponent(promoUrl.split('/').pop() || 'Promo Terbaru')
+        : 'Folder Promo Terbaru';
+      const payloadLive = {
+        status: 'queued',
+        action,
+        promoName: rawName,
+        promoUrl: promoUrl || '',
+        triggeredAt: nowIso,
+        updatedAt: nowIso,
+        percent: 10,
+        stageLabel: 'File promo masuk ke Turso — menyiapkan mesin update otomatis...',
+      };
+      await writeTursoStorage(
+        'logs/promo-sync-live.json',
+        JSON.stringify(payloadLive),
+        'application/json'
+      );
+    } catch {}
+  }
+
   return {
     ok: true,
     status: 200,

@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import useSWR from "swr";
 import Sidebar from "./Sidebar";
+import PromoSyncBanner from "./PromoSyncBanner";
 import { forceAppUpdate, APP_VERSION } from "@/lib/version";
 
 const fetcher = (url: string) => fetch(url, { credentials: "same-origin" }).then(res => res.json());
@@ -108,6 +109,9 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
           </div>
         </div>
       </header>
+
+      {/* Live Progress Loader Update Promo Otomatis (muncul saat berjalan & saat promo baru sudah masuk) */}
+      <PromoSyncBanner />
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl mx-auto w-full p-0 lg:p-8 bg-white shadow-xs min-h-[calc(100dvh-56px-50px)] flex flex-col">
