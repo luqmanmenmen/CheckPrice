@@ -16,6 +16,9 @@
    - Jangan menambahkan logika penerjemahan string mentah atau rekonstruksi promo kompleks di komponen React.
 3. **ISOLASI TOTAL GOOGLE ANTIGRAVITY PYTHON SDK:**
    - Folder `c:\Max Display\antigravity-sdk-demo` dibuat terpisah dan mandiri. Tidak boleh dicampur atau mengganggu project Next.js `price-checker`.
+4. **PRINSIP JALUR TOL ("KEEP JALAN TERCEPAT, JANGAN CARI ULANG"):**
+   - **Untuk AI Agent:** Setiap jalur teknis yang sudah terbukti bekerja cepat & mulus (mis. Turso HTTP Pipeline v2, `StorageObject`/`StorageChunk` 1,5 MB, `uv run` di Windows, direct webhook tanpa extra HTTP hop, auto-cancel Self-Heal, laser-focused missing-only scraping) **WAJIB disimpan & langsung dipakai ulang** — jangan pernah meraba-raba atau mengulang eksperimen lama. Selalu pilih jalur paling singkat & tercepat menuju tujuan.
+   - **Untuk Sistem Aplikasi:** Sekali SKU, barcode alias, artikel, foto, atau cookie sesi ditemukan dari `luqman org` / `matahari.com`, **simpan permanen jalurnya** (Turso Cloud + `BarcodeAlias` + `mapped_sku_paths.json.gz` + Dexie lokal) agar pencarian & update berikutnya lewat jalur tol mulus tanpa scan/audit ulang produk yang sudah komplit.
 
 ---
 
