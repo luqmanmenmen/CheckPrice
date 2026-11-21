@@ -1961,6 +1961,22 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   - [`src/app/api/storage/[...path]/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/storage/%5B...path%5D/route.ts): Fast-path 1-query untuk chunk snapshot immutable + header `CDN-Cache-Control` & `Vercel-CDN-Cache-Control` (`max-age=31536000, immutable`).
   - [`src/components/ShiftLoader.tsx`](file:///c:/Max%20Display/price-checker/src/components/ShiftLoader.tsx): Menampilkan badge **`⚡ N Worker Paralel`** langsung di modal sinkronisasi.
 
+---
+
+### 113. Pembersihan False Positive Kategori `BEAUTY` (`v18_clean_beauty`) & Checkpoint Pagi (22 November 2026, 04:27 WIB)
+
+- **Perbaikan ([`src/lib/productTaxonomy.ts`](file:///c:/Max%20Display/price-checker/src/lib/productTaxonomy.ts), [`python-engine/build_catalog_index.py`](file:///c:/Max%20Display/price-checker/python-engine/build_catalog_index.py), [`src/lib/offlineDb.ts`](file:///c:/Max%20Display/price-checker/src/lib/offlineDb.ts), commit `b889acd`):**
+  - Menghapus kata pendek ambigu (`LIP`, `BROW`, `BLUSH` tunggal) yang sempat menyeret celana (`TWILL PANTS LIP`), topi (`SKHICAP1 BROW`), sepatu (`SLIP ON` -> `LIP ON`), piyama (`BLUSH FLORAL`), & blouse ke kategori `BEAUTY`; menggantinya dengan frase kosmetik presisi + guard toko/dept fashion (`SUKO`, `ZES`, `SLEEPWEAR`, `SHOES/FW`, dll.).
+  - `18` artikel salah kategori sudah langsung dipindahkan di Turso Cloud (`SUKO Beauty = 0`, `ZES Beauty = 0`, `Mu+Ku Beauty = 544` kosmetik/skincare asli).
+- **Status Checkpoint Pagi (Semua Bersih & Live di `origin/main`):**
+  - Database & Storage **100% Turso Cloud Singapore (`5 GB` free tier, `0%` Supabase)**.
+  - Direct Webhook Promo + Global Live Promo Banner aktif.
+  - Laser-focused scraping (skip produk komplit) + Self-Heal auto-cancel + Manual Update Gambar (Foto + Artikel/SKU) + Scan barcode baru auto-tembak MDS BISA & Matahari.com aktif.
+  - Kategori **`SPORT`**, Filter Segmen **`Men / Ladies / Boys / Girls`**, & Pembersihan **`BEAUTY`** (`v18_clean_beauty`) aktif online & offline.
+  - **Multi-Worker Offline Sync Pool (`public/workers/offline-sync-worker.js`)** + Native IndexedDB `{ durability: "relaxed" }` + Edge CDN chunk fast-path aktif.
+  - **Opsi lanjutan nanti pagi (jika dibutuhkan):** Sharded multi-rak `products_0..5` atau non-blocking background install (~3 detik langsung buka layar setelah `models` siap).
+
+
 
 
 
