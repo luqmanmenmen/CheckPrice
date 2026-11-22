@@ -8,10 +8,9 @@ export type SkyPhase = "pagi" | "siang" | "sore" | "malam";
 interface ShiftToggleProps {
   isNight: boolean;
   skyPhase?: SkyPhase;
-  onToggle: (isNight: boolean) => void;
 }
 
-export default function ShiftToggle({ isNight, skyPhase, onToggle }: ShiftToggleProps) {
+export default function ShiftToggle({ isNight, skyPhase }: ShiftToggleProps) {
   const [mounted, setMounted] = useState(false);
   const [stars, setStars] = useState<{ x: number; y: number; delay: string }[]>([]);
 
@@ -29,26 +28,32 @@ export default function ShiftToggle({ isNight, skyPhase, onToggle }: ShiftToggle
   }, []);
 
   return (
-    <div className="w-full flex flex-col items-center justify-center mt-5 mb-1">
+    <div className="w-full flex flex-col items-center justify-center mt-5 mb-1 select-none">
       
-      {/* LABEL */}
+      {/* LABEL OTOMATIS SESUAI JAM */}
       <div className="label mb-2">
         <span id="labelDay" className={`text-slate-700 font-bold ${!isNight ? "visible" : ""}`}>{dayText}</span>
         <span id="labelNight" className={`text-slate-700 font-bold ${isNight ? "visible" : ""}`}>{nightText}</span>
       </div>
 
-      {/* MAIN TOGGLE */}
-      <button
-        type="button"
-        onClick={() => onToggle(!isNight)}
+      {/* KAPSUL PEMANDANGAN LANGIT OTOMATIS (TANPA KNOB GESER) */}
+      <div
+        role="img"
         className={`switch ${isNight ? "night on" : ""}`}
         id="switchBtn"
-        aria-pressed={isNight}
-        aria-label="Ganti suasana langit Pagi / Siang / Sore / Malam"
-        title="Ketuk untuk ganti tampilan langit (Pagi → Siang → Sore → Malam)"
-        style={{ width: '100%', cursor: 'pointer', opacity: 1 }}
+        aria-label={`Suasana langit otomatis: ${!isNight ? dayText : nightText}`}
+        style={{ width: '100%', cursor: 'default', pointerEvents: 'none', opacity: 1 }}
       >
-        <div className="track">
+        <div
+          className="track"
+          style={
+            skyPhase === "sore"
+              ? { background: "linear-gradient(135deg, #f97316 0%, #c084fc 55%, #312e81 100%)" }
+              : skyPhase === "pagi"
+              ? { background: "linear-gradient(135deg, #fbbf24 0%, #60a5fa 48%, #2563eb 100%)" }
+              : undefined
+          }
+        >
           {/* TRACK STARS */}
           <div className="stars" id="trackStars">
             {mounted && stars.map((s, i) => (
@@ -87,8 +92,7 @@ export default function ShiftToggle({ isNight, skyPhase, onToggle }: ShiftToggle
             </div>
           </div>
         </div>
-        <div className="knob"></div>
-      </button>
+      </div>
 
     </div>
   );

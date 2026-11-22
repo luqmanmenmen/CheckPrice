@@ -47,10 +47,9 @@ export default function Login() {
   const [loginRole, setLoginRole] = useState("");
   const [changingPin, setChangingPin] = useState(false);
   
-  // Client-side only states for random positions & 4-phase dynamic sky background
+  // Client-side only states for random positions & 4-phase dynamic sky background (100% otomatis sesuai jam)
   const [mounted, setMounted] = useState(false);
   const [skyPhase, setSkyPhase] = useState<SkyPhase>("siang");
-  const [manualSkyOverride, setManualSkyOverride] = useState(false);
   const [stars, setStars] = useState<{ x: number; y: number; delay: string }[]>([]);
 
   const resolveSkyPhaseByHour = (hour: number): SkyPhase => {
@@ -62,11 +61,6 @@ export default function Login() {
 
   const isNight = skyPhase === "malam";
   const isToggleNight = skyPhase === "sore" || skyPhase === "malam";
-  const cycleSkyPhase = () => {
-    setManualSkyOverride(true);
-    const order: SkyPhase[] = ["pagi", "siang", "sore", "malam"];
-    setSkyPhase((cur) => order[(order.indexOf(cur) + 1) % order.length]);
-  };
 
   const requestGpsLocation = React.useCallback((): Promise<{ lat: number; lng: number; accuracy: number | null } | null> => {
     return new Promise((resolve) => {
@@ -314,12 +308,11 @@ export default function Login() {
 
   // Auto-update fase langit tiap 60 detik mengikuti jam real-time (misal masuk jam 11:00/13:00 matahari makin terik)
   useEffect(() => {
-    if (manualSkyOverride) return;
     const timer = setInterval(() => {
       setSkyPhase(resolveSkyPhaseByHour(new Date().getHours()));
     }, 60000);
     return () => clearInterval(timer);
-  }, [manualSkyOverride]);
+  }, []);
 
   const router = useRouter();
 
@@ -836,8 +829,8 @@ export default function Login() {
           )}
         </form>
 
-        {/* Animasi CSS Langit Pagi (Matahari/Awan/Burung) <-> Malam (Bulan/Bintang Jatuh) */}
-        <ShiftToggle isNight={isToggleNight} skyPhase={skyPhase} onToggle={cycleSkyPhase} />
+        {/* Kapsul Animasi Langit Otomatis Sesuai Jam (Tanpa Knob Geser) */}
+        <ShiftToggle isNight={isToggleNight} skyPhase={skyPhase} />
       </div>
       )}
 
