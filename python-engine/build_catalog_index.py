@@ -626,7 +626,59 @@ def build_and_verify_catalog(stock_only: bool = False, upload_snapshot: bool = T
     assert len({x["key"] for x in compiled}) == len(compiled), "Terdapat key artikel duplikat!"
 
     if getattr(conn, "is_turso", False):
-        cur.execute('DELETE FROM "CatalogArticle"')
+        # DELTA-ONLY SYNC UNTUK TURSO (Hemat ~98% kuota Rows Written vs DELETE ALL + INSERT 57k baris!)
+        # Bandingkan isi CatalogArticle eksisting dan HANYA upsert baris yang benar-benar baru / berubah!
+        existing_sig: Dict[str, Tuple[Any, ...]] = {}
+        try:
+            last_k = ""
+            while True:
+                cur.execute(
+                    '''
+                    SELECT key, sku, barcode, article, description, "brandGroup", "subBrand", "categoryKey",
+                           stok, "hargaNormal", "hargaPromo", diskon, acara, "toDate", "imageUrl",
+                           "articleGroupCount", "articleTotalStok", "articleHasPromo", "articlePromoLabel"
+                    FROM "CatalogArticle"
+                    WHERE key > ?
+                    ORDER BY key ASC
+                    LIMIT 20000
+                    ''',
+                    (last_k,),
+                )
+                ebatch = cur.fetchall()
+                if not ebatch:
+                    break
+                for er in ebatch:
+                    ek = str(er[0])
+                    existing_sig[ek] = (
+                        er[1], er[2], er[3], er[4], er[5], er[6], er[7],
+                        int(er[8] or 0), float(er[9] or 0),
+                        (float(er[10]) if er[10] is not None else None),
+                        er[11], er[12], er[13], er[14],
+                        int(er[15] or 1), int(er[16] or 0),
+                        bool(er[17]), er[18],
+                    )
+                last_k = str(ebatch[-1][0])
+        except Exception as diff_err:
+            print(f"⚠️ Gagal membaca diff CatalogArticle eksisting ({diff_err}), fallback full upsert.")
+            existing_sig = {}
+
+        new_keys = set()
+        changed_records = []
+        for rec in records:
+            rk = str(rec[0])
+            new_keys.add(rk)
+            sig = (
+                rec[1], rec[2], rec[3], rec[4], rec[7], rec[8], rec[9],
+                int(rec[12] or 0), float(rec[13] or 0),
+                (float(rec[14]) if rec[14] is not None else None),
+                rec[15], rec[17], rec[18], rec[19],
+                int(rec[20] or 1), int(rec[21] or 0),
+                bool(rec[24]), rec[25],
+            )
+            if existing_sig.get(rk) != sig:
+                changed_records.append(rec)
+
+        obsolete_keys = [k for k in existing_sig.keys() if k not in new_keys]
         cat_cols = [
             "key", "sku", "barcode", "article", "description", "brand", "dept",
             "brandGroup", "subBrand", "categoryKey", "color", "size", "stok",
@@ -635,7 +687,17 @@ def build_and_verify_catalog(stock_only: bool = False, upload_snapshot: bool = T
             "articleColors", "articleSizes", "articleHasPromo", "articlePromoLabel",
             "sortRank", "updatedAt",
         ]
-        conn.bulk_insert_rows("CatalogArticle", cat_cols, records, on_conflict="key", rows_per_stmt=180, stmts_per_http=4)
+        if obsolete_keys:
+            for i in range(0, len(obsolete_keys), 250):
+                chunk_del = obsolete_keys[i : i + 250]
+                ph = ", ".join(["?"] * len(chunk_del))
+                cur.execute(f'DELETE FROM "CatalogArticle" WHERE key IN ({ph})', chunk_del)
+        if changed_records:
+            conn.bulk_insert_rows("CatalogArticle", cat_cols, changed_records, on_conflict="key", rows_per_stmt=180, stmts_per_http=4)
+        print(
+            f"💾 [TURSO DELTA CATALOG] Total={len(records):,} | Diperbarui={len(changed_records):,} | "
+            f"Dihapus={len(obsolete_keys):,} | Hemat Write={len(records) - len(changed_records):,} baris!"
+        )
     else:
         from psycopg2.extras import execute_values
         cur.execute('TRUNCATE TABLE "CatalogArticle"')
