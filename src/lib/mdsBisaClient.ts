@@ -15,6 +15,7 @@ const ITEM_CHECKER_URL = `${STOREHUB_BASE}/item-checker`;
 const ACTION_LOGIN_DEFAULT = '603f9b4dfafaa0e65eec411a818c1ebcaa476b889f';
 let ACTION_LOGIN = ACTION_LOGIN_DEFAULT;
 let ACTION_DETAIL = '608e569ea77f8871817d11afae932ecea7d0fcbd09';
+let ACTION_PROMO = '60a67fb6833e81c90695ed315a2dc4394535951a87';
 
 export type StoreHubAccount = 'suko' | 'muku';
 
@@ -1280,6 +1281,10 @@ async function resolveDetailActionHash(activeCookie: string): Promise<boolean> {
     );
     for (const jsText of jsTexts) {
       const actMatch = jsText.match(/createServerReference\)?\("([a-f0-9]{40,44})"[^)]{0,160}"checkItemDetail"/);
+      const promoMatch = jsText.match(/createServerReference\)?\("([a-f0-9]{40,44})"[^)]{0,160}"checkItemPromotion"/);
+      if (promoMatch?.[1]) {
+        ACTION_PROMO = promoMatch[1];
+      }
       if (actMatch?.[1]) {
         ACTION_DETAIL = actMatch[1];
         return true;
@@ -1287,6 +1292,97 @@ async function resolveDetailActionHash(activeCookie: string): Promise<boolean> {
     }
   } catch {}
   return false;
+}
+
+/** Memanggil Server Action `checkItemPromotion` StoreHub untuk menarik harga promo live (khususnya Mu+Ku tanpa Excel) */
+async function queryStoreHubPromotion(
+  kind: 'upc' | 'sku',
+  code: string,
+  activeCookie: string,
+  normalPrice: number,
+  timeoutMs: number = 4000
+): Promise<{ hargaPromo: number | null; diskon: string; discountType: string; acara: string } | null> {
+  try {
+    const res = await fetch(ITEM_CHECKER_URL, {
+      method: 'POST',
+      headers: {
+        'Accept': 'text/x-component',
+        'Content-Type': 'text/plain;charset=UTF-8',
+        'Cookie': activeCookie,
+        'Next-Action': ACTION_PROMO,
+        'Referer': ITEM_CHECKER_URL,
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15',
+        'Next-Router-State-Tree': '%5B%22%22%2C%7B%22children%22%3A%5B%22(app)%22%2C%7B%22children%22%3A%5B%22item-checker%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C4%5D%7D%2Cnull%2C%22refetch%22%2C24%5D',
+      },
+      body: JSON.stringify([kind, code]),
+      redirect: 'manual',
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) return null;
+    const text = await res.text();
+    const promos: any[] = [];
+    for (const line of text.split('\n')) {
+      const ci = line.indexOf(':');
+      if (ci > 0 && ci <= 3) {
+        try {
+          const parsed = JSON.parse(line.slice(ci + 1));
+          const data = parsed?.result?.data;
+          if (data && typeof data === 'object' && !Array.isArray(data)) {
+            for (const rows of Object.values(data)) {
+              if (Array.isArray(rows)) {
+                for (const r of rows) if (r && typeof r === 'object') promos.push(r);
+              }
+            }
+          }
+        } catch {}
+      }
+    }
+    if (promos.length === 0) return null;
+
+    let best: { hargaPromo: number | null; diskon: string; discountType: string; acara: string } | null = null;
+    for (const pr of promos) {
+      const dtype = String(pr.DiscountType || '').trim();
+      const msg = String(pr.Message || '').trim();
+      const brName = String(pr.BusinessRuleName || '').trim();
+      const evDesc = String(pr.EventDesc || '').trim();
+      const acara = (evDesc || brName || msg || 'Promo Live luqman org').slice(0, 120);
+      const pct = Number(pr.DiscountPercentage || 0);
+      const amt = Number(pr.DiscountAmount || 0);
+      const isPct = (/percent/i.test(dtype) && pct > 0) || (pct > 0 && amt <= 0);
+      const isAmt = (/amount|price|rupiah/i.test(dtype) && amt > 0) || (amt > 0 && !isPct);
+
+      let cand: { hargaPromo: number | null; diskon: string; discountType: string; acara: string } | null = null;
+      if (isPct && normalPrice > 0 && pct >= 1 && pct <= 95) {
+        const hp = Math.round((normalPrice * (100 - pct)) / 100);
+        if (hp > 0 && hp < normalPrice) {
+          cand = { hargaPromo: hp, diskon: `${pct}%`, discountType: 'PERCENT', acara };
+        }
+      } else if (isAmt && amt > 0) {
+        const isSp = /special|fixed|nett|price/i.test(dtype) || /\b(sp|special\s*price|harga\s*spesial)\b/i.test(`${msg} ${brName}`);
+        const hp = normalPrice > 0 ? (isSp ? Math.round(amt) : Math.round(normalPrice - amt)) : Math.round(amt);
+        if (hp > 0 && (normalPrice <= 0 || hp < normalPrice)) {
+          cand = {
+            hargaPromo: hp,
+            diskon: isSp ? 'SP' : `POT Rp ${Math.round(amt).toLocaleString('id-ID')}`,
+            discountType: 'SPECIAL_PRICE',
+            acara,
+          };
+        }
+      } else if (msg && /(buy|beli|get|gratis|disc|diskon|promo|off|%)/i.test(`${msg} ${brName}`)) {
+        cand = { hargaPromo: null, diskon: (msg || brName).slice(0, 40), discountType: 'BUNDLING', acara };
+      }
+
+      if (cand) {
+        if (!best) best = cand;
+        else if (cand.hargaPromo !== null && (best.hargaPromo === null || cand.hargaPromo < best.hargaPromo)) {
+          best = cand;
+        }
+      }
+    }
+    return best;
+  } catch {
+    return null;
+  }
 }
 
 /** Helper tunggal pemanggilan checkItemDetail StoreHub + parser Next.js RSC (mengembalikan allItems sekaligus) */
@@ -1988,6 +2084,12 @@ export async function checkSingleItemStock(
 
     // 1. Upsert item utama + seluruh allItems yang ikut terbawa di payload awal
     const itemsToUpsert = queryRes.allItems.length > 0 ? queryRes.allItems : [itemData];
+    // Untuk akun Mu+Ku (tidak ada file Excel promo), tarik juga harga promo live lewat `checkItemPromotion`!
+    const seedNormalPrice = Number(String(itemData?.RetailPrice ?? itemData?.Price ?? 0).replace(/[^0-9]/g, '')) || 0;
+    const livePromoPromise =
+      activeAccount === 'muku'
+        ? queryStoreHubPromotion(activeKind, queriedCode, cookie, seedNormalPrice, 3500).catch(() => null)
+        : Promise.resolve(null);
     const updatedVariants: LiveStockVariantSummary[] = [];
     const freshStockBySku = new Map<string, number>();
     const seenUpdatedSkus = new Set<string>();
@@ -2349,6 +2451,23 @@ export async function checkSingleItemStock(
           }
         }
       }
+    }
+
+    // Jika akun Mu+Ku menemukan promo live dari `checkItemPromotion`, langsung simpan ke seluruh varian 1 artikel sebelum response!
+    const livePromo = await livePromoPromise;
+    if (livePromo) {
+      const whereTarget = articleToSearch ? { article: articleToSearch } : { sku: seedSku };
+      await prisma.product
+        .updateMany({
+          where: whereTarget,
+          data: {
+            hargaPromo: livePromo.hargaPromo,
+            diskon: livePromo.diskon,
+            discountType: livePromo.discountType,
+            acara: livePromo.acara,
+          },
+        })
+        .catch(() => {});
     }
 
     return await finalizeProductFamilyResponse({

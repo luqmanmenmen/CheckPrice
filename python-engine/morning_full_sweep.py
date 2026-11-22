@@ -77,6 +77,7 @@ LOGIN_URL = f"{STOREHUB_BASE}/login?next=%2F"
 ITEM_CHECKER_URL = f"{STOREHUB_BASE}/item-checker"
 ACTION_LOGIN = "603f9b4dfafaa0e65eec411a818c1ebcaa476b889f"
 ACTION_DETAIL = "608e569ea77f8871817d11afae932ecea7d0fcbd09"
+ACTION_PROMO = "60a67fb6833e81c90695ed315a2dc4394535951a87"
 
 ACCOUNT_PROFILES: Dict[str, Dict[str, str]] = {
     "suko": {
@@ -250,7 +251,9 @@ def log_sync_history(sync_type: str, file_name: str, total_records: int, status:
 
 
 def resolve_action_detail(default_action: str = ACTION_DETAIL) -> str:
-    """Mendeteksi action ID checkItemDetail secara dinamis dari Next.js bundle jika berubah."""
+    """Mendeteksi action ID checkItemDetail & checkItemPromotion secara dinamis dari Next.js bundle jika berubah."""
+    global ACTION_PROMO
+    found_detail = default_action
     try:
         r = http_session.get(ITEM_CHECKER_URL, timeout=8)
         scripts = re.findall(r'src="(/_next/static/[^"]+\.js)"', r.text)
@@ -259,10 +262,15 @@ def resolve_action_detail(default_action: str = ACTION_DETAIL) -> str:
             js_r = http_session.get(js_url, timeout=8)
             match = re.search(r'createServerReference\)?\("([a-f0-9]{40,44})"[^)]{0,140}"checkItemDetail"', js_r.text)
             if match:
-                return match.group(1)
+                found_detail = match.group(1)
+            match_p = re.search(r'createServerReference\)?\("([a-f0-9]{40,44})"[^)]{0,140}"checkItemPromotion"', js_r.text)
+            if match_p:
+                ACTION_PROMO = match_p.group(1)
+            if match or match_p:
+                break
     except Exception as e:
         print(f"⚠️ Gagal resolve action hash: {e}")
-    return default_action
+    return found_detail
 
 
 def resolve_action_login(default_action: str = ACTION_LOGIN) -> str:
@@ -573,6 +581,269 @@ def query_storehub(category: str, identifier: str, cookie: str) -> Optional[Dict
     """Kompatibilitas pemanggilan tunggal."""
     items = query_storehub_multi(category, identifier, cookie)
     return items[0] if items else None
+
+
+def query_storehub_promotion(category: str, identifier: str, cookie: str) -> List[Dict[str, Any]]:
+    """
+    Memanggil Server Action resmi `checkItemPromotion` di StoreHub (`ACTION_PROMO`)
+    untuk mengambil daftar promo live langsung dari server toko (dipakai khusus Mu+Ku yang tidak punya file Excel promo!).
+    """
+    global ACTION_PROMO
+    headers = {
+        "Accept": "text/x-component",
+        "Content-Type": "text/plain;charset=UTF-8",
+        "Cookie": cookie,
+        "Next-Action": ACTION_PROMO,
+        "Referer": ITEM_CHECKER_URL,
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15",
+        "Next-Router-State-Tree": "%5B%22%22%2C%7B%22children%22%3A%5B%22(app)%22%2C%7B%22children%22%3A%5B%22item-checker%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C4%5D%7D%2Cnull%2C%22refetch%22%2C24%5D",
+    }
+    payload = json.dumps([category, str(identifier).strip()])
+    try:
+        res = http_session.post(ITEM_CHECKER_URL, headers=headers, data=payload, allow_redirects=False, timeout=10)
+    except Exception:
+        return []
+
+    if res.status_code == 404:
+        with action_lock:
+            resolve_action_detail()
+            headers["Next-Action"] = ACTION_PROMO
+        try:
+            res = http_session.post(ITEM_CHECKER_URL, headers=headers, data=payload, allow_redirects=False, timeout=10)
+        except Exception:
+            return []
+
+    if res.status_code != 200:
+        return []
+
+    promos_out: List[Dict[str, Any]] = []
+    for line in res.text.split("\n"):
+        colon_idx = line.find(":")
+        if 0 < colon_idx <= 3:
+            try:
+                parsed = json.loads(line[colon_idx + 1:])
+                if not isinstance(parsed, dict) or parsed.get("error"):
+                    continue
+                data = parsed.get("result", {}).get("data")
+                if isinstance(data, dict):
+                    for _, rows in data.items():
+                        if isinstance(rows, list):
+                            for r in rows:
+                                if isinstance(r, dict):
+                                    promos_out.append(r)
+            except Exception:
+                continue
+    return promos_out
+
+
+def parse_storehub_promotion_rows(promos: List[Dict[str, Any]], normal_price: int) -> Optional[Dict[str, Any]]:
+    """
+    Mengonversi output `checkItemPromotion` (`DiscountType`, `DiscountPercentage`, `DiscountAmount`,
+    `Message`, `BusinessRuleName`, `EventDesc`) menjadi field promo siap simpan ke Turso.
+    """
+    if not promos:
+        return None
+    best: Optional[Dict[str, Any]] = None
+    best_price: Optional[int] = None
+
+    for pr in promos:
+        dtype = str(pr.get("DiscountType") or "").strip()
+        msg = str(pr.get("Message") or "").strip()
+        br_name = str(pr.get("BusinessRuleName") or "").strip()
+        ev_desc = str(pr.get("EventDesc") or "").strip()
+        acara = ev_desc or br_name or msg or f"Promo Live {CREDENTIALS['label']}"
+
+        try:
+            pct = float(pr.get("DiscountPercentage") or 0)
+        except Exception:
+            pct = 0.0
+        try:
+            amt = float(pr.get("DiscountAmount") or 0)
+        except Exception:
+            amt = 0.0
+
+        has_pct = pct > 0
+        has_amt = amt > 0
+        kind = "none"
+        if re.search(r"percent", dtype, re.I) and has_pct:
+            kind = "percentage"
+        elif re.search(r"amount|price|rupiah", dtype, re.I) and has_amt:
+            kind = "amount"
+        elif has_pct:
+            kind = "percentage"
+        elif has_amt:
+            kind = "amount"
+
+        cand: Optional[Dict[str, Any]] = None
+        if kind == "percentage" and normal_price > 0 and 1 <= pct <= 95:
+            hp = int(round(normal_price * (100.0 - pct) / 100.0))
+            if 0 < hp < normal_price:
+                pct_str = f"{int(pct)}%" if float(pct).is_integer() else f"{pct:g}%"
+                cand = {
+                    "hargaPromo": hp,
+                    "diskon": pct_str,
+                    "discountType": "PERCENT",
+                    "acara": acara[:120],
+                }
+        elif kind == "amount" and amt > 0:
+            amt_int = int(round(amt))
+            is_special_price = bool(
+                re.search(r"special|fixed|nett|price", dtype, re.I)
+                or re.search(r"\b(sp|special\s*price|harga\s*spesial)\b", f"{msg} {br_name}", re.I)
+            )
+            if normal_price > 0:
+                hp = amt_int if is_special_price else (normal_price - amt_int)
+                if hp <= 0 and amt_int < normal_price:
+                    hp = amt_int
+                if 0 < hp < normal_price:
+                    cand = {
+                        "hargaPromo": hp,
+                        "diskon": "SP" if is_special_price else f"POT Rp {amt_int:,}".replace(",", "."),
+                        "discountType": "SPECIAL_PRICE",
+                        "acara": acara[:120],
+                    }
+            else:
+                cand = {
+                    "hargaPromo": amt_int,
+                    "diskon": "SP",
+                    "discountType": "SPECIAL_PRICE",
+                    "acara": acara[:120],
+                }
+        elif msg and re.search(r"(buy|beli|get|gratis|disc|diskon|promo|sp\b|off|%)", f"{msg} {br_name}", re.I):
+            cand = {
+                "hargaPromo": None,
+                "diskon": (msg or br_name)[:40],
+                "discountType": "BUNDLING",
+                "acara": acara[:120],
+            }
+
+        if cand:
+            cp = cand.get("hargaPromo")
+            if best is None:
+                best = cand
+                best_price = cp
+            elif cp is not None and (best_price is None or cp < best_price):
+                best = cand
+                best_price = cp
+
+    return best
+
+
+def sweep_muku_promotions_for_catalog(
+    catalog_by_sku: Dict[str, Dict[str, Any]],
+    cookie: str,
+    max_minutes: int = 8,
+    max_articles: int = 2500,
+) -> int:
+    """
+    Menyapu harga promo LIVE khusus produk Mu+Ku lewat Server Action `checkItemPromotion`
+    (1x cek per artikel unik -> otomatis diwariskan ke semua size/warna dalam artikel Mu+Ku tersebut!).
+    Sangat cepat (~25 detik untuk 1.500 artikel) dan 100% bebas file Excel promo.
+    """
+    if ACTIVE_ACCOUNT != "muku" or not cookie:
+        return 0
+
+    t0 = datetime.now()
+    INVALID_ARTS = {"", "0", "-", "PRODUK BARU", "N/A", "NONE", "NULL"}
+    art_to_rows: Dict[str, List[Dict[str, Any]]] = {}
+    for sku, row in catalog_by_sku.items():
+        if not _is_muku_row(row):
+            continue
+        art = str(row.get("article") or "").strip().upper()
+        key = art if art not in INVALID_ARTS else f"SKU:{sku}"
+        art_to_rows.setdefault(key, []).append(row)
+
+    # Prioritaskan artikel Mu+Ku yang punya stok > 0 dulu, lalu yang punya foto/harga normal
+    ordered_articles = sorted(
+        art_to_rows.items(),
+        key=lambda kv: (
+            0 if any(int(r.get("stok") or 0) > 0 for r in kv[1]) else 1,
+            -sum(max(0, int(r.get("stok") or 0)) for r in kv[1]),
+        ),
+    )[:max_articles]
+
+    if not ordered_articles:
+        return 0
+
+    print(f"\n🏷️ [MU+KU LIVE PROMO ENGINE] Memindai promo live StoreHub (`checkItemPromotion`) untuk {len(ordered_articles):,} artikel Mu+Ku...")
+
+    def check_one_article(item_pair: Tuple[str, List[Dict[str, Any]]]):
+        art_key, rows = item_pair
+        # Pilih SKU perwakilan yang punya stok > 0 & harga normal > 0
+        rep = next((r for r in rows if int(r.get("stok") or 0) > 0 and _parse_money_int(r.get("hargaNormal")) > 0), rows[0])
+        rep_sku = str(rep.get("sku") or "").strip()
+        if not rep_sku:
+            return None
+        promos = query_storehub_promotion("sku", rep_sku, cookie)
+        if not promos:
+            return None
+        normal_p = _parse_money_int(rep.get("hargaNormal"))
+        parsed = parse_storehub_promotion_rows(promos, normal_p)
+        if not parsed:
+            return None
+        return (art_key, rows, parsed)
+
+    found_articles = 0
+    promo_updates: List[Tuple[Optional[float], str, str, str, str, str]] = []
+    now_iso = datetime.now(timezone.utc).isoformat()
+    chunk_sz = 120
+
+    for i in range(0, len(ordered_articles), chunk_sz):
+        if (datetime.now() - t0).total_seconds() / 60.0 >= max_minutes:
+            print(f"   ⏱️ Batas waktu sapuan promo Mu+Ku ({max_minutes} menit) tercapai.")
+            break
+        batch_arts = ordered_articles[i:i + chunk_sz]
+        with ThreadPoolExecutor(max_workers=20) as ex:
+            for res in ex.map(check_one_article, batch_arts):
+                if not res:
+                    continue
+                _, rows, parsed = res
+                found_articles += 1
+                for r in rows:
+                    s_sku = str(r.get("sku") or "").strip()
+                    if not s_sku:
+                        continue
+                    # Hitung ulang hargaPromo per varian jika hargaNormal varian berbeda sedikit
+                    row_hn = _parse_money_int(r.get("hargaNormal"))
+                    hp_val = parsed.get("hargaPromo")
+                    if parsed.get("discountType") == "PERCENT" and row_hn > 0:
+                        m_p = re.search(r"(\d+(?:\.\d+)?)", str(parsed.get("diskon") or ""))
+                        if m_p:
+                            pct_v = float(m_p.group(1))
+                            if 1 <= pct_v <= 95:
+                                hp_val = int(round(row_hn * (100.0 - pct_v) / 100.0))
+                    promo_updates.append((
+                        float(hp_val) if hp_val is not None else None,
+                        str(parsed.get("diskon") or ""),
+                        str(parsed.get("discountType") or "SPECIAL_PRICE"),
+                        str(parsed.get("acara") or ""),
+                        now_iso,
+                        s_sku,
+                    ))
+
+    if promo_updates:
+        try:
+            conn_p = connect_pg()
+            if getattr(conn_p, "is_turso", False):
+                for j in range(0, len(promo_updates), 400):
+                    sub = promo_updates[j:j + 400]
+                    stmts = [
+                        (
+                            'UPDATE "Product" SET "hargaPromo" = ?, diskon = ?, "discountType" = ?, acara = ?, "updatedAt" = ? WHERE sku = ?',
+                            row_t,
+                        )
+                        for row_t in sub
+                    ]
+                    conn_p.execute_batch(stmts, transactional=True)
+            conn_p.close()
+        except Exception as e:
+            print(f"   ⚠️ Gagal simpan batch promo live Mu+Ku: {e}")
+
+    print(
+        f"   ✅ [MU+KU LIVE PROMO SELESAI] Ketemu {found_articles:,} artikel Mu+Ku sedang PROMO -> "
+        f"{len(promo_updates):,} varian SKU diperbarui langsung di Turso (0 Excel dibutuhkan)!"
+    )
+    return len(promo_updates)
 
 
 def probe_store_online(cookie: str) -> Tuple[bool, str]:
@@ -1924,6 +2195,10 @@ def execute_live_stock_sync(
     if buffer_by_sku:
         flush_buffer(buffer_by_sku, write_md_report=False)
 
+    muku_promo_skus = 0
+    if is_muku_mode:
+        muku_promo_skus = sweep_muku_promotions_for_catalog(catalog_by_sku, cookie, max_minutes=6)
+
     sold_skus, sold_qty, sold_omzet = (
         (0, 0, 0.0)
         if is_muku_mode
@@ -1934,7 +2209,7 @@ def execute_live_stock_sync(
     if is_muku_mode:
         log_sync_history(
             "MUKU_STOCK_SYNC",
-            f"Update Stok Live Mu+Ku by luqman org — {booking_date} ({checked_count:,} SKU dicek | {changed_count:,} SKU berubah)",
+            f"Update Stok & Promo Live Mu+Ku by luqman org — {booking_date} ({checked_count:,} SKU dicek | {changed_count:,} berubah | {muku_promo_skus:,} promo)",
             changed_count if changed_count > 0 else checked_count,
             "SUCCESS",
         )
@@ -2295,6 +2570,9 @@ def execute_morning_sweep(
             execute_brutal_image_scrape()
         except Exception as e:
             print(f"⚠️ Lewati chain brutal_image_scraper: {e}")
+
+    if ACTIVE_ACCOUNT == "muku":
+        sweep_muku_promotions_for_catalog(catalog_by_sku, cookie, max_minutes=6)
 
     if "--no-catalog" not in sys.argv:
         try:
