@@ -527,6 +527,128 @@ def build_sales_report_summary_payload(conn) -> Dict[str, Any]:
     }
 
 
+def build_sku_audit_pivot_payload(conn) -> Dict[str, Any]:
+    """
+    Menyusun Tabel Pivot Audit Kelengkapan SKU (Barcode, Gambar, Harga Normal) per Toko (SUKO / Mu+Ku / ZES)
+    + sampel prioritas SKU yang belum komplit (stok > 0 & New Arrival duluan) -> 1 file JSON ringan di Turso Storage!
+    """
+    cur = conn.cursor()
+    cur.execute(
+        '''
+        SELECT
+            CASE
+                WHEN UPPER(COALESCE(brand,'')) LIKE '%SUKO%' OR UPPER(COALESCE(dept,'')) LIKE '%SUKO%' THEN 'SUKO'
+                WHEN UPPER(COALESCE(brand,'')) LIKE '%ZES%' OR UPPER(COALESCE(dept,'')) LIKE '%ZES%' THEN 'ZES'
+                ELSE 'MUKU'
+            END AS grp,
+            COUNT(*) AS total_skus,
+            SUM(CASE WHEN stok > 0 THEN 1 ELSE 0 END) AS active_skus,
+            SUM(CASE WHEN (barcode IS NOT NULL AND barcode != '') AND ("imageUrl" IS NOT NULL AND "imageUrl" != '') AND "hargaNormal" > 0 THEN 1 ELSE 0 END) AS complete_skus,
+            SUM(CASE WHEN stok > 0 AND (barcode IS NOT NULL AND barcode != '') AND ("imageUrl" IS NOT NULL AND "imageUrl" != '') AND "hargaNormal" > 0 THEN 1 ELSE 0 END) AS active_complete,
+            SUM(CASE WHEN barcode IS NULL OR barcode = '' THEN 1 ELSE 0 END) AS missing_bc,
+            SUM(CASE WHEN stok > 0 AND (barcode IS NULL OR barcode = '') THEN 1 ELSE 0 END) AS active_missing_bc,
+            SUM(CASE WHEN "imageUrl" IS NULL OR "imageUrl" = '' THEN 1 ELSE 0 END) AS missing_img,
+            SUM(CASE WHEN stok > 0 AND ("imageUrl" IS NULL OR "imageUrl" = '') THEN 1 ELSE 0 END) AS active_missing_img,
+            SUM(CASE WHEN "hargaNormal" IS NULL OR "hargaNormal" <= 0 THEN 1 ELSE 0 END) AS missing_price,
+            SUM(CASE WHEN stok > 0 AND ("hargaNormal" IS NULL OR "hargaNormal" <= 0) THEN 1 ELSE 0 END) AS active_missing_price,
+            SUM(CASE WHEN (barcode IS NULL OR barcode = '') AND ("imageUrl" IS NULL OR "imageUrl" = '') THEN 1 ELSE 0 END) AS missing_both
+        FROM "Product"
+        GROUP BY grp
+        '''
+    )
+    pivot_by_store: Dict[str, Dict[str, Any]] = {}
+    for r in cur.fetchall():
+        grp = str(r[0] or "MUKU")
+        tot = int(r[1] or 0)
+        act = int(r[2] or 0)
+        comp = int(r[3] or 0)
+        act_comp = int(r[4] or 0)
+        pivot_by_store[grp] = {
+            "brandGroup": grp,
+            "totalSkus": tot,
+            "activeSkus": act,
+            "completeSkus": comp,
+            "completePct": round((comp / tot) * 100, 1) if tot > 0 else 0.0,
+            "activeCompleteSkus": act_comp,
+            "activeCompletePct": round((act_comp / act) * 100, 1) if act > 0 else 0.0,
+            "missingBarcode": int(r[5] or 0),
+            "activeMissingBarcode": int(r[6] or 0),
+            "missingImage": int(r[7] or 0),
+            "activeMissingImage": int(r[8] or 0),
+            "missingPrice": int(r[9] or 0),
+            "activeMissingPrice": int(r[10] or 0),
+            "missingBothBcImg": int(r[11] or 0),
+        }
+
+    cur.execute('SELECT COUNT(*) FROM "BarcodeAlias"')
+    alias_count = int((cur.fetchone() or [0])[0] or 0)
+
+    def _fetch_samples(where_sql: str, limit_n: int = 60) -> List[Dict[str, Any]]:
+        cur.execute(
+            f'''
+            SELECT sku, barcode, article, brand, dept, description, color, size, stok, "hargaNormal", "imageUrl"
+            FROM "Product"
+            WHERE {where_sql}
+            ORDER BY CASE WHEN stok > 0 THEN 0 ELSE 1 END, stok DESC, sku DESC
+            LIMIT {int(limit_n)}
+            '''
+        )
+        out = []
+        for r in cur.fetchall():
+            b_up = f"{r[3] or ''} {r[4] or ''}".upper()
+            bg = "SUKO" if "SUKO" in b_up else ("ZES" if "ZES" in b_up else "MUKU")
+            out.append({
+                "sku": r[0],
+                "barcode": r[1] or "",
+                "article": r[2] or "",
+                "brand": r[3] or r[4] or "-",
+                "brandGroup": bg,
+                "description": r[5] or "",
+                "color": r[6] or "",
+                "size": r[7] or "",
+                "stok": int(r[8] or 0),
+                "hargaNormal": float(r[9] or 0),
+                "hasImage": bool(r[10]),
+            })
+        return out
+
+    samples_missing_img = _fetch_samples('("imageUrl" IS NULL OR "imageUrl" = \'\') AND (stok > 0 OR UPPER(COALESCE(brand,\'\')) LIKE \'%SUKO%\')', 60)
+    samples_missing_bc = _fetch_samples('(barcode IS NULL OR barcode = \'\')', 60)
+    samples_missing_price = _fetch_samples('("hargaNormal" IS NULL OR "hargaNormal" <= 0)', 60)
+    cur.close()
+
+    ordered_stores = [pivot_by_store[k] for k in ("SUKO", "MUKU", "ZES") if k in pivot_by_store]
+    totals = {
+        "totalSkus": sum(x["totalSkus"] for x in ordered_stores),
+        "activeSkus": sum(x["activeSkus"] for x in ordered_stores),
+        "completeSkus": sum(x["completeSkus"] for x in ordered_stores),
+        "activeCompleteSkus": sum(x["activeCompleteSkus"] for x in ordered_stores),
+        "missingBarcode": sum(x["missingBarcode"] for x in ordered_stores),
+        "activeMissingBarcode": sum(x["activeMissingBarcode"] for x in ordered_stores),
+        "missingImage": sum(x["missingImage"] for x in ordered_stores),
+        "activeMissingImage": sum(x["activeMissingImage"] for x in ordered_stores),
+        "missingPrice": sum(x["missingPrice"] for x in ordered_stores),
+        "activeMissingPrice": sum(x["activeMissingPrice"] for x in ordered_stores),
+        "missingBothBcImg": sum(x["missingBothBcImg"] for x in ordered_stores),
+        "barcodeAliasCount": alias_count,
+    }
+    totals["completePct"] = round((totals["completeSkus"] / totals["totalSkus"]) * 100, 1) if totals["totalSkus"] > 0 else 0.0
+    totals["activeCompletePct"] = round((totals["activeCompleteSkus"] / totals["activeSkus"]) * 100, 1) if totals["activeSkus"] > 0 else 0.0
+
+    return {
+        "success": True,
+        "source": "PYTHON_AUDIT_PIVOT_CDN",
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "totals": totals,
+        "byStore": ordered_stores,
+        "samples": {
+            "missingImage": samples_missing_img,
+            "missingBarcode": samples_missing_bc,
+            "missingPrice": samples_missing_price,
+        },
+    }
+
+
 def main() -> None:
     _ensure_env_loaded()
     parser = argparse.ArgumentParser(description="Python Admin Analytics, Promo Cleanup, & PO Engine")
@@ -556,6 +678,11 @@ def main() -> None:
             sales_bytes = json.dumps(sales_payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
             _storage_upload(supa_url, supa_key, "analytics/sales-report-summary.json", sales_bytes, "application/json", "300")
             print(f"[PYTHON-ANALYTICS] Unggah analytics/sales-report-summary.json ({len(sales_bytes)/1024:.1f} KB)")
+
+            audit_payload = build_sku_audit_pivot_payload(conn)
+            audit_bytes = json.dumps(audit_payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            _storage_upload(supa_url, supa_key, "analytics/sku-audit-pivot.json", audit_bytes, "application/json", "300")
+            print(f"[PYTHON-ANALYTICS] Unggah analytics/sku-audit-pivot.json ({len(audit_bytes)/1024:.1f} KB)")
     finally:
         conn.close()
 

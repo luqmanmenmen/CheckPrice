@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { APP_VERSION } from "@/lib/version";
+import SkuAuditPivotCard from "@/components/SkuAuditPivotCard";
 
 interface StepItem {
   number: number;
@@ -851,6 +852,14 @@ export default function UpdateProdukPage() {
           )}
         </div>
       </div>
+
+      {/* ============================================================ */}
+      {/* TABEL PIVOT AUDIT KELENGKAPAN SKU (BARCODE • GAMBAR • HARGA) */}
+      {/* ============================================================ */}
+      <SkuAuditPivotCard
+        isBusy={isGhDispatching || isRunning}
+        onTriggerFix={(action) => handleGitHubDispatch(action)}
+      />
 
       {/* ============================================================ */}
       {/* MONITOR LIVE & LOG PROSES SINKRONISASI (REALTIME CLOUD LOG)  */}
