@@ -3,16 +3,21 @@
 import React, { useEffect, useState } from "react";
 import "@/styles/shift-toggle.css";
 
+export type SkyPhase = "pagi" | "siang" | "sore" | "malam";
+
 interface ShiftToggleProps {
   isNight: boolean;
+  skyPhase?: SkyPhase;
   onToggle: (isNight: boolean) => void;
 }
 
-export default function ShiftToggle({ isNight, onToggle }: ShiftToggleProps) {
+export default function ShiftToggle({ isNight, skyPhase, onToggle }: ShiftToggleProps) {
   const [mounted, setMounted] = useState(false);
   const [stars, setStars] = useState<{ x: number; y: number; delay: string }[]>([]);
 
-  // Apply the .night class to the parent wrapper in page.tsx
+  const dayText = skyPhase === "siang" ? "Shift Siang" : "Shift Pagi";
+  const nightText = skyPhase === "sore" ? "Shift Sore" : "Shift Malam";
+
   useEffect(() => {
     // eslint-disable-next-line
     setMounted(true);
@@ -21,23 +26,15 @@ export default function ShiftToggle({ isNight, onToggle }: ShiftToggleProps) {
       y: Math.random() * 100,
       delay: (Math.random() * 3).toFixed(2),
     })));
-    const stage = document.getElementById("login-stage");
-    if (stage) {
-      if (isNight) {
-        stage.classList.add("night");
-      } else {
-        stage.classList.remove("night");
-      }
-    }
-  }, [isNight]);
+  }, []);
 
   return (
     <div className="w-full flex flex-col items-center justify-center mt-5 mb-1">
       
       {/* LABEL */}
       <div className="label mb-2">
-        <span id="labelDay" className={`text-slate-700 font-bold ${!isNight ? "visible" : ""}`}>Shift Pagi</span>
-        <span id="labelNight" className={`text-slate-700 font-bold ${isNight ? "visible" : ""}`}>Shift Siang / Malam</span>
+        <span id="labelDay" className={`text-slate-700 font-bold ${!isNight ? "visible" : ""}`}>{dayText}</span>
+        <span id="labelNight" className={`text-slate-700 font-bold ${isNight ? "visible" : ""}`}>{nightText}</span>
       </div>
 
       {/* MAIN TOGGLE */}
@@ -47,8 +44,8 @@ export default function ShiftToggle({ isNight, onToggle }: ShiftToggleProps) {
         className={`switch ${isNight ? "night on" : ""}`}
         id="switchBtn"
         aria-pressed={isNight}
-        aria-label="Ganti suasana langit Pagi / Malam"
-        title="Ketuk untuk ganti tampilan langit Pagi / Malam"
+        aria-label="Ganti suasana langit Pagi / Siang / Sore / Malam"
+        title="Ketuk untuk ganti tampilan langit (Pagi → Siang → Sore → Malam)"
         style={{ width: '100%', cursor: 'pointer', opacity: 1 }}
       >
         <div className="track">

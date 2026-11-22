@@ -3,7 +3,7 @@ import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 import Link from "next/link";
-import ShiftToggle from "@/components/ShiftToggle";
+import ShiftToggle, { type SkyPhase } from "@/components/ShiftToggle";
 import ShiftLoader from "@/components/ShiftLoader";
 import { ShoppingCart, Shirt, Footprints, Package, Lock, LogOut, MapPin, ShieldCheck, Loader2, RefreshCw } from "lucide-react";
 import { APP_VERSION, forceAppUpdate } from "@/lib/version";
@@ -47,10 +47,26 @@ export default function Login() {
   const [loginRole, setLoginRole] = useState("");
   const [changingPin, setChangingPin] = useState(false);
   
-  // Client-side only states for random positions & day/night background
+  // Client-side only states for random positions & 4-phase dynamic sky background
   const [mounted, setMounted] = useState(false);
-  const [isNight, setIsNight] = useState(false);
+  const [skyPhase, setSkyPhase] = useState<SkyPhase>("siang");
+  const [manualSkyOverride, setManualSkyOverride] = useState(false);
   const [stars, setStars] = useState<{ x: number; y: number; delay: string }[]>([]);
+
+  const resolveSkyPhaseByHour = (hour: number): SkyPhase => {
+    if (hour >= 6 && hour < 11) return "pagi";
+    if (hour >= 11 && hour < 16) return "siang";
+    if (hour >= 16 && hour < 18) return "sore";
+    return "malam";
+  };
+
+  const isNight = skyPhase === "malam";
+  const isToggleNight = skyPhase === "sore" || skyPhase === "malam";
+  const cycleSkyPhase = () => {
+    setManualSkyOverride(true);
+    const order: SkyPhase[] = ["pagi", "siang", "sore", "malam"];
+    setSkyPhase((cur) => order[(order.indexOf(cur) + 1) % order.length]);
+  };
 
   const requestGpsLocation = React.useCallback((): Promise<{ lat: number; lng: number; accuracy: number | null } | null> => {
     return new Promise((resolve) => {
@@ -273,8 +289,7 @@ export default function Login() {
 
   useEffect(() => {
     setMounted(true);
-    const hour = new Date().getHours();
-    setIsNight(hour >= 18 || hour < 6);
+    setSkyPhase(resolveSkyPhaseByHour(new Date().getHours()));
     setStars(Array.from({ length: 50 }).map(() => ({
       x: Math.random() * 100,
       y: Math.random() * 100,
@@ -296,6 +311,15 @@ export default function Login() {
       }
     }
   }, []);
+
+  // Auto-update fase langit tiap 60 detik mengikuti jam real-time (misal masuk jam 11:00/13:00 matahari makin terik)
+  useEffect(() => {
+    if (manualSkyOverride) return;
+    const timer = setInterval(() => {
+      setSkyPhase(resolveSkyPhaseByHour(new Date().getHours()));
+    }, 60000);
+    return () => clearInterval(timer);
+  }, [manualSkyOverride]);
 
   const router = useRouter();
 
@@ -488,7 +512,7 @@ export default function Login() {
   };
 
   return (
-    <div id="login-stage" className={`login-stage ${isNight ? "night" : ""} relative min-h-screen flex flex-col p-4`}>
+    <div id="login-stage" className={`login-stage sky-${skyPhase} ${isNight ? "night" : ""} relative min-h-screen flex flex-col p-4`}>
       {/* Background Langit Pagi (Matahari & Awan) vs Malam (Bulan & Bintang) */}
       <div className="absolute inset-0 pointer-events-none z-0 overflow-hidden">
         <div className="page-sun" aria-hidden="true" />
@@ -813,7 +837,7 @@ export default function Login() {
         </form>
 
         {/* Animasi CSS Langit Pagi (Matahari/Awan/Burung) <-> Malam (Bulan/Bintang Jatuh) */}
-        <ShiftToggle isNight={isNight} onToggle={(nextNight) => setIsNight(nextNight)} />
+        <ShiftToggle isNight={isToggleNight} skyPhase={skyPhase} onToggle={cycleSkyPhase} />
       </div>
       )}
 
