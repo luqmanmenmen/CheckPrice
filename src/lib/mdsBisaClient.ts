@@ -24,7 +24,7 @@ const ACCOUNT_CONFIGS: Record<
 > = {
   suko: {
     username: process.env.MDS_USERNAME || 'M223515',
-    password: process.env.MDS_PASSWORD || 'Mamen123',
+    password: process.env.MDS_PASSWORD || 'Luqmen123!',
     tz: 'Asia/Jakarta',
     storagePath: 'secrets/mds_cookie.txt',
     envCookieKey: 'MDS_SESSION_COOKIE',

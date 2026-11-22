@@ -82,7 +82,7 @@ ACCOUNT_PROFILES: Dict[str, Dict[str, str]] = {
     "suko": {
         "label": "SUKO",
         "username": os.getenv("MDS_USERNAME") or "M223515",
-        "password": os.getenv("MDS_PASSWORD") or "Mamen123",
+        "password": os.getenv("MDS_PASSWORD") or "Luqmen123!",
         "tz": "Asia/Jakarta",
         "cookie_storage_path": "secrets/mds_cookie.txt",
         "local_cookie_file": ".mds_cookie",

@@ -472,7 +472,7 @@ def _fresh_storehub_login() -> Optional[str]:
         pass
 
     username = os.environ.get("MDS_USERNAME") or "M223515"
-    password = os.environ.get("MDS_PASSWORD") or "Mamen123"
+    password = os.environ.get("MDS_PASSWORD") or "Luqmen123!"
     headers = {
         "Accept": "text/x-component",
         "Next-Action": action_hash,
