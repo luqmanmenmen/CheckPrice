@@ -35,8 +35,10 @@ Strategi 4-Jalur Presisi Tinggi (16 Worker Threads + HTTP Keep-Alive Pool):
 import os
 import sys
 import re
+import json
 import time
 import uuid
+from urllib.parse import quote_plus
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Dict, List, Set, Tuple, Any, Optional
@@ -483,6 +485,209 @@ def write_image_report(
         f.write(content)
 
 
+def sweep_targeted_missing_articles(
+    all_products: List[Dict[str, Any]],
+    sku_galleries: Dict[str, List[str]],
+    shopify_art_color_galleries: Dict[Tuple[str, str, str, str], List[str]],
+    shopify_art_galleries: Dict[Tuple[str, str, str], List[str]],
+    max_articles: int = 300,
+):
+    """
+    JALUR 5, 6, & 7: Targeted Deep Search per-Artikel & SKU/Barcode langsung ke Matahari.com
+    - JALUR 5: Predictive Search exact artikel (`/search/suggest.json?q={article}`) -> `/products/{handle}.json`
+    - JALUR 6: Base/Trimmed artikel (`T4L7A5D1-3` -> `T4L7A5D1`), SKU 8-digit, & Barcode EAN-13
+    - JALUR 7: Fallback HTML Search (`/search?type=product&q={query}`) untuk menangkap produk yang tidak keluar di suggest
+    """
+    print("\n🎯 [JALUR 5-7] Targeted Deep Search (Suggest Artikel + Prefix/SKU/Barcode + HTML Search)...")
+
+    INVALID_ARTS = CATALOG_INVALID_ARTICLES | {"NONE", "NULL", ""}
+    # Kelompokkan produk yang belum ketemu fotonya di Jalur 1-3, prioritaskan yang punya stok > 0 & SUKO
+    article_targets: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    for p in all_products:
+        sku = str(p.get("sku") or "").strip()
+        if not sku or sku in sku_galleries:
+            continue
+        desc = str(p.get("description") or "")
+        art = str(p.get("article") or "").strip().upper()
+        if is_ignored_product(desc, art):
+            continue
+        bg = classify_brand_group(p.get("brand"), p.get("dept"))
+        ck = classify_product_category(p.get("brand"), p.get("dept"), desc)
+        col = str(p.get("color") or "").strip().upper()
+        if art not in INVALID_ARTS:
+            if (bg, ck, art) in shopify_art_galleries or (col and (bg, ck, art, col) in shopify_art_color_galleries):
+                continue
+        key = (bg, ck, art if art not in INVALID_ARTS else sku)
+        entry = article_targets.get(key)
+        stok_val = int(p.get("stok") or 0)
+        if not entry:
+            article_targets[key] = {
+                "bg": bg,
+                "ck": ck,
+                "art": art if art not in INVALID_ARTS else "",
+                "sku": sku,
+                "barcode": str(p.get("barcode") or "").strip(),
+                "brand": str(p.get("brand") or "").strip(),
+                "total_stok": max(0, stok_val),
+                "skus": [sku],
+            }
+        else:
+            entry["total_stok"] += max(0, stok_val)
+            if len(entry["skus"]) < 4:
+                entry["skus"].append(sku)
+
+    # Urutkan: stok > 0 dulu, lalu SUKO, lalu stok terbesar
+    sorted_targets = sorted(
+        article_targets.values(),
+        key=lambda x: (
+            0 if x["total_stok"] > 0 else 1,
+            0 if x["bg"] == "SUKO" else 1,
+            -x["total_stok"],
+        ),
+    )[:max_articles]
+
+    if not sorted_targets:
+        print("   ✅ Semua target sudah terpetakan oleh Jalur 1-3.")
+        return
+
+    print(f"   🔎 Memburu {len(sorted_targets):,} artikel prioritas belum berfoto (2 Workers sopan anti-429)...")
+    fetched_handles: Set[str] = set()
+    found_products_list: List[Dict[str, Any]] = []
+
+    def safe_get(url: str, timeout_s: int = 9):
+        for attempt in range(2):
+            try:
+                r = http_session.get(url, headers=HEADERS, timeout=timeout_s)
+                if r.status_code == 429:
+                    time.sleep(2.5 * (attempt + 1))
+                    continue
+                return r
+            except Exception:
+                time.sleep(0.5)
+        return None
+
+    def probe_one_target(t: Dict[str, Any]) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
+        time.sleep(0.35)
+        art = t["art"]
+        sku = t["sku"]
+        barcode = t["barcode"]
+
+        # Susun antrean kueri Jalur 5 (exact artikel) -> Jalur 6 (base artikel/SKU/barcode)
+        queries: List[str] = []
+        if art:
+            queries.append(art)
+            base_dash = re.sub(r"[-_/][A-Z0-9]{1,3}$", "", art)
+            if base_dash and base_dash != art and len(base_dash) >= 5:
+                queries.append(base_dash)
+            if len(art) >= 8 and re.match(r"^[A-Z0-9]{8,}$", art):
+                queries.append(art[:7])
+        if sku and re.match(r"^\d{7,10}$", sku):
+            queries.append(sku)
+        if barcode and len(barcode) >= 8 and barcode != sku:
+            queries.append(barcode)
+
+        seen_q: Set[str] = set()
+        ordered_q: List[str] = []
+        for q in queries:
+            if q and q not in seen_q:
+                seen_q.add(q)
+                ordered_q.append(q)
+
+        cand_handles: List[str] = []
+        # JALUR 5 & 6: Predictive Search JSON
+        for q in ordered_q[:3]:
+            u = f"https://www.matahari.com/search/suggest.json?q={quote_plus(q)}&resources[type]=product&resources[limit]=4"
+            r = safe_get(u, 8)
+            if r is not None and r.status_code == 200:
+                try:
+                    prods = ((r.json() or {}).get("resources") or {}).get("results", {}).get("products") or []
+                    for sp in prods:
+                        h = str(sp.get("handle") or "").strip()
+                        if h and h not in cand_handles:
+                            cand_handles.append(h)
+                    if cand_handles:
+                        break
+                except Exception:
+                    pass
+            time.sleep(0.25)
+
+        # JALUR 7: Fallback HTML Search jika suggest.json kosong
+        if not cand_handles and ordered_q:
+            u = f"https://www.matahari.com/search?type=product&q={quote_plus(ordered_q[0])}"
+            r = safe_get(u, 10)
+            if r is not None and r.status_code == 200:
+                for h in re.findall(r'/products/([a-z0-9][a-z0-9\-]{3,120})', r.text):
+                    if h not in cand_handles:
+                        cand_handles.append(h)
+                    if len(cand_handles) >= 3:
+                        break
+
+        if not cand_handles:
+            return None
+
+        # Ambil detail JSON penuh `/products/{handle}.json` dan verifikasi kecocokan artikel/SKU/tags/brand
+        art_clean = re.sub(r"[^A-Z0-9]", "", art)
+        base_clean = re.sub(r"[^A-Z0-9]", "", re.sub(r"[-_/][A-Z0-9]{1,3}$", "", art)) if art else ""
+        sku_set = set(t["skus"])
+
+        for h in cand_handles[:2]:
+            r = safe_get(f"https://www.matahari.com/products/{h}.json", 10)
+            if r is None or r.status_code != 200:
+                continue
+            try:
+                prod = (r.json() or {}).get("product")
+            except Exception:
+                continue
+            if not prod or not prod.get("images"):
+                continue
+            tags_raw = prod.get("tags") or ""
+            tags_str = " ".join(tags_raw) if isinstance(tags_raw, list) else str(tags_raw)
+            body_up = re.sub(
+                r"[^A-Z0-9]",
+                "",
+                f"{prod.get('title') or ''} {prod.get('body_html') or ''} {prod.get('handle') or ''} {tags_str}".upper(),
+            )
+            variant_skus = {str(v.get("sku") or "").strip() for v in (prod.get("variants") or []) if v.get("sku")}
+            variant_barcodes = {str(v.get("barcode") or "").strip() for v in (prod.get("variants") or []) if v.get("barcode")}
+            img_fns = " ".join(str(im.get("src") or "") for im in (prod.get("images") or []))
+            sku_in_img = any(s in img_fns for s in sku_set if len(s) >= 7)
+            matched = (
+                bool(sku_set & variant_skus)
+                or sku_in_img
+                or (barcode and barcode in variant_barcodes)
+                or (art_clean and len(art_clean) >= 5 and art_clean in body_up)
+                or (base_clean and len(base_clean) >= 6 and base_clean in body_up)
+            )
+            if matched:
+                return (t, prod)
+        return None
+
+    matched_targets = 0
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = {executor.submit(probe_one_target, t): t for t in sorted_targets}
+        for fut in as_completed(futures):
+            res = fut.result()
+            if not res:
+                continue
+            t, prod = res
+            h = str(prod.get("handle") or "")
+            if h not in fetched_handles:
+                fetched_handles.add(h)
+                found_products_list.append(prod)
+            parse_shopify_product(prod, sku_galleries, shopify_art_color_galleries, shopify_art_galleries)
+            # Pastikan mapping juga tersimpan untuk kode artikel POS target (meski body_html pakai variasi penulisan)
+            valid_imgs = [clean_img_url(im.get("src") or "") for im in (prod.get("images") or [])]
+            valid_imgs = [u for u in valid_imgs if u]
+            if valid_imgs and t["art"]:
+                shopify_art_galleries.setdefault((t["bg"], t["ck"], t["art"]), valid_imgs[:6])
+            matched_targets += 1
+
+    print(
+        f"   ✅ [JALUR 5-7 SELESAI] Berhasil menembus +{matched_targets:,} artikel tambahan dari {len(sorted_targets):,} target -> "
+        f"Total kini {len(sku_galleries):,} SKU & {len(shopify_art_galleries):,} Artikel berfoto!"
+    )
+
+
 def execute_brutal_image_scrape():
     start_time = datetime.now()
     print("=" * 80)
@@ -612,6 +817,15 @@ def execute_brutal_image_scrape():
     # 4. Jalankan JALUR 3 (Koleksi Brand & Kategori Raksasa)
     sweep_major_collections(sku_galleries, shopify_art_color_galleries, shopify_art_galleries)
 
+    # 4B. Jalankan JALUR 5, 6, & 7 (Targeted Multi-Query Predictive Search + Prefix/SKU/Barcode + HTML Search)
+    # Khusus menyapu artikel yang masih belum punya foto (prioritas stok > 0 & brand SUKO/Mu+Ku)
+    sweep_targeted_missing_articles(
+        all_products,
+        sku_galleries,
+        shopify_art_color_galleries,
+        shopify_art_galleries,
+    )
+
     # 5. JALUR 4: Bangun indeks Collage Sibling yang terisolasi per (BrandGroup, Category, Article[, Color])
     # sehingga kode artikel kembar lintas toko/kategori (misal THEA/JULIAN sandal vs cardigan) tidak pernah tertular!
     print("\n🔍 [JALUR 4] Memetakan foto & melakukan Propagasi Cerdas Collage per (Toko, Kategori, Artikel)...")
@@ -706,7 +920,10 @@ def execute_brutal_image_scrape():
                 for i in range(0, len(tuples), 400):
                     chunk = tuples[i:i + 400]
                     stmts = [
-                        ('UPDATE "Product" SET "imageUrl" = ?, images = ?, "updatedAt" = ? WHERE sku = ?', (img, imgs, upd, sku))
+                        (
+                            'UPDATE "Product" SET "imageUrl" = ?, images = ?, "updatedAt" = ? WHERE sku = ?',
+                            (img, json.dumps(imgs) if isinstance(imgs, list) else str(imgs or "[]"), upd, sku),
+                        )
                         for sku, img, imgs, upd in chunk
                     ]
                     pg_conn.execute_batch(stmts, transactional=True)

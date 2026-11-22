@@ -613,7 +613,7 @@ export default function UpdateProdukPage() {
                   </p>
                 </div>
                 <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                  Menjalankan mesin Python Multi-Worker (<code className="text-[11px] bg-white px-1 py-0.5 rounded border border-indigo-100">morning_full_sweep.py --brutal</code>) untuk menyerap produk baru, Barcode UPC EAN-13, Artikel, Harga &amp; Stok, serta mesin 4-Jalur Foto Studio Produk Asli (<code className="text-[11px] bg-white px-1 py-0.5 rounded border border-purple-100">brutal_image_scraper.py</code> — bebas logo/banner).
+                  Menjalankan mesin Python Multi-Worker untuk <strong>2 Akun sekaligus (SUKO + Mu+Ku)</strong> (<code className="text-[11px] bg-white px-1 py-0.5 rounded border border-indigo-100">morning_full_sweep.py --brutal</code>) untuk menyerap produk baru, Barcode UPC EAN-13, Artikel, Harga &amp; Stok, serta mesin <strong>7-Jalur Foto Studio Produk Asli</strong> (<code className="text-[11px] bg-white px-1 py-0.5 rounded border border-purple-100">brutal_image_scraper.py</code> — bebas logo/banner). <em>(ZES menyusul setelah akses akun tersedia.)</em>
                 </p>
               </div>
               <button
@@ -626,7 +626,7 @@ export default function UpdateProdukPage() {
                 ) : (
                   <Flame className="w-4 h-4" />
                 )}
-                {isGhDispatching && activeAction === "scrab" ? "Menyalakan..." : "Scrab Komplit (by luqman org + Foto)"}
+                {isGhDispatching && activeAction === "scrab" ? "Menyalakan..." : "Scrab Komplit (SUKO + Mu+Ku + Foto)"}
               </button>
             </div>
 

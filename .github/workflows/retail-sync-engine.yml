@@ -95,13 +95,13 @@ jobs:
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
       - name: 🏷️ [KATEGORI 1D - SCRAB KHUSUS MU+KU] Brutal Scraper & Barcode Recovery Akun Mu+Ku
-        if: ${{ github.event.inputs.action == 'muku-scrab' || github.event.action == 'trigger-muku-scrab' }}
+        if: ${{ github.event.inputs.action == 'muku-scrab' || github.event.inputs.action == 'scrab' || github.event.inputs.action == 'mds-bisa' || github.event.inputs.action == 'all' || github.event.action == 'trigger-muku-scrab' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-mds-bisa' || github.event.action == 'trigger-sync-engine' || (github.event_name == 'workflow_dispatch' && github.event.inputs.action == '') }}
         run: |
-          python -u python-engine/runner_guardian.py --step "KATEGORI 1D - Scrab Produk Mu+Ku (Jalur Akun Mu+Ku)" --action "muku-scrab" --max-retries 3 --track-new-products -- python python-engine/morning_full_sweep.py --account=muku --brutal --upc-first --workers=24
+          python -u python-engine/runner_guardian.py --step "KATEGORI 1D - Scrab Produk Mu+Ku (Jalur Akun Mu+Ku)" --action "${{ github.event.inputs.action || github.event.action || 'muku-scrab' }}" --max-retries 3 --track-new-products -- python python-engine/morning_full_sweep.py --account=muku --brutal --upc-first --workers=24
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
-          MDS_MUKU_SESSION_COOKIE: ${{ github.event.inputs.session_cookie || secrets.MDS_MUKU_SESSION_COOKIE }}
+          MDS_MUKU_SESSION_COOKIE: ${{ secrets.MDS_MUKU_SESSION_COOKIE }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
@@ -155,13 +155,13 @@ jobs:
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
       - name: ⚡ [KATEGORI 2B - UPDATE STOCK MU+KU] Update Stok Live Khusus Produk Mu+Ku
-        if: ${{ github.event.inputs.action == 'muku-stock' || github.event.action == 'trigger-muku-stock' }}
+        if: ${{ github.event.inputs.action == 'muku-stock' || github.event.inputs.action == 'stock-only' || github.event.inputs.action == 'all' || github.event.action == 'trigger-muku-stock' || github.event.action == 'trigger-stock-only' || github.event.action == 'trigger-sync-engine' }}
         run: |
-          python -u python-engine/runner_guardian.py --step "KATEGORI 2B: Update Stock Live Mu+Ku" --action "muku-stock" --max-retries 3 -- python python-engine/morning_full_sweep.py --account=muku --stock-only
+          python -u python-engine/runner_guardian.py --step "KATEGORI 2B: Update Stock Live Mu+Ku" --action "${{ github.event.inputs.action || github.event.action || 'muku-stock' }}" --max-retries 3 -- python python-engine/morning_full_sweep.py --account=muku --stock-only
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
-          MDS_MUKU_SESSION_COOKIE: ${{ github.event.inputs.session_cookie || secrets.MDS_MUKU_SESSION_COOKIE }}
+          MDS_MUKU_SESSION_COOKIE: ${{ secrets.MDS_MUKU_SESSION_COOKIE }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 

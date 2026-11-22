@@ -2019,6 +2019,20 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
      - Setelah `POST /api/admin/trigger/github-dispatch` sukses, sebelumnya UI langsung me-reset `isGhDispatching = false` dan hanya poll 1x setelah `1.2 detik` — padahal GitHub Actions butuh `3–8 detik` untuk membuat run baru di `/actions/runs`, sehingga UI masih menampilkan run lama dan membuat user mengira klik #1 tidak masuk.
      - **Solusi:** Tambah **Optimistic Queued State** (`optimisticQueued`) segera setelah dispatch/self-heal sukses + **progressive polling bertahap (`3s`, `6.5s`, `11s`, `16s`)** yang langsung mati begitu `activeRun.id` baru atau status `queued`/`in_progress` terdeteksi, lengkap dengan indikator *"Menyiapkan antrean GitHub Actions..."* agar 1 klik langsung terkunci & ter-update otomatis.
 
+---
+
+### 117. Login 4-Fase Langit Real-Time, Reset Pondasi Sales 23 Nov 2026, Dual-Account Auto-Trigger (SUKO + Mu+Ku), & 7-Jalur Foto Scraper (23 November 2026)
+
+- **UI/UX Login 4-Fase Langit Otomatis (`5c19020`, `427398b`, `f50a9c4`, `355ff59`):**
+  - Memulihkan background `.login-stage` di [`src/app/globals.css`](file:///c:/Max%20Display/price-checker/src/app/globals.css) + [`src/app/login/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/login/page.tsx) menjadi **4 fase otomatis real-time** (*Pagi 06–10 matahari terbit hangat + sinar berputar*, *Siang 11–15 terik menyala*, *Sore 16–17 senja golden hour*, *Malam 18–05 langit gelap + 50 bintang + bulan*).
+  - Mengembalikan kapsul langit [`src/components/ShiftToggle.tsx`](file:///c:/Max%20Display/price-checker/src/components/ShiftToggle.tsx) di bawah tombol **MULAI KERJA** tanpa bulatan/knob geser (`knob` dihapus, 100% otomatis mengikuti jam).
+- **Cleanup Vercel Deployments:** Menghapus `170` deployment lama via Vercel REST API (`Failed: 0`), menyisakan tepat 3 deployment teratas.
+- **Reset Pondasi Sales Bersih 23 Nov 2026 (`9bbd79b`):**
+  - Menghapus `41` riwayat `SyncHistory` sales lama, membersihkan angka hantu di `analytics/sales-report-summary.json` menjadi `0` (sambil mempertahankan `62.036 pcs` EOH & `319.856` SKU), dan memperbarui `SALES_BASELINE_START_DATE = "2026-11-23"` di [`src/app/api/admin/sales-report/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/sales-report/route.ts) & [`laporan-penjualan/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/laporan-penjualan/page.tsx).
+- **Dual-Account Auto-Sync (SUKO + Mu+Ku) & 7-Jalur Image Scraper:**
+  - [`.github/workflows/retail-sync-engine.yml`](file:///c:/Max%20Display/price-checker/.github/workflows/retail-sync-engine.yml): Setiap trigger **`scrab`**, **`mds-bisa`**, **`stock-only`**, maupun **`all`** sekarang otomatis menjalankan **2 akun sekaligus: SUKO (`M223515`) + Mu+Ku (`M223708`)** dengan isolasi cookie & proteksi stok lintas toko (`ZES` menyusul setelah akses akun tersedia).
+  - [`python-engine/brutal_image_scraper.py`](file:///c:/Max%20Display/price-checker/python-engine/brutal_image_scraper.py): Upgrade ke **7-Jalur Foto Studio** (menambah Jalur 5 Exact Article Suggest, Jalur 6 Trimmed/Base Article + SKU/Barcode Suggest, & Jalur 7 HTML Search Fallback dengan rate-limit guard anti-429 + fix `json.dumps` Turso SQLite).
+
 
 
 
