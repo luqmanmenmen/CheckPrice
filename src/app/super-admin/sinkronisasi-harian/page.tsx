@@ -258,17 +258,39 @@ export default function UpdateProdukPage() {
     }
   };
 
-  // Polling otomatis setiap 3.5 detik
+  // Smart Adaptive Polling:
+  // - Pause total saat tab tidak terlihat (0 query Turso saat background!)
+  // - 5 detik saat workflow aktif berjalan, 30 detik saat idle
+  const isActiveWorkflowRun =
+    cloudStatus.activeRun?.status === "in_progress" || cloudStatus.activeRun?.status === "queued";
+
   useEffect(() => {
     fetchCloudStatus(true);
+  }, []);
+
+  useEffect(() => {
+    const intervalMs = isActiveWorkflowRun ? 5000 : 30000;
     pollTimerRef.current = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
       fetchCloudStatus(false);
-    }, 3500);
+    }, intervalMs);
+
+    const handleVis = () => {
+      if (typeof document !== "undefined" && !document.hidden) {
+        fetchCloudStatus(false);
+      }
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", handleVis);
+    }
 
     return () => {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", handleVis);
+      }
     };
-  }, []);
+  }, [isActiveWorkflowRun]);
 
   // Auto-scroll console log ke baris paling bawah saat ada baris baru
   useEffect(() => {

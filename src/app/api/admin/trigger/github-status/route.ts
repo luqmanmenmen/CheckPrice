@@ -34,6 +34,33 @@ interface DiagnosticItem {
 const rawJobLogCache = new Map<number, { fetchedAt: number; lines: ConsoleLogLine[]; diagnostics: DiagnosticItem[] }>();
 const RAW_LOG_CACHE_TTL_MS = 5 * 60 * 1000;
 
+// Cache ringan dbMetrics dari manifest.json (1 row read, BUKAN COUNT(*) 368rb rows read tiap 3.5 detik!)
+let cachedDbMetrics: { totalProducts: number; totalArticles: number; fetchedAt: number } | null = null;
+const DB_METRICS_TTL_MS = 10 * 60 * 1000;
+
+async function getLightweightDbMetrics(): Promise<{ totalProducts: number; totalArticles: number }> {
+  const now = Date.now();
+  if (cachedDbMetrics && now - cachedDbMetrics.fetchedAt < DB_METRICS_TTL_MS) {
+    return {
+      totalProducts: cachedDbMetrics.totalProducts,
+      totalArticles: cachedDbMetrics.totalArticles,
+    };
+  }
+  try {
+    const { readTursoStorageJson } = await import('@/lib/tursoStorage');
+    const manifest = await readTursoStorageJson<any>('offline-db/manifest.json');
+    const totalProducts = Number(manifest?.totalSkus || 0) || cachedDbMetrics?.totalProducts || 310536;
+    const totalArticles = Number(manifest?.totalModels || 0) || cachedDbMetrics?.totalArticles || 57367;
+    cachedDbMetrics = { totalProducts, totalArticles, fetchedAt: now };
+    return { totalProducts, totalArticles };
+  } catch {
+    return {
+      totalProducts: cachedDbMetrics?.totalProducts || 310536,
+      totalArticles: cachedDbMetrics?.totalArticles || 57367,
+    };
+  }
+}
+
 const NOISY_RUNNER_TOKENS = [
   '[command]/usr/bin/git',
   'git submodule foreach',
@@ -368,7 +395,7 @@ export async function GET(req: Request) {
       console.warn('[GITHUB-STATUS] Gagal mengambil detail jobs:', jobErr);
     }
 
-    // 3. Jalankan DB queries ringan (SyncHistory + O(1) pg_class count) + unduh live-runner-log.json secara paralel
+    // 3. Jalankan DB queries super ringan (~12 rows read total, 0 COUNT(*) full-scan!)
     const [dbSyncHistory, dbMetrics, liveLogRaw] = await Promise.all([
       prisma.syncHistory
         .findMany({
@@ -377,20 +404,11 @@ export async function GET(req: Request) {
           select: { id: true, type: true, fileName: true, status: true, records: true, createdAt: true },
         })
         .catch(() => [] as any[]),
-      Promise.all([
-        prisma.product.count().catch(() => 0),
-        prisma.catalogArticle.count().catch(() => 0),
-      ]).then(([totalProducts, totalArticles]) => ({
-        totalProducts,
-        totalArticles,
-      })),
+      getLightweightDbMetrics(),
       (async () => {
         try {
-          const { supabase } = await import('@/lib/supabaseClient');
-          const { data, error } = await supabase.storage.from('excel-uploads').download('logs/live-runner-log.json');
-          if (data && !error) {
-            return JSON.parse(await data.text());
-          }
+          const { readTursoStorageJson } = await import('@/lib/tursoStorage');
+          return await readTursoStorageJson<any>('logs/live-runner-log.json');
         } catch {}
         return null;
       })(),

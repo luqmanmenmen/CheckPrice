@@ -46,6 +46,7 @@ const VALID_CATEGORIES = new Set<CategoryKey>([
 const VALID_GENDERS = new Set<GenderKey>(["ALL", "MEN", "LADIES", "BOYS", "GIRLS"]);
 
 const CATALOG_CACHE_TTL_MS = 120_000;
+const CATALOG_SUMMARY_TTL_MS = 15 * 60 * 1000; // 15 menit (hemat 114rb rows read groupBy di Turso!)
 const CATALOG_CACHE_MAX = 80;
 const catalogCache = new Map<
   string,
@@ -110,7 +111,7 @@ async function getPrebuiltCatalogSummary(): Promise<GlobalCatalogSummary | null>
       skuSum: r._sum.articleGroupCount || r._count._all,
     })),
     photoMap,
-    expiresAt: Date.now() + CATALOG_CACHE_TTL_MS,
+    expiresAt: Date.now() + CATALOG_SUMMARY_TTL_MS,
   };
   return globalCatalogSummaryCache;
 }

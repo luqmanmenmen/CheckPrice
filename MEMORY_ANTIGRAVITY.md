@@ -1988,6 +1988,20 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   2. [`src/lib/mdsBisaClient.ts`](file:///c:/Max%20Display/price-checker/src/lib/mdsBisaClient.ts), [`src/app/api/live-stock/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/live-stock/route.ts), & [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx): Auto-router dual-account di `checkLiveStockFast()` dan `checkSingleItemStock()` — produk `Mu+Ku` otomatis tembak akun Mu+Ku, produk `SUKO`/`ZES` tembak akun SUKO, dan bila tidak ketemu / stok `< 0` otomatis fallback ke akun satunya (termasuk saat scan barcode baru!).
   3. [`.github/workflows/retail-sync-engine.yml`](file:///c:/Max%20Display/price-checker/.github/workflows/retail-sync-engine.yml), [`src/lib/githubDispatcher.ts`](file:///c:/Max%20Display/price-checker/src/lib/githubDispatcher.ts), [`github-dispatch/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/github-dispatch/route.ts), [`self-heal/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/self-heal/route.ts), & [`sinkronisasi-harian/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/sinkronisasi-harian/page.tsx): Menambahkan 2 trigger khusus **`muku-scrab`** (`🏷️ Scrab Produk Mu+Ku + Foto`) & **`muku-stock`** (`⚡ Update Stock Mu+Ku`). Siap langsung ditekan mulai jam `09:00 WIB` saat server toko buka!
 
+---
+
+### 115. Perbaikan Darurat Kebocoran Kuota Turso 505 Juta Rows Read (`COUNT(*)` Polling 3,5 Detik → 0 Full-Scan) (23 November 2026)
+
+- **Akar Masalah `Quota Critical 100%` (`505.969.738 / 500.000.000 Rows Read`):**
+  - **BUKAN karena tarik sales.** Penyebab utama (~95%) adalah [`src/app/api/admin/trigger/github-status/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/github-status/route.ts) yang sebelumnya memanggil `prisma.product.count()` (`310.536` rows read di SQLite) + `prisma.catalogArticle.count()` (`57.367` rows read) = **`367.903` rows read per request**, sementara halaman [`sinkronisasi-harian/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/sinkronisasi-harian/page.tsx) melakukan polling tiap **3,5 detik** non-stop (~`378 Juta` rows read/jam!).
+- **Aturan Permanen Turso SQLite (ANTI-BOCOR KUOTA):**
+  - **DILARANG keras** memanggil `prisma.product.count()` / `SELECT COUNT(*) FROM "Product"` pada endpoint polling atau serverless! Di SQLite/Turso, `COUNT(*)` memindai seluruh B-tree tabel. Selalu baca total SKU/Artikel dari `offline-db/manifest.json` (`1` row read!) + in-memory cache.
+- **Perbaikan yang Diterapkan:**
+  1. [`github-status/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/github-status/route.ts): Hapus `prisma.product.count()` & `catalogArticle.count()`, ganti dengan `getLightweightDbMetrics()` dari `offline-db/manifest.json` (cache 10 menit, turun dari `367.903` → `~10` rows read/request = **hemat 99,997%**!).
+  2. [`sinkronisasi-harian/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/sinkronisasi-harian/page.tsx): Smart adaptive polling — pause total saat tab tersembunyi (`document.hidden`), `5 detik` saat run aktif, `30 detik` saat idle.
+  3. [`productQueryHelpers.ts`](file:///c:/Max%20Display/price-checker/src/lib/productQueryHelpers.ts), [`catalog/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/catalog/route.ts), [`reports/dashboard/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/reports/dashboard/route.ts), & [`runner_guardian.py`](file:///c:/Max%20Display/price-checker/python-engine/runner_guardian.py): Seluruh `COUNT(*)` / `aggregate` full-scan dialihkan ke `manifest.json` / `sales-report-summary.json` + TTL cache 15–30 menit.
+
+
 
 
 

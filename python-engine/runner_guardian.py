@@ -165,7 +165,7 @@ def push_log_state(log_state: Dict[str, Any], log_path: str) -> bool:
 
 
 def query_db_baseline() -> Tuple[int, int]:
-    """Ambil MAX(id) dan total Product secara O(1)."""
+    """Ambil MAX(id) secara O(1) via PK index + total SKU dari manifest.json (hemat 310rb rows read COUNT(*)!)."""
     if not (os.environ.get("TURSO_DATABASE_URL") or os.environ.get("DATABASE_URL") or os.environ.get("DIRECT_URL")):
         return 0, 0
     conn = None
@@ -175,11 +175,13 @@ def query_db_baseline() -> Tuple[int, int]:
         cur.execute('SELECT COALESCE(MAX(id), 0) FROM "Product"')
         max_id = int(cur.fetchone()[0] or 0)
         if getattr(conn, "is_turso", False):
-            cur.execute('SELECT COUNT(*) FROM "Product"')
+            # Hindari SELECT COUNT(*) FROM Product (310k rows read di SQLite): baca manifest.json (1 row read!)
+            manifest = storage_download_json("offline-db/manifest.json")
+            total_est = int(manifest.get("totalSkus") or 0) if isinstance(manifest, dict) else 0
         else:
             cur.execute("SELECT GREATEST(reltuples::bigint, 0)::bigint FROM pg_class WHERE relname = 'Product'")
-        row = cur.fetchone()
-        total_est = int(row[0] or 0) if row else 0
+            row = cur.fetchone()
+            total_est = int(row[0] or 0) if row else 0
         cur.close()
         return max_id, total_est
     except Exception as exc:

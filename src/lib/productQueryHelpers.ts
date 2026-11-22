@@ -16,11 +16,11 @@ import {
 } from "@/lib/productTaxonomy";
 
 let cachedEstimatedCount: { value: number; fetchedAt: number } | null = null;
-const ESTIMATED_COUNT_TTL_MS = 10 * 60 * 1000;
+const ESTIMATED_COUNT_TTL_MS = 30 * 60 * 1000;
 
 /**
- * Mengambil estimasi jumlah baris tabel Product secara O(1) lewat statistik pg_class.reltuples
- * agar bebas full index scan (menghemat ratusan MB/GB Disk IO Budget Supabase).
+ * Mengambil estimasi jumlah baris tabel Product secara O(1) (1 row read!) dari `offline-db/manifest.json`
+ * agar bebas full B-tree scan `COUNT(*)` 310.536 rows read di Turso SQLite.
  */
 export async function getEstimatedProductCount(): Promise<number> {
   const now = Date.now();
@@ -28,11 +28,16 @@ export async function getEstimatedProductCount(): Promise<number> {
     return cachedEstimatedCount.value;
   }
   try {
-    const exact = await db.product.count();
-    cachedEstimatedCount = { value: exact, fetchedAt: now };
-    return exact;
+    const { readTursoStorageJson } = await import("@/lib/tursoStorage");
+    const manifest = await readTursoStorageJson<any>("offline-db/manifest.json");
+    const total = Number(manifest?.totalSkus || 0);
+    if (total > 0) {
+      cachedEstimatedCount = { value: total, fetchedAt: now };
+      return total;
+    }
+    return cachedEstimatedCount?.value ?? 310536;
   } catch {
-    return cachedEstimatedCount?.value ?? 310000;
+    return cachedEstimatedCount?.value ?? 310536;
   }
 }
 
