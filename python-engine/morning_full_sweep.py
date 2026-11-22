@@ -972,6 +972,116 @@ def build_candidate_queues(existing_skus: Set[str], existing_barcodes: Set[str])
     return hunter_bc_queue, fill_bc_queue, sku_queue
 
 
+_LOGGED_PAYLOAD_KEYS_ACCOUNTS: Set[str] = set()
+
+
+def _parse_money_int(val: Any) -> int:
+    if val is None or val == "":
+        return 0
+    if isinstance(val, (int, float)):
+        return int(round(val)) if val > 0 else 0
+    s = str(val).strip()
+    if not s:
+        return 0
+    s_clean = re.sub(r"[^0-9.,]", "", s)
+    if not s_clean:
+        return 0
+    if "." in s_clean and len(s_clean.split(".")[-1]) <= 2:
+        s_clean = s_clean.split(".")[0]
+    digits = re.sub(r"[^0-9]", "", s_clean)
+    return int(digits) if digits else 0
+
+
+def extract_storehub_promo(item: Dict[str, Any], normal_price: int) -> Dict[str, Any]:
+    """
+    Mengekstrak harga promo, persentase diskon, acara, & tanggal berakhir dari payload StoreHub
+    (mendukung beragam variasi nama field baik untuk akun SUKO maupun Mu+Ku).
+    """
+    if ACTIVE_ACCOUNT not in _LOGGED_PAYLOAD_KEYS_ACCOUNTS:
+        _LOGGED_PAYLOAD_KEYS_ACCOUNTS.add(ACTIVE_ACCOUNT)
+        sample_keys = sorted(k for k in item.keys() if not str(k).startswith("_"))
+        print(f"🔍 [PAYLOAD KEYS {CREDENTIALS['label']} ({CREDENTIALS['username']})] {sample_keys}")
+
+    promo_obj: Dict[str, Any] = {}
+    for pk in ("promo", "Promo", "promotion", "Promotion", "activePromo", "ActivePromo", "priceInfo", "PriceInfo"):
+        v = item.get(pk)
+        if isinstance(v, dict):
+            promo_obj = v
+            break
+        elif isinstance(v, list) and v and isinstance(v[0], dict):
+            promo_obj = v[0]
+            break
+
+    merged_src = dict(promo_obj)
+    merged_src.update(item)
+
+    promo_price = 0
+    for k in (
+        "PromoPrice", "promoPrice", "promo_price",
+        "SellingPrice", "sellingPrice", "selling_price",
+        "SalePrice", "salePrice", "sale_price",
+        "NetPrice", "netPrice", "net_price",
+        "FinalPrice", "finalPrice", "final_price",
+        "DiscountPrice", "discountPrice", "discount_price",
+        "SpecialPrice", "specialPrice", "special_price",
+        "CurrentPrice", "currentPrice", "current_price",
+    ):
+        cand = _parse_money_int(merged_src.get(k))
+        if cand > 0 and (normal_price <= 0 or cand < normal_price):
+            promo_price = cand
+            break
+
+    raw_disc = ""
+    for k in (
+        "DiscountPct", "discountPct", "DiscountPercent", "discountPercent",
+        "Discount", "discount", "Diskon", "diskon", "PromoDiscount", "promoDiscount",
+    ):
+        v = merged_src.get(k)
+        if v is not None and str(v).strip() not in ("", "0", "0%", "0.0", "NONE", "NULL", "-"):
+            raw_disc = str(v).strip()
+            break
+
+    acara = ""
+    for k in (
+        "PromoName", "promoName", "PromoDesc", "promoDesc",
+        "PromotionName", "promotionName", "EventName", "eventName",
+        "EventDesc", "eventDesc", "Acara", "acara", "PromoText", "promoText",
+    ):
+        v = merged_src.get(k)
+        if v is not None and str(v).strip() not in ("", "-", "NONE", "NULL"):
+            acara = str(v).strip()
+            break
+
+    to_date = ""
+    for k in ("PromoEndDate", "promoEndDate", "EndDate", "endDate", "ToDate", "toDate", "ValidUntil", "validUntil"):
+        v = merged_src.get(k)
+        if v is not None and str(v).strip() not in ("", "-", "NONE", "NULL"):
+            to_date = str(v).strip()[:10]
+            break
+
+    # Jika hanya ada diskon persen tapi promo_price belum dihitung, hitung otomatis
+    if promo_price <= 0 and raw_disc and normal_price > 0:
+        m_pct = re.search(r"(\d{1,2})\s*%?", raw_disc)
+        if m_pct:
+            pct_val = int(m_pct.group(1))
+            if 5 <= pct_val <= 90:
+                promo_price = int(round(normal_price * (100 - pct_val) / 100.0))
+
+    if promo_price > 0 and normal_price > 0 and promo_price < normal_price:
+        if not raw_disc:
+            pct_calc = int(round((1.0 - (promo_price / float(normal_price))) * 100))
+            raw_disc = f"{pct_calc}%" if pct_calc >= 1 else "SP"
+        disc_type = "PERCENT" if "%" in raw_disc else "SPECIAL_PRICE"
+        return {
+            "hargaPromo": promo_price,
+            "diskon": raw_disc,
+            "discountType": disc_type,
+            "acara": acara or f"Promo Live {CREDENTIALS['label']}",
+            "toDate": to_date or None,
+        }
+    return {}
+
+
 def item_to_record(
     item: Dict[str, Any],
     fallback_bc: Optional[str] = None,
@@ -980,7 +1090,7 @@ def item_to_record(
     """
     Mengonversi payload StoreHub menjadi record tabel Product + daftar `_all_barcodes`
     secara fleksibel (terima semua panjang barcode >= 4 digit & alfanumerik, tanpa dibuang!)
-    serta MELINDUNGI foto (`imageUrl`, `images`) & promo eksisting.
+    serta MENANGKAP harga normal + harga promo StoreHub (sambil MELINDUNGI foto & promo email eksisting).
     """
     sku_val = normalize_sku_token(item.get("SKU"))
     if not sku_val:
@@ -1011,7 +1121,8 @@ def item_to_record(
         stok_val = 0
 
     raw_p = item.get("RetailPrice") or item.get("Price") or 0
-    p_clean = int(re.sub(r"[^0-9]", "", str(raw_p).split(".")[0]) or 0)
+    p_clean = _parse_money_int(raw_p)
+    promo_info = extract_storehub_promo(item, p_clean or _parse_money_int((existing_row or {}).get("hargaNormal")))
 
     now_iso = datetime.now(timezone.utc).isoformat()
     raw_payload = {k: v for k, v in item.items() if k != "_all_barcodes"}
@@ -1038,11 +1149,19 @@ def item_to_record(
             merged["size"] = size_val
         if p_clean > 0:
             merged["hargaNormal"] = p_clean
+        if promo_info:
+            merged["hargaPromo"] = promo_info["hargaPromo"]
+            merged["diskon"] = promo_info["diskon"]
+            merged["discountType"] = promo_info["discountType"]
+            merged["acara"] = promo_info["acara"]
+            if promo_info.get("toDate"):
+                merged["toDate"] = promo_info["toDate"]
+            merged["_has_live_promo"] = True
         merged["stok"] = stok_val
         merged["updatedAt"] = now_iso
         return merged
 
-    return {
+    rec_new: Dict[str, Any] = {
         "sku": sku_val,
         "barcode": bc_val,
         "_all_barcodes": all_bcs,
@@ -1057,6 +1176,15 @@ def item_to_record(
         "stok": stok_val,
         "updatedAt": now_iso,
     }
+    if promo_info:
+        rec_new["hargaPromo"] = promo_info["hargaPromo"]
+        rec_new["diskon"] = promo_info["diskon"]
+        rec_new["discountType"] = promo_info["discountType"]
+        rec_new["acara"] = promo_info["acara"]
+        if promo_info.get("toDate"):
+            rec_new["toDate"] = promo_info["toDate"]
+        rec_new["_has_live_promo"] = True
+    return rec_new
 
 
 def save_report(start_time: datetime, initial_count: int, session_discovered: int, updated_count: int, brands_counter: Dict[str, int]):
@@ -1144,6 +1272,7 @@ def flush_buffer(
     alias_records: List[Dict[str, Any]] = []
     seen_alias_bcs: Set[str] = set()
     records = []
+    promo_live_updates: List[Tuple[str, float, str, str, str, Optional[str], str]] = []
     new_img_updates: List[Tuple[str, str, List[str]]] = []
     now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -1185,6 +1314,16 @@ def flush_buffer(
         for opt_k in ("brand", "dept", "color", "size"):
             clean_r.setdefault(opt_k, None)
         records.append(clean_r)
+        if r.get("_has_live_promo") and r.get("hargaPromo") and r.get("sku"):
+            promo_live_updates.append((
+                str(r["sku"]),
+                float(r["hargaPromo"]),
+                str(r.get("diskon") or ""),
+                str(r.get("discountType") or "SPECIAL_PRICE"),
+                str(r.get("acara") or ""),
+                str(r["toDate"]) if r.get("toDate") else None,
+                now_iso,
+            ))
         if r.get("_found_images") and r.get("imageUrl") and r.get("sku"):
             new_img_updates.append((str(r["sku"]), str(r["imageUrl"]), list(r["_found_images"])))
     buffer_by_sku.clear()
@@ -1214,6 +1353,24 @@ def flush_buffer(
                 except Exception:
                     pass
         print(f"   💾 [DB SAFE] Berhasil menyimpan {saved_one}/{len(records)} produk ke Database! ({e})")
+
+    # 2B. Simpan Harga Promo Live dari StoreHub (hanya untuk item yang terdeteksi punya promo aktif — tidak pernah menimpa promo email jadi NULL!)
+    if promo_live_updates:
+        try:
+            conn_p = connect_pg()
+            if getattr(conn_p, "is_turso", False):
+                stmts_p = [
+                    (
+                        'UPDATE "Product" SET "hargaPromo" = ?, diskon = ?, "discountType" = ?, acara = ?, "toDate" = COALESCE(?, "toDate"), "updatedAt" = ? WHERE sku = ?',
+                        (hp, dsk, dt, ac, td, upd, sku),
+                    )
+                    for sku, hp, dsk, dt, ac, td, upd in promo_live_updates
+                ]
+                conn_p.execute_batch(stmts_p, transactional=True)
+                print(f"   🏷️ [PROMO LIVE STOREHUB] Tersimpan {len(promo_live_updates)} SKU harga promo live ({CREDENTIALS['label']})!")
+            conn_p.close()
+        except Exception as ep:
+            print(f"   ⚠️ [PROMO LIVE] Lewati update promo batch: {ep}")
 
     # 3. Simpan SEMUA multi-barcode ke BarcodeAlias agar tidak ada 1 barcode pun yang terbuang
     if alias_records:
@@ -1690,11 +1847,14 @@ def execute_live_stock_sync(
                     s_val = rec["sku"]
                     old_stok = int((ex_row or {}).get("stok") or 0)
                     old_price = int(float((ex_row or {}).get("hargaNormal") or 0))
+                    old_promo = int(float((ex_row or {}).get("hargaPromo") or 0))
+                    new_promo = int(float(rec.get("hargaPromo") or 0))
                     old_bc = str((ex_row or {}).get("barcode") or "").strip()
 
                     if (
                         rec["stok"] != old_stok
                         or rec["hargaNormal"] != old_price
+                        or (rec.get("_has_live_promo") and new_promo != old_promo)
                         or (rec.get("barcode") and rec.get("barcode") != old_bc)
                         or (ex_row and ex_row.get("_from_registry_only"))
                     ):
@@ -1711,6 +1871,8 @@ def execute_live_stock_sync(
                         for sib in article_variants_map[art_key]:
                             sib_sku = str(sib.get("sku") or "").strip()
                             if not sib_sku or sib_sku == s_val:
+                                continue
+                            if is_muku_mode and not _is_muku_row(sib):
                                 continue
                             sib_col = str(sib.get("color") or "").strip().upper()
                             sib_sz = str(sib.get("size") or "").strip().upper()
@@ -1733,10 +1895,13 @@ def execute_live_stock_sync(
                                 resolved_by_related_stock.add(sib_sku)
                                 checked_count += 1
                                 old_sib_q = int(sib.get("stok") or 0)
-                                if old_sib_q != found_qty:
-                                    _track_delta_sale(sib_sku, sib, old_sib_q, found_qty)
-                                    upd_sib = dict(sib)
-                                    upd_sib["stok"] = found_qty
+                                upd_sib = dict(sib)
+                                upd_sib["stok"] = found_qty
+                                upd_sib = _protect_cross_store_stock(upd_sib, sib)
+                                final_sib_q = int(upd_sib.get("stok") or 0)
+                                if old_sib_q != final_sib_q:
+                                    if not is_muku_mode:
+                                        _track_delta_sale(sib_sku, sib, old_sib_q, final_sib_q)
                                     upd_sib["updatedAt"] = now_iso
                                     buffer_by_sku[sib_sku] = upd_sib
                                     catalog_by_sku[sib_sku] = upd_sib
@@ -2131,11 +2296,14 @@ def execute_morning_sweep(
         except Exception as e:
             print(f"⚠️ Lewati chain brutal_image_scraper: {e}")
 
-    try:
-        from build_catalog_index import build_and_verify_catalog
-        build_and_verify_catalog()
-    except Exception as e:
-        print(f"⚠️ Lewati auto-rebuild CatalogArticle: {e}")
+    if "--no-catalog" not in sys.argv:
+        try:
+            from build_catalog_index import build_and_verify_catalog
+            build_and_verify_catalog()
+        except Exception as e:
+            print(f"⚠️ Lewati auto-rebuild CatalogArticle: {e}")
+    else:
+        print("ℹ️ [--no-catalog] Lewati rebuild CatalogArticle (akan diselesaikan sekali di Step Kategori 4).")
 
     print("\n" + "=" * 80)
     print(f"🎉 SUKSES TOTAL! Artikel Unik: {len(seen_articles):,} (+{new_articles_discovered:,} baru) | Total SKU: {len(existing_skus):,} (+{new_discovered:,} baru) | Foto Baru: +{live_images_matched:,}")
