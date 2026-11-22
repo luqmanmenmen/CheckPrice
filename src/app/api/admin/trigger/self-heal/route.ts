@@ -15,6 +15,8 @@ const REPO_NAME = 'CheckPrice';
 const VALID_ACTIONS: SyncActionType[] = [
   'scrab',
   'mds-bisa',
+  'muku-scrab',
+  'muku-stock',
   'photos',
   'stock-only',
   'suko-sales',
@@ -25,7 +27,7 @@ const VALID_ACTIONS: SyncActionType[] = [
   'all',
 ];
 
-const COOKIE_ACTIONS = new Set<SyncActionType>(['scrab', 'mds-bisa', 'stock-only', 'suko-sales', 'all']);
+const COOKIE_ACTIONS = new Set<SyncActionType>(['scrab', 'mds-bisa', 'muku-scrab', 'muku-stock', 'stock-only', 'suko-sales', 'all']);
 
 async function cancelStuckGitHubRuns(): Promise<number[]> {
   let githubToken = (process.env.GITHUB_TOKEN || process.env.GH_PAT || '').trim();
@@ -149,12 +151,13 @@ export async function POST(req: Request) {
       'application/json'
     ).catch(() => {});
 
-    // 3. Perbarui sesi luqman org jika diperlukan
+    // 3. Perbarui sesi luqman org sesuai akun (Mu+Ku vs SUKO) jika diperlukan
     let healedCookie = false;
     let freshCookie = '';
     if (refreshCookie && COOKIE_ACTIONS.has(action)) {
       try {
-        freshCookie = await getStoreHubCookie(true, 'self_heal_force_refresh');
+        const targetAcc = action === 'muku-scrab' || action === 'muku-stock' ? 'muku' : 'suko';
+        freshCookie = await getStoreHubCookie(true, 'self_heal_force_refresh', targetAcc);
         healedCookie = Boolean(freshCookie && freshCookie.includes('mso_session='));
       } catch (cookieErr) {
         console.warn('[SELF-HEAL] Gagal refresh cookie:', cookieErr);

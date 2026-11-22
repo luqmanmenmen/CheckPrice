@@ -17,7 +17,7 @@ const REPO_OWNER = 'luqmanmenmen';
 const REPO_NAME = 'CheckPrice';
 const WORKFLOW_ID = 'retail-sync-engine.yml';
 
-export type SyncActionType = 'scrab' | 'mds-bisa' | 'photos' | 'stock-only' | 'suko-sales' | 'promo' | 'upcoming-promo' | 'catalog' | 'analytics' | 'all';
+export type SyncActionType = 'scrab' | 'mds-bisa' | 'muku-scrab' | 'muku-stock' | 'photos' | 'stock-only' | 'suko-sales' | 'promo' | 'upcoming-promo' | 'catalog' | 'analytics' | 'all';
 
 export async function dispatchToGitHubRunner(params: {
   action: SyncActionType;
@@ -58,17 +58,19 @@ export async function dispatchToGitHubRunner(params: {
     };
   }
 
-  // Ambil MDS session cookie dari storage jika ada
+  // Ambil session cookie sesuai akun (Mu+Ku vs SUKO) dari Turso Storage jika ada
   let mdsCookie = sessionCookie;
-  if (!mdsCookie && (action === 'scrab' || action === 'mds-bisa' || action === 'stock-only' || action === 'suko-sales' || action === 'all')) {
+  const isMukuAction = action === 'muku-scrab' || action === 'muku-stock';
+  const cookiePath = isMukuAction ? 'secrets/mds_cookie_muku.txt' : 'secrets/mds_cookie.txt';
+  if (!mdsCookie && (isMukuAction || action === 'scrab' || action === 'mds-bisa' || action === 'stock-only' || action === 'suko-sales' || action === 'all')) {
     try {
       const { supabase } = await import('@/lib/supabaseClient');
-      const { data, error } = await supabase.storage.from('excel-uploads').download('secrets/mds_cookie.txt');
+      const { data, error } = await supabase.storage.from('excel-uploads').download(cookiePath);
       if (data && !error) {
         mdsCookie = (await data.text()).trim();
       }
     } catch (e) {
-      console.warn('[GITHUB-DISPATCH] Gagal membaca fallback mds_cookie dari Storage:', e);
+      console.warn(`[GITHUB-DISPATCH] Gagal membaca fallback ${cookiePath} dari Storage:`, e);
     }
   }
 
@@ -109,6 +111,8 @@ export async function dispatchToGitHubRunner(params: {
   const typeMap: Record<SyncActionType, string> = {
     'scrab': 'SCRAB_BRUTAL_TRIGGER',
     'mds-bisa': 'MDS_BISA_SYNC_TRIGGER',
+    'muku-scrab': 'MUKU_SCRAP_TRIGGER',
+    'muku-stock': 'MUKU_STOCK_TRIGGER',
     'photos': 'PHOTO_SYNC_TRIGGER',
     'stock-only': 'STOCK_SYNC_TRIGGER',
     'suko-sales': 'MDS_SALES_SYNC_TRIGGER',
@@ -121,7 +125,9 @@ export async function dispatchToGitHubRunner(params: {
 
   const labelMap: Record<SyncActionType, string> = {
     'scrab': `KATEGORI 1: Brutal Scrab (by luqman org + Foto luqman org) [v${APP_VERSION}]`,
-    'mds-bisa': `KATEGORI 1A: Brutal Scrab by luqman org [v${APP_VERSION}]`,
+    'mds-bisa': `KATEGORI 1A: Brutal Scrab SUKO by luqman org [v${APP_VERSION}]`,
+    'muku-scrab': `KATEGORI 1D: Scrab Produk Mu+Ku + Foto (Jalur Akun Mu+Ku) [v${APP_VERSION}]`,
+    'muku-stock': `KATEGORI 2B: Update Stock Live Mu+Ku (Jalur Akun Mu+Ku) [v${APP_VERSION}]`,
     'photos': `KATEGORI 1B: Brutal Scrab Foto & Pulihkan URL 404 [v${APP_VERSION}]`,
     'stock-only': `KATEGORI 2: Update Stock Live (Mapping 84.763 SKU + Sales) [v${APP_VERSION}]`,
     'suko-sales': `KATEGORI 2B: Tarik Sales & Stok Cepat SUKO (Turso Cloud) [v${APP_VERSION}]`,

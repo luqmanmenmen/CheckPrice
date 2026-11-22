@@ -44,7 +44,7 @@ export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
     const rawAction = String(body.action || 'all').trim() as SyncActionType;
-    const validActions: SyncActionType[] = ['scrab', 'mds-bisa', 'photos', 'stock-only', 'suko-sales', 'promo', 'upcoming-promo', 'catalog', 'analytics', 'all'];
+    const validActions: SyncActionType[] = ['scrab', 'mds-bisa', 'muku-scrab', 'muku-stock', 'photos', 'stock-only', 'suko-sales', 'promo', 'upcoming-promo', 'catalog', 'analytics', 'all'];
     const action: SyncActionType = validActions.includes(rawAction) ? rawAction : 'all';
 
     const rawSalesDate = typeof body.salesDate === 'string' ? body.salesDate.trim() : typeof body.sales_date === 'string' ? body.sales_date.trim() : '';

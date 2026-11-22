@@ -411,6 +411,7 @@ export default function Home() {
         body: JSON.stringify({
           sku: targetSku,
           article: product.article || null,
+          brandGroup: product.brandGroup || classifyBrandGroup(product),
           discoverFamily: needsDiscovery,
           withImages: needsDiscovery,
           syncAllSizes: true,

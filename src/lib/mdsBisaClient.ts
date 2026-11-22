@@ -16,21 +16,41 @@ const ACTION_LOGIN_DEFAULT = '603f9b4dfafaa0e65eec411a818c1ebcaa476b889f';
 let ACTION_LOGIN = ACTION_LOGIN_DEFAULT;
 let ACTION_DETAIL = '608e569ea77f8871817d11afae932ecea7d0fcbd09';
 
-const CREDENTIALS = {
-  username: 'M223515',
-  password: 'Mamen123',
-  tz: 'Asia/Jakarta',
+export type StoreHubAccount = 'suko' | 'muku';
+
+const ACCOUNT_CONFIGS: Record<
+  StoreHubAccount,
+  { username: string; password: string; tz: string; storagePath: string; envCookieKey: string }
+> = {
+  suko: {
+    username: process.env.MDS_USERNAME || 'M223515',
+    password: process.env.MDS_PASSWORD || 'Mamen123',
+    tz: 'Asia/Jakarta',
+    storagePath: 'secrets/mds_cookie.txt',
+    envCookieKey: 'MDS_SESSION_COOKIE',
+  },
+  muku: {
+    username: process.env.MDS_MUKU_USERNAME || 'M223708',
+    password: process.env.MDS_MUKU_PASSWORD || 'Aurel_28',
+    tz: 'Asia/Jakarta',
+    storagePath: 'secrets/mds_cookie_muku.txt',
+    envCookieKey: 'MDS_MUKU_SESSION_COOKIE',
+  },
 };
 
 const INVALID_ARTICLE_CODES = new Set(['', '0', '-', 'N/A', 'NONE', 'NULL', 'PRODUK BARU']);
 const BAD_IMAGE_TOKENS = ['banner', 'logo', 'icon', 'badge', 'chart', 'size', 'panduan', '.svg', '.gif'];
 
-// In-memory cookie cache (session StoreHub bertahan ~20 menit; 0ms lookup tanpa sentuh Storage!)
-let cachedCookie: string | null = null;
-let cookieCachedAt: number = 0;
+// In-memory cookie cache per-akun (session StoreHub bertahan ~20 menit; 0ms lookup tanpa sentuh Storage!)
+const cookieCacheByAccount: Record<
+  StoreHubAccount,
+  { cookie: string | null; cachedAt: number; lastUploaded: string; lastUploadAt: number }
+> = {
+  suko: { cookie: null, cachedAt: 0, lastUploaded: '', lastUploadAt: 0 },
+  muku: { cookie: null, cachedAt: 0, lastUploaded: '', lastUploadAt: 0 },
+};
 const COOKIE_TTL_MS = 18 * 60 * 1000; // 18 menit
-const STORAGE_COOKIE_UPLOAD_COOLDOWN_MS = 15 * 60 * 1000; // Maks 1x upload per 15 menit (cegah 17k write storage.objects!)
-let lastStorageUploadAt: number = 0;
+const STORAGE_COOKIE_UPLOAD_COOLDOWN_MS = 15 * 60 * 1000; // Maks 1x upload per 15 menit
 
 export type LiveStockVariantSummary = {
   sku: string;
@@ -43,6 +63,7 @@ export type CheckSingleItemOptions = {
   discoverFamily?: boolean;
   withImages?: boolean;
   syncAllSizes?: boolean;
+  preferredAccount?: StoreHubAccount;
 };
 
 export type CheckSingleItemResult = {
@@ -522,23 +543,27 @@ function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   });
 }
 
-let lastStorageCookieUploaded = '';
 /**
- * Simpan cookie ke Supabase Storage secara fire-and-forget & di-throttle maks 1x/15 menit.
- * Mencegah lonjakan 17.000+ write ke storage.objects yang menghabiskan Disk IO Budget Supabase!
+ * Simpan cookie ke Turso Storage secara fire-and-forget & di-throttle maks 1x/15 menit per akun.
  */
-function saveCookieToStorageBackground(cookie: string, isFreshLogin: boolean = false) {
+function saveCookieToStorageBackground(
+  cookie: string,
+  isFreshLogin: boolean = false,
+  account: StoreHubAccount = 'suko'
+) {
   const now = Date.now();
-  if (!cookie || cookie === lastStorageCookieUploaded) return;
-  if (!isFreshLogin && now - lastStorageUploadAt < STORAGE_COOKIE_UPLOAD_COOLDOWN_MS) return;
-  if (isFreshLogin && now - lastStorageUploadAt < 60_000) return;
-  lastStorageCookieUploaded = cookie;
-  lastStorageUploadAt = now;
+  const slot = cookieCacheByAccount[account];
+  const cfg = ACCOUNT_CONFIGS[account];
+  if (!cookie || cookie === slot.lastUploaded) return;
+  if (!isFreshLogin && now - slot.lastUploadAt < STORAGE_COOKIE_UPLOAD_COOLDOWN_MS) return;
+  if (isFreshLogin && now - slot.lastUploadAt < 60_000) return;
+  slot.lastUploaded = cookie;
+  slot.lastUploadAt = now;
   void withTimeout(
     (async () => {
       const { supabase } = await import('@/lib/supabaseClient');
       await supabase.storage.from('excel-uploads').upload(
-        'secrets/mds_cookie.txt',
+        cfg.storagePath,
         Buffer.from(cookie, 'utf-8'),
         { contentType: 'text/plain', upsert: true }
       );
@@ -550,7 +575,11 @@ function saveCookieToStorageBackground(cookie: string, isFreshLogin: boolean = f
 }
 
 /** Gabungkan pembaruan Set-Cookie dari response StoreHub jika ada rotasi mso_session */
-async function persistRefreshedSessionIfAny(res: Response, currentCookie: string): Promise<string> {
+async function persistRefreshedSessionIfAny(
+  res: Response,
+  currentCookie: string,
+  account: StoreHubAccount = 'suko'
+): Promise<string> {
   try {
     const getSetCookie = (res.headers as any).getSetCookie;
     const rawCookies: string[] = typeof getSetCookie === 'function'
@@ -573,10 +602,10 @@ async function persistRefreshedSessionIfAny(res: Response, currentCookie: string
     }
 
     if (changed && updated.includes('mso_session=')) {
-      cachedCookie = updated;
-      cookieCachedAt = Date.now();
-      // Throttled 15 menit: update RAM langsung (0ms), tidak spam Supabase Storage!
-      saveCookieToStorageBackground(updated, false);
+      const slot = cookieCacheByAccount[account];
+      slot.cookie = updated;
+      slot.cachedAt = Date.now();
+      saveCookieToStorageBackground(updated, false, account);
     }
     return updated;
   } catch {
@@ -607,13 +636,17 @@ async function resolveLoginActionHashParallel(): Promise<string | null> {
   return null;
 }
 
-async function postStoreHubLoginDirect(actionHash: string): Promise<{ cookie: string | null; status: number }> {
+async function postStoreHubLoginDirect(
+  actionHash: string,
+  account: StoreHubAccount = 'suko'
+): Promise<{ cookie: string | null; status: number }> {
+  const cfg = ACCOUNT_CONFIGS[account];
   // KRUSIAL (React 19 decodeReplyFromBusboy): field `_1_*` WAJIB ditempatkan SEBELUM `'0'` (`[{},"$K1"]`).
   const fd = new FormData();
   fd.append('_1_next', '/');
-  fd.append('_1_username', CREDENTIALS.username);
-  fd.append('_1_password', CREDENTIALS.password);
-  fd.append('_1_tz', CREDENTIALS.tz);
+  fd.append('_1_username', cfg.username);
+  fd.append('_1_password', cfg.password);
+  fd.append('_1_tz', cfg.tz);
   fd.append('0', '[{},"$K1"]');
 
   const res = await fetch(LOGIN_URL, {
@@ -643,49 +676,53 @@ async function postStoreHubLoginDirect(actionHash: string): Promise<{ cookie: st
 
 export async function getStoreHubCookie(
   forceRefresh: boolean = false,
-  previousCookie?: string | null
+  previousCookie?: string | null,
+  account: StoreHubAccount = 'suko'
 ): Promise<string> {
   const now = Date.now();
+  const slot = cookieCacheByAccount[account];
+  const cfg = ACCOUNT_CONFIGS[account];
+
   if (forceRefresh) {
-    cachedCookie = null;
-    cookieCachedAt = 0;
-  } else if (cachedCookie && cachedCookie.includes('mso_session') && (now - cookieCachedAt) < COOKIE_TTL_MS) {
-    return cachedCookie;
+    slot.cookie = null;
+    slot.cachedAt = 0;
+  } else if (slot.cookie && slot.cookie.includes('mso_session') && (now - slot.cachedAt) < COOKIE_TTL_MS) {
+    return slot.cookie;
   }
 
-  // 1. Jika ada env MDS_SESSION_COOKIE yang memiliki mso_session, gunakan instan (0ms)
-  if (!forceRefresh && process.env.MDS_SESSION_COOKIE && process.env.MDS_SESSION_COOKIE.includes('mso_session')) {
-    cachedCookie = process.env.MDS_SESSION_COOKIE.trim();
-    cookieCachedAt = now;
-    return cachedCookie;
+  // 1. Jika ada env cookie khusus akun yang memiliki mso_session, gunakan instan (0ms)
+  const envVal = (process.env[cfg.envCookieKey] || '').trim();
+  if (!forceRefresh && envVal && envVal.includes('mso_session')) {
+    slot.cookie = envVal;
+    slot.cachedAt = now;
+    return slot.cookie;
   }
 
   // 2. JALUR TOL LANGSUNG: langsung POST login pakai ACTION_LOGIN tersimpan (~300-600ms)
-  // TANPA download Supabase Storage & TANPA scraping 12 JS chunk dulu!
   try {
-    let attempt = await postStoreHubLoginDirect(ACTION_LOGIN);
+    let attempt = await postStoreHubLoginDirect(ACTION_LOGIN, account);
     if (!attempt.cookie && attempt.status === 404) {
       const freshHash = await resolveLoginActionHashParallel();
       if (freshHash) {
-        attempt = await postStoreHubLoginDirect(freshHash);
+        attempt = await postStoreHubLoginDirect(freshHash, account);
       }
     }
     if (attempt.cookie) {
-      cachedCookie = attempt.cookie;
-      cookieCachedAt = Date.now();
-      saveCookieToStorageBackground(attempt.cookie, true);
+      slot.cookie = attempt.cookie;
+      slot.cachedAt = Date.now();
+      saveCookieToStorageBackground(attempt.cookie, true, account);
       return attempt.cookie;
     }
   } catch (e) {
-    console.warn('[MDS-CLIENT] Direct auto-login error:', e);
+    console.warn(`[MDS-CLIENT:${account}] Direct auto-login error:`, e);
   }
 
-  // 3. Fallback terakhir (hanya jika direct login gagal): baca cookie dari Supabase Storage (timeout ketat 1.5 detik)
+  // 3. Fallback terakhir: baca cookie akun dari Turso Storage (timeout ketat 1.5 detik)
   try {
     const cookie = await withTimeout(
       (async () => {
         const { supabase } = await import('@/lib/supabaseClient');
-        const { data, error } = await supabase.storage.from('excel-uploads').download('secrets/mds_cookie.txt');
+        const { data, error } = await supabase.storage.from('excel-uploads').download(cfg.storagePath);
         if (!data || error) return '';
         return (await data.text()).trim();
       })(),
@@ -694,15 +731,15 @@ export async function getStoreHubCookie(
     );
     const prevClean = String(previousCookie || '').trim();
     if (cookie && cookie.includes('mso_session') && (!forceRefresh || (prevClean && cookie !== prevClean))) {
-      cachedCookie = cookie;
-      cookieCachedAt = Date.now();
-      return cachedCookie;
+      slot.cookie = cookie;
+      slot.cachedAt = Date.now();
+      return slot.cookie;
     }
   } catch (e) {
-    console.warn('[MDS-CLIENT] Gagal membaca cookie fallback dari Storage:', e);
+    console.warn(`[MDS-CLIENT:${account}] Gagal membaca cookie fallback dari Storage:`, e);
   }
 
-  throw new Error('Gagal mendapatkan session login StoreHub (mso_session tidak ditemukan)');
+  throw new Error(`Gagal mendapatkan session login StoreHub (${account}: mso_session tidak ditemukan)`);
 }
 
 function harvestBarcodes(rows: any[], primaryItem?: any): string[] {
@@ -1257,7 +1294,8 @@ async function queryStoreHubDetail(
   kind: 'upc' | 'sku',
   code: string,
   activeCookie: string,
-  timeoutMs: number = 5000
+  timeoutMs: number = 5000,
+  account: StoreHubAccount = 'suko'
 ): Promise<{ itemData: any; allItems: any[]; authFailed: boolean; offline: boolean; actionExpired: boolean; cookie: string }> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -1285,7 +1323,7 @@ async function queryStoreHubDetail(
     clearTimeout(timeoutId);
   }
 
-  const updatedCookie = await persistRefreshedSessionIfAny(res, activeCookie);
+  const updatedCookie = await persistRefreshedSessionIfAny(res, activeCookie, account);
 
   if (res.status === 404) {
     return { itemData: null, allItems: [], authFailed: false, offline: false, actionExpired: true, cookie: updatedCookie };
@@ -1401,10 +1439,15 @@ export async function checkLiveStockFast(
   sku: string,
   familySkus: string[],
   familyVariants?: FastLiveVariantInput[],
-  article?: string | null
+  article?: string | null,
+  brandGroup?: string | null
 ): Promise<FastLiveStockResult> {
   const cleanSku = String(sku).trim();
   const noop = async () => {};
+
+  const primaryAccount: StoreHubAccount =
+    String(brandGroup || '').trim().toUpperCase() === 'MUKU' ? 'muku' : 'suko';
+  const fallbackAccount: StoreHubAccount = primaryAccount === 'muku' ? 'suko' : 'muku';
 
   const variantMeta = new Map<string, { color: string | null; size: string | null; prevStok: number | undefined }>();
   if (Array.isArray(familyVariants)) {
@@ -1426,7 +1469,12 @@ export async function checkLiveStockFast(
     )
   ).slice(0, 150);
 
-  let cookie = await getStoreHubCookie().catch(() => null);
+  let activeAccount: StoreHubAccount = primaryAccount;
+  let cookie = await getStoreHubCookie(false, null, primaryAccount).catch(() => null);
+  if (!cookie) {
+    activeAccount = fallbackAccount;
+    cookie = await getStoreHubCookie(false, null, fallbackAccount).catch(() => null);
+  }
   if (!cookie) {
     return {
       result: { success: false, sku: cleanSku, message: 'Gagal login server luqman org. Coba tekan ulang Live Stok.' },
@@ -1434,18 +1482,33 @@ export async function checkLiveStockFast(
     };
   }
 
-  // 1 KALI panggilan langsung ke jalur StoreHub item-checker (tanpa nyari jalur!)
-  let first = await queryStoreHubDetail('sku', cleanSku, cookie, 5000);
+  // 1 KALI panggilan langsung ke jalur StoreHub item-checker memakai akun sesuai toko (Mu+Ku / SUKO)
+  let first = await queryStoreHubDetail('sku', cleanSku, cookie, 5000, activeAccount);
   if (first.actionExpired && (await resolveDetailActionHash(cookie))) {
-    first = await queryStoreHubDetail('sku', cleanSku, cookie, 5000);
+    first = await queryStoreHubDetail('sku', cleanSku, cookie, 5000, activeAccount);
   }
   if (first.authFailed) {
-    const fresh = await getStoreHubCookie(true, cookie).catch(() => null);
+    const fresh = await getStoreHubCookie(true, cookie, activeAccount).catch(() => null);
     if (fresh) {
       cookie = fresh;
-      first = await queryStoreHubDetail('sku', cleanSku, cookie, 5000);
+      first = await queryStoreHubDetail('sku', cleanSku, cookie, 5000, activeAccount);
       if (first.actionExpired && (await resolveDetailActionHash(cookie))) {
-        first = await queryStoreHubDetail('sku', cleanSku, cookie, 5000);
+        first = await queryStoreHubDetail('sku', cleanSku, cookie, 5000, activeAccount);
+      }
+    }
+  }
+
+  // Jalan Alternatif Otomatis: jika akun utama tidak menemukan item atau stok < 0 (beda role toko), coba akun satunya!
+  const firstStokRaw = first.itemData?.StockOnHand ?? first.itemData?.stockOnHand ?? first.itemData?.stock_on_hand ?? first.itemData?.soh;
+  const firstStokNum = firstStokRaw !== undefined && firstStokRaw !== null ? parseInt(String(firstStokRaw), 10) : NaN;
+  if ((!first.itemData || (!Number.isNaN(firstStokNum) && firstStokNum < 0)) && !first.offline && activeAccount === primaryAccount) {
+    const altCookie = await getStoreHubCookie(false, null, fallbackAccount).catch(() => null);
+    if (altCookie) {
+      const altFirst = await queryStoreHubDetail('sku', cleanSku, altCookie, 4500, fallbackAccount);
+      if (altFirst.itemData && !altFirst.offline && !altFirst.authFailed) {
+        activeAccount = fallbackAccount;
+        cookie = altFirst.cookie || altCookie;
+        first = altFirst;
       }
     }
   }
@@ -1772,7 +1835,27 @@ export async function checkSingleItemStock(
   };
 
   try {
-    let cookie = await getStoreHubCookie().catch(() => null);
+    // Tentukan akun utama berdasarkan preferensi / data DB eksisting (Mu+Ku vs SUKO)
+    let primaryAccount: StoreHubAccount = options.preferredAccount || 'suko';
+    if (!options.preferredAccount) {
+      const quickExisting = await prisma.product
+        .findFirst({
+          where: { OR: [{ sku: cleanSku }, { barcode: cleanSku }] },
+          select: { brand: true, dept: true },
+        })
+        .catch(() => null);
+      if (quickExisting && classifyBrandGroup(quickExisting) === 'MUKU') {
+        primaryAccount = 'muku';
+      }
+    }
+    const fallbackAccount: StoreHubAccount = primaryAccount === 'muku' ? 'suko' : 'muku';
+
+    let activeAccount: StoreHubAccount = primaryAccount;
+    let cookie = await getStoreHubCookie(false, null, primaryAccount).catch(() => null);
+    if (!cookie) {
+      activeAccount = fallbackAccount;
+      cookie = await getStoreHubCookie(false, null, fallbackAccount).catch(() => null);
+    }
     if (!cookie) {
       return await fallbackToDb('Server by luqman org belum ada session aktif. Menampilkan stok tersimpan.');
     }
@@ -1782,25 +1865,25 @@ export async function checkSingleItemStock(
 
     let activeKind: 'upc' | 'sku' = firstProbe.kind;
     let queriedCode = firstProbe.code;
-    let queryRes = await queryStoreHubDetail(activeKind, queriedCode, cookie);
+    let queryRes = await queryStoreHubDetail(activeKind, queriedCode, cookie, 5000, activeAccount);
 
     // Jika Next-Action hash berubah di StoreHub, resolve dinamis lalu retry 1x
     if (queryRes.actionExpired) {
       if (await resolveDetailActionHash(cookie)) {
-        queryRes = await queryStoreHubDetail(activeKind, queriedCode, cookie);
+        queryRes = await queryStoreHubDetail(activeKind, queriedCode, cookie, 5000, activeAccount);
       }
     }
 
     // Jika cookie expired (401 / redirect / HTTP 200 RSC shell), paksa auto-login lalu retry 1x
     if (queryRes.authFailed) {
-      const freshCookie: string | null = await getStoreHubCookie(true, cookie).catch(() => null);
+      const freshCookie: string | null = await getStoreHubCookie(true, cookie, activeAccount).catch(() => null);
       if (freshCookie) {
         cookie = freshCookie;
-        queryRes = await queryStoreHubDetail(activeKind, queriedCode, cookie);
+        queryRes = await queryStoreHubDetail(activeKind, queriedCode, cookie, 5000, activeAccount);
       }
       if (queryRes.authFailed || queryRes.actionExpired) {
         if (await resolveDetailActionHash(cookie)) {
-          queryRes = await queryStoreHubDetail(activeKind, queriedCode, cookie);
+          queryRes = await queryStoreHubDetail(activeKind, queriedCode, cookie, 5000, activeAccount);
         }
       }
       if (queryRes.authFailed) {
@@ -1815,7 +1898,7 @@ export async function checkSingleItemStock(
     // Jika jalur utama tidak menemukannya, coba kandidat alternatif (reverse kind, check-digit fix, prefix 234000 / 2*)
     if (!queryRes.itemData) {
       for (const cand of initialCandidates.slice(1)) {
-        const altRes = await queryStoreHubDetail(cand.kind, cand.code, queryRes.cookie || cookie, 4000);
+        const altRes = await queryStoreHubDetail(cand.kind, cand.code, queryRes.cookie || cookie, 4000, activeAccount);
         if (altRes.cookie) cookie = altRes.cookie;
         if (altRes.offline) {
           return await fallbackToDb('Server toko fisik sedang istirahat (malam hari). Menampilkan stok tersimpan.');
@@ -1825,6 +1908,27 @@ export async function checkSingleItemStock(
           activeKind = cand.kind;
           queriedCode = cand.code;
           break;
+        }
+      }
+    }
+
+    // Dual-Account Auto-Fallback: jika belum ketemu atau stok < 0 di akun pertama, otomatis tembak akun kedua (SUKO <-> Mu+Ku)!
+    const curStokRaw = queryRes.itemData?.StockOnHand ?? queryRes.itemData?.stockOnHand ?? queryRes.itemData?.stock_on_hand ?? queryRes.itemData?.soh;
+    const curStokNum = curStokRaw !== undefined && curStokRaw !== null ? parseInt(String(curStokRaw), 10) : NaN;
+    if ((!queryRes.itemData || (!Number.isNaN(curStokNum) && curStokNum < 0)) && activeAccount === primaryAccount) {
+      const altCookie = await getStoreHubCookie(false, null, fallbackAccount).catch(() => null);
+      if (altCookie) {
+        for (const cand of initialCandidates.slice(0, 3)) {
+          const altRes = await queryStoreHubDetail(cand.kind, cand.code, altCookie, 4500, fallbackAccount);
+          if (altRes.itemData && !altRes.offline && !altRes.authFailed) {
+            activeAccount = fallbackAccount;
+            cookie = altRes.cookie || altCookie;
+            queryRes = altRes;
+            activeKind = cand.kind;
+            queriedCode = cand.code;
+            break;
+          }
+          if (altRes.offline) break;
         }
       }
     }

@@ -15,6 +15,8 @@ on:
         options:
           - scrab
           - mds-bisa
+          - muku-scrab
+          - muku-stock
           - photos
           - stock-only
           - suko-sales
@@ -45,7 +47,7 @@ on:
         type: string
 
   repository_dispatch:
-    types: [trigger-sync-engine, trigger-scrab, trigger-mds-bisa, trigger-stock-only, trigger-suko-sales, trigger-photos, trigger-promo, trigger-upcoming-promo, trigger-catalog, trigger-analytics]
+    types: [trigger-sync-engine, trigger-scrab, trigger-mds-bisa, trigger-muku-scrab, trigger-muku-stock, trigger-stock-only, trigger-suko-sales, trigger-photos, trigger-promo, trigger-upcoming-promo, trigger-catalog, trigger-analytics]
 
 concurrency:
   group: retail-sync-group
@@ -84,11 +86,22 @@ jobs:
       - name: 🔥 [KATEGORI 1A - SCRAB BY LUQMAN ORG] Brutal Scraper by luqman org (Turbo Workers • SKU & Barcode Sweep)
         if: ${{ github.event.inputs.action == 'scrab' || github.event.inputs.action == 'mds-bisa' || github.event.inputs.action == 'all' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-mds-bisa' || github.event.action == 'trigger-sync-engine' || (github.event_name == 'workflow_dispatch' && github.event.inputs.action == '') }}
         run: |
-          python -u python-engine/runner_guardian.py --step "KATEGORI 1A - Brutal Scrab by luqman org" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 --track-new-products -- python python-engine/morning_full_sweep.py --brutal --upc-first --workers=24
+          python -u python-engine/runner_guardian.py --step "KATEGORI 1A - Brutal Scrab by luqman org" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 --track-new-products -- python python-engine/morning_full_sweep.py --account=suko --brutal --upc-first --workers=24
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
           MDS_SESSION_COOKIE: ${{ github.event.inputs.session_cookie || secrets.MDS_SESSION_COOKIE }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+
+      - name: 🏷️ [KATEGORI 1D - SCRAB KHUSUS MU+KU] Brutal Scraper & Barcode Recovery Akun Mu+Ku
+        if: ${{ github.event.inputs.action == 'muku-scrab' || github.event.action == 'trigger-muku-scrab' }}
+        run: |
+          python -u python-engine/runner_guardian.py --step "KATEGORI 1D - Scrab Produk Mu+Ku (Jalur Akun Mu+Ku)" --action "muku-scrab" --max-retries 3 --track-new-products -- python python-engine/morning_full_sweep.py --account=muku --brutal --upc-first --workers=24
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          MDS_MUKU_SESSION_COOKIE: ${{ github.event.inputs.session_cookie || secrets.MDS_MUKU_SESSION_COOKIE }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
@@ -109,7 +122,7 @@ jobs:
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
       - name: 📸 [KATEGORI 1C - SCRAB GAMBAR & HEAL 404] Brutal Image Scraper + Pemulih URL Foto
-        if: ${{ github.event.inputs.action == 'scrab' || github.event.inputs.action == 'photos' || github.event.inputs.action == 'all' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-photos' || github.event.action == 'trigger-sync-engine' }}
+        if: ${{ github.event.inputs.action == 'scrab' || github.event.inputs.action == 'muku-scrab' || github.event.inputs.action == 'photos' || github.event.inputs.action == 'all' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-muku-scrab' || github.event.action == 'trigger-photos' || github.event.action == 'trigger-sync-engine' }}
         run: |
           python -u python-engine/runner_guardian.py --step "KATEGORI 1C: Brutal Image Scraper" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 -- python python-engine/brutal_image_scraper.py
           if [ -n "$TURSO_DATABASE_URL" ]; then
@@ -138,6 +151,17 @@ jobs:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
           MDS_SESSION_COOKIE: ${{ github.event.inputs.session_cookie || secrets.MDS_SESSION_COOKIE }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+
+      - name: ⚡ [KATEGORI 2B - UPDATE STOCK MU+KU] Update Stok Live Khusus Produk Mu+Ku
+        if: ${{ github.event.inputs.action == 'muku-stock' || github.event.action == 'trigger-muku-stock' }}
+        run: |
+          python -u python-engine/runner_guardian.py --step "KATEGORI 2B: Update Stock Live Mu+Ku" --action "muku-stock" --max-retries 3 -- python python-engine/morning_full_sweep.py --account=muku --stock-only
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          MDS_MUKU_SESSION_COOKIE: ${{ github.event.inputs.session_cookie || secrets.MDS_MUKU_SESSION_COOKIE }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
@@ -178,7 +202,7 @@ jobs:
         run: |
           if [ -n "$TURSO_DATABASE_URL" ]; then
             STOCK_ONLY_FLAG=""
-            if [ "${{ github.event.inputs.action }}" = "stock-only" ] || [ "${{ github.event.action }}" = "trigger-stock-only" ]; then
+            if [ "${{ github.event.inputs.action }}" = "stock-only" ] || [ "${{ github.event.action }}" = "trigger-stock-only" ] || [ "${{ github.event.inputs.action }}" = "muku-stock" ] || [ "${{ github.event.action }}" = "trigger-muku-stock" ]; then
               STOCK_ONLY_FLAG="--stock-only"
             fi
             python -u python-engine/runner_guardian.py --step "KATEGORI 4: Catalog Brain & Offline Snapshot" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 -- python python-engine/build_catalog_index.py $STOCK_ONLY_FLAG

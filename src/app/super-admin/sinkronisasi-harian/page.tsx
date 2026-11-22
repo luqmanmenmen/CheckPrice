@@ -137,7 +137,7 @@ interface DbMetrics {
   totalArticles: number;
 }
 
-type TriggerAction = "scrab" | "mds-bisa" | "photos" | "stock-only" | "promo" | "upcoming-promo" | "catalog" | "analytics" | "all";
+type TriggerAction = "scrab" | "mds-bisa" | "muku-scrab" | "muku-stock" | "photos" | "stock-only" | "promo" | "upcoming-promo" | "catalog" | "analytics" | "all";
 
 const MAX_FRONTEND_AUTO_RETRIES = 3;
 
@@ -540,37 +540,50 @@ export default function UpdateProdukPage() {
             </div>
 
             {/* Sub-tombol untuk menjalankan salah satu mesin Scrab secara terpisah jika diinginkan */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-indigo-100/80">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 border-t border-indigo-100/80">
               <button
                 onClick={() => handleGitHubDispatch("mds-bisa")}
                 disabled={isGhDispatching || isRunning}
-                className="flex items-center justify-center gap-1.5 px-3 py-2 bg-white hover:bg-indigo-50 text-indigo-800 border border-indigo-200 text-xs font-bold rounded-lg transition-colors disabled:opacity-50"
+                className="flex items-center justify-center gap-1.5 px-3 py-2 bg-white hover:bg-indigo-50 text-indigo-800 border border-indigo-200 text-xs font-bold rounded-lg transition-colors disabled:opacity-50 cursor-pointer"
               >
                 {isGhDispatching && activeAction === "mds-bisa" ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 ) : (
                   <Database className="w-3.5 h-3.5 text-indigo-600" />
                 )}
-                🏪 Scrab Data by luqman org Saja (Turbo Workers)
+                🏪 Scrab Data SUKO Saja
+              </button>
+
+              <button
+                onClick={() => handleGitHubDispatch("muku-scrab")}
+                disabled={isGhDispatching || isRunning}
+                className="flex items-center justify-center gap-1.5 px-3 py-2 bg-[#A54F2C]/10 hover:bg-[#A54F2C]/20 text-[#8E3F20] border border-[#A54F2C]/35 text-xs font-extrabold rounded-lg transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                {isGhDispatching && activeAction === "muku-scrab" ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Flame className="w-3.5 h-3.5 text-[#A54F2C]" />
+                )}
+                🏷️ Scrab Produk Mu+Ku + Foto
               </button>
 
               <button
                 onClick={() => handleGitHubDispatch("photos")}
                 disabled={isGhDispatching || isRunning}
-                className="flex items-center justify-center gap-1.5 px-3 py-2 bg-white hover:bg-purple-50 text-purple-800 border border-purple-200 text-xs font-bold rounded-lg transition-colors disabled:opacity-50"
+                className="flex items-center justify-center gap-1.5 px-3 py-2 bg-white hover:bg-purple-50 text-purple-800 border border-purple-200 text-xs font-bold rounded-lg transition-colors disabled:opacity-50 cursor-pointer"
               >
                 {isGhDispatching && activeAction === "photos" ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 ) : (
                   <Image className="w-3.5 h-3.5 text-purple-600" />
                 )}
-                📸 Scrab Foto Produk luqman org Saja
+                📸 Scrab Foto Produk Saja
               </button>
             </div>
           </div>
 
           {/* ------------------------------------------------------------ */}
-          {/* KATEGORI 2: UPDATE STOCK LIVE (JALUR MAPPING 84.763 SKU)     */}
+          {/* KATEGORI 2: UPDATE STOCK LIVE (SUKO & MU+KU TERPISAH)        */}
           {/* ------------------------------------------------------------ */}
           <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 bg-gradient-to-br from-cyan-50/90 to-white rounded-xl border border-cyan-200 shadow-2xs">
             <div className="flex-1 min-w-0">
@@ -579,25 +592,39 @@ export default function UpdateProdukPage() {
                   KATEGORI 2 • UPDATE STOCK
                 </span>
                 <p className="font-bold text-cyan-950 text-sm flex items-center gap-1.5">
-                  ⚡ Update Stock Live Terkini (Jalur Mapping 84.763 SKU & Artikel)
+                  ⚡ Update Stock Live Terkini (Jalur Akun SUKO &amp; Jalur Akun Mu+Ku)
                 </p>
               </div>
               <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                Memanfaatkan seluruh <strong>84.763 jalur mapping SKU, Barcode & Artikel</strong> yang sudah tersimpan di <code className="text-[11px] bg-white px-1 py-0.5 rounded border border-cyan-100">mapped_sku_paths.json.gz</code> untuk memperbarui stok fisik terkini (<code className="text-[11px]">stok</code> & <code className="text-[11px]">relatedStock</code> multi-warna/size) dengan 16 Worker Python tanpa membuang jalur SKU sedikit pun.
+                Memperbarui stok fisik terkini (<code className="text-[11px]">stok</code> &amp; <code className="text-[11px]">relatedStock</code> multi-warna/size) memakai jalur akun masing-masing toko secara terisolasi (anti-timpa stok SUKO ↔ Mu+Ku).
               </p>
             </div>
-            <button
-              onClick={() => handleGitHubDispatch("stock-only")}
-              disabled={isGhDispatching || isRunning}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-extrabold rounded-xl transition-colors disabled:opacity-50 shrink-0 shadow-sm"
-            >
-              {isGhDispatching && activeAction === "stock-only" ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Zap className="w-4 h-4" />
-              )}
-              {isGhDispatching && activeAction === "stock-only" ? "Menyalakan..." : "Update Stock Live"}
-            </button>
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
+              <button
+                onClick={() => handleGitHubDispatch("stock-only")}
+                disabled={isGhDispatching || isRunning}
+                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-extrabold rounded-xl transition-colors disabled:opacity-50 shadow-sm cursor-pointer"
+              >
+                {isGhDispatching && activeAction === "stock-only" ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Zap className="w-4 h-4" />
+                )}
+                {isGhDispatching && activeAction === "stock-only" ? "Menyalakan..." : "Update Stock SUKO"}
+              </button>
+              <button
+                onClick={() => handleGitHubDispatch("muku-stock")}
+                disabled={isGhDispatching || isRunning}
+                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-[#A54F2C] hover:bg-[#8E3F20] text-white text-xs font-extrabold rounded-xl transition-colors disabled:opacity-50 shadow-sm cursor-pointer"
+              >
+                {isGhDispatching && activeAction === "muku-stock" ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Zap className="w-4 h-4" />
+                )}
+                {isGhDispatching && activeAction === "muku-stock" ? "Menyalakan..." : "Update Stock Mu+Ku"}
+              </button>
+            </div>
           </div>
 
           {/* ------------------------------------------------------------ */}

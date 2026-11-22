@@ -78,11 +78,68 @@ ITEM_CHECKER_URL = f"{STOREHUB_BASE}/item-checker"
 ACTION_LOGIN = "603f9b4dfafaa0e65eec411a818c1ebcaa476b889f"
 ACTION_DETAIL = "608e569ea77f8871817d11afae932ecea7d0fcbd09"
 
-CREDENTIALS = {
-    "username": os.getenv("MDS_USERNAME") or "M223515",
-    "password": os.getenv("MDS_PASSWORD") or "Mamen123",
-    "tz": "Asia/Jakarta",
+ACCOUNT_PROFILES: Dict[str, Dict[str, str]] = {
+    "suko": {
+        "label": "SUKO",
+        "username": os.getenv("MDS_USERNAME") or "M223515",
+        "password": os.getenv("MDS_PASSWORD") or "Mamen123",
+        "tz": "Asia/Jakarta",
+        "cookie_storage_path": "secrets/mds_cookie.txt",
+        "local_cookie_file": ".mds_cookie",
+        "env_cookie_key": "MDS_SESSION_COOKIE",
+    },
+    "muku": {
+        "label": "Mu+Ku",
+        "username": os.getenv("MDS_MUKU_USERNAME") or "M223708",
+        "password": os.getenv("MDS_MUKU_PASSWORD") or "Aurel_28",
+        "tz": "Asia/Jakarta",
+        "cookie_storage_path": "secrets/mds_cookie_muku.txt",
+        "local_cookie_file": ".mds_cookie_muku",
+        "env_cookie_key": "MDS_MUKU_SESSION_COOKIE",
+    },
 }
+
+ACTIVE_ACCOUNT = "suko"
+CREDENTIALS = dict(ACCOUNT_PROFILES["suko"])
+
+
+def set_active_account(account: str) -> str:
+    """Memilih profil akun StoreHub aktif ('suko' atau 'muku') beserta jalur cookie terpisah."""
+    global ACTIVE_ACCOUNT, CREDENTIALS
+    key = "muku" if str(account or "").strip().lower() in ("muku", "mu+ku", "m223708") else "suko"
+    ACTIVE_ACCOUNT = key
+    CREDENTIALS = dict(ACCOUNT_PROFILES[key])
+    print(f"🔐 [ACCOUNT] Profil aktif: {CREDENTIALS['label']} ({CREDENTIALS['username']}) | Cookie: {CREDENTIALS['cookie_storage_path']}")
+    return key
+
+
+def _is_muku_row(row: Optional[Dict[str, Any]]) -> bool:
+    """Mengembalikan True bila baris produk milik toko Multibrand Mu+Ku (di luar Monostore SUKO & ZES)."""
+    if not row:
+        return True
+    b_up = str(row.get("brand") or "").upper()
+    d_up = str(row.get("dept") or "").upper()
+    if "SUKO" in b_up or "SUKO" in d_up or "ZES" in b_up or "ZES" in d_up:
+        return False
+    return True
+
+
+def _protect_cross_store_stock(rec: Dict[str, Any], ex_row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Anti-Timpa Stok Lintas Toko (SUKO vs Mu+Ku):
+    - Akun Mu+Ku tidak boleh menimpa stok > 0 milik SUKO/ZES menjadi <= 0.
+    - Akun SUKO tidak boleh menimpa stok > 0 milik Mu+Ku menjadi <= 0.
+    """
+    if not ex_row:
+        return rec
+    old_stok = int(ex_row.get("stok") or 0)
+    new_stok = int(rec.get("stok") or 0)
+    is_muku_item = _is_muku_row(rec)
+    if ACTIVE_ACCOUNT == "muku" and not is_muku_item and new_stok <= 0 and old_stok > 0:
+        rec["stok"] = old_stok
+    elif ACTIVE_ACCOUNT == "suko" and is_muku_item and new_stok <= 0 and old_stok > 0:
+        rec["stok"] = old_stok
+    return rec
 
 REPORT_PATH = os.path.join(os.path.dirname(__file__), "LAPORAN_SCRAP_PAGI.md")
 MAPPED_PATHS_FILE = os.path.join(os.path.dirname(__file__), "mapped_sku_paths.json.gz")
@@ -225,15 +282,17 @@ def resolve_action_login(default_action: str = ACTION_LOGIN) -> str:
 
 
 def save_valid_cookie(cookie_str: str) -> None:
-    """Menyimpan cookie valid (WAJIB berisi mso_session=) ke Turso Storage dan .mds_cookie lokal."""
+    """Menyimpan cookie valid (WAJIB berisi mso_session=) ke Turso Storage & file lokal sesuai akun aktif."""
     if not cookie_str or "mso_session=" not in cookie_str:
         return
+    storage_path = CREDENTIALS.get("cookie_storage_path", "secrets/mds_cookie.txt")
+    local_name = CREDENTIALS.get("local_cookie_file", ".mds_cookie")
     try:
-        storage_upload("secrets/mds_cookie.txt", cookie_str.encode("utf-8"), content_type="text/plain")
+        storage_upload(storage_path, cookie_str.encode("utf-8"), content_type="text/plain")
     except Exception:
         pass
     try:
-        local_cookie_path = os.path.join(os.path.dirname(__file__), "..", ".mds_cookie")
+        local_cookie_path = os.path.join(os.path.dirname(__file__), "..", local_name)
         with open(local_cookie_path, "w", encoding="utf-8") as f:
             f.write(cookie_str)
     except Exception:
@@ -241,9 +300,10 @@ def save_valid_cookie(cookie_str: str) -> None:
 
 
 def auto_login_storehub() -> str:
-    """Auto-login ke StoreHub MDS BISA jika cookie kedaluwarsa (HANYA menerima cookie dengan mso_session=)."""
+    """Auto-login ke StoreHub MDS BISA memakai akun aktif (SUKO / Mu+Ku)."""
     global ACTION_LOGIN
-    print("🔑 [AUTH] Mencoba auto-login ke StoreHub MDS BISA...")
+    acc_label = CREDENTIALS.get("label", "SUKO")
+    print(f"🔑 [AUTH {acc_label}] Mencoba auto-login ke StoreHub MDS BISA ({CREDENTIALS['username']})...")
     try:
         ACTION_LOGIN = resolve_action_login(ACTION_LOGIN)
         headers = {
@@ -261,7 +321,7 @@ def auto_login_storehub() -> str:
             ("_1_tz", (None, CREDENTIALS["tz"])),
             ("0", (None, '[{},"$K1"]')),
         ]
-        res = http_session.post(LOGIN_URL, headers=headers, files=files, allow_redirects=False, timeout=12)
+        res = http_session.post(LOGIN_URL, headers=headers, files=files, allow_redirects=False, timeout=15)
         cookies_dict = res.cookies.get_dict()
         if not cookies_dict and "set-cookie" in res.headers:
             raw_sc = res.headers.get("set-cookie", "")
@@ -273,15 +333,16 @@ def auto_login_storehub() -> str:
         # PENTING: HAProxy selalu mengirim cookie db76d... bahkan saat login gagal!
         # JANGAN PERNAH menganggap db76d... sebagai login sukses tanpa mso_session=!
         if cookie_str and "mso_session=" in cookie_str:
-            print("✅ [AUTH] Auto-login StoreHub berhasil! Memperbarui cookie di Supabase Storage...")
+            print(f"✅ [AUTH {acc_label}] Auto-login StoreHub berhasil! Memperbarui {CREDENTIALS.get('cookie_storage_path')} di Turso Storage...")
             save_valid_cookie(cookie_str)
             return cookie_str
-        print("⚠️ [AUTH] Auto-login HTTP tidak mengembalikan mso_session (menjaga cookie Storage/lokal tetap utuh).")
+        print(f"⚠️ [AUTH {acc_label}] Auto-login HTTP tidak mengembalikan mso_session (menjaga cookie Storage/lokal tetap utuh).")
     except Exception as e:
-        print(f"⚠️ [AUTH] Auto-login gagal: {e}")
+        print(f"⚠️ [AUTH {acc_label}] Auto-login gagal: {e}")
 
-    # Fallback aman ke .mds_cookie lokal jika masih valid
-    local_cookie_path = os.path.join(os.path.dirname(__file__), "..", ".mds_cookie")
+    # Fallback aman ke file cookie lokal jika masih valid
+    local_name = CREDENTIALS.get("local_cookie_file", ".mds_cookie")
+    local_cookie_path = os.path.join(os.path.dirname(__file__), "..", local_name)
     if os.path.exists(local_cookie_path):
         try:
             with open(local_cookie_path, "r", encoding="utf-8") as f:
@@ -294,21 +355,28 @@ def auto_login_storehub() -> str:
 
 
 def get_active_cookie() -> str:
-    """Mengambil session cookie aktif (wajib berisi mso_session=) dari Env, Storage, atau Lokal."""
-    env_cookie = (os.getenv("MDS_SESSION_COOKIE") or "").strip()
+    """Mengambil session cookie aktif (wajib berisi mso_session=) dari Env, Turso Storage, atau Lokal sesuai akun aktif."""
+    env_key = CREDENTIALS.get("env_cookie_key", "MDS_SESSION_COOKIE")
+    env_cookie = (os.getenv(env_key) or "").strip()
     if "mso_session=" in env_cookie:
         return env_cookie
+    if ACTIVE_ACCOUNT == "muku":
+        generic_env = (os.getenv("MDS_SESSION_COOKIE") or "").strip()
+        if "mso_session=" in generic_env and os.getenv("MDS_SESSION_COOKIE_IS_MUKU") == "1":
+            return generic_env
 
+    storage_path = CREDENTIALS.get("cookie_storage_path", "secrets/mds_cookie.txt")
     try:
-        data = storage_download("secrets/mds_cookie.txt")
+        data = storage_download(storage_path)
         if data:
             cookie = data.decode("utf-8").strip()
             if "mso_session=" in cookie:
                 return cookie
     except Exception as e:
-        print(f"⚠️ Gagal membaca cookie dari Turso Storage: {e}")
+        print(f"⚠️ Gagal membaca cookie ({storage_path}) dari Turso Storage: {e}")
 
-    local_cookie_path = os.path.join(os.path.dirname(__file__), "..", ".mds_cookie")
+    local_name = CREDENTIALS.get("local_cookie_file", ".mds_cookie")
+    local_cookie_path = os.path.join(os.path.dirname(__file__), "..", local_name)
     if os.path.exists(local_cookie_path):
         try:
             with open(local_cookie_path, "r", encoding="utf-8") as f:
@@ -1456,8 +1524,11 @@ def execute_live_stock_sync(
         if sales_date and re.match(r"^\d{4}-\d{2}-\d{2}$", sales_date.strip())
         else today_wib
     )
+    is_muku_mode = ACTIVE_ACCOUNT == "muku"
     print("=" * 80)
-    if suko_sales_only:
+    if is_muku_mode:
+        print(f"🏷️ [MU+KU LIVE STOCK ENGINE] UPDATE STOK TERKINI PRODUK MU+KU (AKUN: {CREDENTIALS['username']} | BUKU: {booking_date})")
+    elif suko_sales_only:
         print(f"💰 [SUKO SALES & STOCK ENGINE] TARIK SALES OTOMATIS KHUSUS PRODUK SUKO (BUKU: {booking_date})")
     else:
         print(f"⚡ [LIVE STOCK + SALES ENGINE] UPDATE STOK TERKINI & REKAP SALES SUKO (BUKU: {booking_date})")
@@ -1466,23 +1537,23 @@ def execute_live_stock_sync(
     cookie = get_active_cookie()
     if not cookie:
         print("❌ Cookie login StoreHub tidak ditemukan.")
-        log_sync_history("STOCK_SYNC", "Gagal: Cookie StoreHub tidak ditemukan", 0, "FAILED")
+        log_sync_history("MUKU_STOCK_SYNC" if is_muku_mode else "STOCK_SYNC", "Gagal: Cookie StoreHub tidak ditemukan", 0, "FAILED")
         return
 
     online, cookie = ensure_store_online(cookie, run_once_cloud=True)
     if not online:
         log_sync_history(
-            "STOCK_SYNC",
-            "Server database stok toko sedang offline / tidak merespons (Stok tersimpan tetap aman)",
+            "MUKU_STOCK_SYNC" if is_muku_mode else "STOCK_SYNC",
+            f"Server database stok toko ({CREDENTIALS['label']}) sedang offline / tidak merespons (Stok tersimpan tetap aman)",
             0,
             "OFFLINE",
         )
         return
 
-    print("📥 Memuat 84.763 jalur mapping SKU & Artikel dari Supabase + Registry...")
+    print("📥 Memuat jalur mapping SKU & Artikel dari Turso + Registry...")
     catalog_by_sku, _, _ = load_existing_catalog_full()
     total_mapped = len(catalog_by_sku)
-    print(f"📊 Total Jalur Mapping SKU Siap Audit Stok: {total_mapped:,} SKU")
+    print(f"📊 Total Jalur Mapping SKU di DB: {total_mapped:,} SKU")
 
     # Kelompokkan berdasarkan (article, color, size) untuk propagasi instan `relatedStock`
     article_variants_map: Dict[str, List[Dict[str, Any]]] = {}
@@ -1494,17 +1565,28 @@ def execute_live_stock_sync(
     seen_rep_articles: Set[str] = set()
 
     for sku, row in catalog_by_sku.items():
+        if is_muku_mode and not _is_muku_row(row):
+            continue
         art = str(row.get("article") or "").strip().upper()
         if art not in INVALID_ARTS:
             article_variants_map.setdefault(art, []).append(row)
 
-    # Wave 1A: Semua SKU SUKO/aktif dengan stok > 0 (atau promo bila mode penuh)
+    # Wave 1A: SKU prioritas sesuai mode akun (Mu+Ku vs SUKO)
     for sku, row in catalog_by_sku.items():
+        if is_muku_mode and not _is_muku_row(row):
+            continue
         is_in_stock = int(row.get("stok") or 0) > 0
-        if suko_sales_only:
+        if suko_sales_only and not is_muku_mode:
             if is_in_stock and _is_suko_sales_eligible(row):
                 priority_wave_1.append(sku)
                 seen_in_wave_1.add(sku)
+        elif is_muku_mode:
+            if is_in_stock or row.get("hargaPromo") or row.get("imageUrl"):
+                priority_wave_1.append(sku)
+                seen_in_wave_1.add(sku)
+                art = str(row.get("article") or "").strip().upper()
+                if art not in INVALID_ARTS:
+                    seen_rep_articles.add(art)
         elif is_in_stock or row.get("hargaPromo"):
             priority_wave_1.append(sku)
             seen_in_wave_1.add(sku)
@@ -1512,8 +1594,8 @@ def execute_live_stock_sync(
             if art not in INVALID_ARTS:
                 seen_rep_articles.add(art)
 
-    if not suko_sales_only:
-        # Wave 1B: 1 SKU perwakilan untuk setiap artikel unik di toko (~12.000 artikel)
+    if not suko_sales_only or is_muku_mode:
+        # Wave 1B: 1 SKU perwakilan untuk setiap artikel unik di toko
         for art, rows in article_variants_map.items():
             if art not in seen_rep_articles and rows:
                 rep_sku = str(rows[0].get("sku") or "").strip()
@@ -1522,14 +1604,16 @@ def execute_live_stock_sync(
                     seen_in_wave_1.add(rep_sku)
                     seen_rep_articles.add(art)
 
-        # Wave 2: Seluruh sisa jalur SKU dari mapping
-        for sku in catalog_by_sku.keys():
+        # Wave 2: Seluruh sisa jalur SKU dari mapping (hanya Mu+Ku bila mode Mu+Ku)
+        for sku, row in catalog_by_sku.items():
+            if is_muku_mode and not _is_muku_row(row):
+                continue
             if sku not in seen_in_wave_1:
                 priority_wave_2.append(sku)
 
     ordered_skus = priority_wave_1 + priority_wave_2
-    print(f"🎯 Strategi Prioritas Update Stok & Sales:")
-    print(f"   👉 [GELOMBANG 1 - Stok Aktif SUKO] : {len(priority_wave_1):,} SKU")
+    print(f"🎯 Strategi Prioritas Update Stok ({CREDENTIALS['label']}):")
+    print(f"   👉 [GELOMBANG 1 - Prioritas Utama] : {len(priority_wave_1):,} SKU")
     print(f"   👉 [GELOMBANG 2 - Sisa Mapping]    : {len(priority_wave_2):,} SKU")
 
     checked_count = 0
@@ -1600,6 +1684,9 @@ def execute_live_stock_sync(
                     rec = item_to_record(item, existing_row=ex_row)
                     if not rec:
                         continue
+                    rec = _protect_cross_store_stock(rec, ex_row)
+                    if is_muku_mode and not _is_muku_row(rec):
+                        continue
                     s_val = rec["sku"]
                     old_stok = int((ex_row or {}).get("stok") or 0)
                     old_price = int(float((ex_row or {}).get("hargaNormal") or 0))
@@ -1611,7 +1698,8 @@ def execute_live_stock_sync(
                         or (rec.get("barcode") and rec.get("barcode") != old_bc)
                         or (ex_row and ex_row.get("_from_registry_only"))
                     ):
-                        _track_delta_sale(s_val, ex_row or rec, old_stok, int(rec["stok"] or 0))
+                        if not is_muku_mode:
+                            _track_delta_sale(s_val, ex_row or rec, old_stok, int(rec["stok"] or 0))
                         buffer_by_sku[s_val] = rec
                         catalog_by_sku[s_val] = rec
                         changed_count += 1
@@ -1671,15 +1759,27 @@ def execute_live_stock_sync(
     if buffer_by_sku:
         flush_buffer(buffer_by_sku, write_md_report=False)
 
-    sold_skus, sold_qty, sold_omzet = record_mds_delta_sales(sales_deltas, target_sales_date=booking_date)
+    sold_skus, sold_qty, sold_omzet = (
+        (0, 0, 0.0)
+        if is_muku_mode
+        else record_mds_delta_sales(sales_deltas, target_sales_date=booking_date)
+    )
 
     save_mapped_paths_registry(catalog_by_sku)
-    log_sync_history(
-        "MDS_SALES_SYNC" if (suko_sales_only or sold_qty > 0) else "STOCK_SYNC",
-        f"Rekap Stok & Sales luqman org — Buku {booking_date} ({checked_count:,} SKU dicek | {sold_skus:,} SKU terjual, {sold_qty:,} pcs, Rp {sold_omzet:,.0f})",
-        sold_skus if sold_skus > 0 else checked_count,
-        "SUCCESS",
-    )
+    if is_muku_mode:
+        log_sync_history(
+            "MUKU_STOCK_SYNC",
+            f"Update Stok Live Mu+Ku by luqman org — {booking_date} ({checked_count:,} SKU dicek | {changed_count:,} SKU berubah)",
+            changed_count if changed_count > 0 else checked_count,
+            "SUCCESS",
+        )
+    else:
+        log_sync_history(
+            "MDS_SALES_SYNC" if (suko_sales_only or sold_qty > 0) else "STOCK_SYNC",
+            f"Rekap Stok & Sales luqman org — Buku {booking_date} ({checked_count:,} SKU dicek | {sold_skus:,} SKU terjual, {sold_qty:,} pcs, Rp {sold_omzet:,.0f})",
+            sold_skus if sold_skus > 0 else checked_count,
+            "SUCCESS",
+        )
 
     # Langsung segarkan JSON matang CDN (0 beban RAM Postgres saat halaman Laporan Sales dibuka!)
     try:
@@ -1774,16 +1874,26 @@ def execute_morning_sweep(
         (s, r) for s, r in catalog_by_sku.items()
         if (r.get("_from_registry_only") or not r.get("barcode")) and s
     ]
-    # Prioritaskan brand inti toko (SUKO, ZES, COLE, NEVADA, LITTLE M, CONNEXION, DISNEY, ST YVES) di depan
+    # Prioritaskan brand inti toko sesuai akun aktif (Mu+Ku vs SUKO)
     def missing_prio(item_pair: Tuple[str, Dict[str, Any]]) -> Tuple[int, str]:
         s_code, r_obj = item_pair
         b_up = f"{r_obj.get('brand') or ''} {r_obj.get('dept') or ''}".upper()
-        if "SUKO" in b_up or "ZES" in b_up:
+        is_muku_core = any(k in b_up for k in ("MUKU", "NEVADA", "LITTLE M", "COLE", "CONNEXION", "ST YVES", "DISNEY", "AOS", "MAXMURAH", "CARDINAL", "VOLO", "NAYOUNG"))
+        is_suko_zes = ("SUKO" in b_up or "ZES" in b_up)
+        if ACTIVE_ACCOUNT == "muku":
+            if is_muku_core:
+                return (0, s_code)
+            if not is_suko_zes:
+                return (1, s_code)
+            return (2, s_code)
+        if is_suko_zes:
             return (0, s_code)
-        if any(k in b_up for k in ("COLE", "NEVADA", "LITTLE M", "CONNEXION", "MUKU", "ST YVES", "DISNEY", "AOS", "MAXMURAH")):
+        if is_muku_core:
             return (1, s_code)
         return (2, s_code)
 
+    if ACTIVE_ACCOUNT == "muku":
+        missing_bc_rows = [(s, r) for s, r in missing_bc_rows if _is_muku_row(r)]
     missing_bc_rows.sort(key=missing_prio)
     missing_bc_skus = [s for s, _ in missing_bc_rows]
 
@@ -1870,6 +1980,7 @@ def execute_morning_sweep(
                         )
                         if not rec:
                             continue
+                        rec = _protect_cross_store_stock(rec, ex_row)
                         sku_val = rec["sku"]
                         bc_val = rec.get("barcode")
                         art_val_up = str(rec.get("article") or "").strip().upper()
@@ -2006,8 +2117,8 @@ def execute_morning_sweep(
     save_mapped_paths_registry(catalog_by_sku)
     save_report(start_time, initial_count, new_discovered, updated_count, brands_counter)
     log_sync_history(
-        "MDS_BISA_SYNC",
-        f"Article-First Scrap by luqman org (Total: {len(seen_articles):,} Artikel / {len(existing_skus):,} SKU, Baru: +{new_articles_discovered:,} Artikel / +{new_discovered:,} SKU)",
+        "MUKU_SCRAP_SYNC" if ACTIVE_ACCOUNT == "muku" else "MDS_BISA_SYNC",
+        f"Article-First Scrap ({CREDENTIALS['label']}) by luqman org (Total: {len(seen_articles):,} Artikel / {len(existing_skus):,} SKU, Baru: +{new_articles_discovered:,} Artikel / +{new_discovered:,} SKU)",
         len(existing_skus),
         "SUCCESS",
     )
@@ -2041,6 +2152,7 @@ if __name__ == "__main__":
     workers_arg = 28
     max_min_arg: Optional[int] = None
     sales_date_arg: Optional[str] = None
+    account_arg: str = os.getenv("MDS_ACCOUNT") or "suko"
     for idx_a, a in enumerate(argv):
         if a.startswith("--range="):
             parts = a.split("=", 1)[1].split("-")
@@ -2054,6 +2166,10 @@ if __name__ == "__main__":
             m_val = a.split("=", 1)[1]
             if m_val.isdigit():
                 max_min_arg = max(1, int(m_val))
+        elif a.startswith("--account="):
+            account_arg = a.split("=", 1)[1].strip().lower()
+        elif a == "--account" and idx_a + 1 < len(argv):
+            account_arg = argv[idx_a + 1].strip().lower()
         elif a.startswith("--sales-date="):
             sd_val = a.split("=", 1)[1].strip()
             if re.match(r"^\d{4}-\d{2}-\d{2}$", sd_val):
@@ -2062,6 +2178,8 @@ if __name__ == "__main__":
             sd_val = argv[idx_a + 1].strip()
             if re.match(r"^\d{4}-\d{2}-\d{2}$", sd_val):
                 sales_date_arg = sd_val
+
+    set_active_account(account_arg)
 
     if "--export-paths" in args:
         print("🗺️ Mengekspor seluruh jalur mapping 84.763+ SKU dari Supabase ke mapped_sku_paths.json.gz...")

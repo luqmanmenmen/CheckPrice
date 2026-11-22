@@ -1976,6 +1976,19 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   - **Multi-Worker Offline Sync Pool (`public/workers/offline-sync-worker.js`)** + Native IndexedDB `{ durability: "relaxed" }` + Edge CDN chunk fast-path aktif.
   - **Opsi lanjutan nanti pagi (jika dibutuhkan):** Sharded multi-rak `products_0..5` atau non-blocking background install (~3 detik langsung buka layar setelah `models` siap).
 
+---
+
+### 114. Arsitektur Dual-Account Terisolasi (SUKO + Mu+Ku Role Anak Mu+Ku) untuk Scrab, Update Stock Live, & Scan Barcode Baru (23 November 2026)
+
+- **Kabar Baru Pengguna:** Mendapatkan akun role anak **Mu+Ku** (`M223708`), sehingga kini sistem memiliki 2 jalur akun StoreHub yang terpisah dan tidak bentrok:
+  - **Akun SUKO (`suko`):** cookie `secrets/mds_cookie.txt` (lokal `.mds_cookie`), prioritas `SUKO` & `ZES`.
+  - **Akun Mu+Ku (`muku`):** cookie `secrets/mds_cookie_muku.txt` (lokal `.mds_cookie_muku`), prioritas `Mu+Ku` (`NEVADA`, `LITTLE M`, `COLE`, `CONNEXION`, `ST YVES`, `MAXMURAH`, `DISNEY`, `CARDINAL`, `VOLO`, `NAYOUNG`, dll.).
+- **Anti-Timpa Stok Lintas Toko + Auto-Fallback:**
+  1. [`python-engine/morning_full_sweep.py`](file:///c:/Max%20Display/price-checker/python-engine/morning_full_sweep.py): Mendukung `--account=suko` / `--account=muku`, memfilter antrean khusus Mu+Ku pada mode `--account=muku`, dan menjaga `_protect_cross_store_stock()` agar stok `> 0` SUKO tidak pernah tertimpa `0` oleh akun Mu+Ku maupun sebaliknya.
+  2. [`src/lib/mdsBisaClient.ts`](file:///c:/Max%20Display/price-checker/src/lib/mdsBisaClient.ts), [`src/app/api/live-stock/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/live-stock/route.ts), & [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx): Auto-router dual-account di `checkLiveStockFast()` dan `checkSingleItemStock()` — produk `Mu+Ku` otomatis tembak akun Mu+Ku, produk `SUKO`/`ZES` tembak akun SUKO, dan bila tidak ketemu / stok `< 0` otomatis fallback ke akun satunya (termasuk saat scan barcode baru!).
+  3. [`.github/workflows/retail-sync-engine.yml`](file:///c:/Max%20Display/price-checker/.github/workflows/retail-sync-engine.yml), [`src/lib/githubDispatcher.ts`](file:///c:/Max%20Display/price-checker/src/lib/githubDispatcher.ts), [`github-dispatch/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/github-dispatch/route.ts), [`self-heal/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/self-heal/route.ts), & [`sinkronisasi-harian/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/sinkronisasi-harian/page.tsx): Menambahkan 2 trigger khusus **`muku-scrab`** (`🏷️ Scrab Produk Mu+Ku + Foto`) & **`muku-stock`** (`⚡ Update Stock Mu+Ku`). Siap langsung ditekan mulai jam `09:00 WIB` saat server toko buka!
+
+
 
 
 

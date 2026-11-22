@@ -29,12 +29,15 @@ export async function POST(req: NextRequest) {
       ? body.familySkus.map((s: any) => String(s || '').trim()).filter(Boolean)
       : familyVariants.map((v) => v.sku);
 
+    const brandGroup = typeof body.brandGroup === 'string' ? body.brandGroup.trim().toUpperCase() : null;
+
     if (body.fastMode === true && (familySkus.length > 0 || familyVariants.length > 0)) {
       const { result, persist } = await checkLiveStockFast(
         String(sku),
         familySkus,
         familyVariants,
-        typeof body.article === 'string' ? body.article : null
+        typeof body.article === 'string' ? body.article : null,
+        brandGroup
       );
       if (result.success) {
         after(async () => {
@@ -50,6 +53,7 @@ export async function POST(req: NextRequest) {
       discoverFamily: body.discoverFamily !== false,
       withImages: body.withImages !== false,
       syncAllSizes: body.syncAllSizes !== false,
+      preferredAccount: brandGroup === 'MUKU' ? 'muku' : undefined,
     });
     return NextResponse.json(result);
   } catch (err: any) {
