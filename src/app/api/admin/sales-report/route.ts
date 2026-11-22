@@ -88,9 +88,9 @@ export async function GET(request: NextRequest) {
     });
 
     // Deteksi khusus: Apakah KEMARIN belum pernah tarik sales?
-    // Jika belum (dan kemarin >= tanggal baseline bersih 2026-11-21), tarikan sales pertama hari ini
+    // Jika belum (dan kemarin >= tanggal baseline bersih 2026-11-23), tarikan sales pertama hari ini
     // akan memunculkan alert & otomatis dibukukan ke tanggal kemarin. Setelah selesai, tarikan berikutnya masuk hari ini.
-    const SALES_BASELINE_START_DATE = "2026-11-21";
+    const SALES_BASELINE_START_DATE = "2026-11-23";
     const wibTodayDt = new Date(`${todayStr}T00:00:00.000Z`);
     const wibYesterdayDt = new Date(wibTodayDt.getTime() - 24 * 60 * 60 * 1000);
     const yesterdayWibStr = wibYesterdayDt.toISOString().split('T')[0];

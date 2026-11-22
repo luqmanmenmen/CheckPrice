@@ -1599,7 +1599,7 @@ export default function LaporanPenjualanPage() {
           </div>
         ) : (
           <>
-            {/* Banner ramah saat baru reset baseline hari ini (21 Nov 2026) */}
+            {/* Banner ramah saat baru reset baseline hari ini (23 Nov 2026) */}
             {!hasAnySalesYet && (
               <div
                 className={`rounded-2xl p-4 border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
@@ -1612,7 +1612,7 @@ export default function LaporanPenjualanPage() {
                   <Info className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
                   <div className="text-xs sm:text-sm whitespace-normal break-words">
                     <p className="font-extrabold">
-                      Rekap Sales Bersih luqman org Aktif Mulai 21 November 2026!
+                      Rekap Sales Bersih luqman org Aktif Mulai 23 November 2026!
                     </p>
                     <p className={`mt-0.5 ${darkMode ? "text-emerald-200/80" : "text-emerald-800"}`}>
                       Data sales lama sudah dibersihkan. Baseline stok aktif SUKO saat ini:{" "}
@@ -2232,7 +2232,7 @@ export default function LaporanPenjualanPage() {
                       Rekonsiliasi Pergerakan Stok SUKO (BOM → Terjual → EOH)
                     </h2>
                     <p className={`text-xs ${textMuted} mt-0.5`}>
-                      Baseline stok awal dihitung mulai 21 Nov 2026 khusus produk aktif SUKO (MUKU &amp; ZES dikecualikan)
+                      Baseline stok awal dihitung mulai 23 Nov 2026 khusus produk aktif SUKO (MUKU &amp; ZES dikecualikan)
                     </p>
                   </div>
                   <span className={`px-3 py-1.5 rounded-xl ${softCls} text-xs font-bold ${textPrimary} self-start sm:self-auto`}>
@@ -2424,7 +2424,7 @@ export default function LaporanPenjualanPage() {
                           ))
                         ) : (
                           <div className={`p-6 text-center text-xs ${textMuted} ${softCls} rounded-2xl whitespace-normal break-words`}>
-                            Belum ada transaksi terjual sejak reset baseline 21 Nov 2026. Klik <strong>Tarik Sales SUKO</strong> di jam buka toko untuk merekam penjualan.
+                            Belum ada transaksi terjual sejak reset baseline 23 Nov 2026. Klik <strong>Tarik Sales SUKO</strong> di jam buka toko untuk merekam penjualan.
                           </div>
                         )}
                       </div>
