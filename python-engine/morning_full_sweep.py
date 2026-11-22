@@ -1979,9 +1979,9 @@ def execute_live_stock_sync(
         return
 
     print("📥 Memuat jalur mapping SKU & Artikel dari Turso + Registry...")
-    catalog_by_sku, _, _ = load_existing_catalog_full()
+    catalog_by_sku, existing_barcodes, _ = load_existing_catalog_full()
     total_mapped = len(catalog_by_sku)
-    print(f"📊 Total Jalur Mapping SKU di DB: {total_mapped:,} SKU")
+    print(f"📊 Total Jalur Mapping SKU di DB: {total_mapped:,} SKU | Barcode/Alias Terdaftar: {len(existing_barcodes):,}")
 
     # Kelompokkan berdasarkan (article, color, size) untuk propagasi instan `relatedStock`
     article_variants_map: Dict[str, List[Dict[str, Any]]] = {}
@@ -2121,14 +2121,20 @@ def execute_live_stock_sync(
                     old_promo = int(float((ex_row or {}).get("hargaPromo") or 0))
                     new_promo = int(float(rec.get("hargaPromo") or 0))
                     old_bc = str((ex_row or {}).get("barcode") or "").strip()
+                    rec_all_bcs = list(rec.get("_all_barcodes") or [])
+                    has_new_barcode_alias = any(bc and bc not in existing_barcodes for bc in rec_all_bcs)
 
                     if (
                         rec["stok"] != old_stok
                         or rec["hargaNormal"] != old_price
                         or (rec.get("_has_live_promo") and new_promo != old_promo)
                         or (rec.get("barcode") and rec.get("barcode") != old_bc)
+                        or has_new_barcode_alias
                         or (ex_row and ex_row.get("_from_registry_only"))
                     ):
+                        for bc_new in rec_all_bcs:
+                            if bc_new:
+                                existing_barcodes.add(bc_new)
                         if not is_muku_mode:
                             _track_delta_sale(s_val, ex_row or rec, old_stok, int(rec["stok"] or 0))
                         buffer_by_sku[s_val] = rec
@@ -2310,32 +2316,50 @@ def execute_morning_sweep(
     print(f"📊 Katalog Saat Ini: {initial_articles_count:,} Artikel Unik | {initial_count:,} SKU di DB | {len(existing_barcodes):,} Barcode")
 
     # Jalur 0: Semua SKU tanpa barcode (fleksibel: 7/8/9+ digit & alfanumerik, TIDAK terkunci hanya 8 digit!)
+    # Prioritas MUTLAK: SKU aktif (stok > 0) -> punya foto/harga -> SKU terbaru/New Arrival (angka terbesar duluan!)
     missing_bc_rows = [
         (s, r) for s, r in catalog_by_sku.items()
         if (r.get("_from_registry_only") or not r.get("barcode")) and s
     ]
-    # Prioritaskan brand inti toko sesuai akun aktif (Mu+Ku vs SUKO)
-    def missing_prio(item_pair: Tuple[str, Dict[str, Any]]) -> Tuple[int, str]:
+    def missing_prio(item_pair: Tuple[str, Dict[str, Any]]) -> Tuple[int, int, int, int, int, str]:
         s_code, r_obj = item_pair
         b_up = f"{r_obj.get('brand') or ''} {r_obj.get('dept') or ''}".upper()
         is_muku_core = any(k in b_up for k in ("MUKU", "NEVADA", "LITTLE M", "COLE", "CONNEXION", "ST YVES", "DISNEY", "AOS", "MAXMURAH", "CARDINAL", "VOLO", "NAYOUNG"))
         is_suko_zes = ("SUKO" in b_up or "ZES" in b_up)
         if ACTIVE_ACCOUNT == "muku":
-            if is_muku_core:
-                return (0, s_code)
-            if not is_suko_zes:
-                return (1, s_code)
-            return (2, s_code)
-        if is_suko_zes:
-            return (0, s_code)
-        if is_muku_core:
-            return (1, s_code)
-        return (2, s_code)
+            brand_rank = 0 if is_muku_core else (1 if not is_suko_zes else 2)
+        else:
+            brand_rank = 0 if is_suko_zes else (1 if is_muku_core else 2)
+        has_stok_rank = 0 if int(r_obj.get("stok") or 0) > 0 else 1
+        has_img_rank = 0 if r_obj.get("imageUrl") else 1
+        has_price_rank = 0 if _parse_money_int(r_obj.get("hargaNormal")) > 0 else 1
+        # Urutkan angka SKU DESC agar New Arrival (34xxxxxx, 5xxxxxxx, 7xxxxxxx) disapu paling awal!
+        sku_num_desc = -int(s_code) if s_code.isdigit() else 0
+        return (has_stok_rank, brand_rank, has_img_rank, has_price_rank, sku_num_desc, s_code)
 
     if ACTIVE_ACCOUNT == "muku":
         missing_bc_rows = [(s, r) for s, r in missing_bc_rows if _is_muku_row(r)]
     missing_bc_rows.sort(key=missing_prio)
     missing_bc_skus = [s for s, _ in missing_bc_rows]
+
+    # Tambahan Jalur 0B (New Arrival Multi-Barcode Sync):
+    # SKU terbaru (stok > 0 / angka SKU tinggi) yang SUDAH punya 1 barcode di Product tapi mungkin belum punya
+    # VendorBarcode EAN-13 di BarcodeAlias -> ikut dicek cepat agar 100% bisa di-scan barcode hangtagnya!
+    new_arrival_bc_refresh_skus: List[str] = []
+    if not custom_range and not census_sku_only:
+        candidates_na = [
+            (s, r) for s, r in catalog_by_sku.items()
+            if s and r.get("barcode") and not r.get("_from_registry_only")
+            and ((ACTIVE_ACCOUNT == "muku" and _is_muku_row(r)) or (ACTIVE_ACCOUNT == "suko" and not _is_muku_row(r)))
+            and (int(r.get("stok") or 0) > 0 or (s.isdigit() and int(s) >= 34000000))
+        ]
+        candidates_na.sort(
+            key=lambda kv: (
+                0 if int(kv[1].get("stok") or 0) > 0 else 1,
+                -int(kv[0]) if kv[0].isdigit() else 0,
+            )
+        )
+        new_arrival_bc_refresh_skus = [s for s, _ in candidates_na[:1500]]
 
     hunter_bc_queue: List[str] = []
     fill_bc_queue: List[str] = []
@@ -2535,12 +2559,17 @@ def execute_morning_sweep(
         if neighbor_sku_queue:
             run_sweep_phase("sku", [s for s in neighbor_sku_queue if s not in existing_skus], "EXPAND-NEW-ART-SKU", expand_on_new_article=False)
     else:
-        # JALUR 0: Tarik Barcode & Stok untuk SKU baru tanpa barcode
+        # JALUR 0: Tarik Barcode, Stok, & Harga untuk SKU baru/Mu+Ku tanpa barcode (prioritas New Arrival & stok > 0!)
+        bc_rec_mins = 12.0 if ACTIVE_ACCOUNT == "muku" else 6.0
         if missing_bc_skus:
-            run_sweep_phase("sku", missing_bc_skus, "BARCODE-RECOVERY", expand_on_new_article=False, phase_max_minutes=7.0)
+            run_sweep_phase("sku", missing_bc_skus, "BARCODE-RECOVERY", expand_on_new_article=False, phase_max_minutes=bc_rec_mins)
+
+        # JALUR 0B: Lengkapi Multi-Barcode / VendorBarcode EAN-13 untuk SKU New Arrival & Aktif (supaya scan barcode hangtag 100% muncul!)
+        if new_arrival_bc_refresh_skus:
+            run_sweep_phase("sku", new_arrival_bc_refresh_skus, "NEW-ARRIVAL-BARCODE-SYNC", expand_on_new_article=False, phase_max_minutes=4.0)
 
         # JALUR 1: Sapuan Article-Hunter Stride-4 merata di seluruh zona 234000* (SUKO, ZES, MUKU)
-        run_sweep_phase("upc", [b for b in hunter_bc_queue if b not in existing_barcodes], "ARTICLE-HUNTER-UPC", expand_on_new_article=True, phase_max_minutes=14.0)
+        run_sweep_phase("upc", [b for b in hunter_bc_queue if b not in existing_barcodes], "ARTICLE-HUNTER-UPC", expand_on_new_article=True, phase_max_minutes=10.0)
 
         # JALUR 1B: Sensus SKU 8-digit klaster baru (71xxxx-73xxxx) & celah SKU Modulo-10 untuk menangkap konsinyasi non-234000
         run_sweep_phase("sku", [s for s in sku_queue if s not in existing_skus], "CENSUS-SKU-SWEEP", expand_on_new_article=True, phase_max_minutes=5.0)
@@ -2563,7 +2592,7 @@ def execute_morning_sweep(
         "SUCCESS",
     )
 
-    if with_images:
+    if with_images and "--no-inline-images" not in sys.argv:
         try:
             print("\n📸 [--with-images] Melanjutkan penyapuan foto penuh Matahari.com (Sitemap 209+ & Sibling)...")
             from brutal_image_scraper import execute_brutal_image_scrape

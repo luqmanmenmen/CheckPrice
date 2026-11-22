@@ -86,7 +86,7 @@ jobs:
       - name: 🔥 [KATEGORI 1A - SCRAB BY LUQMAN ORG] Brutal Scraper by luqman org (Turbo Workers • SKU & Barcode Sweep)
         if: ${{ github.event.inputs.action == 'scrab' || github.event.inputs.action == 'mds-bisa' || github.event.inputs.action == 'all' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-mds-bisa' || github.event.action == 'trigger-sync-engine' || (github.event_name == 'workflow_dispatch' && github.event.inputs.action == '') }}
         run: |
-          python -u python-engine/runner_guardian.py --step "KATEGORI 1A - Brutal Scrab SUKO (Luqman Arif)" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 --track-new-products -- python python-engine/morning_full_sweep.py --account=suko --brutal --upc-first --workers=24 --minutes=18 --no-catalog
+          python -u python-engine/runner_guardian.py --step "KATEGORI 1A - Brutal Scrab SUKO (Luqman Arif)" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 --track-new-products -- python python-engine/morning_full_sweep.py --account=suko --brutal --upc-first --workers=24 --minutes=18 --no-catalog --no-inline-images
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
@@ -101,7 +101,7 @@ jobs:
           if [ "${{ github.event.inputs.action }}" = "muku-scrab" ] || [ "${{ github.event.action }}" = "trigger-muku-scrab" ]; then
             MUKU_MIN=35
           fi
-          python -u python-engine/runner_guardian.py --step "KATEGORI 1D - Scrab Produk Mu+Ku (Aurel)" --action "${{ github.event.inputs.action || github.event.action || 'muku-scrab' }}" --max-retries 3 --track-new-products -- python python-engine/morning_full_sweep.py --account=muku --brutal --upc-first --workers=24 --minutes=$MUKU_MIN --no-catalog
+          python -u python-engine/runner_guardian.py --step "KATEGORI 1D - Scrab Produk Mu+Ku (Aurel)" --action "${{ github.event.inputs.action || github.event.action || 'muku-scrab' }}" --max-retries 3 --track-new-products -- python python-engine/morning_full_sweep.py --account=muku --brutal --upc-first --workers=24 --minutes=$MUKU_MIN --no-catalog --no-inline-images
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
