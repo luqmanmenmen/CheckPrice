@@ -99,3 +99,46 @@ body {
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
 }
+
+/* Login Stage Background (Siang & Malam Berbintang) */
+.login-stage {
+  min-height: 100vh;
+  background: radial-gradient(120% 90% at 50% 30%, #3f6a97 0%, #123a63 70%);
+  transition: background 1.1s ease;
+  overflow-x: hidden;
+}
+
+.login-stage.night {
+  background: radial-gradient(120% 90% at 50% 30%, #0a1230 0%, #04050f 75%);
+}
+
+.page-stars {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 1.2s ease;
+}
+
+.login-stage.night .page-stars {
+  opacity: 1;
+}
+
+.page-stars span {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  background: #ffffff;
+  border-radius: 50%;
+  animation: login-twinkle 3s ease-in-out infinite;
+}
+
+@keyframes login-twinkle {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}

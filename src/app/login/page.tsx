@@ -46,8 +46,9 @@ export default function Login() {
   const [loginRole, setLoginRole] = useState("");
   const [changingPin, setChangingPin] = useState(false);
   
-  // Client-side only states for random positions
+  // Client-side only states for random positions & day/night background
   const [mounted, setMounted] = useState(false);
+  const [isNight, setIsNight] = useState(false);
   const [stars, setStars] = useState<{ x: number; y: number; delay: string }[]>([]);
 
   const requestGpsLocation = React.useCallback((): Promise<{ lat: number; lng: number; accuracy: number | null } | null> => {
@@ -271,6 +272,8 @@ export default function Login() {
 
   useEffect(() => {
     setMounted(true);
+    const hour = new Date().getHours();
+    setIsNight(hour >= 18 || hour < 6);
     setStars(Array.from({ length: 50 }).map(() => ({
       x: Math.random() * 100,
       y: Math.random() * 100,
@@ -484,7 +487,7 @@ export default function Login() {
   };
 
   return (
-    <div id="login-stage" className="login-stage relative min-h-screen flex flex-col p-4">
+    <div id="login-stage" className={`login-stage ${isNight ? "night" : ""} relative min-h-screen flex flex-col p-4`}>
       {/* Background Stars (Optional extra effect) */}
       <div className="absolute inset-0 pointer-events-none z-0">
         <div className="page-stars" id="pageStars">
