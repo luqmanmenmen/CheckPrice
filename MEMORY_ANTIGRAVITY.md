@@ -2029,9 +2029,17 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
 - **Cleanup Vercel Deployments:** Menghapus `170` deployment lama via Vercel REST API (`Failed: 0`), menyisakan tepat 3 deployment teratas.
 - **Reset Pondasi Sales Bersih 23 Nov 2026 (`9bbd79b`):**
   - Menghapus `41` riwayat `SyncHistory` sales lama, membersihkan angka hantu di `analytics/sales-report-summary.json` menjadi `0` (sambil mempertahankan `62.036 pcs` EOH & `319.856` SKU), dan memperbarui `SALES_BASELINE_START_DATE = "2026-11-23"` di [`src/app/api/admin/sales-report/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/sales-report/route.ts) & [`laporan-penjualan/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/laporan-penjualan/page.tsx).
-- **Dual-Account Auto-Sync (SUKO + Mu+Ku) & 7-Jalur Image Scraper:**
-  - [`.github/workflows/retail-sync-engine.yml`](file:///c:/Max%20Display/price-checker/.github/workflows/retail-sync-engine.yml): Setiap trigger **`scrab`**, **`mds-bisa`**, **`stock-only`**, maupun **`all`** sekarang otomatis menjalankan **2 akun sekaligus: SUKO (`M223515`) + Mu+Ku (`M223708`)** dengan isolasi cookie & proteksi stok lintas toko (`ZES` menyusul setelah akses akun tersedia).
-  - [`python-engine/brutal_image_scraper.py`](file:///c:/Max%20Display/price-checker/python-engine/brutal_image_scraper.py): Upgrade ke **7-Jalur Foto Studio** (menambah Jalur 5 Exact Article Suggest, Jalur 6 Trimmed/Base Article + SKU/Barcode Suggest, & Jalur 7 HTML Search Fallback dengan rate-limit guard anti-429 + fix `json.dumps` Turso SQLite).
+- **Dual-Account Auto-Sync (SUKO + Mu+Ku) & 7-Jalur Image Scraper (`69b64c0`, `bbcedb3`, `4650b9e`, `b28579b`, `26b15cb`):**
+  - **Kredensial Resmi 2 Akun StoreHub (`4650b9e`):**
+    - **SUKO:** `M223515` / `Luqmen123!` (cookie `secrets/mds_cookie.txt`)
+    - **Mu+Ku:** `M223708` / `Aurel_28` (cookie `secrets/mds_cookie_muku.txt`)
+    - *(ZES menyusul setelah akses akun role ZES tersedia.)*
+  - [`.github/workflows/retail-sync-engine.yml`](file:///c:/Max%20Display/price-checker/.github/workflows/retail-sync-engine.yml) & [`sinkronisasi-harian/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/sinkronisasi-harian/page.tsx): Tombol 1-Klik Utama **`▶ Jalankan Semua (SUKO + Mu+Ku)`** (`all`) dipindahkan ke paling atas Master Control dengan `timeout-minutes: 150`, `--no-catalog` pada Step 1A/1D, dan alokasi waktu seimbang (SUKO + Mu+Ku + Foto 7-Jalur + Stock Live + Promo + Catalog Delta-Only).
+  - [`python-engine/brutal_image_scraper.py`](file:///c:/Max%20Display/price-checker/python-engine/brutal_image_scraper.py): Upgrade ke **7-Jalur Foto Studio** (Jalur 5 Exact Article Suggest, Jalur 6 Trimmed/Base Article + SKU/Barcode Suggest, & Jalur 7 HTML Search Fallback dengan rate-limit guard anti-429 + fix `json.dumps` Turso SQLite).
+  - **Zero-Excel Mu+Ku Live Promo (`checkItemPromotion`, `26b15cb`):** Ditemukan & dipasang Server Action resmi StoreHub `checkItemPromotion` (`60a67fb6833e81c90695ed315a2dc4394535951a87`) di [`python-engine/morning_full_sweep.py`](file:///c:/Max%20Display/price-checker/python-engine/morning_full_sweep.py) (`sweep_muku_promotions_for_catalog()`, 1x per artikel unik Mu+Ku -> wariskan ke seluruh varian SKU) dan [`src/lib/mdsBisaClient.ts`](file:///c:/Max%20Display/price-checker/src/lib/mdsBisaClient.ts) (`queryStoreHubPromotion()`, aktif otomatis saat Live Scan Mu+Ku di HP).
+- **Status Checkpoint Final (23 November 2026, 02:13 WIB — Siap Tempur Jam 09:00 WIB):**
+  - Branch `main` bersih & tersinkron penuh di GitHub + Vercel (`luqmanganteng.my.id`) + Turso v2 (`suko-retail-v2-luqmanmen`).
+  - Besok jam `09:00 WIB`: 1 klik tombol hijau paling atas **`▶ Jalankan Semua (SUKO + Mu+Ku)`** di Master Control (dan kapan saja `⚡ Live Stok` / scan barcode baru langsung aktif real-time SUKO + Mu+Ku).
 
 
 
