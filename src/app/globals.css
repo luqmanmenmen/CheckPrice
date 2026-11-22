@@ -50,13 +50,14 @@ body {
 }
 
 @keyframes scan-line {
-  0% { top: 0%; opacity: 0.8; }
-  50% { top: 100%; opacity: 1; }
-  100% { top: 0%; opacity: 0.8; }
+  0% { transform: translate3d(0, 0%, 0); opacity: 0.75; }
+  50% { transform: translate3d(0, 100%, 0); opacity: 1; }
+  100% { transform: translate3d(0, 0%, 0); opacity: 0.75; }
 }
 
 .animate-scan {
-  animation: scan-line 2.5s ease-in-out infinite;
+  will-change: transform, opacity;
+  animation: scan-line 2.2s ease-in-out infinite;
 }
 
 /* Chip Loader Animation */

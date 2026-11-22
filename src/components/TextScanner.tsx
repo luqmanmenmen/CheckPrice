@@ -277,10 +277,10 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     }
   }, []);
 
-  // Inisialisasi & Start Kamera Native <video> (4-Tier Fallback Anti-Black-Page!)
+  // Inisialisasi & Start Kamera Native <video> (4-Tier Fallback Anti-Black-Page + 60 FPS Smooth Preview!)
   useEffect(() => {
     let isMounted = true;
-    let scanIntervalId: ReturnType<typeof setInterval> | null = null;
+    let scanTimerId: ReturnType<typeof setTimeout> | null = null;
     let watchdogId: ReturnType<typeof setTimeout> | null = null;
 
     isHandlingResult.current = false;
@@ -292,13 +292,14 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
         throw new Error("Browser tidak mendukung akses kamera.");
       }
 
-      // TIER 1: Kamera Full-HD ideal (lebih tajam untuk garis tipis EAN-13 di Safari iPhone)
+      // TIER 1: Kamera HD 720p @ 60fps ideal (preview super mulus 60 FPS & tajam untuk barcode, jauh lebih ringan dari 1080p)
       try {
         return await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: facingMode },
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            frameRate: { ideal: 60, min: 30 },
           },
           audio: false,
         });
@@ -449,28 +450,49 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       }
     };
 
-    // Loop Dekoder Barcode 16 FPS langsung dari elemen <video>
+    // Adaptive Non-Blocking Decoder Loop (bebas main-thread stutter, animasi laser & preview 60 FPS mulus!)
+    const scheduleNextTick = (delayMs: number) => {
+      if (!isMounted || isHandlingResult.current) return;
+      scanTimerId = setTimeout(() => {
+        void decodeFrameTick();
+      }, delayMs);
+    };
+
     const decodeFrameTick = async () => {
-      if (
-        !isMounted ||
-        isHandlingResult.current ||
-        isDecodingFrame.current ||
-        isDecodingImageRef.current ||
-        !videoRef.current ||
-        !canvasRef.current
-      ) {
+      if (!isMounted || isHandlingResult.current) return;
+      if (isDecodingFrame.current || isDecodingImageRef.current || !videoRef.current || !canvasRef.current) {
+        scheduleNextTick(120);
         return;
       }
 
       const video = videoRef.current;
       if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) {
+        scheduleNextTick(150);
         return;
       }
 
       isDecodingFrame.current = true;
+      const tickStart = typeof performance !== "undefined" ? performance.now() : Date.now();
       const pass = ++scanPassCounter.current;
+      const hasNative = Boolean(nativeDetectorRef.current);
 
       try {
+        // JALUR KILAT GPU HARDWARE (0 drawImage, 0 copy piksel CPU!):
+        // Bila HP mendukung Native BarcodeDetector, langsung deteksi dari elemen <video> di GPU!
+        if (hasNative && !(!hwZoomActiveRef.current && zoomRatioRef.current > 1)) {
+          try {
+            const directCodes = await nativeDetectorRef.current.detect(video);
+            if (directCodes && directCodes.length > 0 && directCodes[0].rawValue) {
+              await handleBarcodeDetected(directCodes[0].rawValue);
+              if (isHandlingResult.current) return;
+            }
+          } catch {}
+          // Jika Native GPU aktif, cukup jalankan fallback canvas CPU hanya 1x setiap 4 tick agar HP tetap dingin & 60 FPS!
+          if (pass % 4 !== 0) {
+            return;
+          }
+        }
+
         const vw = video.videoWidth;
         const vh = video.videoHeight;
         const canvas = canvasRef.current;
@@ -482,13 +504,13 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
         const passMode = pass % 4;
 
         if (passMode === 3) {
-          // Pass 3: Rotasi 90 derajat + kontras tinggi untuk barcode vertikal / miring di hangtag
+          // Pass 3: Rotasi 90 derajat untuk barcode vertikal / miring di hangtag (kanvas ringan maks 640px)
           const cropW = Math.max(120, Math.floor((vw * 0.56) / digitalZoom));
           const cropH = Math.max(120, Math.floor((vh * 0.72) / digitalZoom));
           const sx = Math.floor((vw - cropW) / 2);
           const sy = Math.floor((vh - cropH) / 2);
 
-          const drawW = Math.min(960, cropW);
+          const drawW = Math.min(640, cropW);
           const drawH = Math.max(120, Math.floor(cropH * (drawW / cropW)));
           if (canvas.width !== drawH) canvas.width = drawH;
           if (canvas.height !== drawW) canvas.height = drawW;
@@ -506,37 +528,37 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
           }
           applyPixelContrastBoost(ctx, drawH, drawW);
         } else {
-          // Pass 0 & 1: fokus pita horizontal tengah (kotak barcode); Pass 2: area tengah lebih luas
+          // Pass 0 & 1: fokus pita horizontal tengah; Pass 2: area tengah lebih luas (maks 720px = 2.4x lebih ringan dari 1120px!)
           const cropW = Math.max(160, Math.floor((vw * 0.88) / digitalZoom));
           const cropH = Math.max(
             120,
-            Math.floor((vh * (passMode === 2 ? 0.68 : 0.44)) / digitalZoom)
+            Math.floor((vh * (passMode === 2 ? 0.64 : 0.4)) / digitalZoom)
           );
           const sx = Math.floor((vw - cropW) / 2);
           const sy = Math.floor((vh - cropH) / 2);
 
-          const targetW = Math.min(1120, cropW);
-          const targetH = Math.max(140, Math.floor(cropH * (targetW / cropW)));
+          const targetW = Math.min(720, cropW);
+          const targetH = Math.max(120, Math.floor(cropH * (targetW / cropW)));
 
           if (canvas.width !== targetW) canvas.width = targetW;
           if (canvas.height !== targetH) canvas.height = targetH;
 
           ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, targetW, targetH);
 
-          // Dekoder Sub-Pixel Soft-Edge EAN-13 (~4ms) sebelum hard-contrast boost agar transisi piksel akurat
+          // Dekoder Sub-Pixel Soft-Edge EAN-13 (~2ms di 720px) sebelum hard-contrast boost
           const softEan = decodeEan13SoftEdgeFromCanvas(canvas, 2);
           if (softEan) {
             await handleBarcodeDetected(softEan);
             if (isHandlingResult.current) return;
           }
 
-          // Pass 1 & 2 mengaktifkan kontras pixel-buffer untuk ZXing fallback (Code-128 / QR / dll)
-          if (passMode === 1 || passMode === 2) {
+          // Hanya jalankan contrast boost pada Pass 2 agar main thread tidak pernah tersedak
+          if (passMode === 2) {
             applyPixelContrastBoost(ctx, targetW, targetH);
           }
         }
 
-        // 1. Coba Native BarcodeDetector dulu jika tersedia (sangat cepat di GPU HP)
+        // 1. Coba Native BarcodeDetector pada area crop/zoom jika tersedia
         if (nativeDetectorRef.current) {
           try {
             const barcodes = await nativeDetectorRef.current.detect(canvas);
@@ -560,11 +582,15 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
         }
       } finally {
         isDecodingFrame.current = false;
+        const elapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - tickStart;
+        // Beri ruang napas adaptif agar main thread UI & kamera selalu 60 FPS mulus!
+        const nextDelay = hasNative ? Math.max(90, 120 - elapsed) : Math.max(110, Math.min(220, elapsed + 95));
+        scheduleNextTick(nextDelay);
       }
     };
 
     startNativeVideoCamera();
-    scanIntervalId = setInterval(decodeFrameTick, 65);
+    scheduleNextTick(180);
 
     // Bangunkan kamera otomatis jika user kembali dari minimize / kunci layar
     const handleVisibilityChange = () => {
@@ -584,7 +610,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
     return () => {
       isMounted = false;
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-      if (scanIntervalId) clearInterval(scanIntervalId);
+      if (scanTimerId) clearTimeout(scanTimerId);
       if (watchdogId) clearTimeout(watchdogId);
       stopHardwareStream();
     };
@@ -814,20 +840,24 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
             videoRef.current.play().catch(() => {});
           }
         }}
-        style={
-          !hwZoomActive && zoomLevel > 1
-            ? { transform: `scale(${zoomLevel})`, transformOrigin: "center center" }
-            : undefined
-        }
+        style={{
+          transform: !hwZoomActive && zoomLevel > 1 ? `scale(${zoomLevel}) translateZ(0)` : "translateZ(0)",
+          transformOrigin: "center center",
+          willChange: "transform",
+        }}
         className="absolute inset-0 w-full h-full object-cover bg-black z-0 transition-transform duration-200"
       />
 
-      {/* OVERLAY VIEWFINDER KASIR MODERN */}
+      {/* OVERLAY VIEWFINDER KASIR MODERN (100% GPU Composited 60 FPS — Tanpa backdrop-filter berat di atas video!) */}
       <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-4 z-10">
         {/* Kotak Bidik Barcode (Horizontal Rectangular Viewfinder) */}
-        <div className="relative w-[88%] max-w-[360px] h-36 sm:h-40 border-2 border-emerald-400/80 rounded-2xl shadow-[0_0_30px_rgba(16,185,129,0.3)] flex items-center justify-center overflow-hidden backdrop-brightness-105">
-          {/* Garis Laser Horizontal Bergerak Naik-Turun */}
-          <div className="absolute w-full h-0.5 bg-gradient-to-r from-transparent via-emerald-400 to-transparent shadow-[0_0_12px_#34d399] animate-laser" />
+        <div className="relative w-[88%] max-w-[360px] h-36 sm:h-40 border-2 border-emerald-400/85 rounded-2xl shadow-[0_0_24px_rgba(16,185,129,0.28)] flex items-center justify-center overflow-hidden">
+          {/* Garis Laser Horizontal 60 FPS Murni GPU (`transform: translate3d`) */}
+          <div className="absolute inset-x-0 top-2 bottom-2 pointer-events-none overflow-hidden">
+            <div className="w-full h-full animate-laser-gpu">
+              <div className="w-full h-0.5 bg-gradient-to-r from-transparent via-emerald-400 to-transparent shadow-[0_0_12px_#34d399]" />
+            </div>
+          </div>
 
           {/* Siku Sudut Kotak Bidik (Corner Accents) */}
           <div className="absolute top-0 left-0 w-5 h-5 border-t-4 border-l-4 border-emerald-400 rounded-tl-xl" />
@@ -1030,21 +1060,23 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       </div>
 
       <style jsx global>{`
-        @keyframes laserMove {
+        @keyframes laserMoveGpu {
           0% {
-            top: 5%;
-            opacity: 0.2;
+            transform: translate3d(0, 0%, 0);
+            opacity: 0.35;
           }
           50% {
             opacity: 1;
           }
           100% {
-            top: 95%;
-            opacity: 0.2;
+            transform: translate3d(0, 97%, 0);
+            opacity: 0.35;
           }
         }
-        .animate-laser {
-          animation: laserMove 2s ease-in-out infinite alternate;
+        .animate-laser-gpu {
+          will-change: transform, opacity;
+          backface-visibility: hidden;
+          animation: laserMoveGpu 1.65s ease-in-out infinite alternate;
         }
       `}</style>
     </div>
