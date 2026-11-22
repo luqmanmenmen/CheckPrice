@@ -57,7 +57,7 @@ jobs:
   sync:
     name: Run Python Retail Engine (100% Turso Cloud)
     runs-on: ubuntu-latest
-    timeout-minutes: 95
+    timeout-minutes: 150
 
     steps:
       - name: 📥 Checkout Repository & Brankas Mapping 84.763 SKU

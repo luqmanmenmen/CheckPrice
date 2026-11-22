@@ -599,6 +599,39 @@ export default function UpdateProdukPage() {
 
         <div className="p-4 flex flex-col gap-3.5">
           {/* ------------------------------------------------------------ */}
+          {/* TOMBOL UTAMA 1-KLIK: ALL TRIGGER (SUKO + MU+KU KOMPLIT)       */}
+          {/* ------------------------------------------------------------ */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-xl shadow-md border border-emerald-500/40">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="px-2 py-0.5 text-[10px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 rounded-full flex items-center gap-1">
+                  <Zap className="w-2.5 h-2.5 text-emerald-300" /> REKOMENDASI 1 KLIK • ALL TRIGGER v{APP_VERSION}
+                </span>
+                <p className="font-bold text-sm text-white">
+                  Jalankan Semua Sekaligus (SUKO + Mu+Ku Komplit)
+                </p>
+              </div>
+              <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                <strong>1 klik langsung beres semua:</strong> Scrab Produk &amp; Barcode + Harga Normal &amp; Promo (Akun SUKO + Mu+Ku) → Foto 7-Jalur → Update Stock Live (SUKO + Mu+Ku) → Promo Email → Catalog &amp; Snapshot Offline.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => handleGitHubDispatch("all")}
+                disabled={isGhDispatching || isRunning}
+                className="flex items-center gap-2 px-5 py-3 bg-gradient-to-r from-emerald-400 to-green-500 hover:from-emerald-300 hover:to-green-400 text-slate-950 text-xs font-black rounded-xl transition-all disabled:opacity-50 shadow-md shadow-emerald-500/25 cursor-pointer"
+              >
+                {isGhDispatching && activeAction === "all" ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
+                ) : (
+                  <Play className="w-4 h-4 fill-current" />
+                )}
+                {isGhDispatching && activeAction === "all" ? "Menyalakan..." : "Jalankan Semua (SUKO + Mu+Ku)"}
+              </button>
+            </div>
+          </div>
+
+          {/* ------------------------------------------------------------ */}
           {/* KATEGORI 1: SCRAB BRUTAL (MDS BISA + GAMBAR MATAHARI.COM)    */}
           {/* ------------------------------------------------------------ */}
           <div className="flex flex-col gap-3 p-4 bg-gradient-to-br from-indigo-50/90 via-purple-50/60 to-white rounded-xl border border-indigo-200 shadow-2xs">
@@ -778,39 +811,6 @@ export default function UpdateProdukPage() {
               )}
               {isGhDispatching && activeAction === "catalog" ? "Menyalakan..." : "Build Catalog & Snapshot"}
             </button>
-          </div>
-
-          {/* ------------------------------------------------------------ */}
-          {/* ALL TRIGGER: JALANKAN SEMUA 4 KATEGORI TERPADU               */}
-          {/* ------------------------------------------------------------ */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-xl shadow-md border border-slate-800 mt-0.5">
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="px-2 py-0.5 text-[10px] font-extrabold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full flex items-center gap-1">
-                  <Zap className="w-2.5 h-2.5 text-emerald-400" /> ALL TRIGGER v{APP_VERSION}
-                </span>
-                <p className="font-bold text-sm text-slate-100">
-                  Jalankan Semua (Kategori 1 + 2 + 3 + 4 Terpadu)
-                </p>
-              </div>
-              <p className="text-xs text-slate-400 mt-1">
-                Scrab luqman org &amp; Foto 404 Heal → Update Stock Live → Update Promo Terbaru → Build Catalog &amp; Snapshot CDN (.json.gz).
-              </p>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                onClick={() => handleGitHubDispatch("all")}
-                disabled={isGhDispatching || isRunning}
-                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-400 hover:to-green-400 text-slate-950 text-xs font-black rounded-xl transition-all disabled:opacity-50 shadow-md shadow-emerald-500/20 cursor-pointer"
-              >
-                {isGhDispatching && activeAction === "all" ? (
-                  <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
-                ) : (
-                  <Play className="w-4 h-4 fill-current" />
-                )}
-                {isGhDispatching && activeAction === "all" ? "Menyalakan..." : "All Trigger (Kat 1–4)"}
-              </button>
-            </div>
           </div>
 
           {/* Result Banner Dispatch Feedback */}
