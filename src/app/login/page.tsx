@@ -3,6 +3,7 @@ import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 import Link from "next/link";
+import ShiftToggle from "@/components/ShiftToggle";
 import ShiftLoader from "@/components/ShiftLoader";
 import { ShoppingCart, Shirt, Footprints, Package, Lock, LogOut, MapPin, ShieldCheck, Loader2, RefreshCw } from "lucide-react";
 import { APP_VERSION, forceAppUpdate } from "@/lib/version";
@@ -488,8 +489,15 @@ export default function Login() {
 
   return (
     <div id="login-stage" className={`login-stage ${isNight ? "night" : ""} relative min-h-screen flex flex-col p-4`}>
-      {/* Background Stars (Optional extra effect) */}
-      <div className="absolute inset-0 pointer-events-none z-0">
+      {/* Background Langit Pagi (Matahari & Awan) vs Malam (Bulan & Bintang) */}
+      <div className="absolute inset-0 pointer-events-none z-0 overflow-hidden">
+        <div className="page-sun" aria-hidden="true" />
+        <div className="page-clouds" aria-hidden="true">
+          <img src="/assets/cloud2.png" alt="" className="page-cloud page-cloud-1" draggable={false} />
+          <img src="/assets/cloud2.png" alt="" className="page-cloud page-cloud-2" draggable={false} />
+          <img src="/assets/cloud2.png" alt="" className="page-cloud page-cloud-3" draggable={false} />
+        </div>
+        <div className="page-moon-glow" aria-hidden="true" />
         <div className="page-stars" id="pageStars">
           {mounted && stars.map((s, i) => (
             <span key={i} style={{ left: `${s.x}%`, top: `${s.y}%`, animationDelay: `${s.delay}s` }}></span>
@@ -803,6 +811,9 @@ export default function Login() {
             </div>
           )}
         </form>
+
+        {/* Animasi CSS Langit Pagi (Matahari/Awan/Burung) <-> Malam (Bulan/Bintang Jatuh) */}
+        <ShiftToggle isNight={isNight} onToggle={(nextNight) => setIsNight(nextNight)} />
       </div>
       )}
 

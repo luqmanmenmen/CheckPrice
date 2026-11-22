@@ -32,23 +32,24 @@ export default function ShiftToggle({ isNight, onToggle }: ShiftToggleProps) {
   }, [isNight]);
 
   return (
-    <div className="w-full flex flex-col items-center justify-center my-6">
+    <div className="w-full flex flex-col items-center justify-center mt-5 mb-1">
       
       {/* LABEL */}
       <div className="label mb-2">
         <span id="labelDay" className={`text-slate-700 font-bold ${!isNight ? "visible" : ""}`}>Shift Pagi</span>
-        <span id="labelNight" className={`text-slate-700 font-bold ${isNight ? "visible" : ""}`}>Shift Siang</span>
+        <span id="labelNight" className={`text-slate-700 font-bold ${isNight ? "visible" : ""}`}>Shift Siang / Malam</span>
       </div>
 
       {/* MAIN TOGGLE */}
       <button
         type="button"
+        onClick={() => onToggle(!isNight)}
         className={`switch ${isNight ? "night on" : ""}`}
         id="switchBtn"
         aria-pressed={isNight}
-        disabled
-        aria-label="Toggle day and night mode (Automatic)"
-        style={{ width: '100%', cursor: 'default', opacity: 1 }}
+        aria-label="Ganti suasana langit Pagi / Malam"
+        title="Ketuk untuk ganti tampilan langit Pagi / Malam"
+        style={{ width: '100%', cursor: 'pointer', opacity: 1 }}
       >
         <div className="track">
           {/* TRACK STARS */}
