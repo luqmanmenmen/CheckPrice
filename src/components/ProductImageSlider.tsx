@@ -57,6 +57,7 @@ interface ProductImageSliderProps {
   colorBadge?: string | null;
   onBrokenImages?: () => Promise<boolean | void> | void;
   isHealing?: boolean;
+  refreshVersion?: number;
 }
 
 export default function ProductImageSlider({
@@ -70,6 +71,7 @@ export default function ProductImageSlider({
   colorBadge = null,
   onBrokenImages,
   isHealing = false,
+  refreshVersion = 0,
 }: ProductImageSliderProps) {
   const cleanImages = (images || []).filter(
     (u): u is string => typeof u === "string" && u.trim().length > 0
@@ -81,7 +83,7 @@ export default function ProductImageSlider({
   const [thumbError, setThumbError] = useState<Record<number, boolean>>({});
   const healTriggeredKeyRef = useRef<string>("");
 
-  // Reset state ketika daftar gambar berganti (misal ganti produk / warna / selesai heal)
+  // Reset state ketika daftar gambar berganti ATAU setelah manual Update Gambar (refreshVersion naik)
   const imagesKey = cleanImages.join("|");
   useEffect(() => {
     setCurrentIndex(0);
@@ -93,7 +95,7 @@ export default function ProductImageSlider({
     if (cleanImages.length > 1) {
       preloadProductImages(cleanImages.slice(1), imageWidth);
     }
-  }, [imagesKey, imageWidth]);
+  }, [imagesKey, imageWidth, refreshVersion]);
 
   const triggerBrokenHeal = () => {
     if (!onBrokenImages) return;
@@ -189,7 +191,7 @@ export default function ProductImageSlider({
             </div>
           ) : (
             <img
-              key={displaySrc}
+              key={`${safeIndex}-${refreshVersion}-${displaySrc}`}
               src={displaySrc}
               alt={`${alt} - Foto ${safeIndex + 1}`}
               loading="eager"
@@ -296,6 +298,7 @@ export default function ProductImageSlider({
                   </div>
                 ) : (
                   <img
+                    key={`${idx}-${refreshVersion}-${thumbSrc}`}
                     src={thumbSrc}
                     alt=""
                     loading="lazy"

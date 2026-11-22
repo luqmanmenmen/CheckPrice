@@ -660,7 +660,7 @@ async function postStoreHubLoginDirect(
     },
     body: fd,
     redirect: 'manual',
-    signal: AbortSignal.timeout(6000),
+    signal: AbortSignal.timeout(9000),
   });
 
   const getSetCookie = (res.headers as any).getSetCookie;
@@ -1483,17 +1483,17 @@ export async function checkLiveStockFast(
   }
 
   // 1 KALI panggilan langsung ke jalur StoreHub item-checker memakai akun sesuai toko (Mu+Ku / SUKO)
-  let first = await queryStoreHubDetail('sku', cleanSku, cookie, 5000, activeAccount);
+  let first = await queryStoreHubDetail('sku', cleanSku, cookie, 7000, activeAccount);
   if (first.actionExpired && (await resolveDetailActionHash(cookie))) {
-    first = await queryStoreHubDetail('sku', cleanSku, cookie, 5000, activeAccount);
+    first = await queryStoreHubDetail('sku', cleanSku, cookie, 7000, activeAccount);
   }
   if (first.authFailed) {
     const fresh = await getStoreHubCookie(true, cookie, activeAccount).catch(() => null);
     if (fresh) {
       cookie = fresh;
-      first = await queryStoreHubDetail('sku', cleanSku, cookie, 5000, activeAccount);
+      first = await queryStoreHubDetail('sku', cleanSku, cookie, 7000, activeAccount);
       if (first.actionExpired && (await resolveDetailActionHash(cookie))) {
-        first = await queryStoreHubDetail('sku', cleanSku, cookie, 5000, activeAccount);
+        first = await queryStoreHubDetail('sku', cleanSku, cookie, 7000, activeAccount);
       }
     }
   }
@@ -1603,13 +1603,13 @@ export async function checkLiveStockFast(
 
   if (remaining.length > 0 && mappedViaRelated === 0) {
     const singleWave = remaining.slice(0, 16);
-    const results = await Promise.all(singleWave.map((s) => queryStoreHubDetail('sku', s, cookie!, 3500)));
+    const results = await Promise.all(singleWave.map((s) => queryStoreHubDetail('sku', s, cookie!, 3500, activeAccount)));
     for (const r of results) {
       if (!r.offline && !r.authFailed) absorb(r);
     }
   } else if (remaining.length > 0 && remaining.length <= 8) {
     // Sisa sedikit (<= 8 SKU tidak ada di relatedStock): selesaikan dalam 1 batch paralel cepat (~0.8s)
-    const results = await Promise.all(remaining.map((s) => queryStoreHubDetail('sku', s, cookie!, 3000)));
+    const results = await Promise.all(remaining.map((s) => queryStoreHubDetail('sku', s, cookie!, 3000, activeAccount)));
     for (const r of results) {
       if (!r.offline && !r.authFailed) absorb(r);
     }
@@ -2422,15 +2422,22 @@ export async function healProductImagesInDb(params: {
   let mdsNewVariants = 0;
 
   // Jika dipicu manual ("Update Gambar"), sekalian sinkronkan Artikel, SKU, Barcode, & Varian dari MDS BISA (luqman org)
+  // Batasi race 4.5 detik agar pencarian foto Matahari tidak pernah kehabisan waktu saat cold start klik pertama.
   if (params.force) {
     try {
+      const brandUp = `${dbMain.brand || ''} ${dbMain.dept || ''}`.toUpperCase();
+      const preferredAccount: StoreHubAccount | undefined =
+        brandUp.includes('MUKU') || brandUp.includes('MU+KU') || brandUp.includes('MU + KU')
+          ? 'muku'
+          : undefined;
       const mdsSync = await Promise.race([
         checkSingleItemStock(dbMain.sku || dbMain.barcode || artToUse0 || cleanSku, {
           discoverFamily: true,
           withImages: false,
           syncAllSizes: true,
+          preferredAccount,
         }),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 9000)),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 4500)),
       ]);
       if (mdsSync && mdsSync.success) {
         mdsMetadataUpdated = true;

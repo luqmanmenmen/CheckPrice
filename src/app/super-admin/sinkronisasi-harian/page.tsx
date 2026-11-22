@@ -192,9 +192,37 @@ export default function UpdateProdukPage() {
   const [autoRetryCountdown, setAutoRetryCountdown] = useState<number | null>(null);
   const [isSelfHealing, setIsSelfHealing] = useState(false);
   const [lastTriggerUsed, setLastTriggerUsed] = useState<TriggerAction | null>(null);
+  // Optimistic Queued State: mencegah tombol balik idle sebelum GitHub Actions selesai membuat run baru (~3-8 detik)
+  const [optimisticQueued, setOptimisticQueued] = useState<{
+    action: TriggerAction;
+    preRunId: number | null;
+    startedAt: number;
+  } | null>(null);
+  const optimisticQueuedRef = useRef<{
+    action: TriggerAction;
+    preRunId: number | null;
+    startedAt: number;
+  } | null>(null);
+  const postDispatchTimersRef = useRef<NodeJS.Timeout[]>([]);
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
   const retriedRunIdsRef = useRef<Set<number>>(new Set());
+
+  const clearPostDispatchTimers = () => {
+    for (const t of postDispatchTimersRef.current) clearTimeout(t);
+    postDispatchTimersRef.current = [];
+  };
+
+  const setOptimisticState = (
+    next: { action: TriggerAction; preRunId: number | null; startedAt: number } | null
+  ) => {
+    optimisticQueuedRef.current = next;
+    setOptimisticQueued(next);
+  };
+
+  useEffect(() => {
+    return () => clearPostDispatchTimers();
+  }, []);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -236,8 +264,20 @@ export default function UpdateProdukPage() {
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.hasRuns) {
+          const opt = optimisticQueuedRef.current;
+          const incomingRun: ActiveRun | null = data.activeRun || null;
+          if (opt) {
+            const isNewRun = Boolean(incomingRun && incomingRun.id !== opt.preRunId);
+            const isAlreadyActive =
+              incomingRun?.status === "queued" || incomingRun?.status === "in_progress";
+            const isExpired = Date.now() - opt.startedAt > 22000;
+            if (isNewRun || isAlreadyActive || isExpired) {
+              clearPostDispatchTimers();
+              setOptimisticState(null);
+            }
+          }
           setCloudStatus({
-            activeRun: data.activeRun,
+            activeRun: incomingRun,
             steps: data.steps || [],
             recentRuns: data.recentRuns || [],
             syncHistory: data.syncHistory || [],
@@ -258,11 +298,34 @@ export default function UpdateProdukPage() {
     }
   };
 
+  // Jadwalkan polling bertahap (3s, 6.5s, 11s, 16s) setelah dispatch agar run baru GitHub langsung tertangkap di klik ke-1
+  const schedulePostDispatchPolls = (action: TriggerAction, preRunId: number | null) => {
+    clearPostDispatchTimers();
+    setOptimisticState({ action, preRunId, startedAt: Date.now() });
+    const delays = [3000, 6500, 11000, 16000];
+    for (const ms of delays) {
+      const timer = setTimeout(() => {
+        if (!optimisticQueuedRef.current) return;
+        fetchCloudStatus(false);
+      }, ms);
+      postDispatchTimersRef.current.push(timer);
+    }
+    const expireTimer = setTimeout(() => {
+      if (optimisticQueuedRef.current) {
+        setOptimisticState(null);
+        fetchCloudStatus(false);
+      }
+    }, 22000);
+    postDispatchTimersRef.current.push(expireTimer);
+  };
+
   // Smart Adaptive Polling:
   // - Pause total saat tab tidak terlihat (0 query Turso saat background!)
-  // - 5 detik saat workflow aktif berjalan, 30 detik saat idle
+  // - 5 detik saat workflow aktif berjalan atau antrean optimistik, 30 detik saat idle
   const isActiveWorkflowRun =
-    cloudStatus.activeRun?.status === "in_progress" || cloudStatus.activeRun?.status === "queued";
+    cloudStatus.activeRun?.status === "in_progress" ||
+    cloudStatus.activeRun?.status === "queued" ||
+    Boolean(optimisticQueued);
 
   useEffect(() => {
     fetchCloudStatus(true);
@@ -336,7 +399,7 @@ export default function UpdateProdukPage() {
           message: data.message,
           actionsUrl: data.actionsUrl,
         });
-        setTimeout(() => fetchCloudStatus(false), 1500);
+        schedulePostDispatchPolls(actionToRun, cloudStatus.activeRun?.id ?? null);
       } else {
         setGhDispatchResult({
           success: false,
@@ -434,7 +497,7 @@ export default function UpdateProdukPage() {
 
       if (res.ok && data.success) {
         setGhDispatchResult({ success: true, message: data.message, actionsUrl: data.actionsUrl });
-        setTimeout(() => fetchCloudStatus(false), 1200);
+        schedulePostDispatchPolls(action, cloudStatus.activeRun?.id ?? null);
       } else {
         setGhDispatchResult({
           success: false,
@@ -472,9 +535,15 @@ export default function UpdateProdukPage() {
   }
 
   const activeRun = cloudStatus.activeRun;
-  const isRunning = activeRun?.status === "in_progress" || activeRun?.status === "queued" || isGhDispatching;
-  const isSuccess = activeRun?.status === "completed" && activeRun?.conclusion === "success";
-  const isFailed = activeRun?.hasError || (activeRun?.status === "completed" && activeRun?.conclusion === "failure");
+  const isRunning =
+    activeRun?.status === "in_progress" ||
+    activeRun?.status === "queued" ||
+    isGhDispatching ||
+    Boolean(optimisticQueued);
+  const isSuccess = !optimisticQueued && activeRun?.status === "completed" && activeRun?.conclusion === "success";
+  const isFailed =
+    !optimisticQueued &&
+    (activeRun?.hasError || (activeRun?.status === "completed" && activeRun?.conclusion === "failure"));
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 pb-24 max-w-3xl mx-auto flex flex-col gap-5">
@@ -760,6 +829,12 @@ export default function UpdateProdukPage() {
               )}
               <div className="flex-1">
                 <p className="font-bold text-sm">{ghDispatchResult.message}</p>
+                {optimisticQueued && ghDispatchResult.success && (
+                  <p className="inline-flex items-center gap-1.5 text-xs font-bold text-indigo-700 mt-1">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Menyiapkan antrean GitHub Actions (otomatis memperbarui status dalam beberapa detik, tidak perlu klik ulang)...
+                  </p>
+                )}
                 {ghDispatchResult.actionsUrl && (
                   <a
                     href={ghDispatchResult.actionsUrl}

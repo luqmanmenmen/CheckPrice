@@ -2000,6 +2000,24 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   1. [`github-status/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/trigger/github-status/route.ts): Hapus `prisma.product.count()` & `catalogArticle.count()`, ganti dengan `getLightweightDbMetrics()` dari `offline-db/manifest.json` (cache 10 menit, turun dari `367.903` → `~10` rows read/request = **hemat 99,997%**!).
   2. [`sinkronisasi-harian/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/sinkronisasi-harian/page.tsx): Smart adaptive polling — pause total saat tab tersembunyi (`document.hidden`), `5 detik` saat run aktif, `30 detik` saat idle.
   3. [`productQueryHelpers.ts`](file:///c:/Max%20Display/price-checker/src/lib/productQueryHelpers.ts), [`catalog/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/catalog/route.ts), [`reports/dashboard/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/reports/dashboard/route.ts), & [`runner_guardian.py`](file:///c:/Max%20Display/price-checker/python-engine/runner_guardian.py): Seluruh `COUNT(*)` / `aggregate` full-scan dialihkan ke `manifest.json` / `sales-report-summary.json` + TTL cache 15–30 menit.
+- **Migrasi Turso v2 & Delta-Only Writes (`4e8ff1c`):**
+  - Migrasi penuh ke Turso Free v2 (`libsql://suko-retail-v2-luqmanmen.aws-ap-southeast-1.turso.io`, `388.470` rows + `22/22` Storage objects) serta mengubah `python-engine/build_catalog_index.py` dari `DELETE ALL + INSERT ALL` (`~803k` writes/run) menjadi **Delta-Only Upsert** (hemat ~98% kuota writes).
+
+---
+
+### 116. Perbaikan 1-Klik Responsif (Anti Harus Klik 2x) pada Live Stok, Update Gambar, & Trigger GitHub Actions (23 November 2026)
+
+- **Masalah yang Dilaporkan User:** Tombol **Live Stok**, **Update Gambar / Foto**, dan **Trigger GitHub Actions** sebelumnya sering harus ditekan **2 kali ("peng 2")** baru terlihat ter-update.
+- **Akar Masalah & Perbaikan:**
+  1. **⚡ Live Stok ([`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx) & [`src/lib/mdsBisaClient.ts`](file:///c:/Max%20Display/price-checker/src/lib/mdsBisaClient.ts)):**
+     - Pada klik #1 (cold start / cookie expired), timeout `postStoreHubLoginDirect` (`6000ms`) & `queryStoreHubDetail` (`5000ms`) kadang kepepet sementara cookie sedang di-refresh; ditambah batch lanjutan di `checkLiveStockFast()` belum meneruskan `activeAccount` (berdampak pada produk Mu+Ku).
+     - **Solusi:** Naikkan timeout login `6000ms -> 9000ms`, query utama `5000ms -> 7000ms`, teruskan `activeAccount` di semua batch paralel, tambah **1x silent auto-retry otomatis** di `handleCheckLiveStock` (jika percobaan #1 gagal transient & bukan `storeOffline`), dan pastikan `setProduct` memakai `variantStockMap.get(prev.sku) ?? data.stok`.
+  2. **📸 Update Gambar / Foto ([`src/components/ProductImageSlider.tsx`](file:///c:/Max%20Display/price-checker/src/components/ProductImageSlider.tsx), [`src/app/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/page.tsx), & [`src/lib/mdsBisaClient.ts`](file:///c:/Max%20Display/price-checker/src/lib/mdsBisaClient.ts)):**
+     - `ProductImageSlider` sebelumnya hanya mereset `hasError` / `thumbError` / `useRawFallback` bila string `imagesKey` berubah, sehingga foto yang sempat gagal load atau URL sama tidak me-reload di klik pertama; selain itu `healProductImagesInDb` punya race timeout MDS sync `9000ms` yang memakan waktu sebelum fetch foto Matahari.
+     - **Solusi:** Tambah prop `refreshVersion` di `ProductImageSlider` (mereset seluruh error state & me-remount `<img>` utama + thumbnail via `key`), increment `imageRefreshVersion` setiap selesai `handleHealProductImages` (plus 1x silent retry jika tombol manual gagal transient), dan turunkan race timeout MDS sync di `healProductImagesInDb` menjadi `4500ms` dengan `preferredAccount` Mu+Ku/SUKO.
+  3. **🚀 Trigger GitHub Actions ([`src/app/super-admin/sinkronisasi-harian/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/sinkronisasi-harian/page.tsx)):**
+     - Setelah `POST /api/admin/trigger/github-dispatch` sukses, sebelumnya UI langsung me-reset `isGhDispatching = false` dan hanya poll 1x setelah `1.2 detik` — padahal GitHub Actions butuh `3–8 detik` untuk membuat run baru di `/actions/runs`, sehingga UI masih menampilkan run lama dan membuat user mengira klik #1 tidak masuk.
+     - **Solusi:** Tambah **Optimistic Queued State** (`optimisticQueued`) segera setelah dispatch/self-heal sukses + **progressive polling bertahap (`3s`, `6.5s`, `11s`, `16s`)** yang langsung mati begitu `activeRun.id` baru atau status `queued`/`in_progress` terdeteksi, lengkap dengan indikator *"Menyiapkan antrean GitHub Actions..."* agar 1 klik langsung terkunci & ter-update otomatis.
 
 
 

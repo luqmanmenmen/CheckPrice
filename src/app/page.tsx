@@ -385,6 +385,7 @@ export default function Home() {
 
   const [checkingLiveStock, setCheckingLiveStock] = useState(false);
   const [liveStockVerified, setLiveStockVerified] = useState<string | null>(null);
+  const [imageRefreshVersion, setImageRefreshVersion] = useState(0);
   const liveStockEpochRef = useRef(0);
 
   const handleCheckLiveStock = async () => {
@@ -403,25 +404,48 @@ export default function Home() {
         size: s.size || null,
         stok: typeof s.stok === "number" ? s.stok : 0,
       }));
-    try {
+    const payload = JSON.stringify({
+      sku: targetSku,
+      article: product.article || null,
+      brandGroup: product.brandGroup || classifyBrandGroup(product),
+      discoverFamily: needsDiscovery,
+      withImages: needsDiscovery,
+      syncAllSizes: true,
+      // Jalur tol khusus Live Stok: 1 request langsung ke StoreHub (+ peta relatedStock), 0 tunggu DB
+      fastMode: !needsDiscovery,
+      familySkus: !needsDiscovery ? familySkus : [],
+      familyVariants: !needsDiscovery ? familyVariants : [],
+    });
+
+    const callLiveStockOnce = async () => {
       const res = await fetch("/api/live-stock", {
         method: "POST",
         cache: "no-store",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sku: targetSku,
-          article: product.article || null,
-          brandGroup: product.brandGroup || classifyBrandGroup(product),
-          discoverFamily: needsDiscovery,
-          withImages: needsDiscovery,
-          syncAllSizes: true,
-          // Jalur tol khusus Live Stok: 1 request langsung ke StoreHub (+ peta relatedStock), 0 tunggu DB
-          fastMode: !needsDiscovery,
-          familySkus: !needsDiscovery ? familySkus : [],
-          familyVariants: !needsDiscovery ? familyVariants : [],
-        }),
+        body: payload,
       });
-      const data = await res.json();
+      const json = await res.json().catch(() => ({ success: false }));
+      return { ok: res.ok, data: json };
+    };
+
+    try {
+      // 1-Click Reliability: jika percobaan #1 gagal karena cold-start / refresh sesi, otomatis retry 1x diam-diam
+      let attempt: { ok: boolean; data: any };
+      try {
+        attempt = await callLiveStockOnce();
+      } catch {
+        attempt = { ok: false, data: { success: false } };
+      }
+      if (
+        liveStockEpochRef.current === requestEpoch &&
+        (!attempt.ok || (!attempt.data?.success && !attempt.data?.storeOffline))
+      ) {
+        await new Promise((r) => setTimeout(r, 350));
+        if (liveStockEpochRef.current !== requestEpoch) return;
+        attempt = await callLiveStockOnce();
+      }
+
+      const data = attempt.data;
       if (liveStockEpochRef.current !== requestEpoch) return;
       if (data.success && (data.data || data.stok !== undefined)) {
         const variantStockMap = new Map<string, number>();
@@ -452,6 +476,9 @@ export default function Home() {
             return updatedMain;
           });
           setSiblings(nextSiblings);
+          if (updatedMain.imageUrl || (Array.isArray(updatedMain.images) && updatedMain.images.length > 0)) {
+            setImageRefreshVersion((v) => v + 1);
+          }
           sessionCacheRef.current.set(targetSku.toLowerCase(), { product: updatedMain, siblings: nextSiblings });
           nextSiblings.forEach((s) => {
             if (s.sku) sessionCacheRef.current.set(s.sku.toLowerCase(), { product: s, siblings: nextSiblings });
@@ -482,7 +509,9 @@ export default function Home() {
             )
             .catch(() => {});
         } else {
-          setProduct((prev) => (prev ? { ...prev, stok: data.stok } : null));
+          setProduct((prev) =>
+            prev ? { ...prev, stok: variantStockMap.get(prev.sku) ?? data.stok ?? prev.stok } : null
+          );
           // Update seluruh siblings (varian warna & ukuran dalam 1 artikel yang sama)
           if (variantStockMap.size > 0) {
             setSiblings((prevSiblings) => {
@@ -571,19 +600,38 @@ export default function Home() {
     setHealingImageKey(key);
     if (isManual) setUpdatingImages(true);
     try {
-      const res = await fetch("/api/product/heal-image", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sku: target.sku || "",
-          article: target.article || "",
-          barcode: target.barcode || "",
-          targetColor: opts?.targetColor || "",
-          force: isManual,
-        }),
+      const reqPayload = JSON.stringify({
+        sku: target.sku || "",
+        article: target.article || "",
+        barcode: target.barcode || "",
+        targetColor: opts?.targetColor || "",
+        force: isManual,
       });
-      const json = await res.json().catch(() => null);
-      if (res.ok && json?.success) {
+      const callHealOnce = async () => {
+        const r = await fetch("/api/product/heal-image", {
+          method: "POST",
+          cache: "no-store",
+          headers: { "Content-Type": "application/json" },
+          body: reqPayload,
+        });
+        const j = await r.json().catch(() => null);
+        return { ok: r.ok, json: j };
+      };
+
+      let attempt: { ok: boolean; json: any };
+      try {
+        attempt = await callHealOnce();
+      } catch {
+        attempt = { ok: false, json: null };
+      }
+      // 1-Click Reliability: jika tombol manual Update Gambar gagal transient di klik #1, retry 1x diam-diam
+      if (isManual && (!attempt.ok || !attempt.json?.success)) {
+        await new Promise((r) => setTimeout(r, 350));
+        attempt = await callHealOnce();
+      }
+
+      const json = attempt.json;
+      if (attempt.ok && json?.success) {
         const healedSibs: ProductData[] = Array.isArray(json.siblings) ? json.siblings : [];
         const healedMain: ProductData | undefined = json.data;
         const sibMap = new Map(healedSibs.map((s) => [s.sku, s]));
@@ -654,6 +702,9 @@ export default function Home() {
           const { updateOfflineFamilyImages } = await import("@/lib/offlineDb");
           await updateOfflineFamilyImages(healedSibs, healedMain?.article || target.article);
         }
+
+        // Paksa slider foto me-reset status error & me-remount <img> di klik pertama
+        setImageRefreshVersion((v) => v + 1);
 
         if (isManual) {
           showToast(
@@ -4186,6 +4237,7 @@ export default function Home() {
                     })
                   }
                   isHealing={healingImageKey === (product.article || product.sku)}
+                  refreshVersion={imageRefreshVersion}
                 />
                 {(heroImages.length === 0 || mismatchedOwnerColor) && (
                   <div className="mt-2.5 mx-3 md:mx-0 p-2.5 rounded-xl border border-amber-200 bg-amber-50/95 flex flex-wrap items-center justify-between gap-2">
