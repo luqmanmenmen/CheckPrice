@@ -691,7 +691,7 @@ export default function UsersManagement() {
                           disabled={updatingStoreUserId === user.id}
                           onChange={(e) => handleQuickChangeStore(user, e.target.value)}
                           className="pl-7 pr-2.5 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-800 font-bold text-xs border border-indigo-200 outline-none focus:ring-2 focus:ring-indigo-400 cursor-pointer disabled:opacity-50"
-                          title="Pindah lokasi kerja karyawan (SUKO 719 Pakuwon Mall ↔ SUKO 720 Tunjungan Plaza)"
+                          title="Pindah lokasi kerja karyawan (SUKO 719 Pakuwon Mall ↔ MU+KU Pakuwon Mall ↔ SUKO 720 Tunjungan Plaza)"
                         >
                           {(!user.toko || !OFFICIAL_STORES.includes(user.toko)) && (
                             <option value={user.toko || ""}>

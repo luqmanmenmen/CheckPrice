@@ -9,6 +9,7 @@ export interface StoreGeofenceZone {
 
 export const OFFICIAL_STORES = [
   "SUKO 719 PAKUWON MALL",
+  "MU+KU PAKUWON MALL",
   "SUKO 720 TUNJUNGAN PLAZA",
 ] as const;
 
@@ -28,6 +29,14 @@ export const WORK_LOCATION_ZONES: StoreGeofenceZone[] = [
     radiusMeters: 750,
   },
   {
+    id: "MUKU_PAKUWON_MALL",
+    name: "MU+KU PAKUWON MALL",
+    shortName: "MU+KU PAKUWON MALL",
+    lat: -7.2896,
+    lng: 112.6747,
+    radiusMeters: 750,
+  },
+  {
     id: "SUKO_720_TUNJUNGAN_PLAZA",
     name: "SUKO 720 TUNJUNGAN PLAZA",
     shortName: "SUKO 720 TUNJUNGAN PLAZA",
@@ -39,17 +48,21 @@ export const WORK_LOCATION_ZONES: StoreGeofenceZone[] = [
 
 /**
  * Tentukan zona mall spesifik berdasarkan penempatan toko karyawan (`user.toko`).
- * - Jika karyawan ditugaskan ke SUKO 719 PAKUWON MALL -> HANYA boleh login di Pakuwon Mall (ditolak meski ke TP).
- * - Jika karyawan ditugaskan ke SUKO 720 TUNJUNGAN PLAZA -> HANYA boleh login di Tunjungan Plaza (ditolak meski ke Pakuwon).
+ * - Jika karyawan ditugaskan ke SUKO 719 PAKUWON MALL -> HANYA boleh login di Pakuwon Mall.
+ * - Jika karyawan ditugaskan ke MU+KU PAKUWON MALL -> HANYA boleh login di Pakuwon Mall (koordinat sama dengan SUKO 719).
+ * - Jika karyawan ditugaskan ke SUKO 720 TUNJUNGAN PLAZA -> HANYA boleh login di Tunjungan Plaza.
  */
 export function resolveAssignedStoreZone(assignedToko?: string | null): StoreGeofenceZone | null {
   const norm = String(assignedToko || "").trim().toUpperCase();
   if (!norm) return null;
+  if ((norm.includes("MU+KU") || norm.includes("MUKU") || norm.includes("MU + KU")) && (norm.includes("PAKUWON") || norm.includes("719"))) {
+    return WORK_LOCATION_ZONES[1];
+  }
   if (norm.includes("PAKUWON") || norm.includes("719")) {
     return WORK_LOCATION_ZONES[0];
   }
   if (norm.includes("TUNJUNGAN") || norm.includes("720") || /\bTP\b/.test(norm)) {
-    return WORK_LOCATION_ZONES[1];
+    return WORK_LOCATION_ZONES[2];
   }
   return null;
 }
