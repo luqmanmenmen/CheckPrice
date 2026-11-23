@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
           article: typeof body.article === 'string' ? body.article : null,
           brandGroup,
         },
-        { requestUrl: req.url, timeoutMs: 8000 }
+        { requestUrl: req.url, timeoutMs: 4200 }
       );
       return NextResponse.json({ ...result, fastMode: true });
     }
@@ -45,10 +45,10 @@ export async function POST(req: NextRequest) {
         action: 'scan',
         sku: String(sku),
         withImages: body.withImages !== false,
-        maxSeconds: 6.5,
+        maxSeconds: 4.2,
         preferredAccount: brandGroup === 'MUKU' ? 'muku' : brandGroup === 'SUKO' ? 'suko' : undefined,
       },
-      { requestUrl: req.url, timeoutMs: 9500 }
+      { requestUrl: req.url, timeoutMs: 5200 }
     );
     return NextResponse.json(result);
   } catch (err: any) {

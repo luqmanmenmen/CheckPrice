@@ -853,19 +853,22 @@ def _verify_image_not_grey_logo(url: str, timeout: float = 1.6) -> bool:
 
 
 def lookup_matahari_images(sku: str = "", article: str = "", barcode: str = "") -> List[str]:
-    queries = [q for q in dict.fromkeys([sku.strip(), article.strip(), barcode.strip()]) if q and len(q) >= 4]
-    candidates: List[str] = []
-    for q in queries[:2]:
+    queries = [q for q in dict.fromkeys([sku.strip(), article.strip(), barcode.strip()]) if q and len(q) >= 4][:2]
+    if not queries:
+        return []
+
+    def _fetch_suggest(q: str) -> List[str]:
         qs = urllib.parse.urlencode({"q": q, "resources[type]": "product"})
-        status, txt = _http_get_text(f"https://matahari.com/search/suggest.json?{qs}", timeout=2.2)
+        status, txt = _http_get_text(f"https://matahari.com/search/suggest.json?{qs}", timeout=1.6)
         if status != 200 or not txt:
-            continue
+            return []
         try:
             data = json.loads(txt)
             prods = (((data.get("resources") or {}).get("results") or {}).get("products")) or []
         except Exception:
-            continue
+            return []
         q_low = q.lower()
+        found: List[str] = []
         for p in prods:
             img = str(p.get("image") or "").strip()
             if img.startswith("//"):
@@ -878,16 +881,25 @@ def lookup_matahari_images(sku: str = "", article: str = "", barcode: str = "") 
             url_p = str(p.get("url") or "").lower()
             title = str(p.get("title") or "").lower()
             if q_low in img.lower() or q_low in handle or q_low in url_p or (article and article.lower() in title):
-                if img not in candidates:
-                    candidates.append(img)
-        if candidates:
-            break
+                if img not in found:
+                    found.append(img)
+        return found
 
-    verified: List[str] = []
-    for c in candidates[:4]:
-        if _verify_image_not_grey_logo(c):
-            verified.append(c)
-    return verified
+    candidates: List[str] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(queries)) as pool:
+        for res_list in pool.map(_fetch_suggest, queries):
+            for u in res_list:
+                if u not in candidates:
+                    candidates.append(u)
+
+    if not candidates:
+        return []
+
+    # Verifikasi paralel anti logo abu-abu (2.238B / 3.163B) dalam 1 round-trip (~200-400ms!)
+    top_cands = candidates[:4]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(top_cands)) as pool:
+        ok_flags = list(pool.map(lambda u: _verify_image_not_grey_logo(u, timeout=1.1), top_cands))
+    return [u for u, ok in zip(top_cands, ok_flags) if ok]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -975,41 +987,58 @@ def _probe_account_with_deadline(
     if not cookie:
         return {"account": account, "items": [], "auth_failed": True}
 
-    probe_list = [only_one] if only_one else candidates
-    for idx, (kind, code) in enumerate(probe_list[:4]):
-        remaining = deadline - time.time()
-        if remaining < 0.8:
-            return {"account": account, "items": [], "timeout": True, "cookie": cookie}
+    probe_list = [only_one] if only_one else candidates[:2]
+    remaining = deadline - time.time()
+    if remaining < 0.6:
+        return {"account": account, "items": [], "timeout": True, "cookie": cookie}
 
-        t_out = min(3.6 if idx == 0 else 2.4, max(1.0, remaining))
-        res = query_detail(kind, code, cookie, account, timeout=t_out)
-        cookie = res.get("cookie") or cookie
+    t_out = min(2.4, max(0.9, remaining))
 
-        if res.get("action_expired") and (deadline - time.time()) > 1.5:
-            if resolve_action_hashes(cookie=cookie):
-                res = query_detail(kind, code, cookie, account, timeout=min(3.0, max(1.0, deadline - time.time())))
-                cookie = res.get("cookie") or cookie
+    # TURBO PARALLEL PROBE: Tembak kandidat utama (`upc` + `sku`) BERSAMAAN dalam 1 round-trip (~300-600ms)!
+    def _run_one(pair: Tuple[str, str], active_cookie: str, to_sec: float) -> Tuple[str, str, Dict[str, Any]]:
+        k, c = pair
+        return k, c, query_detail(k, c, active_cookie, account, timeout=to_sec)
 
-        if res.get("auth_failed") and (deadline - time.time()) > 1.8:
+    results: List[Tuple[str, str, Dict[str, Any]]] = []
+    if len(probe_list) == 1:
+        results = [_run_one(probe_list[0], cookie, t_out)]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(probe_list)) as pool:
+            futs = [pool.submit(_run_one, p, cookie, t_out) for p in probe_list]
+            for f in futs:
+                try:
+                    results.append(f.result(timeout=t_out + 0.3))
+                except Exception:
+                    pass
+
+    # Cek hasil langsung (menang tercepat!)
+    for k, c, res in results:
+        if res.get("cookie"):
+            cookie = res["cookie"]
+        if res.get("items"):
+            return {"account": account, "items": res["items"], "kind": k, "code": c, "cookie": cookie}
+
+    if any(r.get("offline") for _, _, r in results):
+        return {"account": account, "items": [], "offline": True, "cookie": cookie}
+
+    # Auto-heal hash expired atau cookie expired tepat 1x bila sisa waktu cukup
+    need_hash = any(r.get("action_expired") for _, _, r in results)
+    need_auth = any(r.get("auth_failed") for _, _, r in results)
+    if (need_hash or need_auth) and (deadline - time.time()) > 1.2:
+        if need_hash:
+            resolve_action_hashes(cookie=cookie)
+        if need_auth:
             fresh = get_storehub_cookie(account, force_refresh=True)
             if fresh:
                 cookie = fresh
-                res = query_detail(kind, code, cookie, account, timeout=min(3.0, max(1.0, deadline - time.time())))
-                cookie = res.get("cookie") or cookie
-
-        if res.get("offline"):
+        k0, c0 = probe_list[0]
+        retry_res = query_detail(k0, c0, cookie, account, timeout=min(2.2, max(0.8, deadline - time.time())))
+        cookie = retry_res.get("cookie") or cookie
+        if retry_res.get("items"):
+            return {"account": account, "items": retry_res["items"], "kind": k0, "code": c0, "cookie": cookie}
+        if retry_res.get("offline"):
             return {"account": account, "items": [], "offline": True, "cookie": cookie}
-        if res.get("auth_failed"):
-            return {"account": account, "items": [], "auth_failed": True, "cookie": cookie}
-        items = res.get("items") or []
-        if items:
-            return {
-                "account": account,
-                "items": items,
-                "kind": kind,
-                "code": code,
-                "cookie": cookie,
-            }
+
     return {"account": account, "items": [], "cookie": cookie}
 
 
@@ -1218,14 +1247,14 @@ def run_live_scan(
     code: str,
     preferred_account: Optional[str] = None,
     with_images: bool = True,
-    max_seconds: float = 6.5,
+    max_seconds: float = 4.2,
 ) -> Dict[str, Any]:
     t0 = time.time()
     clean_code = str(code or "").strip()
     if not clean_code:
         return {"success": False, "error": "Kode barcode/SKU kosong"}
 
-    deadline = t0 + max(3.5, min(float(max_seconds), 8.5))
+    deadline = t0 + max(2.8, min(float(max_seconds), 4.5))
     candidates = build_probe_candidates(clean_code)
 
     # Tentukan akun pembuka cerdas: QR/Alfanumerik -> Mu+Ku duluan; EAN 234000* -> SUKO/Mu+Ku
@@ -1291,31 +1320,32 @@ def run_live_scan(
         primary_raw.get("Price") or primary_raw.get("RetailPrice") or primary_raw.get("UnitPrice")
     ) or 0
 
-    # Langkah 4: Jalankan PARALEL (Matrix Stock + Live Promo + Foto Studio) dalam 1 siklus singkat!
+    # Langkah 4: Jalankan PARALEL (Matrix Stock + Live Promo + Foto Studio) dalam 1 siklus kilat (< 1,8 dtk)!
     matrix_rows: List[Dict[str, Any]] = []
     live_promo: Optional[Dict[str, Any]] = None
     found_images: List[str] = []
 
+    enrich_budget = max(1.0, min(1.8, deadline - time.time()))
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-        fut_matrix = pool.submit(query_stock_matrix, seed_sku, active_cookie, owner_acc, 2.8)
-        fut_promo = pool.submit(query_promotion, active_kind, active_code, active_cookie, owner_acc, seed_normal, 2.5)
+        fut_matrix = pool.submit(query_stock_matrix, seed_sku, active_cookie, owner_acc, enrich_budget)
+        fut_promo = pool.submit(query_promotion, active_kind, active_code, active_cookie, owner_acc, seed_normal, enrich_budget)
         fut_img = (
             pool.submit(lookup_matahari_images, seed_sku, seed_article, clean_code)
             if with_images
             else None
         )
         try:
-            m_res = fut_matrix.result(timeout=3.0)
+            m_res = fut_matrix.result(timeout=enrich_budget + 0.2)
             matrix_rows = m_res.get("rows") or []
         except Exception:
             matrix_rows = []
         try:
-            live_promo = fut_promo.result(timeout=2.8)
+            live_promo = fut_promo.result(timeout=enrich_budget + 0.2)
         except Exception:
             live_promo = None
         if fut_img is not None:
             try:
-                found_images = fut_img.result(timeout=2.6)
+                found_images = fut_img.result(timeout=enrich_budget + 0.3)
             except Exception:
                 found_images = []
 

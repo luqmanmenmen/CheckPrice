@@ -253,19 +253,23 @@ export async function GET(
             })
           : null;
 
+        let liveOfflineMsg: string | null = null;
         if (!hasDbArticleMatch) {
           try {
-            const liveTimeoutMs = isPureDigitCode ? 9000 : 8500;
+            const liveTimeoutMs = 5200;
             const liveRes: any = await invokePythonLiveEngine(
               {
                 action: "scan",
                 sku: rawInput,
                 withImages: true,
-                maxSeconds: 6.5,
+                maxSeconds: 4.2,
                 ...(isLikelyUniqueQrOrVendorCode ? { preferredAccount: "muku" } : {}),
               },
               { requestUrl: request.url, timeoutMs: liveTimeoutMs }
             );
+            if (liveRes?.storeOffline) {
+              liveOfflineMsg = liveRes.message || "Server toko sedang tutup (malam hari).";
+            }
             if (liveRes?.success && liveRes?.data) {
               return NextResponse.json({
                 data: liveRes.data,
@@ -298,13 +302,27 @@ export async function GET(
             }
           } catch {}
         }
+
+        // Jangan biarkan kode barcode/QR unik (mis. 2663005FS) jatuh ke pencarian teks fuzzy lambat & mengembalikan produk acak!
+        if (!hasDbArticleMatch && (isPureDigitCode || isLikelyUniqueQrOrVendorCode || fastMode)) {
+          return NextResponse.json(
+            {
+              error: liveOfflineMsg || `Produk tidak ditemukan untuk: "${rawInput}"`,
+              storeOffline: Boolean(liveOfflineMsg),
+              hint: liveOfflineMsg
+                ? "Coba scan kembali saat jam operasional toko (09:00–21:30 WIB)."
+                : "Kode belum terdaftar di server toko maupun database lokal.",
+            },
+            { status: 404 }
+          );
+        }
       }
 
       if (isPureDigitCode || fastMode) {
         return NextResponse.json(
           {
             error: `Produk tidak ditemukan untuk: "${rawInput}"`,
-            hint: "Ketuk tombol Scrap luqman org di bawah untuk menarik SKU, barcode, dan foto secara langsung."
+            hint: "Kode belum terdaftar di server toko maupun database lokal."
           },
           { status: 404 }
         );

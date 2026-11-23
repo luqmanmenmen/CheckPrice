@@ -26,24 +26,33 @@ export function calculateEan13CheckDigit(digits12: string): string {
   return String((10 - (sum % 10)) % 10);
 }
 
+function normalizeCanonicalOrigin(rawOrigin: string): string {
+  const clean = rawOrigin.trim().replace(/\/+$/, '');
+  // Hindari 308 Permanent Redirect hop (luqmanganteng.my.id -> www.luqmanganteng.my.id) hemat ~250ms!
+  if (clean === 'https://luqmanganteng.my.id' || clean === 'http://luqmanganteng.my.id') {
+    return 'https://www.luqmanganteng.my.id';
+  }
+  return clean;
+}
+
 function resolvePyLiveEndpoint(requestUrl?: string): string {
   if (requestUrl) {
     try {
       const u = new URL(requestUrl);
       if (u.origin && !u.origin.includes('localhost') && !u.origin.includes('127.0.0.1')) {
-        return `${u.origin}/api/py_live`;
+        return `${normalizeCanonicalOrigin(u.origin)}/api/py_live`;
       }
     } catch {}
   }
   const prodDomain = (process.env.NEXT_PUBLIC_APP_URL || '').trim().replace(/\/+$/, '');
   if (prodDomain && prodDomain.startsWith('http')) {
-    return `${prodDomain}/api/py_live`;
+    return `${normalizeCanonicalOrigin(prodDomain)}/api/py_live`;
   }
   const vercelUrl = (process.env.VERCEL_URL || '').trim();
   if (vercelUrl) {
     return `https://${vercelUrl.replace(/^https?:\/\//, '')}/api/py_live`;
   }
-  return 'https://luqmanganteng.my.id/api/py_live';
+  return 'https://www.luqmanganteng.my.id/api/py_live';
 }
 
 export async function invokePythonLiveEngine<T = any>(
@@ -51,7 +60,7 @@ export async function invokePythonLiveEngine<T = any>(
   options: { requestUrl?: string; timeoutMs?: number } = {}
 ): Promise<T> {
   const endpoint = resolvePyLiveEndpoint(options.requestUrl);
-  const timeoutMs = options.timeoutMs ?? 9000;
+  const timeoutMs = options.timeoutMs ?? 5200;
 
   const res = await fetch(endpoint, {
     method: 'POST',
