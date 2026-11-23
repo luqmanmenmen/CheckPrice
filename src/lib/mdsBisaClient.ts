@@ -26,6 +26,8 @@ const ALL_STORE_ACCOUNTS: StoreHubAccount[] = ['suko', 'muku'];
 
 // Peta routing cepat di RAM: sku -> akun pemilik toko ('suko' | 'muku') agar Live Stok langsung tepat sasaran 0ms!
 const skuOwnerAccountCache = new Map<string, StoreHubAccount>();
+let routingCacheLoadedAt = 0;
+const ROUTING_CACHE_TTL_MS = 15 * 60 * 1000;
 const HOT_SCAN_SEEDS_PATH = 'analytics/hot-scan-seeds.json';
 
 type HotScanSeedEntry = {
@@ -37,6 +39,25 @@ type HotScanSeedEntry = {
   stok: number;
   discoveredAt: string;
 };
+
+/** Muat peta jalur pemilik toko (`analytics/hot-scan-seeds.json`) 1× per 15 menit agar tahan cold-start Vercel */
+async function ensureHotScanRoutingLoaded(): Promise<void> {
+  if (routingCacheLoadedAt > 0 && Date.now() - routingCacheLoadedAt < ROUTING_CACHE_TTL_MS) {
+    return;
+  }
+  routingCacheLoadedAt = Date.now();
+  try {
+    const { readTursoStorageJson } = await import('./tursoStorage');
+    const doc = await readTursoStorageJson<{ seeds?: HotScanSeedEntry[] }>(HOT_SCAN_SEEDS_PATH).catch(() => null);
+    if (Array.isArray(doc?.seeds)) {
+      for (const s of doc.seeds) {
+        if (s?.sku && (s.ownerAccount === 'suko' || s.ownerAccount === 'muku')) {
+          skuOwnerAccountCache.set(s.sku, s.ownerAccount);
+        }
+      }
+    }
+  } catch {}
+}
 
 /**
  * Simpan jalur kepemilikan akun & seed zona panas ke Turso Storage (`analytics/hot-scan-seeds.json`)
@@ -1459,7 +1480,7 @@ async function queryStoreHubStockMatrix(
             if (!normSz) continue;
             const numVal = Number(v);
             if (!Number.isNaN(numVal)) {
-              sizeMap.set(normSz, Math.max(0, Math.round(numVal)));
+              sizeMap.set(normSz, Math.round(numVal));
             }
           }
           if (sizeMap.size > 0) {
@@ -1742,7 +1763,17 @@ export async function checkLiveStockFast(
   const cleanSku = String(sku).trim();
   const noop = async () => {};
 
-  const cachedOwner = skuOwnerAccountCache.get(cleanSku);
+  await ensureHotScanRoutingLoaded();
+  let cachedOwner: StoreHubAccount | undefined = skuOwnerAccountCache.get(cleanSku);
+  if (!cachedOwner) {
+    for (const fs of familySkus) {
+      const hit = skuOwnerAccountCache.get(String(fs || '').trim());
+      if (hit) {
+        cachedOwner = hit;
+        break;
+      }
+    }
+  }
   const primaryAccount: StoreHubAccount =
     cachedOwner || (String(brandGroup || '').trim().toUpperCase() === 'MUKU' ? 'muku' : 'suko');
   const fallbackAccount: StoreHubAccount = primaryAccount === 'muku' ? 'suko' : 'muku';
@@ -1808,28 +1839,49 @@ export async function checkLiveStockFast(
     }
   }
 
-  // Jalan Alternatif Otomatis: jika akun utama tidak menemukan item atau stok < 0 (beda role toko), coba akun satunya!
+  // Aturan Bisnis Lintas-Toko (SUKO <-> Mu+Ku):
+  // Hanya akun role milik toko pemilik produk yang menampilkan qty stok nyata (> 0 atau minus on-hand < 0).
+  // Jika akun pertama belum terkunci jalurnya & hanya mengembalikan stok 0 (atau tidak ketemu) ->
+  // cek cepat akun role satunya; bila akun satunya punya stok != 0 (>0 atau <0), pindahkan & kunci jalurnya permanen!
   const firstStokRaw = first.itemData?.StockOnHand ?? first.itemData?.stockOnHand ?? first.itemData?.stock_on_hand ?? first.itemData?.soh;
   const firstStokNum = firstStokRaw !== undefined && firstStokRaw !== null ? parseInt(String(firstStokRaw), 10) : NaN;
-  if (
-    (!first.itemData || (!Number.isNaN(firstStokNum) && firstStokNum < 0)) &&
-    matrixRes.rows.length === 0 &&
-    !first.offline &&
-    activeAccount === primaryAccount
-  ) {
+  const matrixHasNonZero = matrixRes.rows.some((r) => Array.from(r.sizes.values()).some((q) => q !== 0));
+  const primaryHasRealStock = (!Number.isNaN(firstStokNum) && firstStokNum !== 0) || matrixHasNonZero;
+
+  if (!primaryHasRealStock && !cachedOwner && !first.offline && activeAccount === primaryAccount) {
     const altCookie = await getStoreHubCookie(false, null, fallbackAccount).catch(() => null);
     if (altCookie) {
       const [altFirst, altMatrix] = await Promise.all([
         queryStoreHubDetail('sku', cleanSku, altCookie, 4500, fallbackAccount),
         queryStoreHubStockMatrix(cleanSku, altCookie, 4500, fallbackAccount),
       ]);
-      if ((altFirst.itemData || altMatrix.rows.length > 0) && !altFirst.offline && !altFirst.authFailed) {
-        activeAccount = fallbackAccount;
-        cookie = altFirst.cookie || altMatrix.cookie || altCookie;
-        first = altFirst;
-        matrixRes = altMatrix;
+      const altStokRaw = altFirst.itemData?.StockOnHand ?? altFirst.itemData?.stockOnHand ?? altFirst.itemData?.stock_on_hand ?? altFirst.itemData?.soh;
+      const altStokNum = altStokRaw !== undefined && altStokRaw !== null ? parseInt(String(altStokRaw), 10) : NaN;
+      const altMatrixHasNonZero = altMatrix.rows.some((r) => Array.from(r.sizes.values()).some((q) => q !== 0));
+      const altHasRealStock = (!Number.isNaN(altStokNum) && altStokNum !== 0) || altMatrixHasNonZero;
+
+      if ((!first.itemData && (altFirst.itemData || altMatrix.rows.length > 0)) || altHasRealStock) {
+        if (!altFirst.offline && !altFirst.authFailed) {
+          activeAccount = fallbackAccount;
+          cookie = altFirst.cookie || altMatrix.cookie || altCookie;
+          first = altFirst;
+          matrixRes = altMatrix;
+          // Kunci jalur kepemilikan toko permanen agar Live Stok berikutnya langsung 1 tembakan!
+          skuOwnerAccountCache.set(cleanSku, activeAccount);
+          void recordHotScanSeed({
+            sku: cleanSku,
+            barcode: null,
+            article: sanitizeArticleCode(article || altFirst.itemData?.StyleCode || altFirst.itemData?.styleCode),
+            brand: String(altFirst.itemData?.Brand ?? altFirst.itemData?.brand ?? '').trim() || null,
+            ownerAccount: activeAccount,
+            stok: !Number.isNaN(altStokNum) ? altStokNum : 0,
+            discoveredAt: new Date().toISOString(),
+          });
+        }
       }
     }
+  } else if (primaryHasRealStock && !cachedOwner) {
+    skuOwnerAccountCache.set(cleanSku, activeAccount);
   }
   if (first.authFailed && matrixRes.rows.length === 0) {
     return {
@@ -2317,12 +2369,10 @@ export async function checkSingleItemStock(
 
     // 1. Upsert item utama + seluruh allItems yang ikut terbawa di payload awal
     const itemsToUpsert = queryRes.allItems.length > 0 ? queryRes.allItems : [itemData];
-    // Untuk akun Mu+Ku (tidak ada file Excel promo), tarik juga harga promo live lewat `checkItemPromotion`!
+    // Tarik harga promo live dari akun role pemilik toko (`activeAccount`: SUKO / Mu+Ku / ZES)
+    // karena setiap akun role toko hanya bisa melihat harga promo milik tokonya sendiri!
     const seedNormalPrice = parseRetailPrice(itemData?.RetailPrice ?? itemData?.Price) || 0;
-    const livePromoPromise =
-      activeAccount === 'muku'
-        ? queryStoreHubPromotion(activeKind, queriedCode, cookie, seedNormalPrice, 3500).catch(() => null)
-        : Promise.resolve(null);
+    const livePromoPromise = queryStoreHubPromotion(activeKind, queriedCode, cookie, seedNormalPrice, 3500).catch(() => null);
     const updatedVariants: LiveStockVariantSummary[] = [];
     const freshStockBySku = new Map<string, number>();
     const seenUpdatedSkus = new Set<string>();
