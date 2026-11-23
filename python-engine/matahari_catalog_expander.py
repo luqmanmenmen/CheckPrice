@@ -42,6 +42,7 @@ from build_catalog_index import (
     is_ignored_product,
     resolve_db_url,
 )
+from image_quality_controller import is_junk_image_url
 from raw_vault_collector import (
     normalize_barcode_token,
     normalize_sku_token,
@@ -97,6 +98,8 @@ def clean_img_url(src: str) -> str:
     if s.startswith("//"):
         s = f"https:{s}"
     if "cdn.shopify.com/s/files/1/0666/9212/0727/" not in s:
+        return ""
+    if is_junk_image_url(s):
         return ""
     fn_lower = s.split("?")[0].split("/")[-1].lower()
     for bad in NON_PRODUCT_KEYWORDS:

@@ -1,4 +1,5 @@
 import Dexie from "dexie";
+import { sanitizeRetailImageUrl } from "./imageController";
 import {
   expandRetailQuery,
   computeProductRelevanceScore,
@@ -343,9 +344,10 @@ function sanitizePriceValue(val: number | null | undefined): number {
 function sanitizeAndIndexModel(m: CachedArticleModel): CachedArticleModel {
   const fixedNormal = sanitizePriceValue(m.hargaNormal);
   const fixedPromo = m.hargaPromo !== null && m.hargaPromo !== undefined ? sanitizePriceValue(m.hargaPromo) : null;
+  const fixedImg = sanitizeRetailImageUrl(m.imageUrl);
   const normalizedPriceM: CachedArticleModel =
-    fixedNormal !== m.hargaNormal || fixedPromo !== m.hargaPromo
-      ? { ...m, hargaNormal: fixedNormal, hargaPromo: fixedPromo }
+    fixedNormal !== m.hargaNormal || fixedPromo !== m.hargaPromo || fixedImg !== (m.imageUrl || null)
+      ? { ...m, hargaNormal: fixedNormal, hargaPromo: fixedPromo, imageUrl: fixedImg }
       : m;
 
   const isExpired = isLocalPromoExpired(normalizedPriceM.toDate);

@@ -126,9 +126,12 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
-      - name: 📸 [KATEGORI 1C - SCRAB GAMBAR & HEAL 404] Brutal Image Scraper + Pemulih URL Foto
+      - name: 📸 [KATEGORI 1C - SCRAB GAMBAR, IMAGE CONTROLLER & HEAL 404] Brutal Image Scraper + Pembersih Logo Abu-Abu + Pemulih 404
         if: ${{ github.event.inputs.action == 'scrab' || github.event.inputs.action == 'muku-scrab' || github.event.inputs.action == 'photos' || github.event.inputs.action == 'all' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-muku-scrab' || github.event.action == 'trigger-photos' || github.event.action == 'trigger-sync-engine' }}
         run: |
+          if [ -n "$TURSO_DATABASE_URL" ]; then
+            python -u python-engine/runner_guardian.py --step "KATEGORI 1C: Image Quality Controller (Hapus Logo Abu-Abu & Sampah)" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 1 -- python python-engine/image_quality_controller.py --purge-turso --workers 48 || true
+          fi
           python -u python-engine/runner_guardian.py --step "KATEGORI 1C: Brutal Image Scraper" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 -- python python-engine/brutal_image_scraper.py
           if [ -n "$TURSO_DATABASE_URL" ]; then
             python -u python-engine/runner_guardian.py --step "KATEGORI 1C: Pemulih URL Foto 404" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 1 -- python python-engine/repair_broken_images.py --scan-limit 350 --workers 32 || true

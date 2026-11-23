@@ -3,45 +3,35 @@
 import { useState, useRef, useEffect, TouchEvent } from "react";
 import { ChevronLeft, ChevronRight, Maximize2, Image as ImageIcon } from "lucide-react";
 import ImageLightboxModal from "@/components/ImageLightboxModal";
+import {
+  isJunkRetailImageDimensions,
+  optimizeRetailImageUrl,
+  reportJunkImageToServer,
+  sanitizeRetailImageList,
+  sanitizeRetailImageUrl,
+} from "@/lib/imageController";
+
+export { optimizeRetailImageUrl };
 
 const preloadedUrls = new Set<string>();
 
 /**
- * Menormalkan URL gambar retail (https://) tanpa menambah query `?width=...`
- * karena sebagian URL Shopify CDN mengembalikan HTTP 404 jika diberi parameter width.
- */
-export function optimizeRetailImageUrl(rawUrl?: string | null, _width: number = 400): string {
-  if (!rawUrl || typeof rawUrl !== "string") return "";
-  let trimmed = rawUrl.trim();
-  if (!trimmed) return "";
-  if (trimmed.startsWith("//")) trimmed = `https:${trimmed}`;
-
-  if (trimmed.includes("cdn.shopify.com") || trimmed.includes("matahari.com/cdn/shop")) {
-    try {
-      const u = new URL(trimmed);
-      u.searchParams.delete("width");
-      return u.toString();
-    } catch {
-      return trimmed.replace(/([?&])width=\d+&?/g, "$1").replace(/[?&]$/, "");
-    }
-  }
-  return trimmed;
-}
-
-/**
  * Preload daftar URL gambar ke RAM browser di background agar saat diklik/discan langsung muncul 0ms
+ * (dibatasi maks 12 URL sekaligus & melewati gambar sampah/logo abu-abu agar tidak membombardir CDN)
  */
 export function preloadProductImages(urls: (string | null | undefined)[], width: number = 400) {
   if (typeof window === "undefined") return;
+  let queued = 0;
   for (const raw of urls) {
-    if (!raw) continue;
-    const opt = optimizeRetailImageUrl(raw, width);
+    if (!raw || queued >= 12) break;
+    const opt = sanitizeRetailImageUrl(raw);
     if (!opt || preloadedUrls.has(opt)) continue;
     preloadedUrls.add(opt);
+    queued++;
     const img = new window.Image();
     img.decoding = "async";
     img.referrerPolicy = "no-referrer";
-    img.src = opt;
+    img.src = optimizeRetailImageUrl(opt, width);
   }
 }
 
@@ -73,9 +63,7 @@ export default function ProductImageSlider({
   isHealing = false,
   refreshVersion = 0,
 }: ProductImageSliderProps) {
-  const cleanImages = (images || []).filter(
-    (u): u is string => typeof u === "string" && u.trim().length > 0
-  );
+  const cleanImages = sanitizeRetailImageList(images);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isZoomed, setIsZoomed] = useState(false);
   const [useRawFallback, setUseRawFallback] = useState<Record<number, boolean>>({});
@@ -199,6 +187,18 @@ export default function ProductImageSlider({
               fetchPriority="high"
               referrerPolicy="no-referrer"
               draggable={false}
+              onLoad={(e) => {
+                const el = e.currentTarget;
+                if (isJunkRetailImageDimensions(el.naturalWidth, el.naturalHeight)) {
+                  reportJunkImageToServer({
+                    imageUrl: rawCurrentSrc,
+                    width: el.naturalWidth,
+                    height: el.naturalHeight,
+                  });
+                  setHasError((prev) => ({ ...prev, [safeIndex]: true }));
+                  triggerBrokenHeal();
+                }
+              }}
               onError={() => {
                 if (!useRawFallback[safeIndex] && displaySrc !== rawCurrentSrc) {
                   setUseRawFallback((prev) => ({ ...prev, [safeIndex]: true }));
@@ -303,6 +303,17 @@ export default function ProductImageSlider({
                     alt=""
                     loading="lazy"
                     referrerPolicy="no-referrer"
+                    onLoad={(e) => {
+                      const el = e.currentTarget;
+                      if (isJunkRetailImageDimensions(el.naturalWidth, el.naturalHeight)) {
+                        reportJunkImageToServer({
+                          imageUrl: imgUrl,
+                          width: el.naturalWidth,
+                          height: el.naturalHeight,
+                        });
+                        setThumbError((prev) => ({ ...prev, [idx]: true }));
+                      }
+                    }}
                     onError={() => {
                       setThumbError((prev) => ({ ...prev, [idx]: true }));
                       triggerBrokenHeal();

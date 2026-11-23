@@ -33,6 +33,9 @@ if hasattr(sys.stdout, "reconfigure"):
 BAD_IMAGE_TOKENS = ("banner", "logo", "icon", "badge", "chart", "size", "panduan", ".svg", ".gif")
 INVALID_ARTICLE_CODES = {"", "0", "-", "N/A", "NONE", "NULL", "PRODUK BARU"}
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from image_quality_controller import is_junk_content_length, is_junk_image_url  # noqa: E402
+
 
 def _load_env_files() -> None:
     try:
@@ -65,7 +68,7 @@ def _connect_postgres():
 
 
 def _check_url_alive(url: str, timeout: float = 6.0) -> Tuple[str, bool]:
-    if not url or not url.startswith("http"):
+    if not url or not url.startswith("http") or is_junk_image_url(url):
         return url, False
     req = urllib.request.Request(
         url,
@@ -74,7 +77,13 @@ def _check_url_alive(url: str, timeout: float = 6.0) -> Tuple[str, bool]:
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return url, resp.status == 200
+            if resp.status != 200:
+                return url, False
+            cl_raw = resp.headers.get("Content-Length") or resp.headers.get("content-length")
+            cl = int(cl_raw) if cl_raw and str(cl_raw).isdigit() else 0
+            if is_junk_content_length(cl):
+                return url, False
+            return url, True
     except urllib.error.HTTPError as e:
         if e.code == 405:
             try:
@@ -95,6 +104,8 @@ def _normalize_shopify_url(raw_url: Any) -> Optional[str]:
     if u.startswith("//"):
         u = "https:" + u
     if "cdn.shopify.com/s/files/1/0666/9212/0727/" not in u:
+        return None
+    if is_junk_image_url(u):
         return None
     fn = u.split("?")[0].split("/")[-1].lower()
     if not fn or any(tok in fn for tok in BAD_IMAGE_TOKENS):

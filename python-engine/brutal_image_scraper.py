@@ -59,6 +59,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
 
 from turso_db import get_turso_table_client, is_turso_configured
+from image_quality_controller import is_junk_image_url
 
 load_dotenv()
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -149,6 +150,8 @@ def clean_img_url(src: str) -> str:
         s = f"https:{s}"
     if "cdn.shopify.com/s/files/1/0666/9212/0727/" not in s:
         return ""
+    if is_junk_image_url(s):
+        return ""
     fn_lower = s.split("?")[0].split("/")[-1].lower()
     for bad in NON_PRODUCT_KEYWORDS:
         if bad in fn_lower:
@@ -192,6 +195,11 @@ def parse_shopify_product(
     for img in images:
         alt_text = str(img.get("alt") or "").lower()
         if any(bad in alt_text for bad in ("size", "chart", "panduan", "ukur", "banner", "logo")):
+            continue
+        # Tolak logo Matahari abu-abu berdasarkan dimensi eksak Shopify (281×363 px) atau mikro <= 120px
+        iw = int(img.get("width") or 0)
+        ih = int(img.get("height") or 0)
+        if (iw == 281 and ih == 363) or (0 < iw <= 120) or (0 < ih <= 120):
             continue
         cu = clean_img_url(img.get("src", ""))
         if cu and cu not in all_product_imgs:

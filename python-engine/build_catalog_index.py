@@ -29,6 +29,9 @@ from typing import Any, Dict, List, Optional, Tuple
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from image_quality_controller import is_junk_image_url  # noqa: E402
+
 INVALID_ARTICLES = {"", "0", "-", "PRODUK BARU", "N/A", "NONE"}
 
 ERP_DIVISION_AS_BRAND = {
@@ -497,7 +500,8 @@ def build_and_verify_catalog(stock_only: bool = False, upload_snapshot: bool = T
             if sz and sz.upper() not in {"-", "SOLID"}:
                 sizes.add(sz)
 
-            img = v[15]
+            raw_img = v[15]
+            img = raw_img if (raw_img and not is_junk_image_url(raw_img)) else None
             if img and not best_photo:
                 best_photo = img
 

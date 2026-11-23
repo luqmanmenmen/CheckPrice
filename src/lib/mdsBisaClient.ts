@@ -3,6 +3,7 @@
  * Digunakan untuk tombol "⚡ Live Stok" dan "⚡ Cari & Scrap Barang Ini di Server (StoreHub + Foto + 1 Keluarga Artikel)"
  */
 
+import { isJunkRetailImageUrl } from './imageController';
 import { prisma } from './prisma';
 import { checkAndCleanPromo, getProductSiblings } from './productQueryHelpers';
 import { classifyBrandGroup, classifyProductCategory, getNormalizedSubBrand } from './productTaxonomy';
@@ -197,6 +198,7 @@ function normalizeMatahariImageUrl(rawUrl: any): string | null {
   if (!url) return null;
   if (url.startsWith('//')) url = `https:${url}`;
   if (!url.includes('cdn.shopify.com/s/files/1/0666/9212/0727/')) return null;
+  if (isJunkRetailImageUrl(url)) return null;
   const filename = url.split('?')[0].split('/').pop()?.toLowerCase() || '';
   if (!filename || BAD_IMAGE_TOKENS.some((bad) => filename.includes(bad))) return null;
   return url;

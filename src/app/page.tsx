@@ -11,6 +11,7 @@ import { Bell } from "lucide-react";
 import Link from "next/link";
 import { ChipLoader } from "@/components/ChipLoader";
 import ProductImageSlider, { optimizeRetailImageUrl, preloadProductImages } from "@/components/ProductImageSlider";
+import CatalogImageController from "@/components/CatalogImageController";
 import ShiftLoader, { SyncProgressModal } from "@/components/ShiftLoader";
 import type { SyncProgressDetails, CachedProduct, CachedArticleModel } from "@/lib/offlineDb";
 import ImageLightboxModal from "@/components/ImageLightboxModal";
@@ -3574,60 +3575,52 @@ export default function Home() {
               }}
               className="group text-left bg-white border border-slate-200 hover:border-blue-400 hover:shadow-md rounded-xl overflow-hidden transition-all flex flex-col h-full cursor-pointer"
             >
-              {/* Clean Portrait Product Photo (Zero Overlay Badges) */}
+              {/* Clean Portrait Product Photo via CatalogImageController (Anti Blank-White & Anti Grey-Logo) */}
               <div className="w-full aspect-[3/4] bg-slate-50 shrink-0 overflow-hidden border-b border-slate-100">
-                {p.imageUrl ? (
-                  <img
-                    src={optimizeRetailImageUrl(p.imageUrl, 400)}
-                    alt={info.name}
-                    loading="eager"
-                    decoding="sync"
-                    referrerPolicy="no-referrer"
-                    onError={(e) => {
-                      const imgEl = e.currentTarget as HTMLImageElement;
-                      if (!imgEl.dataset.healRequested) {
-                        imgEl.dataset.healRequested = "1";
-                        handleHealProductImages({ sku: p.sku, article: p.article, barcode: p.barcode });
-                      }
-                      imgEl.style.opacity = "0";
-                    }}
-                    className="w-full h-full object-cover object-top group-hover:scale-105 transition-transform duration-300"
-                  />
-                ) : (
-                  <div className={`w-full h-full bg-gradient-to-br ${posterTintClass} flex flex-col items-center justify-between py-4 px-2.5 text-center`}>
-                    <span className="text-[8.5px] font-black uppercase tracking-widest text-slate-400/90">
-                      {brandMeta.shortLabel} • {catMeta?.shortLabel || "Produk"}
-                    </span>
-                    <div className="flex flex-col items-center gap-2">
-                      <div className="w-11 h-11 rounded-2xl bg-white/95 shadow-xs border border-slate-200/80 flex items-center justify-center text-slate-600">
-                        <CategoryVectorIcon catKey={catKey} className="w-5 h-5" />
-                      </div>
-                      {swatchColors.length > 0 && (
-                        <div className="flex items-center justify-center gap-1 flex-wrap max-w-[110px]">
-                          {swatchColors.slice(0, 4).map((colName) => {
-                            const cData = getColorData(colName);
-                            return (
-                              <span
-                                key={colName}
-                                title={colName}
-                                className="w-3.5 h-3.5 rounded-full border border-slate-300/90 shadow-2xs shrink-0"
-                                style={{ backgroundColor: cData?.hex || "#CBD5E1" }}
-                              />
-                            );
-                          })}
-                          {swatchColors.length > 4 && (
-                            <span className="text-[9px] font-bold text-slate-500">
-                              +{swatchColors.length - 4}
-                            </span>
-                          )}
+                <CatalogImageController
+                  imageUrl={p.imageUrl}
+                  alt={info.name}
+                  sku={p.sku}
+                  article={p.article}
+                  onHealRequested={() => {
+                    handleHealProductImages({ sku: p.sku, article: p.article, barcode: p.barcode });
+                  }}
+                  fallback={
+                    <div className={`w-full h-full bg-gradient-to-br ${posterTintClass} flex flex-col items-center justify-between py-4 px-2.5 text-center`}>
+                      <span className="text-[8.5px] font-black uppercase tracking-widest text-slate-400/90">
+                        {brandMeta.shortLabel} • {catMeta?.shortLabel || "Produk"}
+                      </span>
+                      <div className="flex flex-col items-center gap-2">
+                        <div className="w-11 h-11 rounded-2xl bg-white/95 shadow-xs border border-slate-200/80 flex items-center justify-center text-slate-600">
+                          <CategoryVectorIcon catKey={catKey} className="w-5 h-5" />
                         </div>
-                      )}
+                        {swatchColors.length > 0 && (
+                          <div className="flex items-center justify-center gap-1 flex-wrap max-w-[110px]">
+                            {swatchColors.slice(0, 4).map((colName) => {
+                              const cData = getColorData(colName);
+                              return (
+                                <span
+                                  key={colName}
+                                  title={colName}
+                                  className="w-3.5 h-3.5 rounded-full border border-slate-300/90 shadow-2xs shrink-0"
+                                  style={{ backgroundColor: cData?.hex || "#CBD5E1" }}
+                                />
+                              );
+                            })}
+                            {swatchColors.length > 4 && (
+                              <span className="text-[9px] font-bold text-slate-500">
+                                +{swatchColors.length - 4}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <span className="text-[8.5px] font-bold text-slate-400 bg-white/80 border border-slate-200/70 px-2 py-0.5 rounded-full">
+                        Foto Web Belum Tersedia
+                      </span>
                     </div>
-                    <span className="text-[8.5px] font-bold text-slate-400 bg-white/80 border border-slate-200/70 px-2 py-0.5 rounded-full">
-                      Foto Web Belum Tersedia
-                    </span>
-                  </div>
-                )}
+                  }
+                />
               </div>
 
               {/* Card Body (Toko SUKO/Mu+Ku/ZES, Sub-Brand, Artikel, Kategori, Promo Tag, & Harga di Samping/Bawah) */}
