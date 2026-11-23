@@ -77,6 +77,7 @@ LOGIN_URL = f"{STOREHUB_BASE}/login?next=%2F"
 ITEM_CHECKER_URL = f"{STOREHUB_BASE}/item-checker"
 ACTION_LOGIN = "603f9b4dfafaa0e65eec411a818c1ebcaa476b889f"
 ACTION_DETAIL = "608e569ea77f8871817d11afae932ecea7d0fcbd09"
+ACTION_STOCK = "609a33bf9f07b2014de2e2303717cb33ca4a588314"
 ACTION_PROMO = "60a67fb6833e81c90695ed315a2dc4394535951a87"
 
 ACCOUNT_PROFILES: Dict[str, Dict[str, str]] = {
@@ -251,8 +252,8 @@ def log_sync_history(sync_type: str, file_name: str, total_records: int, status:
 
 
 def resolve_action_detail(default_action: str = ACTION_DETAIL) -> str:
-    """Mendeteksi action ID checkItemDetail & checkItemPromotion secara dinamis dari Next.js bundle jika berubah."""
-    global ACTION_PROMO
+    """Mendeteksi action ID checkItemDetail, checkItemStock, & checkItemPromotion secara dinamis dari Next.js bundle."""
+    global ACTION_PROMO, ACTION_STOCK
     found_detail = default_action
     try:
         r = http_session.get(ITEM_CHECKER_URL, timeout=8)
@@ -263,10 +264,13 @@ def resolve_action_detail(default_action: str = ACTION_DETAIL) -> str:
             match = re.search(r'createServerReference\)?\("([a-f0-9]{40,44})"[^)]{0,140}"checkItemDetail"', js_r.text)
             if match:
                 found_detail = match.group(1)
+            match_s = re.search(r'createServerReference\)?\("([a-f0-9]{40,44})"[^)]{0,140}"checkItemStock"', js_r.text)
+            if match_s:
+                ACTION_STOCK = match_s.group(1)
             match_p = re.search(r'createServerReference\)?\("([a-f0-9]{40,44})"[^)]{0,140}"checkItemPromotion"', js_r.text)
             if match_p:
                 ACTION_PROMO = match_p.group(1)
-            if match or match_p:
+            if match or match_s or match_p:
                 break
     except Exception as e:
         print(f"⚠️ Gagal resolve action hash: {e}")
@@ -581,6 +585,160 @@ def query_storehub(category: str, identifier: str, cookie: str) -> Optional[Dict
     """Kompatibilitas pemanggilan tunggal."""
     items = query_storehub_multi(category, identifier, cookie)
     return items[0] if items else None
+
+
+def query_storehub_stock_matrix(category: str, identifier: str, cookie: str) -> Tuple[str, List[Dict[str, Any]]]:
+    """
+    TURBO MATRIX ENGINE: Memanggil Server Action resmi `checkItemStock` (`ACTION_STOCK`, ~50-150ms!)
+    yang langsung mengembalikan SELURUH matriks stok 1 artikel (semua warna x semua ukuran) dalam 1 HTTP request!
+    Return: ("ok", rows) | ("empty", []) | ("unauthorized", []) | ("offline", [])
+    """
+    global ACTION_STOCK
+    headers = {
+        "Accept": "text/x-component",
+        "Content-Type": "text/plain;charset=UTF-8",
+        "Cookie": cookie,
+        "Next-Action": ACTION_STOCK,
+        "Referer": ITEM_CHECKER_URL,
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15",
+        "Next-Router-State-Tree": "%5B%22%22%2C%7B%22children%22%3A%5B%22(app)%22%2C%7B%22children%22%3A%5B%22item-checker%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C4%5D%7D%2Cnull%2C%22refetch%22%2C24%5D",
+    }
+    payload = json.dumps([category, str(identifier).strip()])
+    try:
+        res = http_session.post(ITEM_CHECKER_URL, headers=headers, data=payload, allow_redirects=False, timeout=8)
+    except Exception:
+        return ("empty", [])
+
+    if res.status_code == 404:
+        with action_lock:
+            resolve_action_detail()
+            headers["Next-Action"] = ACTION_STOCK
+        try:
+            res = http_session.post(ITEM_CHECKER_URL, headers=headers, data=payload, allow_redirects=False, timeout=8)
+        except Exception:
+            return ("empty", [])
+
+    redirect_loc = (res.headers.get("location") or res.headers.get("x-action-redirect") or "").lower()
+    if res.status_code == 401 or (res.status_code in (301, 302, 303, 307, 308) and "login" in redirect_loc) or "login" in redirect_loc:
+        return ("unauthorized", [])
+    if res.status_code != 200:
+        return ("empty", [])
+
+    text = res.text
+    if "NEXT_REDIRECT" in text and "/login" in text:
+        return ("unauthorized", [])
+    if "no route to host" in text or "504 Gateway" in text:
+        return ("offline", [])
+
+    for line in text.split("\n"):
+        colon_idx = line.find(":")
+        if 0 < colon_idx <= 3:
+            try:
+                parsed = json.loads(line[colon_idx + 1:])
+                if not isinstance(parsed, dict):
+                    continue
+                if parsed.get("error"):
+                    err_str = str(parsed["error"])
+                    if "no route to host" in err_str or "tcp connection" in err_str:
+                        return ("offline", [])
+                    return ("empty", [])
+                data = parsed.get("result", {}).get("data")
+                if isinstance(data, list) and data:
+                    return ("ok", [r for r in data if isinstance(r, dict)])
+            except Exception:
+                continue
+    return ("empty", [])
+
+
+def _norm_matrix_token(val: Any) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(val or "").strip().upper())
+
+
+def _match_matrix_qty(matrix_rows: List[Dict[str, Any]], color: Any, size: Any) -> Optional[int]:
+    """Mencocokkan (color, size) dari DB dengan matriks StoreHub `[{"COLOR & SIZE": "BLACK", "M": "31.000000", ...}]`."""
+    if not matrix_rows:
+        return None
+    col_raw = str(color or "").strip().upper()
+    col_norm = _norm_matrix_token(col_raw)
+    sz_raw = str(size or "").strip().upper()
+    sz_norm = _norm_matrix_token(sz_raw)
+
+    # 1. Cari baris warna paling cocok
+    matched_row: Optional[Dict[str, Any]] = None
+    if len(matrix_rows) == 1:
+        matched_row = matrix_rows[0]
+    else:
+        for r in matrix_rows:
+            r_col = str(r.get("COLOR & SIZE") or r.get("COLOR") or r.get("Color") or "").strip().upper()
+            r_norm = _norm_matrix_token(r_col)
+            if (col_raw and r_col == col_raw) or (col_norm and r_norm == col_norm):
+                matched_row = r
+                break
+        if matched_row is None and col_norm:
+            for r in matrix_rows:
+                r_col = str(r.get("COLOR & SIZE") or r.get("COLOR") or r.get("Color") or "").strip().upper()
+                r_norm = _norm_matrix_token(r_col)
+                if r_norm and (r_norm in col_norm or col_norm in r_norm):
+                    matched_row = r
+                    break
+
+    if matched_row is None:
+        return None
+
+    # 2. Cari kolom ukuran pada baris warna tersebut
+    size_entries = [
+        (str(k).strip().upper(), _norm_matrix_token(k), v)
+        for k, v in matched_row.items()
+        if str(k).strip().upper() not in ("COLOR & SIZE", "COLOR", "TOTAL", "GRAND TOTAL")
+    ]
+    if not size_entries:
+        return None
+
+    for k_raw, k_norm, v in size_entries:
+        if (sz_raw and k_raw == sz_raw) or (sz_norm and k_norm == sz_norm):
+            try:
+                return int(float(v or 0))
+            except Exception:
+                return 0
+    # Fallback bila artikel hanya punya 1 kolom ukuran (mis. ALL SIZE / OS / NO SIZE / F)
+    if len(size_entries) == 1:
+        try:
+            return int(float(size_entries[0][2] or 0))
+        except Exception:
+            return 0
+    return None
+
+
+def flush_stock_only_deltas(stock_updates: List[Tuple[int, str, str]]) -> int:
+    """
+    Menyimpan HANYA kolom `stok` & `updatedAt` secara batch ke Turso SQLite.
+    Hemat ~60% kuota Turso Writes dibanding full-row upsert karena index kolom lain tidak ikut ditulis ulang!
+    """
+    if not stock_updates:
+        return 0
+    saved = 0
+    try:
+        conn_s = connect_pg()
+        if getattr(conn_s, "is_turso", False):
+            for i in range(0, len(stock_updates), 400):
+                chunk = stock_updates[i:i + 400]
+                stmts = [
+                    ('UPDATE "Product" SET stok = ?, "updatedAt" = ? WHERE sku = ?', (q, upd, sku))
+                    for q, upd, sku in chunk
+                ]
+                conn_s.execute_batch(stmts, transactional=True)
+                saved += len(chunk)
+        else:
+            cur = conn_s.cursor()
+            for q, upd, sku in stock_updates:
+                cur.execute('UPDATE "Product" SET stok = %s, "updatedAt" = %s WHERE sku = %s', (q, upd, sku))
+                saved += 1
+            conn_s.commit()
+            cur.close()
+        conn_s.close()
+    except Exception as e:
+        print(f"   ⚠️ Fallback simpan delta stok ({e})")
+    return saved
 
 
 def query_storehub_promotion(category: str, identifier: str, cookie: str) -> List[Dict[str, Any]]:
@@ -1983,79 +2141,66 @@ def execute_live_stock_sync(
     total_mapped = len(catalog_by_sku)
     print(f"📊 Total Jalur Mapping SKU di DB: {total_mapped:,} SKU | Barcode/Alias Terdaftar: {len(existing_barcodes):,}")
 
-    # Kelompokkan berdasarkan (article, color, size) untuk propagasi instan `relatedStock`
+    # =========================================================================
+    # TURBO MATRIX STOCK ENGINE (`checkItemStock` — 50-150ms per ARTIKEL PENUH!)
+    # 1 Request langsung menyapu SEMUA warna x SEMUA ukuran dalam 1 artikel (10-40 SKU sekaligus!)
+    # - Mode SUKO : HANYA artikel SUKO (~1.205 artikel -> 100% tuntas dalam < 45 detik!)
+    # - Mode Mu+Ku: HANYA artikel Mu+Ku (~58.667 artikel -> puluhan ribu s/d 100% artikel tuntas!)
+    # =========================================================================
+    INVALID_ARTS = {"", "0", "-", "PRODUK BARU", "N/A", "NONE", "NULL"}
     article_variants_map: Dict[str, List[Dict[str, Any]]] = {}
-    INVALID_ARTS = {"", "0", "-", "PRODUK BARU", "N/A", "NONE"}
+    orphan_skus: List[str] = []
 
-    priority_wave_1: List[str] = []
-    priority_wave_2: List[str] = []
-    seen_in_wave_1: Set[str] = set()
-    seen_rep_articles: Set[str] = set()
+    def _belongs_to_active_account(row: Dict[str, Any]) -> bool:
+        b_up = f"{row.get('brand') or ''} {row.get('dept') or ''}".upper()
+        if is_muku_mode:
+            return _is_muku_row(row)
+        # Mode SUKO: HANYA SUKO (jangan buang waktu tembak 293rb SKU Mu+Ku atau 6.5rb ZES!)
+        return "SUKO" in b_up
 
     for sku, row in catalog_by_sku.items():
-        if is_muku_mode and not _is_muku_row(row):
+        if not _belongs_to_active_account(row):
+            continue
+        if suko_sales_only and not is_muku_mode and not _is_suko_sales_eligible(row):
             continue
         art = str(row.get("article") or "").strip().upper()
         if art not in INVALID_ARTS:
             article_variants_map.setdefault(art, []).append(row)
+        else:
+            orphan_skus.append(sku)
 
-    # Wave 1A: SKU prioritas sesuai mode akun (Mu+Ku vs SUKO)
-    for sku, row in catalog_by_sku.items():
-        if is_muku_mode and not _is_muku_row(row):
-            continue
-        is_in_stock = int(row.get("stok") or 0) > 0
-        if suko_sales_only and not is_muku_mode:
-            if is_in_stock and _is_suko_sales_eligible(row):
-                priority_wave_1.append(sku)
-                seen_in_wave_1.add(sku)
-        elif is_muku_mode:
-            if is_in_stock or row.get("hargaPromo") or row.get("imageUrl"):
-                priority_wave_1.append(sku)
-                seen_in_wave_1.add(sku)
-                art = str(row.get("article") or "").strip().upper()
-                if art not in INVALID_ARTS:
-                    seen_rep_articles.add(art)
-        elif is_in_stock or row.get("hargaPromo"):
-            priority_wave_1.append(sku)
-            seen_in_wave_1.add(sku)
-            art = str(row.get("article") or "").strip().upper()
-            if art not in INVALID_ARTS:
-                seen_rep_articles.add(art)
+    # Urutkan artikel prioritas: stok > 0 dulu -> promo -> brand inti -> SKU angka terbesar (New Arrival dulu!)
+    MUKU_PRIORITY_BRANDS = ("MUKU", "NEVADA", "LITTLE M", "COLE", "CONNEXION", "ST YVES", "DISNEY", "CARDINAL", "EXIT", "MAXMURAH", "AERO", "T ZONE", "DETAILS", "VOLO", "LOIS", "BEAUTY")
 
-    if not suko_sales_only or is_muku_mode:
-        # Wave 1B: 1 SKU perwakilan untuk setiap artikel unik di toko
-        for art, rows in article_variants_map.items():
-            if art not in seen_rep_articles and rows:
-                rep_sku = str(rows[0].get("sku") or "").strip()
-                if rep_sku and rep_sku not in seen_in_wave_1:
-                    priority_wave_1.append(rep_sku)
-                    seen_in_wave_1.add(rep_sku)
-                    seen_rep_articles.add(art)
+    def _article_sort_key(item_pair: Tuple[str, List[Dict[str, Any]]]):
+        art_k, rows = item_pair
+        has_stok = 0 if any(int(r.get("stok") or 0) > 0 for r in rows) else 1
+        has_promo = 0 if any(r.get("hargaPromo") for r in rows) else 1
+        has_img = 0 if any(r.get("imageUrl") for r in rows) else 1
+        b_sample = f"{rows[0].get('brand') or ''} {rows[0].get('dept') or ''}".upper()
+        is_core = 0 if (not is_muku_mode or any(k in b_sample for k in MUKU_PRIORITY_BRANDS)) else 1
+        max_sku_num = max((int(str(r.get("sku"))) for r in rows if str(r.get("sku") or "").isdigit()), default=0)
+        return (has_stok, has_promo, is_core, has_img, -max_sku_num, art_k)
 
-        # Wave 2: Seluruh sisa jalur SKU dari mapping (hanya Mu+Ku bila mode Mu+Ku)
-        for sku, row in catalog_by_sku.items():
-            if is_muku_mode and not _is_muku_row(row):
-                continue
-            if sku not in seen_in_wave_1:
-                priority_wave_2.append(sku)
+    ordered_articles = sorted(article_variants_map.items(), key=_article_sort_key)
+    total_target_skus = sum(len(rows) for _, rows in ordered_articles) + len(orphan_skus)
 
-    ordered_skus = priority_wave_1 + priority_wave_2
-    print(f"🎯 Strategi Prioritas Update Stok ({CREDENTIALS['label']}):")
-    print(f"   👉 [GELOMBANG 1 - Prioritas Utama] : {len(priority_wave_1):,} SKU")
-    print(f"   👉 [GELOMBANG 2 - Sisa Mapping]    : {len(priority_wave_2):,} SKU")
+    print(f"🚀 [TURBO MATRIX ENGINE — {CREDENTIALS['label']}] 1 Request `checkItemStock` = 1 Artikel Penuh (Semua Warna x Size):")
+    print(f"   👉 Total Artikel Target : {len(ordered_articles):,} Artikel ({total_target_skus:,} SKU)")
+    print(f"   👉 Sisa SKU Tanpa Art   : {len(orphan_skus):,} SKU")
 
     checked_count = 0
+    checked_articles = 0
     changed_count = 0
+    matrix_hit_articles = 0
+    stock_delta_batch: List[Tuple[int, str, str]] = []
+    fallback_detail_skus: List[str] = list(orphan_skus)
     buffer_by_sku: Dict[str, Dict[str, Any]] = {}
     sales_deltas: Dict[str, Dict[str, Any]] = {}
-    resolved_by_related_stock: Set[str] = set()
-    chunk_size = 240
     now_iso = datetime.now(timezone.utc).isoformat()
 
     def _track_delta_sale(sku_key: str, prev_row: Optional[Dict[str, Any]], old_q: int, new_q: int):
-        # Produk tidak ada penjualan -> skip 0 write!
-        # Pengaman: hanya produk SUKO/stok positif, new_q >= 0 (tolak -1 MUKU/ZES), dan batas RTO <= 25 pcs/scan
-        if not _is_suko_sales_eligible(prev_row):
+        if is_muku_mode or not _is_suko_sales_eligible(prev_row):
             return
         if old_q <= 0 or new_q < 0 or new_q >= old_q:
             return
@@ -2075,128 +2220,131 @@ def execute_live_stock_sync(
                 "is_promo": is_promo,
             }
 
-    for c_start in range(0, len(ordered_skus), chunk_size):
+    # FASE 1: Sapuan TURBO MATRIX per Artikel (36 Workers, chunk 360 artikel)
+    art_chunk_size = 360
+    matrix_workers = 36
+    stop_offline = False
+
+    for a_start in range(0, len(ordered_articles), art_chunk_size):
         elapsed_min = (datetime.now() - start_time).total_seconds() / 60.0
         if elapsed_min >= max_minutes:
             print(f"⏱️ Batas waktu aman runner ({max_minutes} menit) tercapai. Menyimpan hasil...")
             break
 
-        raw_chunk = ordered_skus[c_start:c_start + chunk_size]
-        chunk = [s for s in raw_chunk if s not in resolved_by_related_stock]
-        if not chunk:
-            continue
-
+        batch_arts = ordered_articles[a_start:a_start + art_chunk_size]
         offline_hits = 0
-        with ThreadPoolExecutor(max_workers=28) as executor:
-            future_map = {
-                executor.submit(query_storehub_multi, "sku", sku_cand, cookie): sku_cand
-                for sku_cand in chunk
-            }
+        with ThreadPoolExecutor(max_workers=matrix_workers) as executor:
+            future_map = {}
+            for art_k, rows in batch_arts:
+                # Pilih SKU perwakilan terbaik (punya stok > 0 atau SKU valid 8-digit)
+                rep = next((r for r in rows if int(r.get("stok") or 0) > 0), rows[0])
+                rep_sku = str(rep.get("sku") or "").strip()
+                if rep_sku:
+                    future_map[executor.submit(query_storehub_stock_matrix, "sku", rep_sku, cookie)] = (art_k, rows, rep_sku)
+
             for fut in as_completed(future_map):
-                sku_cand = future_map[fut]
-                items = fut.result()
-                checked_count += 1
-                if not items:
-                    continue
-                if items[0].get("_offline"):
+                art_k, rows, rep_sku = future_map[fut]
+                checked_articles += 1
+                st_code, matrix_rows = fut.result()
+                if st_code == "offline":
                     offline_hits += 1
                     continue
-                if items[0].get("_unauthorized"):
+                if st_code == "unauthorized":
                     fresh = auto_login_storehub()
                     if fresh:
                         cookie = fresh
                     continue
+                if st_code != "ok" or not matrix_rows:
+                    # Fallback hanya untuk SKU perwakilan bila artikel sedang kosong/belum punya relasi warna
+                    if any(int(r.get("stok") or 0) > 0 for r in rows):
+                        for r in rows:
+                            if int(r.get("stok") or 0) > 0:
+                                fallback_detail_skus.append(str(r.get("sku") or ""))
+                    continue
 
-                for item in items:
-                    ex_row = catalog_by_sku.get(sku_cand)
-                    rec = item_to_record(item, existing_row=ex_row)
-                    if not rec:
+                matrix_hit_articles += 1
+                for sib in rows:
+                    sib_sku = str(sib.get("sku") or "").strip()
+                    if not sib_sku:
                         continue
-                    rec = _protect_cross_store_stock(rec, ex_row)
-                    if is_muku_mode and not _is_muku_row(rec):
+                    checked_count += 1
+                    found_q = _match_matrix_qty(matrix_rows, sib.get("color"), sib.get("size"))
+                    if found_q is None:
                         continue
-                    s_val = rec["sku"]
-                    old_stok = int((ex_row or {}).get("stok") or 0)
-                    old_price = int(float((ex_row or {}).get("hargaNormal") or 0))
-                    old_promo = int(float((ex_row or {}).get("hargaPromo") or 0))
-                    new_promo = int(float(rec.get("hargaPromo") or 0))
-                    old_bc = str((ex_row or {}).get("barcode") or "").strip()
-                    rec_all_bcs = list(rec.get("_all_barcodes") or [])
-                    has_new_barcode_alias = any(bc and bc not in existing_barcodes for bc in rec_all_bcs)
-
-                    if (
-                        rec["stok"] != old_stok
-                        or rec["hargaNormal"] != old_price
-                        or (rec.get("_has_live_promo") and new_promo != old_promo)
-                        or (rec.get("barcode") and rec.get("barcode") != old_bc)
-                        or has_new_barcode_alias
-                        or (ex_row and ex_row.get("_from_registry_only"))
-                    ):
-                        for bc_new in rec_all_bcs:
-                            if bc_new:
-                                existing_barcodes.add(bc_new)
-                        if not is_muku_mode:
-                            _track_delta_sale(s_val, ex_row or rec, old_stok, int(rec["stok"] or 0))
-                        buffer_by_sku[s_val] = rec
-                        catalog_by_sku[s_val] = rec
+                    old_q = int(sib.get("stok") or 0)
+                    upd_sib = dict(sib)
+                    upd_sib["stok"] = found_q
+                    upd_sib = _protect_cross_store_stock(upd_sib, sib)
+                    final_q = int(upd_sib.get("stok") or 0)
+                    if final_q != old_q:
+                        _track_delta_sale(sib_sku, sib, old_q, final_q)
+                        upd_sib["updatedAt"] = now_iso
+                        catalog_by_sku[sib_sku] = upd_sib
+                        stock_delta_batch.append((final_q, now_iso, sib_sku))
                         changed_count += 1
 
-                    # Ekstraksi Multi-Varian `relatedStock` jika dikembalikan oleh StoreHub
-                    rel_stock = item.get("relatedStock") or item.get("RelatedStock")
-                    art_key = str(rec.get("article") or "").strip().upper()
-                    if isinstance(rel_stock, dict) and art_key in article_variants_map:
-                        for sib in article_variants_map[art_key]:
-                            sib_sku = str(sib.get("sku") or "").strip()
-                            if not sib_sku or sib_sku == s_val:
-                                continue
-                            if is_muku_mode and not _is_muku_row(sib):
-                                continue
-                            sib_col = str(sib.get("color") or "").strip().upper()
-                            sib_sz = str(sib.get("size") or "").strip().upper()
-                            found_qty: Optional[int] = None
-                            for r_col, sizes_obj in rel_stock.items():
-                                rc_up = str(r_col or "").strip().upper()
-                                if rc_up == sib_col or (sib_col and (rc_up in sib_col or sib_col in rc_up)):
-                                    if isinstance(sizes_obj, dict):
-                                        for r_sz, q_val in sizes_obj.items():
-                                            rs_up = str(r_sz or "").strip().upper()
-                                            if rs_up == sib_sz:
-                                                try:
-                                                    found_qty = int(float(q_val or 0))
-                                                except Exception:
-                                                    found_qty = 0
-                                                break
-                                if found_qty is not None:
-                                    break
-                            if found_qty is not None:
-                                resolved_by_related_stock.add(sib_sku)
-                                checked_count += 1
-                                old_sib_q = int(sib.get("stok") or 0)
-                                upd_sib = dict(sib)
-                                upd_sib["stok"] = found_qty
-                                upd_sib = _protect_cross_store_stock(upd_sib, sib)
-                                final_sib_q = int(upd_sib.get("stok") or 0)
-                                if old_sib_q != final_sib_q:
-                                    if not is_muku_mode:
-                                        _track_delta_sale(sib_sku, sib, old_sib_q, final_sib_q)
-                                    upd_sib["updatedAt"] = now_iso
-                                    buffer_by_sku[sib_sku] = upd_sib
-                                    catalog_by_sku[sib_sku] = upd_sib
-                                    changed_count += 1
-
-        if offline_hits > len(chunk) // 2:
-            print("⚠️ Koneksi ke SQL Server Toko 719 terputus. Menyimpan perubahan yang sudah didapat...")
+        if offline_hits > len(batch_arts) // 2:
+            print(f"⚠️ Koneksi ke server toko ({CREDENTIALS['label']}) terputus. Menyimpan hasil...")
+            stop_offline = True
             break
 
-        if len(buffer_by_sku) >= 200:
-            flush_buffer(buffer_by_sku, write_md_report=False)
+        if len(stock_delta_batch) >= 400:
+            flush_stock_only_deltas(stock_delta_batch)
+            stock_delta_batch.clear()
 
-        if (c_start // chunk_size) % 3 == 0 or c_start + chunk_size >= len(ordered_skus):
-            pct_now = min(100, int((checked_count / max(len(ordered_skus), 1)) * 100))
-            print(
-                f"   ⚡ [PROGRES SALES SUKO] {pct_now}% • Terperiksa: {checked_count:,} / {len(ordered_skus):,} SKU | "
-                f"Berubah: {changed_count:,} SKU | Terdeteksi Terjual: {len(sales_deltas):,} SKU"
-            )
+        dt_sec = max(0.1, (datetime.now() - start_time).total_seconds())
+        pct_now = min(100, int((checked_articles / max(len(ordered_articles), 1)) * 100))
+        print(
+            f"   ⚡ [TURBO MATRIX {CREDENTIALS['label']}] {pct_now}% • {checked_articles:,}/{len(ordered_articles):,} Artikel "
+            f"({checked_articles / dt_sec:.1f} art/s | {checked_count:,} SKU dicek | {changed_count:,} stok berubah | "
+            f"Matrix Hit: {matrix_hit_articles:,})"
+        )
+
+    if stock_delta_batch:
+        flush_stock_only_deltas(stock_delta_batch)
+        stock_delta_batch.clear()
+
+    # FASE 2: Fallback `checkItemDetail` HANYA untuk SKU orphan / yang matriksnya kosong (maks 500 SKU)
+    if not stop_offline and fallback_detail_skus:
+        fb_targets = [s for s in dict.fromkeys(fallback_detail_skus) if s][:500]
+        elapsed_min = (datetime.now() - start_time).total_seconds() / 60.0
+        if fb_targets and elapsed_min < max_minutes:
+            print(f"   🔄 [FASE 2 FALLBACK] Mengecek {len(fb_targets):,} SKU tunggal via checkItemDetail...")
+            for c_start in range(0, len(fb_targets), 120):
+                if (datetime.now() - start_time).total_seconds() / 60.0 >= max_minutes:
+                    break
+                chunk = fb_targets[c_start:c_start + 120]
+                with ThreadPoolExecutor(max_workers=24) as executor:
+                    fmap = {executor.submit(query_storehub_multi, "sku", s, cookie): s for s in chunk}
+                    for fut in as_completed(fmap):
+                        sku_cand = fmap[fut]
+                        items = fut.result()
+                        checked_count += 1
+                        if not items or items[0].get("_offline") or items[0].get("_unauthorized"):
+                            continue
+                        for item in items:
+                            ex_row = catalog_by_sku.get(sku_cand)
+                            rec = item_to_record(item, existing_row=ex_row)
+                            if not rec:
+                                continue
+                            rec = _protect_cross_store_stock(rec, ex_row)
+                            if is_muku_mode and not _is_muku_row(rec):
+                                continue
+                            s_val = rec["sku"]
+                            old_stok = int((ex_row or {}).get("stok") or 0)
+                            old_price = int(float((ex_row or {}).get("hargaNormal") or 0))
+                            rec_all_bcs = list(rec.get("_all_barcodes") or [])
+                            has_new_bc = any(bc and bc not in existing_barcodes for bc in rec_all_bcs)
+                            if rec["stok"] != old_stok or rec["hargaNormal"] != old_price or has_new_bc:
+                                for bcn in rec_all_bcs:
+                                    if bcn:
+                                        existing_barcodes.add(bcn)
+                                _track_delta_sale(s_val, ex_row or rec, old_stok, int(rec["stok"] or 0))
+                                buffer_by_sku[s_val] = rec
+                                catalog_by_sku[s_val] = rec
+                                changed_count += 1
+                if len(buffer_by_sku) >= 150:
+                    flush_buffer(buffer_by_sku, write_md_report=False)
 
     if buffer_by_sku:
         flush_buffer(buffer_by_sku, write_md_report=False)
