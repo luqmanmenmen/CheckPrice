@@ -2079,6 +2079,11 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
       - **6 Berkas Railway/FastAPI/PQ Mati di `python-engine/` Dihapus:** `Dockerfile`, `Procfile`, `runtime.txt`, `main.py`, `audit_images.py`, `reprocess_storage_pq.py` + pembersihan `requirements.txt` (buang `fastapi`, `uvicorn`, `supabase`, `psycopg2-binary`, `pydantic`, `python-multipart`).
       - **22 Skrip Node.js Duplikat di `scripts/` Dihapus** (termasuk `sync_mds_bisa_full.mjs`, `sync_matahari_images.js`, `gas_supabase_uploader.js`, dan seluruh skrip PQ lama — menyisakan hanya [`scripts/gas_turso_uploader.js`](file:///c:/Max%20Display/price-checker/scripts/gas_turso_uploader.js) yang aktif untuk Gmail Promo Webhook) + **14 berkas temp/debug/walkthrough lama di root**.
     - **Verifikasi:** `npm run build` (`35/35` halaman) + `npx tsc --noEmit` (`exit 0`) lulus 100%.
+  - **100% Pure Python Live Scan di Vercel (`api/py_live.py` — `sin1`) & Penghapusan Total `mdsBisaClient.ts` (24 Nov 2026):**
+    - Membangun [`python-engine/storehub_live_engine.py`](file:///c:/Max%20Display/price-checker/python-engine/storehub_live_engine.py) (**100% Python stdlib murni — 0 dependency berat**, cold start kilat `< 300ms` di Vercel `sin1` Singapura) yang menangani seluruh komunikasi live StoreHub: Auto-Scan barang baru/QR (`2663005FS`) dengan Hard Deadline Cap 6,5 detik + routing Brand/Dept deterministik (`SUKO` `M223515` vs `Mu+Ku` `M223708` + slot `ZES`), Turbo Matrix Live Stock `checkItemStock`, Live Promo `checkItemPromotion`, Image Quality Controller (filter logo abu-abu `2.238B`/`3.163B`), Upsert langsung ke Turso (`Product` + `BarcodeAlias` + `CatalogArticle`), & pencatatan `analytics/hot-scan-seeds.json`.
+    - Mendeploy sebagai Vercel Python Serverless Function di [`api/py_live.py`](file:///c:/Max%20Display/price-checker/api/py_live.py) (dikonfigurasi `includeFiles` di [`vercel.json`](file:///c:/Max%20Display/price-checker/vercel.json)).
+    - Menghapus permanen **`src/lib/mdsBisaClient.ts` (`3.013` baris / `122 KB`)** dan menggantinya dengan jembatan tipis 60 baris [`src/lib/pyLiveBridge.ts`](file:///c:/Max%20Display/price-checker/src/lib/pyLiveBridge.ts). Sekarang **0% logika StoreHub di TypeScript** — 100% 1 otak Python di Vercel (`sin1`) & GitHub Actions!
+
 
 
 

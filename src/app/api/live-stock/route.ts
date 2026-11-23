@@ -1,8 +1,8 @@
-import { NextRequest, NextResponse, after } from 'next/server';
-import { checkSingleItemStock, checkLiveStockFast, FastLiveVariantInput } from '@/lib/mdsBisaClient';
+import { NextRequest, NextResponse } from 'next/server';
+import { invokePythonLiveEngine, FastLiveVariantInput } from '@/lib/pyLiveBridge';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
+export const maxDuration = 30;
 
 export async function POST(req: NextRequest) {
   try {
@@ -13,8 +13,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'SKU produk wajib diisi' }, { status: 400 });
     }
 
-    // JALUR TOL KHUSUS LIVE STOK: HP kasir sudah memegang daftar varian (sku, color, size, stok)
-    // -> 1 request langsung ke StoreHub (+ peta relatedStock), 0 baca DB, simpan perubahan ke DB di background!
     const familyVariants: FastLiveVariantInput[] = Array.isArray(body.familyVariants)
       ? body.familyVariants
           .filter((v: any) => v && v.sku)
@@ -25,42 +23,42 @@ export async function POST(req: NextRequest) {
             stok: typeof v.stok === 'number' ? v.stok : undefined,
           }))
       : [];
-    const familySkus: string[] = Array.isArray(body.familySkus)
-      ? body.familySkus.map((s: any) => String(s || '').trim()).filter(Boolean)
-      : familyVariants.map((v) => v.sku);
 
     const brandGroup = typeof body.brandGroup === 'string' ? body.brandGroup.trim().toUpperCase() : null;
 
-    if (body.fastMode === true && (familySkus.length > 0 || familyVariants.length > 0)) {
-      const { result, persist } = await checkLiveStockFast(
-        String(sku),
-        familySkus,
-        familyVariants,
-        typeof body.article === 'string' ? body.article : null,
-        brandGroup
+    if (body.fastMode === true && familyVariants.length > 0) {
+      const result = await invokePythonLiveEngine(
+        {
+          action: 'fast-stock',
+          sku: String(sku),
+          familyVariants,
+          article: typeof body.article === 'string' ? body.article : null,
+          brandGroup,
+        },
+        { requestUrl: req.url, timeoutMs: 8000 }
       );
-      if (result.success) {
-        after(async () => {
-          await persist().catch(() => {});
-        });
-      }
       return NextResponse.json({ ...result, fastMode: true });
     }
 
-    // JALUR SCRAP PRODUK BARU / BARCODE TIDAK DITEMUKAN + FOTO:
-    // Langsung simpan tuntas ke 3 tabel DB (Product + images[], BarcodeAlias, CatalogArticle) sebelum return!
-    const result = await checkSingleItemStock(String(sku), {
-      discoverFamily: body.discoverFamily !== false,
-      withImages: body.withImages !== false,
-      syncAllSizes: body.syncAllSizes !== false,
-      preferredAccount: brandGroup === 'MUKU' ? 'muku' : undefined,
-    });
+    const result = await invokePythonLiveEngine(
+      {
+        action: 'scan',
+        sku: String(sku),
+        withImages: body.withImages !== false,
+        maxSeconds: 6.5,
+        preferredAccount: brandGroup === 'MUKU' ? 'muku' : brandGroup === 'SUKO' ? 'suko' : undefined,
+      },
+      { requestUrl: req.url, timeoutMs: 9500 }
+    );
     return NextResponse.json(result);
   } catch (err: any) {
-    return NextResponse.json({
-      success: false,
-      error: err.message || 'Gagal memeriksa stok live',
-    }, { status: 500 });
+    return NextResponse.json(
+      {
+        success: false,
+        error: err.message || 'Gagal memeriksa stok live',
+      },
+      { status: 500 }
+    );
   }
 }
 
@@ -70,8 +68,15 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: false, error: 'SKU produk wajib diisi' }, { status: 400 });
   }
 
-  const discoverFamily = req.nextUrl.searchParams.get('discoverFamily') !== '0';
   const withImages = req.nextUrl.searchParams.get('withImages') !== '0';
-  const result = await checkSingleItemStock(String(sku), { discoverFamily, withImages });
+  const result = await invokePythonLiveEngine(
+    {
+      action: 'scan',
+      sku: String(sku),
+      withImages,
+      maxSeconds: 6.5,
+    },
+    { requestUrl: req.url, timeoutMs: 9500 }
+  );
   return NextResponse.json(result);
 }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma as db } from "@/lib/prisma";
-import { checkSingleItemStock, calculateEan13CheckDigit } from "@/lib/mdsBisaClient";
+import { invokePythonLiveEngine, calculateEan13CheckDigit } from "@/lib/pyLiveBridge";
 import {
   expandRetailQuery,
   computeProductRelevanceScore,
@@ -255,24 +255,24 @@ export async function GET(
 
         if (!hasDbArticleMatch) {
           try {
-            const liveTimeoutMs = isPureDigitCode ? 12000 : 9500;
-            const liveRes: any = await Promise.race([
-              checkSingleItemStock(rawInput, {
-                discoverFamily: true,
+            const liveTimeoutMs = isPureDigitCode ? 9000 : 8500;
+            const liveRes: any = await invokePythonLiveEngine(
+              {
+                action: "scan",
+                sku: rawInput,
                 withImages: true,
-                syncAllSizes: true,
-                // QR / barcode alfanumerik unik (mis. 2663005FS) mayoritas milik Mu+Ku / konsinyasi -> coba Mu+Ku dulu (otomatis fallback SUKO!)
-                ...(isLikelyUniqueQrOrVendorCode ? { preferredAccount: 'muku' as const } : {}),
-              }),
-              new Promise((resolve) => setTimeout(() => resolve({ success: false, timeout: true }), liveTimeoutMs))
-            ]);
+                maxSeconds: 6.5,
+                ...(isLikelyUniqueQrOrVendorCode ? { preferredAccount: "muku" } : {}),
+              },
+              { requestUrl: request.url, timeoutMs: liveTimeoutMs }
+            );
             if (liveRes?.success && liveRes?.data) {
               return NextResponse.json({
                 data: liveRes.data,
                 siblings: liveRes.siblings || [liveRes.data],
                 aliases: liveRes.aliases || [],
                 ownerAccount: liveRes.ownerAccount || null,
-                source: 'MDS_BISA_LIVE'
+                source: liveRes.source || "PYTHON_LIVE_ENGINE",
               });
             }
             if (liveRes?.success && liveRes?.sku) {
@@ -281,14 +281,19 @@ export async function GET(
                   OR: [
                     { sku: liveRes.sku },
                     ...(liveRes.barcode ? [{ barcode: liveRes.barcode }] : []),
-                    { barcode: rawInput }
-                  ]
-                }
+                    { barcode: rawInput },
+                  ],
+                },
               });
               if (fetched) {
                 fetched = checkAndCleanPromo(fetched);
                 const siblings = await getProductSiblings(fetched);
-                return NextResponse.json({ data: fetched, siblings, source: 'MDS_BISA_LIVE' });
+                return NextResponse.json({
+                  data: fetched,
+                  siblings,
+                  ownerAccount: liveRes.ownerAccount || null,
+                  source: liveRes.source || "PYTHON_LIVE_ENGINE",
+                });
               }
             }
           } catch {}

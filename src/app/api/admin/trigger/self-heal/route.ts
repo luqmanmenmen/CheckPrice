@@ -3,7 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { cookies } from 'next/headers';
 import { verifyToken } from '@/lib/auth';
 import { dispatchToGitHubRunner, SyncActionType } from '@/lib/githubDispatcher';
-import { getStoreHubCookie } from '@/lib/mdsBisaClient';
+import { invokePythonLiveEngine } from '@/lib/pyLiveBridge';
 import { readTursoStorageText, writeTursoStorage } from '@/lib/tursoStorage';
 
 export const dynamic = 'force-dynamic';
@@ -157,7 +157,11 @@ export async function POST(req: Request) {
     if (refreshCookie && COOKIE_ACTIONS.has(action)) {
       try {
         const targetAcc = action === 'muku-scrab' || action === 'muku-stock' ? 'muku' : 'suko';
-        freshCookie = await getStoreHubCookie(true, 'self_heal_force_refresh', targetAcc);
+        const pyAuth: any = await invokePythonLiveEngine(
+          { action: 'refresh-cookie', account: targetAcc },
+          { requestUrl: req.url, timeoutMs: 8000 }
+        );
+        freshCookie = String(pyAuth?.cookie || '');
         healedCookie = Boolean(freshCookie && freshCookie.includes('mso_session='));
       } catch (cookieErr) {
         console.warn('[SELF-HEAL] Gagal refresh cookie:', cookieErr);

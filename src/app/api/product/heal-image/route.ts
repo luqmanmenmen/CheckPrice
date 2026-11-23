@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { healProductImagesInDb } from "@/lib/mdsBisaClient";
+import { invokePythonLiveEngine } from "@/lib/pyLiveBridge";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -10,8 +10,6 @@ export async function POST(req: Request) {
     const sku = typeof body?.sku === "string" ? body.sku.trim() : "";
     const article = typeof body?.article === "string" ? body.article.trim() : "";
     const barcode = typeof body?.barcode === "string" ? body.barcode.trim() : "";
-    const targetColor = typeof body?.targetColor === "string" ? body.targetColor.trim() : "";
-    const force = Boolean(body?.force);
 
     if (!sku && !article && !barcode) {
       return NextResponse.json(
@@ -20,7 +18,10 @@ export async function POST(req: Request) {
       );
     }
 
-    const result = await healProductImagesInDb({ sku, article, barcode, targetColor, force });
+    const result = await invokePythonLiveEngine(
+      { action: "heal-image", sku, article, barcode },
+      { requestUrl: req.url, timeoutMs: 8000 }
+    );
     return NextResponse.json(result);
   } catch (err: any) {
     console.error("[API HEAL-IMAGE] Error:", err);
