@@ -1136,7 +1136,7 @@ export function paginateCategorySections<
   };
 }
 
-/** Mengurutkan item agar produk berfoto & berstok tampil paling depan saat menjelajah katalog */
+/** Mengurutkan item agar produk ADA STOK (> 0) selalu tampil paling depan di Page 1, lalu berfoto, stok terbanyak, & promo */
 export function compareBrowseItems<
   T extends {
     imageUrl?: string | null;
@@ -1148,14 +1148,14 @@ export function compareBrowseItems<
     name?: string | null;
   }
 >(a: T, b: T): number {
-  const aPhoto = a.imageUrl ? 1 : 0;
-  const bPhoto = b.imageUrl ? 1 : 0;
-  if (bPhoto !== aPhoto) return bPhoto - aPhoto;
   const aStok = a.articleTotalStok ?? a.stok ?? 0;
   const bStok = b.articleTotalStok ?? b.stok ?? 0;
   const aHasStok = aStok > 0 ? 1 : 0;
   const bHasStok = bStok > 0 ? 1 : 0;
   if (bHasStok !== aHasStok) return bHasStok - aHasStok;
+  const aPhoto = a.imageUrl ? 1 : 0;
+  const bPhoto = b.imageUrl ? 1 : 0;
+  if (bPhoto !== aPhoto) return bPhoto - aPhoto;
   if (bStok !== aStok) return bStok - aStok;
   const aPromo = a.articleHasPromo || Boolean(a.hargaPromo) ? 1 : 0;
   const bPromo = b.articleHasPromo || Boolean(b.hargaPromo) ? 1 : 0;

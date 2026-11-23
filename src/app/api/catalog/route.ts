@@ -264,6 +264,7 @@ export async function GET(request: NextRequest) {
           }
           return { ...row, genderKey: gKey };
         });
+        enrichedRows.sort(compareBrowseItems);
 
         const matchedRows =
           gender === "ALL"

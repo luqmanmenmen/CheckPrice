@@ -573,11 +573,11 @@ def build_and_verify_catalog(stock_only: bool = False, upload_snapshot: bool = T
             "articlePromoLabel": promo_label,
         })
 
-    # Urutan resmi Facing Out: berfoto > berstok > jumlah stok > promo > abjad
+    # Urutan resmi Facing Out: ADA STOK (>0) paling atas di Page 1 > berfoto > jumlah stok > promo > abjad
     compiled.sort(
         key=lambda x: (
-            0 if x["imageUrl"] else 1,
             0 if x["articleTotalStok"] > 0 else 1,
+            0 if x["imageUrl"] else 1,
             -x["articleTotalStok"],
             0 if x["articleHasPromo"] else 1,
             x["description"].upper(),

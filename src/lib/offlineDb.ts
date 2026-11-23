@@ -19,6 +19,7 @@ import {
   classifyBrandGroup,
   classifyProductCategory,
   classifyProductGender,
+  compareBrowseItems,
   getNormalizedSubBrand,
   createEmptyCategoryCounts,
   createEmptyGenderCounts,
@@ -194,6 +195,7 @@ export function updateLocalFamilyStockInMemory(
       }
     }
     if (modelsToPersist.length > 0) {
+      memoryModelsCache.sort(compareBrowseItems);
       db.models.bulkPut(modelsToPersist).catch(() => {});
     }
   }
@@ -427,6 +429,7 @@ export function ensureFamilyInLocalModels(mainProd: CachedProduct, familyList: C
         } else {
           memoryModelsCache.push(indexedRow);
         }
+        memoryModelsCache.sort(compareBrowseItems);
       }
     }
   } catch (err) {
@@ -572,6 +575,8 @@ export async function rebuildModelsIndexFromProducts(): Promise<CachedArticleMod
       return sanitizeAndIndexModel(row);
     });
 
+    models.sort(compareBrowseItems);
+
     await db.models.clear();
     const WRITE_BATCH = 2500;
     for (let i = 0; i < models.length; i += WRITE_BATCH) {
@@ -604,7 +609,9 @@ export async function ensureModelsIndexReady(): Promise<CachedArticleModel[] | n
         const stored = await db.models.toArray();
         const hasLegacyOther = stored.some((m) => (m.brandGroup as string) === "OTHER");
         if (!hasLegacyOther) {
-          memoryModelsCache = stored.map(sanitizeAndIndexModel);
+          // IndexedDB `.toArray()` mengembalikan urutan Primary Key `key` (abjad: 3957, 3PCTSSPACE...).
+          // Urutkan segera dengan `compareBrowseItems` agar Page 1 SELALU menampilkan produk ADA STOK (> 0) & berfoto dulu!
+          memoryModelsCache = stored.map(sanitizeAndIndexModel).sort(compareBrowseItems);
           return memoryModelsCache;
         }
       }
@@ -625,6 +632,7 @@ export async function ensureModelsIndexReady(): Promise<CachedArticleModel[] | n
           if (json.data.length < 9000) break;
         }
         if (fetchedModels.length >= 1000) {
+          fetchedModels.sort(compareBrowseItems);
           await db.models.clear();
           const WRITE_BATCH = 2500;
           for (let i = 0; i < fetchedModels.length; i += WRITE_BATCH) {
@@ -1950,7 +1958,9 @@ export async function updateOfflineFamilyImages(
         await db.models.bulkPut(nextModels);
         if (memoryModelsCache) {
           const modelMap = new Map(nextModels.map((m) => [m.key, m]));
-          memoryModelsCache = memoryModelsCache.map((m) => modelMap.get(m.key) || m);
+          memoryModelsCache = memoryModelsCache
+            .map((m) => modelMap.get(m.key) || m)
+            .sort(compareBrowseItems);
         }
       }
     }
