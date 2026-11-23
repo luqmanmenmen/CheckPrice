@@ -1408,17 +1408,31 @@ def _parse_money_int(val: Any) -> int:
     if val is None or val == "":
         return 0
     if isinstance(val, (int, float)):
-        return int(round(val)) if val > 0 else 0
+        n = int(round(val)) if val > 0 else 0
+        return int(round(n / 1_000_000)) if n >= 1_000_000_000 else n
     s = str(val).strip()
     if not s:
         return 0
+    # Tangani format desimal ERP StoreHub seperti "159000.000000" atau "159000.00" (titik tunggal diikuti 1-2 atau >=4 digit)
+    if re.fullmatch(r"\d+\.\d+", s):
+        frac = s.split(".", 1)[1]
+        if len(frac) != 3:
+            try:
+                n = int(round(float(s)))
+                return int(round(n / 1_000_000)) if n >= 1_000_000_000 else n
+            except Exception:
+                pass
     s_clean = re.sub(r"[^0-9.,]", "", s)
     if not s_clean:
         return 0
-    if "." in s_clean and len(s_clean.split(".")[-1]) <= 2:
-        s_clean = s_clean.split(".")[0]
+    # Tangani format "159,000.00" atau "159,000.000000" (koma ribuan + titik desimal)
+    if "." in s_clean:
+        last_part = s_clean.rsplit(".", 1)[-1]
+        if len(last_part) <= 2 or len(last_part) >= 4:
+            s_clean = s_clean.rsplit(".", 1)[0]
     digits = re.sub(r"[^0-9]", "", s_clean)
-    return int(digits) if digits else 0
+    n = int(digits) if digits else 0
+    return int(round(n / 1_000_000)) if n >= 1_000_000_000 else n
 
 
 def extract_storehub_promo(item: Dict[str, Any], normal_price: int) -> Dict[str, Any]:

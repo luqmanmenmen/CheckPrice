@@ -304,10 +304,17 @@ export async function findOfflineProductByCode(rawCode: string): Promise<CachedP
   })();
 
   try {
-    return await Promise.race<CachedProduct | null>([
+    const found = await Promise.race<CachedProduct | null>([
       lookupPromise,
       new Promise<null>((resolve) => setTimeout(() => resolve(null), raceTimeoutMs)),
     ]);
+    if (!found) return null;
+    const fixedNormal = sanitizePriceValue(found.hargaNormal);
+    const fixedPromo = found.hargaPromo !== null && found.hargaPromo !== undefined ? sanitizePriceValue(found.hargaPromo) : null;
+    if (fixedNormal !== found.hargaNormal || fixedPromo !== found.hargaPromo) {
+      return { ...found, hargaNormal: fixedNormal, hargaPromo: fixedPromo };
+    }
+    return found;
   } catch {
     return null;
   }
@@ -327,17 +334,30 @@ export function isNormalPriceTerm(val?: string | null): boolean {
   return s.includes("NORMAL") || s === "REGULAR" || s === "HARGA NORMAL";
 }
 
+function sanitizePriceValue(val: number | null | undefined): number {
+  if (val === null || val === undefined || !Number.isFinite(Number(val))) return 0;
+  const n = Number(val);
+  return n >= 1_000_000_000 ? Math.round(n / 1_000_000) : n;
+}
+
 function sanitizeAndIndexModel(m: CachedArticleModel): CachedArticleModel {
-  const isExpired = isLocalPromoExpired(m.toDate);
+  const fixedNormal = sanitizePriceValue(m.hargaNormal);
+  const fixedPromo = m.hargaPromo !== null && m.hargaPromo !== undefined ? sanitizePriceValue(m.hargaPromo) : null;
+  const normalizedPriceM: CachedArticleModel =
+    fixedNormal !== m.hargaNormal || fixedPromo !== m.hargaPromo
+      ? { ...m, hargaNormal: fixedNormal, hargaPromo: fixedPromo }
+      : m;
+
+  const isExpired = isLocalPromoExpired(normalizedPriceM.toDate);
   const isFakeNormal = Boolean(
-    (m.acara && isNormalPriceTerm(m.acara)) ||
-    (m.discountType && isNormalPriceTerm(m.discountType)) ||
-    (m.hargaPromo && m.hargaNormal && Number(m.hargaPromo) >= Number(m.hargaNormal))
+    (normalizedPriceM.acara && isNormalPriceTerm(normalizedPriceM.acara)) ||
+    (normalizedPriceM.discountType && isNormalPriceTerm(normalizedPriceM.discountType)) ||
+    (normalizedPriceM.hargaPromo && normalizedPriceM.hargaNormal && Number(normalizedPriceM.hargaPromo) >= Number(normalizedPriceM.hargaNormal))
   );
 
   const cleanM = (isExpired || isFakeNormal)
     ? {
-        ...m,
+        ...normalizedPriceM,
         hargaPromo: null,
         diskon: null,
         discountType: null,
@@ -346,7 +366,7 @@ function sanitizeAndIndexModel(m: CachedArticleModel): CachedArticleModel {
         articleHasPromo: false,
         articlePromoLabel: null,
       }
-    : m;
+    : normalizedPriceM;
 
   const resolvedCategory = classifyProductCategory(cleanM);
   const resolvedGender = classifyProductGender(cleanM);

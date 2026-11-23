@@ -770,13 +770,30 @@ function harvestBarcodes(rows: any[], primaryItem?: any): string[] {
 }
 
 function parseRetailPrice(rawPrice: any): number | null {
-  if (!rawPrice) return null;
+  if (rawPrice === null || rawPrice === undefined || rawPrice === '') return null;
+  if (typeof rawPrice === 'number') {
+    if (!Number.isFinite(rawPrice) || rawPrice <= 0) return null;
+    const n = Math.round(rawPrice);
+    return n >= 1_000_000_000 ? Math.round(n / 1_000_000) : n;
+  }
   let str = String(rawPrice).trim();
-  if (/\.\d{4,}$/.test(str) || /\.00$/.test(str)) {
-    str = str.split('.')[0];
+  if (/^\d+\.\d+$/.test(str)) {
+    const frac = str.split('.')[1];
+    if (frac.length !== 3) {
+      const n = Math.round(Number(str));
+      if (Number.isFinite(n) && n > 0) {
+        return n >= 1_000_000_000 ? Math.round(n / 1_000_000) : n;
+      }
+    }
+  }
+  if (/\.\d{4,}$/.test(str) || /\.\d{1,2}$/.test(str)) {
+    str = str.replace(/\.\d+$/, '');
   }
   const cleaned = str.replace(/[^0-9]/g, '');
-  return cleaned ? parseInt(cleaned, 10) : null;
+  if (!cleaned) return null;
+  const n = parseInt(cleaned, 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n >= 1_000_000_000 ? Math.round(n / 1_000_000) : n;
 }
 
 function resolveProductGallery(
@@ -2214,7 +2231,7 @@ export async function checkSingleItemStock(
     // 1. Upsert item utama + seluruh allItems yang ikut terbawa di payload awal
     const itemsToUpsert = queryRes.allItems.length > 0 ? queryRes.allItems : [itemData];
     // Untuk akun Mu+Ku (tidak ada file Excel promo), tarik juga harga promo live lewat `checkItemPromotion`!
-    const seedNormalPrice = Number(String(itemData?.RetailPrice ?? itemData?.Price ?? 0).replace(/[^0-9]/g, '')) || 0;
+    const seedNormalPrice = parseRetailPrice(itemData?.RetailPrice ?? itemData?.Price) || 0;
     const livePromoPromise =
       activeAccount === 'muku'
         ? queryStoreHubPromotion(activeKind, queriedCode, cookie, seedNormalPrice, 3500).catch(() => null)

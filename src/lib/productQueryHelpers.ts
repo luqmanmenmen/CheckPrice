@@ -125,25 +125,39 @@ export function isItemPromoActive(item: any): boolean {
  * Membersihkan promo kedaluwarsa & label promo palsu (NORMAL PRICE) di memori tanpa spam koneksi DB per-baris,
  * lalu menjadwalkan 1 updateMany asinkron ke PostgreSQL bila ada promo expired atau fake promo.
  */
+export function sanitizeRetailPrice(val: any): number {
+  const n = Number(val || 0);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n >= 1_000_000_000 ? Math.round(n / 1_000_000) : n;
+}
+
 export function cleanPromoList(rows: any[]): any[] {
   const expiredIds: number[] = [];
   const fakePromoIds: number[] = [];
   const cleaned = rows.map((p) => {
     if (!p) return p;
-    const isExpired = isPromoExpired(p.toDate);
+    const normP =
+      (Number(p.hargaNormal || 0) >= 1_000_000_000 || Number(p.hargaPromo || 0) >= 1_000_000_000)
+        ? {
+            ...p,
+            hargaNormal: sanitizeRetailPrice(p.hargaNormal),
+            hargaPromo: p.hargaPromo ? sanitizeRetailPrice(p.hargaPromo) : null,
+          }
+        : p;
+    const isExpired = isPromoExpired(normP.toDate);
     const isFakeNormal = Boolean(
-      (p.acara && isNormalPriceTerm(p.acara)) ||
-      (p.discountType && isNormalPriceTerm(p.discountType)) ||
-      (p.hargaPromo && p.hargaNormal && Number(p.hargaPromo) >= Number(p.hargaNormal))
+      (normP.acara && isNormalPriceTerm(normP.acara)) ||
+      (normP.discountType && isNormalPriceTerm(normP.discountType)) ||
+      (normP.hargaPromo && normP.hargaNormal && Number(normP.hargaPromo) >= Number(normP.hargaNormal))
     );
 
     if (isExpired || isFakeNormal) {
-      if (typeof p.id === "number" && p.id > 0) {
-        if (isExpired) expiredIds.push(p.id);
-        if (isFakeNormal) fakePromoIds.push(p.id);
+      if (typeof normP.id === "number" && normP.id > 0) {
+        if (isExpired) expiredIds.push(normP.id);
+        if (isFakeNormal) fakePromoIds.push(normP.id);
       }
       return {
-        ...p,
+        ...normP,
         hargaPromo: null,
         diskon: null,
         discountType: null,
@@ -152,7 +166,7 @@ export function cleanPromoList(rows: any[]): any[] {
         toDate: null,
       };
     }
-    return p;
+    return normP;
   });
 
   const idsToClean = Array.from(new Set([...expiredIds, ...fakePromoIds]));
