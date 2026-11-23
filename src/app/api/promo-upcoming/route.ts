@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchStorageAnalyticsJson } from "@/lib/productQueryHelpers";
-import { supabase } from "@/lib/supabaseClient";
+import { writeTursoStorage } from "@/lib/tursoStorage";
 import { dispatchToGitHubRunner } from "@/lib/githubDispatcher";
 import { verifyToken } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -76,11 +76,11 @@ export async function POST(request: NextRequest) {
         if (!f || !f.name) continue;
         const buf = Buffer.from(await f.arrayBuffer());
         const objectPath = `${folder}/${f.name}`;
-        const { error } = await supabase.storage.from("excel-uploads").upload(objectPath, buf, {
-          contentType: f.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-          upsert: true,
-        });
-        if (error) throw error;
+        await writeTursoStorage(
+          objectPath,
+          buf,
+          f.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        );
         uploadedPaths.push(objectPath);
       }
     }

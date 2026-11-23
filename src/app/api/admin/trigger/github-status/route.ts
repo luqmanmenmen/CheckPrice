@@ -255,10 +255,10 @@ export async function GET(req: Request) {
 
     if (!githubToken) {
       try {
-        const { supabase } = await import('@/lib/supabaseClient');
-        const { data, error } = await supabase.storage.from('excel-uploads').download('secrets/gh_token.txt');
-        if (data && !error) {
-          githubToken = (await data.text()).trim();
+        const { readTursoStorageText } = await import('@/lib/tursoStorage');
+        const txt = await readTursoStorageText('secrets/gh_token.txt');
+        if (txt) {
+          githubToken = txt.trim();
         }
       } catch (e) {
         console.warn('[GITHUB-STATUS] Gagal membaca fallback token:', e);

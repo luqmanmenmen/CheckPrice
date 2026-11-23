@@ -1,25 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { supabase } from '@/lib/supabaseClient';
+import { listTursoStorage, getTursoPublicUrl } from '@/lib/tursoStorage';
 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const folder = searchParams.get("folder") || "PQ";
-    
-    const { data: files, error } = await supabase.storage
-      .from('excel-uploads')
-      .list(folder, { sortBy: { column: 'created_at', order: 'asc' } });
-      
-    if (error) throw error;
-    
-    // Filter out the empty placeholder file that Supabase creates for empty folders (.emptyFolderPlaceholder)
+    const folder = searchParams.get("folder") || "PROMO";
+
+    const files = await listTursoStorage(folder);
     const validFiles = files ? files.filter(f => f.name !== '.emptyFolderPlaceholder') : [];
-    
-    // Map to the format frontend expects
+
     const mappedBlobs = validFiles.map(f => {
       const pathname = `${folder}/${f.name}`;
-      const url = supabase.storage.from('excel-uploads').getPublicUrl(pathname).data.publicUrl;
+      const url = getTursoPublicUrl(pathname);
       return {
         url,
         pathname,

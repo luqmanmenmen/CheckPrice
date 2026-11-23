@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
 import { verifyToken } from "@/lib/auth";
-import { supabase } from "@/lib/supabaseClient";
+import { readTursoStorageJson, writeTursoStorage } from "@/lib/tursoStorage";
 
 export const dynamic = "force-dynamic";
 
@@ -54,7 +54,6 @@ async function readStoreTargetFromStorage(): Promise<StoreTargetConfig> {
   }
 
   try {
-    const { readTursoStorageJson } = await import("@/lib/tursoStorage");
     const json = await readTursoStorageJson(TARGET_STORAGE_PATH);
     const val = Number(json?.targetMtd || 0);
     if (val >= 1_000_000) {
@@ -129,20 +128,7 @@ export async function POST(req: NextRequest) {
     };
 
     const payloadBytes = Buffer.from(JSON.stringify(cfg), "utf-8");
-    const { error } = await supabase.storage
-      .from("excel-uploads")
-      .upload(TARGET_STORAGE_PATH, payloadBytes, {
-        contentType: "application/json",
-        cacheControl: "60",
-        upsert: true,
-      });
-
-    if (error) {
-      return NextResponse.json(
-        { success: false, error: `Gagal menyimpan target ke server: ${error.message}` },
-        { status: 500 }
-      );
-    }
+    await writeTursoStorage(TARGET_STORAGE_PATH, payloadBytes, "application/json");
 
     cachedTarget = { config: cfg, fetchedAt: Date.now() };
     return NextResponse.json({

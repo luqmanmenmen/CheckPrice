@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabaseClient';
+import { writeTursoStorage, getTursoPublicUrl } from '@/lib/tursoStorage';
 
 export async function POST(request: Request): Promise<NextResponse> {
   try {
@@ -11,32 +11,19 @@ export async function POST(request: Request): Promise<NextResponse> {
       return NextResponse.json({ error: 'File is required' }, { status: 400 });
     }
 
-    // Convert file to ArrayBuffer for Supabase Storage
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
-
     const filePath = `${folder}/${file.name}`;
 
-    const { data, error } = await supabase
-      .storage
-      .from('excel-uploads')
-      .upload(filePath, buffer, {
-        contentType: file.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        upsert: true
-      });
+    await writeTursoStorage(
+      filePath,
+      buffer,
+      file.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
 
-    if (error) {
-      console.error("Supabase Storage Error:", error);
-      throw error;
-    }
+    const publicUrl = getTursoPublicUrl(filePath);
 
-    // Get public URL
-    const { data: { publicUrl } } = supabase
-      .storage
-      .from('excel-uploads')
-      .getPublicUrl(filePath);
-
-    return NextResponse.json({ 
+    return NextResponse.json({
       url: publicUrl,
       pathname: filePath
     });

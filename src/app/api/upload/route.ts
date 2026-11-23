@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabaseClient";
+import { writeTursoStorage } from "@/lib/tursoStorage";
 import { dispatchToGitHubRunner } from "@/lib/githubDispatcher";
 import { verifyToken } from "@/lib/auth";
 
@@ -57,11 +57,11 @@ export async function POST(request: NextRequest) {
     for (const file of files) {
       const buffer = Buffer.from(await file.arrayBuffer());
       const objectPath = `${batchFolder}/${file.name}`;
-      const { error } = await supabase.storage.from("excel-uploads").upload(objectPath, buffer, {
-        contentType: file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        upsert: true,
-      });
-      if (error) throw error;
+      await writeTursoStorage(
+        objectPath,
+        buffer,
+        file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
       uploadedNames.push(file.name);
       logs.push(`Terunggah ke Storage: ${objectPath}`);
     }

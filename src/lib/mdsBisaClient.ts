@@ -629,12 +629,8 @@ function saveCookieToStorageBackground(
   slot.lastUploadAt = now;
   void withTimeout(
     (async () => {
-      const { supabase } = await import('@/lib/supabaseClient');
-      await supabase.storage.from('excel-uploads').upload(
-        cfg.storagePath,
-        Buffer.from(cookie, 'utf-8'),
-        { contentType: 'text/plain', upsert: true }
-      );
+      const { writeTursoStorage } = await import('@/lib/tursoStorage');
+      await writeTursoStorage(cfg.storagePath, Buffer.from(cookie, 'utf-8'), 'text/plain');
       return true;
     })(),
     3000,
@@ -789,10 +785,9 @@ export async function getStoreHubCookie(
   try {
     const cookie = await withTimeout(
       (async () => {
-        const { supabase } = await import('@/lib/supabaseClient');
-        const { data, error } = await supabase.storage.from('excel-uploads').download(cfg.storagePath);
-        if (!data || error) return '';
-        return (await data.text()).trim();
+        const { readTursoStorageText } = await import('@/lib/tursoStorage');
+        const txt = await readTursoStorageText(cfg.storagePath);
+        return txt ? txt.trim() : '';
       })(),
       1500,
       ''
