@@ -2080,6 +2080,10 @@ export default function Home() {
               applySelectedProductFamily(fastJson.data, srvSibs);
               preloadProductImages([fastJson.data?.imageUrl, ...srvSibs.map((s: ProductData) => s.imageUrl)], 400);
               syncServerProductToLocal(fastJson.data, srvSibs, fastJson.aliases);
+              if (fastJson.source === "MDS_BISA_LIVE") {
+                const storeBadge = fastJson.ownerAccount === "muku" ? "Mu+Ku" : fastJson.ownerAccount === "suko" ? "SUKO" : "luqman org";
+                showToast(`Produk baru ditemukan & disimpan otomatis (${storeBadge}) — kini bisa di-scan semua crew!`, "success");
+              }
             }
             return;
           }
@@ -2096,8 +2100,8 @@ export default function Home() {
         if (isScanning) setIsScanning(false);
         showBarcodeNotFoundNotice(
           trimmed,
-          `Barcode / kode "${trimmed}" belum ada di database offline (${(localSkuCount || 310526).toLocaleString("id-ID")} SKU) maupun server. Ketuk tombol di bawah untuk langsung mencari & mengambil foto dari luqman org.`,
-          true
+          `Kode "${trimmed}" sudah dicek otomatis ke server SUKO & Mu+Ku namun belum terdaftar atau server toko sedang istirahat.`,
+          false
         );
       }
       return;
@@ -2107,9 +2111,11 @@ export default function Home() {
 
     let netTimer: ReturnType<typeof setTimeout> | null = null;
     try {
-      // 1. Untuk scan/pencarian kode saat DB lokal belum terisi, pakai ?fast=1 + timeout pendek 2.8s agar cepat muncul tombol Scrap!
-      const timeoutMs = isCodeSearch ? 2800 : (localDbReady ? 6500 : 10000);
-      const requestUrl = isCodeSearch ? `${endpointUrl}${endpointUrl.includes("?") ? "&fast=1" : "?fast=1"}` : endpointUrl;
+      // 1. Auto-Scan Hybrid Dual-Account (SUKO + Mu+Ku): selalu sertakan `&fast=1&live=1` untuk kode scan agar 100% otomatis tanpa tombol manual!
+      const timeoutMs = isCodeSearch ? 14500 : (localDbReady ? 6500 : 10000);
+      const requestUrl = isCodeSearch
+        ? `${endpointUrl}${endpointUrl.includes("?") ? "&fast=1&live=1" : "?fast=1&live=1"}`
+        : endpointUrl;
       const netCtrl = new AbortController();
       netTimer = setTimeout(() => netCtrl.abort(), timeoutMs);
       const res = await fetch(requestUrl, {
@@ -2231,13 +2237,17 @@ export default function Home() {
           setProductsList([]);
           preloadProductImages([data.data?.imageUrl, ...serverSiblings.map((s: ProductData) => s.imageUrl)], 400);
           syncServerProductToLocal(data.data, serverSiblings, (data as any).aliases);
+          if ((data as any).source === "MDS_BISA_LIVE") {
+            const storeBadge = (data as any).ownerAccount === "muku" ? "Mu+Ku" : (data as any).ownerAccount === "suko" ? "SUKO" : "luqman org";
+            showToast(`Produk baru ditemukan & disimpan otomatis (${storeBadge}) — kini bisa di-scan semua crew!`, "success");
+          }
         }
         if (isScanning) setIsScanning(false);
       } else {
-        const msg = isCodeSearch && localDbReady && res.status === 404
-          ? `Barcode / produk "${trimmed}" tidak ditemukan di database offline (${(localSkuCount || 306312).toLocaleString('id-ID')} SKU) maupun server. Ketuk tombol di bawah untuk scrap langsung di luqman org.`
+        const msg = isCodeSearch && res.status === 404
+          ? `Kode "${trimmed}" sudah dicek otomatis ke server SUKO & Mu+Ku namun belum terdaftar atau server toko sedang istirahat.`
           : (data.error || `Produk tidak ditemukan untuk: "${trimmed}"`);
-        showBarcodeNotFoundNotice(trimmed, msg, Boolean(trimmed));
+        showBarcodeNotFoundNotice(trimmed, msg, false);
       }
     } catch {
       if (searchCounterRef.current === currentSearch) {

@@ -159,7 +159,8 @@ def expand_universal_neighbors(
         s = sku_val.strip()
         if len(s) == 8 and s.isdigit():
             base7 = int(s[:7])
-            span_sku = 12 if is_new_article else 6
+            # Burst lebih dalam (±35 = 70 tetangga) saat menemukan artikel/konsinyasi baru agar 1 seri PO tersedot penuh!
+            span_sku = 35 if is_new_article else 8
             for nb7 in range(max(100000, base7 - span_sku), base7 + span_sku + 1):
                 nb_sku = gen_mds_sku8(nb7)
                 add_sku(nb_sku)
@@ -305,3 +306,62 @@ def build_adaptive_sku_census(
         if len(sparse_out) >= max_sparse:
             break
     return sparse_out
+
+
+def build_hot_scan_burst_queues(
+    hot_seeds: List[Dict[str, Any]],
+    active_account: str,
+    existing_skus: Set[str],
+    existing_barcodes: Set[str],
+    calc_ean13_cd: Callable[[str], str],
+    gen_mds_sku8: Callable[[int], Optional[str]],
+    sku_radius: int = 60,
+) -> Tuple[List[str], List[str]]:
+    """
+    JALUR 0A (HYBRID HOT-SCAN BURST):
+    Membaca daftar barang unik yang baru di-scan crew di lapangan (`analytics/hot-scan-seeds.json`).
+    Setiap 1 barang unik yang di-scan crew (mis. `2663005FS` -> SKU 8-digit internalnya di akun Mu+Ku)
+    langsung meledakkan burst `±60` SKU Modulo-10 + tetangga QR/barcodenya di akun role pemiliknya!
+    Hasilnya: 1x scan crew otomatis menyedot 1 blok PO / 1 rak brand konsinyasi penuh!
+    """
+    burst_skus: List[str] = []
+    burst_bcs: List[str] = []
+    seen_s = set(existing_skus)
+    seen_b = set(existing_barcodes)
+    acc_low = str(active_account or "suko").strip().lower()
+
+    for seed in hot_seeds:
+        if not isinstance(seed, dict):
+            continue
+        seed_owner = str(seed.get("ownerAccount") or "").strip().lower()
+        if seed_owner and seed_owner != acc_low:
+            continue
+
+        s_val = normalize_flexible_code(seed.get("sku"))
+        b_val = normalize_flexible_code(seed.get("barcode"))
+
+        # Burst ±60 SKU 8-digit Modulo-10 di sekitar seed SKU (paling ampuh menangkap 1 blok kedatangan barang!)
+        if s_val and len(s_val) == 8 and s_val.isdigit():
+            base7 = int(s_val[:7])
+            for nb7 in range(max(100000, base7 - sku_radius), base7 + sku_radius + 1):
+                cand = gen_mds_sku8(nb7)
+                if cand and cand not in seen_s:
+                    seen_s.add(cand)
+                    burst_skus.append(cand)
+
+        # Burst juga tetangga QR/barcode uniknya (mis. 2663005FS -> 2663000FS..2663015FS + S/M/L/XL)
+        if b_val or s_val:
+            nb_bcs, nb_skus = expand_universal_neighbors(
+                code=b_val or "",
+                sku_val=s_val,
+                is_new_article=True,
+                seen_bcs=seen_b,
+                seen_skus=seen_s,
+                calc_ean13_cd=calc_ean13_cd,
+                gen_mds_sku8=gen_mds_sku8,
+            )
+            burst_bcs.extend(nb_bcs)
+            burst_skus.extend(nb_skus)
+
+    return burst_skus, burst_bcs
+

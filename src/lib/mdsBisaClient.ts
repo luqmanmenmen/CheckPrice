@@ -21,6 +21,51 @@ let ACTION_PROMO = '60a67fb6833e81c90695ed315a2dc4394535951a87';
 
 export type StoreHubAccount = 'suko' | 'muku';
 
+// Daftar semua akun role toko aktif (plug-and-play: tinggal tambah 'zes' begitu kredensial role ZES tersedia)
+const ALL_STORE_ACCOUNTS: StoreHubAccount[] = ['suko', 'muku'];
+
+// Peta routing cepat di RAM: sku -> akun pemilik toko ('suko' | 'muku') agar Live Stok langsung tepat sasaran 0ms!
+const skuOwnerAccountCache = new Map<string, StoreHubAccount>();
+const HOT_SCAN_SEEDS_PATH = 'analytics/hot-scan-seeds.json';
+
+type HotScanSeedEntry = {
+  sku: string;
+  barcode: string | null;
+  article: string | null;
+  brand: string | null;
+  ownerAccount: StoreHubAccount;
+  stok: number;
+  discoveredAt: string;
+};
+
+/**
+ * Simpan jalur kepemilikan akun & seed zona panas ke Turso Storage (`analytics/hot-scan-seeds.json`)
+ * agar: (1) Live Stok tahu akun role pemiliknya, (2) Python Exploration otomatis meledakkan ±60 SKU
+ * di sekitar barang unik yang baru di-scan crew!
+ */
+async function recordHotScanSeed(entry: HotScanSeedEntry): Promise<void> {
+  try {
+    if (entry.sku) skuOwnerAccountCache.set(entry.sku, entry.ownerAccount);
+    const { readTursoStorageJson, writeTursoStorage } = await import('./tursoStorage');
+    const existing = await readTursoStorageJson<{ seeds?: HotScanSeedEntry[]; updatedAt?: string }>(HOT_SCAN_SEEDS_PATH).catch(() => null);
+    const list: HotScanSeedEntry[] = Array.isArray(existing?.seeds) ? [...existing.seeds] : [];
+    const idx = list.findIndex((s) => s.sku === entry.sku);
+    if (idx >= 0) {
+      list[idx] = entry;
+    } else {
+      list.unshift(entry);
+    }
+    const trimmed = list.slice(0, 500);
+    await writeTursoStorage(
+      HOT_SCAN_SEEDS_PATH,
+      JSON.stringify({ updatedAt: new Date().toISOString(), count: trimmed.length, seeds: trimmed }),
+      'application/json'
+    );
+  } catch (err) {
+    console.warn('[MDS-CLIENT] Gagal catat hot-scan-seed:', err);
+  }
+}
+
 const ACCOUNT_CONFIGS: Record<
   StoreHubAccount,
   { username: string; password: string; tz: string; storagePath: string; envCookieKey: string }
@@ -88,6 +133,7 @@ export type CheckSingleItemResult = {
   storeOffline?: boolean;
   savedToDb?: boolean;
   fastMode?: boolean;
+  ownerAccount?: StoreHubAccount;
   message?: string;
 };
 
@@ -890,6 +936,7 @@ async function upsertStoreHubItemToDb(
     siblingImgByColor: Map<string, string>;
     fallbackArticle?: string | null;
     fallbackArticleImg?: string | null;
+    ownerAccount?: StoreHubAccount;
   }
 ): Promise<{
   sku: string;
@@ -1000,6 +1047,7 @@ async function upsertStoreHubItemToDb(
       },
     });
 
+    const aliasSourceTag = opts.ownerAccount ? `LIVE_${opts.ownerAccount.toUpperCase()}` : 'MDS_LIVE';
     await Promise.allSettled(
       allDiscoveredBarcodes
         .map((b) => String(b).trim())
@@ -1007,8 +1055,8 @@ async function upsertStoreHubItemToDb(
         .map((cleanBc) =>
           prisma.barcodeAlias.upsert({
             where: { barcode: cleanBc },
-            update: { barcodeNorm: normalizeCodeKey(cleanBc), sku: itemSku, source: 'MDS_LIVE', updatedAt: new Date() },
-            create: { barcode: cleanBc, barcodeNorm: normalizeCodeKey(cleanBc), sku: itemSku, source: 'MDS_LIVE' },
+            update: { barcodeNorm: normalizeCodeKey(cleanBc), sku: itemSku, source: aliasSourceTag, updatedAt: new Date() },
+            create: { barcode: cleanBc, barcodeNorm: normalizeCodeKey(cleanBc), sku: itemSku, source: aliasSourceTag },
           })
         )
     );
@@ -1694,8 +1742,9 @@ export async function checkLiveStockFast(
   const cleanSku = String(sku).trim();
   const noop = async () => {};
 
+  const cachedOwner = skuOwnerAccountCache.get(cleanSku);
   const primaryAccount: StoreHubAccount =
-    String(brandGroup || '').trim().toUpperCase() === 'MUKU' ? 'muku' : 'suko';
+    cachedOwner || (String(brandGroup || '').trim().toUpperCase() === 'MUKU' ? 'muku' : 'suko');
   const fallbackAccount: StoreHubAccount = primaryAccount === 'muku' ? 'suko' : 'muku';
 
   const variantMeta = new Map<string, { color: string | null; size: string | null; prevStok: number | undefined }>();
@@ -2079,112 +2128,148 @@ export async function checkSingleItemStock(
   };
 
   try {
-    // Tentukan akun utama berdasarkan preferensi / data DB eksisting (Mu+Ku vs SUKO)
-    let primaryAccount: StoreHubAccount = options.preferredAccount || 'suko';
-    if (!options.preferredAccount) {
-      const quickExisting = await prisma.product
-        .findFirst({
-          where: { OR: [{ sku: cleanSku }, { barcode: cleanSku }] },
-          select: { brand: true, dept: true },
-        })
-        .catch(() => null);
-      if (quickExisting && classifyBrandGroup(quickExisting) === 'MUKU') {
-        primaryAccount = 'muku';
-      }
-    }
-    const fallbackAccount: StoreHubAccount = primaryAccount === 'muku' ? 'suko' : 'muku';
+    const initialCandidates = buildInitialProbeCandidates(cleanSku);
 
-    let activeAccount: StoreHubAccount = primaryAccount;
-    let cookie = await getStoreHubCookie(false, null, primaryAccount).catch(() => null);
-    if (!cookie) {
-      activeAccount = fallbackAccount;
-      cookie = await getStoreHubCookie(false, null, fallbackAccount).catch(() => null);
-    }
-    if (!cookie) {
+    // ─────────────────────────────────────────────────────────────────────────
+    // HYBRID AUTO-SCAN ENGINE (DUAL-ACCOUNT PARALLEL PROBE: SUKO + Mu+Ku [+ ZES])
+    // Tembak SEMUA akun role toko secara BERSAMAAN lalu terapkan aturan bisnis:
+    // 1. Jika 2 akun mengembalikan produk yang sama -> pilih akun yang ADA DATA STOKNYA
+    //    (stok > 0 prioritas #1, lalu minus on-hand < 0 prioritas #2, baru 0).
+    // 2. Jika 2 akun sama-sama stok 0 -> tulis 0 & tentukan jalur toko dari brand/dept.
+    // 3. Simpan jalur `ownerAccount` (`LIVE_SUKO`/`LIVE_MUKU`) + catat ke `hot-scan-seeds.json`
+    //    agar Live Stok berikutnya 0ms langsung tepat akun & Python Exploration meledakkan ±60 SKU!
+    // ─────────────────────────────────────────────────────────────────────────
+    type AccountProbeOutcome = {
+      account: StoreHubAccount;
+      cookie: string;
+      queryRes: { itemData: any; allItems: any[]; authFailed: boolean; offline: boolean; actionExpired: boolean; cookie: string };
+      activeKind: 'upc' | 'sku';
+      queriedCode: string;
+      stokNum: number | null;
+    };
+
+    const probeSingleAccount = async (account: StoreHubAccount): Promise<AccountProbeOutcome | null> => {
+      let accCookie = await getStoreHubCookie(false, null, account).catch(() => null);
+      if (!accCookie) return null;
+
+      const firstProbe = initialCandidates[0] || { kind: 'sku' as const, code: cleanSku };
+      let accKind: 'upc' | 'sku' = firstProbe.kind;
+      let accCode = firstProbe.code;
+      let res = await queryStoreHubDetail(accKind, accCode, accCookie, 5500, account);
+
+      if (res.actionExpired && (await resolveDetailActionHash(accCookie))) {
+        res = await queryStoreHubDetail(accKind, accCode, accCookie, 5500, account);
+      }
+      if (res.authFailed) {
+        const fresh = await getStoreHubCookie(true, accCookie, account).catch(() => null);
+        if (fresh) {
+          accCookie = fresh;
+          res = await queryStoreHubDetail(accKind, accCode, accCookie, 5500, account);
+          if ((res.authFailed || res.actionExpired) && (await resolveDetailActionHash(accCookie))) {
+            res = await queryStoreHubDetail(accKind, accCode, accCookie, 5500, account);
+          }
+        }
+      }
+      if (res.cookie) accCookie = res.cookie;
+      if (res.offline || res.authFailed) {
+        return { account, cookie: accCookie, queryRes: res, activeKind: accKind, queriedCode: accCode, stokNum: null };
+      }
+
+      // Jika probe #1 belum ketemu, coba kandidat alternatif (reverse upc/sku, check-digit fix, prefix 234000 / 2*)
+      if (!res.itemData) {
+        for (const cand of initialCandidates.slice(1, 5)) {
+          const altRes = await queryStoreHubDetail(cand.kind, cand.code, accCookie, 4200, account);
+          if (altRes.cookie) accCookie = altRes.cookie;
+          if (altRes.offline) {
+            return { account, cookie: accCookie, queryRes: altRes, activeKind: cand.kind, queriedCode: cand.code, stokNum: null };
+          }
+          if (altRes.itemData) {
+            res = altRes;
+            accKind = cand.kind;
+            accCode = cand.code;
+            break;
+          }
+        }
+      }
+
+      let stokNum: number | null = null;
+      if (res.itemData) {
+        const rawS = res.itemData.StockOnHand ?? res.itemData.stockOnHand ?? res.itemData.stock_on_hand ?? res.itemData.soh;
+        if (rawS !== undefined && rawS !== null && String(rawS).trim() !== '') {
+          const parsed = parseInt(String(rawS), 10);
+          if (!Number.isNaN(parsed)) stokNum = parsed;
+        }
+      }
+      return { account, cookie: accCookie, queryRes: res, activeKind: accKind, queriedCode: accCode, stokNum };
+    };
+
+    const rawOutcomes = await Promise.all(ALL_STORE_ACCOUNTS.map((acc) => probeSingleAccount(acc)));
+    const validOutcomes = rawOutcomes.filter((o): o is AccountProbeOutcome => Boolean(o));
+
+    if (validOutcomes.length === 0) {
       return await fallbackToDb('Server by luqman org belum ada session aktif. Menampilkan stok tersimpan.');
     }
 
-    const initialCandidates = buildInitialProbeCandidates(cleanSku);
-    const firstProbe = initialCandidates[0] || { kind: 'sku' as const, code: cleanSku };
-
-    let activeKind: 'upc' | 'sku' = firstProbe.kind;
-    let queriedCode = firstProbe.code;
-    let queryRes = await queryStoreHubDetail(activeKind, queriedCode, cookie, 5000, activeAccount);
-
-    // Jika Next-Action hash berubah di StoreHub, resolve dinamis lalu retry 1x
-    if (queryRes.actionExpired) {
-      if (await resolveDetailActionHash(cookie)) {
-        queryRes = await queryStoreHubDetail(activeKind, queriedCode, cookie, 5000, activeAccount);
+    const hits = validOutcomes.filter((o) => Boolean(o.queryRes.itemData) && !o.queryRes.itemData.error);
+    if (hits.length === 0) {
+      const anyOffline = validOutcomes.some((o) => o.queryRes.offline);
+      if (anyOffline) {
+        return await fallbackToDb('Server toko fisik sedang istirahat (malam hari). Menampilkan stok tersimpan.');
       }
-    }
-
-    // Jika cookie expired (401 / redirect / HTTP 200 RSC shell), paksa auto-login lalu retry 1x
-    if (queryRes.authFailed) {
-      const freshCookie: string | null = await getStoreHubCookie(true, cookie, activeAccount).catch(() => null);
-      if (freshCookie) {
-        cookie = freshCookie;
-        queryRes = await queryStoreHubDetail(activeKind, queriedCode, cookie, 5000, activeAccount);
-      }
-      if (queryRes.authFailed || queryRes.actionExpired) {
-        if (await resolveDetailActionHash(cookie)) {
-          queryRes = await queryStoreHubDetail(activeKind, queriedCode, cookie, 5000, activeAccount);
-        }
-      }
-      if (queryRes.authFailed) {
+      const allAuthFailed = validOutcomes.every((o) => o.queryRes.authFailed);
+      if (allAuthFailed) {
         return await fallbackToDb('Sesi login luqman org gagal diperbarui. Menampilkan stok tersimpan.');
       }
-    }
-
-    if (queryRes.offline) {
-      return await fallbackToDb('Server toko fisik sedang istirahat (malam hari). Menampilkan stok tersimpan.');
-    }
-
-    // Jika jalur utama tidak menemukannya, coba kandidat alternatif (reverse kind, check-digit fix, prefix 234000 / 2*)
-    if (!queryRes.itemData) {
-      for (const cand of initialCandidates.slice(1)) {
-        const altRes = await queryStoreHubDetail(cand.kind, cand.code, queryRes.cookie || cookie, 4000, activeAccount);
-        if (altRes.cookie) cookie = altRes.cookie;
-        if (altRes.offline) {
-          return await fallbackToDb('Server toko fisik sedang istirahat (malam hari). Menampilkan stok tersimpan.');
-        }
-        if (altRes.itemData) {
-          queryRes = altRes;
-          activeKind = cand.kind;
-          queriedCode = cand.code;
-          break;
-        }
-      }
-    }
-
-    // Dual-Account Auto-Fallback: jika belum ketemu atau stok < 0 di akun pertama, otomatis tembak akun kedua (SUKO <-> Mu+Ku)!
-    const curStokRaw = queryRes.itemData?.StockOnHand ?? queryRes.itemData?.stockOnHand ?? queryRes.itemData?.stock_on_hand ?? queryRes.itemData?.soh;
-    const curStokNum = curStokRaw !== undefined && curStokRaw !== null ? parseInt(String(curStokRaw), 10) : NaN;
-    if ((!queryRes.itemData || (!Number.isNaN(curStokNum) && curStokNum < 0)) && activeAccount === primaryAccount) {
-      const altCookie = await getStoreHubCookie(false, null, fallbackAccount).catch(() => null);
-      if (altCookie) {
-        for (const cand of initialCandidates.slice(0, 3)) {
-          const altRes = await queryStoreHubDetail(cand.kind, cand.code, altCookie, 4500, fallbackAccount);
-          if (altRes.itemData && !altRes.offline && !altRes.authFailed) {
-            activeAccount = fallbackAccount;
-            cookie = altRes.cookie || altCookie;
-            queryRes = altRes;
-            activeKind = cand.kind;
-            queriedCode = cand.code;
-            break;
-          }
-          if (altRes.offline) break;
-        }
-      }
-    }
-
-    const itemData = queryRes.itemData;
-    if (!itemData || itemData.error) {
       return await fallbackToDb('Produk tidak ditemukan di server toko maupun database lokal.');
     }
+
+    // Pilih pemenang berdasarkan aturan bisnis:
+    // 1. Stok positif (> 0) PALING UTAMA (qty lebih besar menang)
+    // 2. Minus on-hand (< 0) menang di atas stok 0 (menandakan produk aktif bertransaksi di akun role tsb!)
+    // 3. Jika semua stok == 0 -> tulis 0 & pilih akun sesuai klasifikasi brand/dept (SUKO -> suko, lainnya -> muku)
+    const rankHit = (h: AccountProbeOutcome): [number, number, number] => {
+      const s = h.stokNum ?? 0;
+      const tier = s > 0 ? 3 : s < 0 ? 2 : 1;
+      const qtyTie = s > 0 ? s : s < 0 ? Math.abs(s) : 0;
+      const { brand: b, dept: d } = normalizeBrandAndDept(h.queryRes.itemData);
+      const grp = classifyBrandGroup({ brand: b, dept: d, description: h.queryRes.itemData?.Description });
+      const brandMatchesAcc =
+        (grp === 'SUKO' && h.account === 'suko') || (grp === 'MUKU' && h.account === 'muku') ? 1 : 0;
+      return [tier, brandMatchesAcc, qtyTie];
+    };
+
+    hits.sort((a, b) => {
+      const ra = rankHit(a);
+      const rb = rankHit(b);
+      if (rb[0] !== ra[0]) return rb[0] - ra[0];
+      if (rb[2] !== ra[2] && rb[0] === 3) return rb[2] - ra[2];
+      if (rb[1] !== ra[1]) return rb[1] - ra[1];
+      return rb[2] - ra[2];
+    });
+
+    const winner = hits[0];
+    const activeAccount: StoreHubAccount = winner.account;
+    let cookie = winner.cookie;
+    const queryRes = winner.queryRes;
+    const activeKind = winner.activeKind;
+    const queriedCode = winner.queriedCode;
+    const itemData = queryRes.itemData;
 
     const seedSku = String(itemData.SKU ?? itemData.sku ?? cleanSku).trim();
     const seedBarcode = itemData.VendorBarcode ? String(itemData.VendorBarcode).trim() : (activeKind === 'upc' ? queriedCode : null);
     let articleToSearch = sanitizeArticleCode(itemData.StyleCode ?? itemData.styleCode ?? itemData.article);
+
+    // Simpan jalur akun pemilik di RAM & antrekan Hot-Scan Seed untuk Python Exploration (fire-and-forget!)
+    skuOwnerAccountCache.set(seedSku, activeAccount);
+    void recordHotScanSeed({
+      sku: seedSku,
+      barcode: seedBarcode || (cleanSku !== seedSku ? cleanSku : null),
+      article: articleToSearch,
+      brand: String(itemData.Brand ?? itemData.brand ?? itemData.Department ?? '').trim() || null,
+      ownerAccount: activeAccount,
+      stok: winner.stokNum ?? 0,
+      discoveredAt: new Date().toISOString(),
+    });
 
     const existingMain = await prisma.product.findUnique({
       where: { sku: seedSku },
@@ -2261,6 +2346,7 @@ export async function checkSingleItemStock(
         siblingImgByColor,
         fallbackArticle: articleToSearch,
         fallbackArticleImg,
+        ownerAccount: activeAccount,
       });
       if (!saved) continue;
       freshStockBySku.set(saved.sku, saved.stok);
@@ -2587,7 +2673,7 @@ export async function checkSingleItemStock(
         .catch(() => {});
     }
 
-    return await finalizeProductFamilyResponse({
+    const finalRes = await finalizeProductFamilyResponse({
       mainSku: seedSku,
       fallbackBarcode: resolvedSeedBarcode,
       mataImages,
@@ -2600,6 +2686,7 @@ export async function checkSingleItemStock(
       imagesMatched,
       storeOffline: false,
     });
+    return { ...finalRes, ownerAccount: activeAccount };
   } catch (err: any) {
     return {
       success: false,

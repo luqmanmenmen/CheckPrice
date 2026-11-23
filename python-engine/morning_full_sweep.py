@@ -53,6 +53,7 @@ from raw_vault_collector import (
 from scrap_controller import (
     build_adaptive_sku_census,
     build_alnum_qr_candidate_queue,
+    build_hot_scan_burst_queues,
     expand_universal_neighbors,
 )
 from turso_db import (
@@ -2531,6 +2532,8 @@ def execute_morning_sweep(
     fill_bc_queue: List[str] = []
     sku_queue: List[str] = []
     alnum_qr_queue: List[str] = []
+    hot_burst_skus: List[str] = []
+    hot_burst_bcs: List[str] = []
 
     if custom_range:
         r_start, r_end = custom_range
@@ -2543,7 +2546,25 @@ def execute_morning_sweep(
     else:
         hunter_bc_queue, fill_bc_queue, sku_queue = build_candidate_queues(set(catalog_by_sku.keys()), existing_barcodes)
         alnum_qr_queue = build_alnum_qr_candidate_queue(existing_barcodes, catalog_by_sku, max_candidates=12000)
-        print("🎯 Strategi UNIVERSAL SCRAP CONTROLLER Aktif (SUKO • Mu+Ku • ZES • QR & Barcode Unik):")
+        # JALUR 0A (HYBRID HOT-SCAN BURST): Baca seed barang unik yang baru di-scan crew di lapangan!
+        try:
+            from turso_db import storage_download_json
+            hot_doc = storage_download_json("analytics/hot-scan-seeds.json") or {}
+            hot_seeds = hot_doc.get("seeds") if isinstance(hot_doc, dict) else []
+            if isinstance(hot_seeds, list) and hot_seeds:
+                hot_burst_skus, hot_burst_bcs = build_hot_scan_burst_queues(
+                    hot_seeds=hot_seeds,
+                    active_account=ACTIVE_ACCOUNT,
+                    existing_skus=set(catalog_by_sku.keys()),
+                    existing_barcodes=existing_barcodes,
+                    calc_ean13_cd=calculate_ean13_check_digit,
+                    gen_mds_sku8=generate_mds_sku8,
+                    sku_radius=60,
+                )
+        except Exception as e_hot:
+            print(f"⚠️ Lewati hot-scan-seeds: {e_hot}")
+        print("🎯 Strategi HYBRID UNIVERSAL SCRAP CONTROLLER Aktif (SUKO • Mu+Ku • ZES • QR & Hot-Scan Burst):")
+        print(f"   👉 [JALUR 0A - Hot-Scan Burst dari Scan Crew]     : {len(hot_burst_skus):,} SKU + {len(hot_burst_bcs):,} QR/BC")
         print(f"   👉 [JALUR 0  - Tarik Barcode & Stok SKU Baru]     : {len(missing_bc_skus):,} SKU")
         print(f"   👉 [JALUR 0C - QR & Barcode Alfanumerik Unik]     : {len(alnum_qr_queue):,} kandidat QR/Alnum")
         print(f"   👉 [JALUR 1  - Hunter Stride-4 Lintas Zona]       : {len(hunter_bc_queue):,} kandidat Barcode")
@@ -2713,6 +2734,12 @@ def execute_morning_sweep(
         if neighbor_sku_queue:
             run_sweep_phase("sku", [s for s in neighbor_sku_queue if s not in existing_skus], "EXPAND-NEW-ART-SKU", expand_on_new_article=False)
     else:
+        # JALUR 0A (PRIORITAS #1 HYBRID): Burst ±60 SKU & QR di sekitar barang unik yang baru di-scan crew di lapangan!
+        if hot_burst_skus:
+            run_sweep_phase("sku", [s for s in hot_burst_skus if s not in existing_skus], "HOT-SCAN-BURST-SKU", expand_on_new_article=True, phase_max_minutes=5.0)
+        if hot_burst_bcs:
+            run_sweep_phase("upc", [b for b in hot_burst_bcs if b not in existing_barcodes], "HOT-SCAN-BURST-QR", expand_on_new_article=True, phase_max_minutes=3.0)
+
         # JALUR 0: Tarik Barcode, Stok, & Harga untuk SKU baru/Mu+Ku tanpa barcode (prioritas New Arrival & stok > 0!)
         # Khusus Mu+Ku yang masih punya puluhan ribu SKU web tanpa barcode, alokasikan mayoritas waktu (~75-80%)
         # untuk menambal barcode nyata, bukan membuang waktu menebak barcode acak!

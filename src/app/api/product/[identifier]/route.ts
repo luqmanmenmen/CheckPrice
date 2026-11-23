@@ -270,6 +270,8 @@ export async function GET(
               return NextResponse.json({
                 data: liveRes.data,
                 siblings: liveRes.siblings || [liveRes.data],
+                aliases: liveRes.aliases || [],
+                ownerAccount: liveRes.ownerAccount || null,
                 source: 'MDS_BISA_LIVE'
               });
             }
