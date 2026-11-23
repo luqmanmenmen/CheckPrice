@@ -102,7 +102,7 @@ jobs:
           if [ "${{ github.event.inputs.action }}" = "muku-scrab" ] || [ "${{ github.event.action }}" = "trigger-muku-scrab" ]; then
             MUKU_MIN=35
           fi
-          python -u python-engine/runner_guardian.py --step "KATEGORI 1D - Scrab Produk Mu+Ku (Aurel)" --action "${{ github.event.inputs.action || github.event.action || 'muku-scrab' }}" --max-retries 3 --track-new-products -- python python-engine/morning_full_sweep.py --account=muku --brutal --upc-first --workers=24 --minutes=$MUKU_MIN --no-catalog --no-inline-images
+          python -u python-engine/runner_guardian.py --step "KATEGORI 1D - Scrab Produk Mu+Ku (Aurel)" --action "${{ github.event.inputs.action || github.event.action || 'muku-scrab' }}" --max-retries 3 --track-new-products -- python python-engine/morning_full_sweep.py --account=muku --brutal --upc-first --workers=40 --minutes=$MUKU_MIN --no-catalog --no-inline-images
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
@@ -227,8 +227,8 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
-      - name: 📊 [KATEGORI 5 - ADMIN ANALYTICS & CLEANUP] Clean Promo, Generate PO, & Precompute JSON Turso
-        if: ${{ github.event.inputs.action == 'analytics' || github.event.inputs.action == 'promo' || github.event.inputs.action == 'stock-only' || github.event.inputs.action == 'suko-stock' || github.event.inputs.action == 'muku-stock' || github.event.inputs.action == 'catalog' || github.event.inputs.action == 'all' || github.event.action == 'trigger-analytics' || github.event.action == 'trigger-promo' || github.event.action == 'trigger-stock-only' || github.event.action == 'trigger-suko-stock' || github.event.action == 'trigger-muku-stock' || github.event.action == 'trigger-sync-engine' }}
+      - name: 📊 [KATEGORI 5 - ADMIN ANALYTICS, PIVOT AUDIT & CLEANUP] Clean Promo, Generate PO, & Precompute JSON Turso
+        if: ${{ github.event.inputs.action == 'analytics' || github.event.inputs.action == 'scrab' || github.event.inputs.action == 'mds-bisa' || github.event.inputs.action == 'muku-scrab' || github.event.inputs.action == 'photos' || github.event.inputs.action == 'promo' || github.event.inputs.action == 'stock-only' || github.event.inputs.action == 'suko-stock' || github.event.inputs.action == 'muku-stock' || github.event.inputs.action == 'catalog' || github.event.inputs.action == 'all' || github.event.action == 'trigger-analytics' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-mds-bisa' || github.event.action == 'trigger-muku-scrab' || github.event.action == 'trigger-photos' || github.event.action == 'trigger-promo' || github.event.action == 'trigger-stock-only' || github.event.action == 'trigger-suko-stock' || github.event.action == 'trigger-muku-stock' || github.event.action == 'trigger-sync-engine' }}
         run: |
           if [ -n "$TURSO_DATABASE_URL" ]; then
             python -u python-engine/runner_guardian.py --step "KATEGORI 5: Admin Analytics & Cleanup" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 -- python python-engine/run_admin_analytics.py --clean-promo --generate-po --analytics

@@ -2722,7 +2722,12 @@ def execute_morning_sweep(
             run_sweep_phase("sku", [s for s in neighbor_sku_queue if s not in existing_skus], "EXPAND-NEW-ART-SKU", expand_on_new_article=False)
     else:
         # JALUR 0: Tarik Barcode, Stok, & Harga untuk SKU baru/Mu+Ku tanpa barcode (prioritas New Arrival & stok > 0!)
-        bc_rec_mins = 12.0 if ACTIVE_ACCOUNT == "muku" else 6.0
+        # Khusus Mu+Ku yang masih punya puluhan ribu SKU web tanpa barcode, alokasikan mayoritas waktu (~75-80%)
+        # untuk menambal barcode nyata, bukan membuang waktu menebak barcode acak!
+        if ACTIVE_ACCOUNT == "muku" and len(missing_bc_skus) > 5000:
+            bc_rec_mins = max(18.0, float(max_minutes) - 8.0)
+        else:
+            bc_rec_mins = 12.0 if ACTIVE_ACCOUNT == "muku" else 6.0
         if missing_bc_skus:
             run_sweep_phase("sku", missing_bc_skus, "BARCODE-RECOVERY", expand_on_new_article=False, phase_max_minutes=bc_rec_mins)
 
