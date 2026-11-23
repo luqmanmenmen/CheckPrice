@@ -121,15 +121,90 @@ def set_active_account(account: str) -> str:
     return key
 
 
-def _is_muku_row(row: Optional[Dict[str, Any]]) -> bool:
-    """Mengembalikan True bila baris produk milik toko Multibrand Mu+Ku (di luar Monostore SUKO & ZES)."""
+def resolve_owner_account_from_row(row: Optional[Dict[str, Any]]) -> str:
+    """
+    Penentuan pemilik toko 100% DETERMINISTIK (Pure Python) berdasarkan Brand/Dept:
+    - 'suko' : Brand/Dept mengandung SUKO -> akun role M223515
+    - 'zes'  : Brand/Dept mengandung ZES  -> slot akun role ZES
+    - 'muku' : Selain SUKO & ZES          -> akun role M223708
+    """
     if not row:
-        return True
+        return "muku"
     b_up = str(row.get("brand") or "").upper()
     d_up = str(row.get("dept") or "").upper()
-    if "SUKO" in b_up or "SUKO" in d_up or "ZES" in b_up or "ZES" in d_up:
-        return False
-    return True
+    if "SUKO" in b_up or "SUKO" in d_up:
+        return "suko"
+    if "ZES" in b_up or "ZES" in d_up:
+        return "zes"
+    return "muku"
+
+
+def _is_muku_row(row: Optional[Dict[str, Any]]) -> bool:
+    """Mengembalikan True bila baris produk milik toko Multibrand Mu+Ku (di luar Monostore SUKO & ZES)."""
+    return resolve_owner_account_from_row(row) == "muku"
+
+
+CROSS_SESSION_COOKIES: Dict[str, str] = {}
+cross_cookie_lock = threading.Lock()
+
+
+def get_session_cookie_for_account(account_key: str) -> str:
+    """
+    Pure Python Dual-Session Cookie Loader:
+    Mengambil session cookie untuk akun role pemilik toko ('suko' M223515 / 'muku' M223708)
+    agar saat Python menemukan produk milik toko lain, Python langsung bisa menarik stok riilnya
+    dari akun role pemilik yang tepat!
+    """
+    acc = str(account_key or "").strip().lower()
+    if acc not in ACCOUNT_PROFILES:
+        return ""
+    with cross_cookie_lock:
+        if CROSS_SESSION_COOKIES.get(acc):
+            return CROSS_SESSION_COOKIES[acc]
+
+    prof = ACCOUNT_PROFILES[acc]
+    env_val = (os.getenv(prof["env_cookie_key"]) or "").strip()
+    if "mso_session=" in env_val:
+        with cross_cookie_lock:
+            CROSS_SESSION_COOKIES[acc] = env_val
+        return env_val
+
+    try:
+        raw = storage_download(prof["cookie_storage_path"])
+        if raw:
+            c = raw.decode("utf-8", errors="ignore").strip()
+            if "mso_session=" in c:
+                with cross_cookie_lock:
+                    CROSS_SESSION_COOKIES[acc] = c
+                return c
+    except Exception:
+        pass
+    return ""
+
+
+def enrich_cross_store_stock_python(rec: Dict[str, Any], ex_row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Pure Python Cross-Store Owner Routing:
+    Jika Python menemukan produk yang Brand/Dept-nya milik toko LAIN (mis. lagi sapu di akun Mu+Ku
+    tapi ketemu produk baru SUKO), langsung tembak 1x memakai akun role pemilik aslinya (`suko`/`muku`)
+    untuk mengisi stok riil (>0, 0, atau -1), lalu jaga anti-timpa bila akun pemilik sedang tidak punya cookie!
+    """
+    owner_acc = resolve_owner_account_from_row(rec)
+    if owner_acc != ACTIVE_ACCOUNT and owner_acc in ACCOUNT_PROFILES:
+        owner_cookie = get_session_cookie_for_account(owner_acc)
+        sku_val = str(rec.get("sku") or "").strip()
+        if owner_cookie and sku_val:
+            try:
+                owner_items = query_storehub_multi("sku", sku_val, owner_cookie)
+                if owner_items and not owner_items[0].get("_offline") and not owner_items[0].get("_unauthorized"):
+                    matched = next((x for x in owner_items if str(x.get("SKU") or "").strip() == sku_val), owner_items[0])
+                    raw_s = matched.get("StockOnHand")
+                    if raw_s is not None and str(raw_s).strip() != "":
+                        rec["stok"] = int(float(raw_s))
+                        return rec
+            except Exception:
+                pass
+    return _protect_cross_store_stock(rec, ex_row)
 
 
 def _protect_cross_store_stock(rec: Dict[str, Any], ex_row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -2346,7 +2421,7 @@ def execute_live_stock_sync(
                             rec = item_to_record(item, existing_row=ex_row)
                             if not rec:
                                 continue
-                            rec = _protect_cross_store_stock(rec, ex_row)
+                            rec = enrich_cross_store_stock_python(rec, ex_row)
                             if is_muku_mode and not _is_muku_row(rec):
                                 continue
                             s_val = rec["sku"]
@@ -2634,7 +2709,7 @@ def execute_morning_sweep(
                         )
                         if not rec:
                             continue
-                        rec = _protect_cross_store_stock(rec, ex_row)
+                        rec = enrich_cross_store_stock_python(rec, ex_row)
                         sku_val = rec["sku"]
                         bc_val = rec.get("barcode")
                         art_val_up = str(rec.get("article") or "").strip().upper()
