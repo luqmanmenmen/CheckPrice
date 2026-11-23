@@ -1,4 +1,4 @@
-name: Retail Sync Engine (3 Kategori Python Turbo Engine — 100% Turso Cloud)
+name: Retail Sync Engine (4 Kategori Python Turbo Matrix Engine — 100% Turso Cloud)
 
 # ARSITEKTUR MURNI PYTHON DI GITHUB ACTIONS + TURSO CLOUD (0% SUPABASE!)
 # Cron otomatis tetap dimatikan agar quota menit GitHub (2.000 menit/bulan) hemat.
@@ -16,9 +16,10 @@ on:
           - scrab
           - mds-bisa
           - muku-scrab
+          - stock-only
+          - suko-stock
           - muku-stock
           - photos
-          - stock-only
           - suko-sales
           - promo
           - upcoming-promo
@@ -47,7 +48,7 @@ on:
         type: string
 
   repository_dispatch:
-    types: [trigger-sync-engine, trigger-scrab, trigger-mds-bisa, trigger-muku-scrab, trigger-muku-stock, trigger-stock-only, trigger-suko-sales, trigger-photos, trigger-promo, trigger-upcoming-promo, trigger-catalog, trigger-analytics]
+    types: [trigger-sync-engine, trigger-scrab, trigger-mds-bisa, trigger-muku-scrab, trigger-stock-only, trigger-suko-stock, trigger-muku-stock, trigger-suko-sales, trigger-photos, trigger-promo, trigger-upcoming-promo, trigger-catalog, trigger-analytics]
 
 concurrency:
   group: retail-sync-group
@@ -95,7 +96,7 @@ jobs:
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
       - name: 🏷️ [KATEGORI 1D - SCRAB KHUSUS MU+KU] Brutal Scraper & Barcode Recovery Akun Mu+Ku
-        if: ${{ github.event.inputs.action == 'muku-scrab' || github.event.inputs.action == 'scrab' || github.event.inputs.action == 'mds-bisa' || github.event.inputs.action == 'all' || github.event.action == 'trigger-muku-scrab' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-mds-bisa' || github.event.action == 'trigger-sync-engine' || (github.event_name == 'workflow_dispatch' && github.event.inputs.action == '') }}
+        if: ${{ github.event.inputs.action == 'muku-scrab' || github.event.inputs.action == 'scrab' || github.event.inputs.action == 'all' || github.event.action == 'trigger-muku-scrab' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-sync-engine' || (github.event_name == 'workflow_dispatch' && github.event.inputs.action == '') }}
         run: |
           MUKU_MIN=24
           if [ "${{ github.event.inputs.action }}" = "muku-scrab" ] || [ "${{ github.event.action }}" = "trigger-muku-scrab" ]; then
@@ -114,7 +115,7 @@ jobs:
         run: |
           if [ -n "$TURSO_DATABASE_URL" ]; then
             python -u python-engine/runner_guardian.py --step "KATEGORI 1B (Collector): Ekspansi Vendor & Audit" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 --track-new-products -- python python-engine/raw_vault_collector.py --collect-vendors --collect-web --audit
-            python -u python-engine/runner_guardian.py --step "KATEGORI 1B (Expander): Katalog luqman org" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 --track-new-products -- python python-engine/matahari_catalog_expander.py
+            python -u python-engine/runner_guardian.py --step "KATEGORI 1B (Expander): Katalog luqman org" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 --track-new-products -- python python-engine/matahari_catalog_expander.py --no-catalog
           else
             echo "TURSO_DATABASE_URL belum dikonfigurasi, lewati ekspansi artikel online."
           fi
@@ -138,8 +139,8 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
-      - name: ⚡ [KATEGORI 2 - UPDATE STOCK & SALES SUKO] Update Stok Terkini & Rekap Penjualan luqman org
-        if: ${{ github.event.inputs.action == 'stock-only' || github.event.inputs.action == 'suko-sales' || github.event.inputs.action == 'all' || github.event.action == 'trigger-stock-only' || github.event.action == 'trigger-suko-sales' }}
+      - name: ⚡ [KATEGORI 2 - UPDATE STOCK & SALES SUKO] Turbo Matrix Stock & Rekap Penjualan SUKO
+        if: ${{ github.event.inputs.action == 'stock-only' || github.event.inputs.action == 'suko-stock' || github.event.inputs.action == 'suko-sales' || github.event.inputs.action == 'all' || github.event.action == 'trigger-stock-only' || github.event.action == 'trigger-suko-stock' || github.event.action == 'trigger-suko-sales' || github.event.action == 'trigger-sync-engine' }}
         run: |
           SALES_DATE="${{ github.event.inputs.sales_date }}"
           SALES_DATE_FLAG=""
@@ -149,7 +150,7 @@ jobs:
           if [ "${{ github.event.inputs.action }}" = "suko-sales" ] || [ "${{ github.event.action }}" = "trigger-suko-sales" ]; then
             python -u python-engine/runner_guardian.py --step "KATEGORI 2: Tarik Sales & Stok SUKO Cepat" --action "suko-sales" --max-retries 3 -- python python-engine/morning_full_sweep.py --account=suko --suko-sales-only --minutes=20 $SALES_DATE_FLAG
           else
-            python -u python-engine/runner_guardian.py --step "KATEGORI 2: Update Stock Live Mapping & Sales SUKO" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 -- python python-engine/morning_full_sweep.py --account=suko --stock-only --minutes=15 $SALES_DATE_FLAG
+            python -u python-engine/runner_guardian.py --step "KATEGORI 2: Update Stock Live SUKO (Turbo Matrix)" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 -- python python-engine/morning_full_sweep.py --account=suko --stock-only --minutes=15 $SALES_DATE_FLAG
           fi
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
@@ -210,7 +211,7 @@ jobs:
         run: |
           if [ -n "$TURSO_DATABASE_URL" ]; then
             STOCK_ONLY_FLAG=""
-            if [ "${{ github.event.inputs.action }}" = "stock-only" ] || [ "${{ github.event.action }}" = "trigger-stock-only" ] || [ "${{ github.event.inputs.action }}" = "muku-stock" ] || [ "${{ github.event.action }}" = "trigger-muku-stock" ]; then
+            if [ "${{ github.event.inputs.action }}" = "stock-only" ] || [ "${{ github.event.action }}" = "trigger-stock-only" ] || [ "${{ github.event.inputs.action }}" = "suko-stock" ] || [ "${{ github.event.action }}" = "trigger-suko-stock" ] || [ "${{ github.event.inputs.action }}" = "muku-stock" ] || [ "${{ github.event.action }}" = "trigger-muku-stock" ]; then
               STOCK_ONLY_FLAG="--stock-only"
             fi
             python -u python-engine/runner_guardian.py --step "KATEGORI 4: Catalog Brain & Offline Snapshot" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 -- python python-engine/build_catalog_index.py $STOCK_ONLY_FLAG
@@ -224,7 +225,7 @@ jobs:
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
       - name: 📊 [KATEGORI 5 - ADMIN ANALYTICS & CLEANUP] Clean Promo, Generate PO, & Precompute JSON Turso
-        if: ${{ github.event.inputs.action == 'analytics' || github.event.inputs.action == 'promo' || github.event.inputs.action == 'stock-only' || github.event.inputs.action == 'catalog' || github.event.inputs.action == 'all' || github.event.action == 'trigger-analytics' || github.event.action == 'trigger-promo' || github.event.action == 'trigger-sync-engine' }}
+        if: ${{ github.event.inputs.action == 'analytics' || github.event.inputs.action == 'promo' || github.event.inputs.action == 'stock-only' || github.event.inputs.action == 'suko-stock' || github.event.inputs.action == 'muku-stock' || github.event.inputs.action == 'catalog' || github.event.inputs.action == 'all' || github.event.action == 'trigger-analytics' || github.event.action == 'trigger-promo' || github.event.action == 'trigger-stock-only' || github.event.action == 'trigger-suko-stock' || github.event.action == 'trigger-muku-stock' || github.event.action == 'trigger-sync-engine' }}
         run: |
           if [ -n "$TURSO_DATABASE_URL" ]; then
             python -u python-engine/runner_guardian.py --step "KATEGORI 5: Admin Analytics & Cleanup" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 -- python python-engine/run_admin_analytics.py --clean-promo --generate-po --analytics

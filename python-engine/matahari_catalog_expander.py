@@ -395,7 +395,7 @@ def fetch_target_collections(products_by_id: Dict[int, Dict[str, Any]], max_coll
     print(f"   ✅ [TAHAP 2] Selesai dalam {time.time() - t0:.1f}s -> Total {len(products_by_id):,} artikel terkumpul!")
 
 
-def execute_catalog_expansion(collections_only: bool = False, max_collections: int = 160):
+def execute_catalog_expansion(collections_only: bool = False, max_collections: int = 160, no_catalog: bool = False):
     from turso_db import connect_turso, is_turso_configured
 
     t_start = time.time()
@@ -685,15 +685,20 @@ def execute_catalog_expansion(collections_only: bool = False, max_collections: i
     cur.close()
     conn.close()
 
-    # Rebuild CatalogArticle agar UI & /api/catalog-models langsung mutakhir
-    print("\n🧠 [TAHAP 5] Menyusun ulang tabel CatalogArticle (Python Catalog Brain)...")
-    stats = build_and_verify_catalog()
+    # Rebuild CatalogArticle hanya bila dipanggil standalone (di GitHub Actions sudah ditangani KATEGORI 4)
+    stats: Dict[str, Any] = {}
+    if not no_catalog:
+        print("\n🧠 [TAHAP 5] Menyusun ulang tabel CatalogArticle (Python Catalog Brain)...")
+        stats = build_and_verify_catalog()
+    else:
+        print("\n⏭️ [TAHAP 5] Dilewati (--no-catalog aktif; Catalog Brain akan dibangun 1x di KATEGORI 4).")
 
     print("\n" + "=" * 80)
     print(f"🎉 SELESAI EKSPANSI KATALOG dalam {time.time() - t_start:.1f} detik!")
     print(f"   • Total SKU Baru Ditambahkan : +{len(insert_list):,} SKU")
-    print(f"   • Total Artikel Katalog Kini : {stats.get('total_articles', 0):,} Artikel")
-    print(f"   • Rincian Toko               : {stats.get('brand_groups', {})}")
+    if stats:
+        print(f"   • Total Artikel Katalog Kini : {stats.get('total_articles', 0):,} Artikel")
+        print(f"   • Rincian Toko               : {stats.get('brand_groups', {})}")
     print("=" * 80)
 
 
@@ -703,5 +708,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Matahari.com Catalog Article & Variant Expander")
     parser.add_argument("--collections-only", action="store_true", help="Lewati Tahap 1 (/products.json 25k) dan langsung pindai koleksi")
     parser.add_argument("--max-collections", type=int, default=160, help="Jumlah maksimal koleksi prioritas yang dipindai")
+    parser.add_argument("--no-catalog", action="store_true", help="Lewati rebuild CatalogArticle (digunakan saat dipanggil di pipeline GitHub Actions)")
     args = parser.parse_args()
-    execute_catalog_expansion(collections_only=args.collections_only, max_collections=args.max_collections)
+    execute_catalog_expansion(
+        collections_only=args.collections_only,
+        max_collections=args.max_collections,
+        no_catalog=args.no_catalog,
+    )

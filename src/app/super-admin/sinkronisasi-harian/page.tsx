@@ -138,7 +138,7 @@ interface DbMetrics {
   totalArticles: number;
 }
 
-type TriggerAction = "scrab" | "mds-bisa" | "muku-scrab" | "muku-stock" | "photos" | "stock-only" | "promo" | "upcoming-promo" | "catalog" | "analytics" | "all";
+type TriggerAction = "scrab" | "mds-bisa" | "muku-scrab" | "stock-only" | "suko-stock" | "muku-stock" | "photos" | "promo" | "upcoming-promo" | "catalog" | "analytics" | "all";
 
 const MAX_FRONTEND_AUTO_RETRIES = 3;
 
@@ -580,21 +580,21 @@ export default function UpdateProdukPage() {
       </div>
 
       {/* ============================================================ */}
-      {/* 3 KATEGORI UTAMA MESIN PYTHON DI GITHUB ACTIONS              */}
+      {/* 4 KATEGORI UTAMA MESIN PYTHON TURBO MATRIX (100% TURSO)      */}
       {/* ============================================================ */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="p-4 border-b border-slate-100 bg-gradient-to-r from-indigo-50 via-purple-50 to-cyan-50 flex items-center justify-between gap-2">
           <div>
             <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
               <ShieldCheck className="w-4 h-4 text-indigo-600" />
-              Rekonstruksi 3 Kategori Trigger (GitHub Actions Python Engine)
+              Pusat Kendali 4 Kategori Mesin Python (100% Turso Cloud)
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Seluruh mesin berjalan di server Ubuntu GitHub Actions dengan brankas mapping 84.763 SKU
+              Mesin Turbo Matrix 60× lebih cepat di GitHub Actions Ubuntu — terisolasi penuh per toko (SUKO &amp; Mu+Ku)
             </p>
           </div>
           <span className="px-2.5 py-1 text-[10px] font-extrabold bg-indigo-100 text-indigo-800 rounded-full border border-indigo-200 shrink-0">
-            84.763 JALUR SKU AKTIF
+            TURBO MATRIX • 327RB+ SKU
           </span>
         </div>
 
@@ -708,46 +708,60 @@ export default function UpdateProdukPage() {
           </div>
 
           {/* ------------------------------------------------------------ */}
-          {/* KATEGORI 2: UPDATE STOCK LIVE (SUKO & MU+KU TERPISAH)        */}
+          {/* KATEGORI 2: TURBO MATRIX STOCK (SUKO + MU+KU / PER TOKO)     */}
           {/* ------------------------------------------------------------ */}
-          <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 bg-gradient-to-br from-cyan-50/90 to-white rounded-xl border border-cyan-200 shadow-2xs">
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="px-2 py-0.5 text-[10px] font-black bg-cyan-600 text-white rounded-md uppercase tracking-wider">
-                  KATEGORI 2 • UPDATE STOCK
-                </span>
-                <p className="font-bold text-cyan-950 text-sm flex items-center gap-1.5">
-                  ⚡ Update Stock Live Terkini (Jalur Akun SUKO &amp; Jalur Akun Mu+Ku)
+          <div className="flex flex-col gap-3 p-4 bg-gradient-to-br from-cyan-50/90 to-white rounded-xl border border-cyan-200 shadow-2xs">
+            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="px-2 py-0.5 text-[10px] font-black bg-cyan-600 text-white rounded-md uppercase tracking-wider">
+                    KATEGORI 2 • TURBO MATRIX STOCK
+                  </span>
+                  <p className="font-bold text-cyan-950 text-sm flex items-center gap-1.5">
+                    ⚡ Update Stock Live Terkini (Mesin Turbo Matrix 1 Request = 1 Artikel Penuh)
+                  </p>
+                </div>
+                <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                  Memperbarui stok fisik seluruh warna &amp; size secara kilat (<strong>60× lebih cepat</strong> &amp; delta-only hemat Turso writes) memakai akun masing-masing toko secara terisolasi (SUKO ↔ Mu+Ku anti-timpa + Promo Live Mu+Ku).
                 </p>
               </div>
-              <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                Memperbarui stok fisik terkini (<code className="text-[11px]">stok</code> &amp; <code className="text-[11px]">relatedStock</code> multi-warna/size) memakai jalur akun masing-masing toko secara terisolasi (anti-timpa stok SUKO ↔ Mu+Ku).
-              </p>
-            </div>
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
               <button
                 onClick={() => handleGitHubDispatch("stock-only")}
                 disabled={isGhDispatching || isRunning}
-                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-extrabold rounded-xl transition-colors disabled:opacity-50 shadow-sm cursor-pointer"
+                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-extrabold rounded-xl transition-colors disabled:opacity-50 shrink-0 shadow-sm cursor-pointer"
               >
                 {isGhDispatching && activeAction === "stock-only" ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
                   <Zap className="w-4 h-4" />
                 )}
-                {isGhDispatching && activeAction === "stock-only" ? "Menyalakan..." : "Update Stock SUKO"}
+                {isGhDispatching && activeAction === "stock-only" ? "Menyalakan..." : "Update Stock Semua (SUKO + Mu+Ku)"}
+              </button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-cyan-100/80">
+              <button
+                onClick={() => handleGitHubDispatch("suko-stock")}
+                disabled={isGhDispatching || isRunning}
+                className="flex items-center justify-center gap-1.5 px-3 py-2 bg-white hover:bg-cyan-50 text-cyan-900 border border-cyan-200 text-xs font-bold rounded-lg transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                {isGhDispatching && activeAction === "suko-stock" ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Zap className="w-3.5 h-3.5 text-cyan-600" />
+                )}
+                🏪 Update Stock SUKO Saja
               </button>
               <button
                 onClick={() => handleGitHubDispatch("muku-stock")}
                 disabled={isGhDispatching || isRunning}
-                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-[#A54F2C] hover:bg-[#8E3F20] text-white text-xs font-extrabold rounded-xl transition-colors disabled:opacity-50 shadow-sm cursor-pointer"
+                className="flex items-center justify-center gap-1.5 px-3 py-2 bg-[#A54F2C]/10 hover:bg-[#A54F2C]/20 text-[#8E3F20] border border-[#A54F2C]/35 text-xs font-extrabold rounded-lg transition-colors disabled:opacity-50 cursor-pointer"
               >
                 {isGhDispatching && activeAction === "muku-stock" ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 ) : (
-                  <Zap className="w-4 h-4" />
+                  <Zap className="w-3.5 h-3.5 text-[#A54F2C]" />
                 )}
-                {isGhDispatching && activeAction === "muku-stock" ? "Menyalakan..." : "Update Stock Mu+Ku"}
+                🏷️ Update Stock Mu+Ku Saja
               </button>
             </div>
           </div>
@@ -797,7 +811,7 @@ export default function UpdateProdukPage() {
                 </p>
               </div>
               <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                Menyusun ulang <code className="text-[11px] bg-white px-1 py-0.5 rounded border border-violet-100">CatalogArticle</code> + mengompres 310rb+ SKU ke 1 file CDN <code className="text-[11px]">.json.gz</code> (~8,5 MB). Notif <em>Update Sekarang</em> hanya menyala bila ada produk baru atau promo berubah.
+                Menyusun ulang <code className="text-[11px] bg-white px-1 py-0.5 rounded border border-violet-100">CatalogArticle</code> (delta-only, urut <strong>Ada Stok &gt; 0 di Page 1</strong>) + mengompres 327rb+ SKU ke 1 file CDN <code className="text-[11px]">.json.gz</code> (~9 MB). Notif <em>Update Sekarang</em> hanya menyala bila ada produk baru atau promo berubah.
               </p>
             </div>
             <button

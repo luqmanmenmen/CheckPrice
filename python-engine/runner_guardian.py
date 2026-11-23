@@ -43,9 +43,8 @@ sys.path.append(str(SCRIPT_DIR))
 from build_offline_snapshot import (  # noqa: E402
     _connect_postgres,
     _load_env_files,
-    _storage_upload,
-    _supabase_credentials,
 )
+from turso_db import storage_download_json, storage_upload  # noqa: E402
 
 STOREHUB_BASE = "https://storehub.mdsretailing.id"
 LOGIN_URL = f"{STOREHUB_BASE}/login?next=%2F"

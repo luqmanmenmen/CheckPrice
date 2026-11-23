@@ -1,23 +1,25 @@
 /**
  * src/lib/githubDispatcher.ts
  * ============================================================================
- * Pusat Dispatch ke GitHub Actions Python Runner (0% Eksekusi Berat di Vercel)
+ * Pusat Dispatch ke GitHub Actions Python Runner (0% Eksekusi Berat di Vercel, 100% Turso Cloud)
  * Mengirim sinyal `workflow_dispatch` ke `.github/workflows/retail-sync-engine.yml`
- * untuk 3 Kategori Utama:
- * 1. KATEGORI 1 — SCRAB (`scrab` | `mds-bisa` | `photos`)
- * 2. KATEGORI 2 — UPDATE STOCK LIVE (`stock-only` via Jalur Mapping 84.763 SKU)
- * 3. KATEGORI 3 — UPDATE PROMO EMAIL (`promo` via Python Promo Parser)
+ * untuk 4 Kategori Utama:
+ * 1. KATEGORI 1 — SCRAB (`scrab` | `mds-bisa` | `muku-scrab` | `photos`)
+ * 2. KATEGORI 2 — TURBO MATRIX STOCK (`stock-only` | `suko-stock` | `muku-stock` | `suko-sales`)
+ * 3. KATEGORI 3 — UPDATE PROMO EMAIL (`promo` | `upcoming-promo`)
+ * 4. KATEGORI 4 — CATALOG BRAIN & SNAPSHOT (`catalog` | `analytics` | `all`)
  * ============================================================================
  */
 
 import { prisma } from '@/lib/prisma';
 import { APP_VERSION } from '@/lib/version';
+import { readTursoStorageText } from '@/lib/tursoStorage';
 
 const REPO_OWNER = 'luqmanmenmen';
 const REPO_NAME = 'CheckPrice';
 const WORKFLOW_ID = 'retail-sync-engine.yml';
 
-export type SyncActionType = 'scrab' | 'mds-bisa' | 'muku-scrab' | 'muku-stock' | 'photos' | 'stock-only' | 'suko-sales' | 'promo' | 'upcoming-promo' | 'catalog' | 'analytics' | 'all';
+export type SyncActionType = 'scrab' | 'mds-bisa' | 'muku-scrab' | 'stock-only' | 'suko-stock' | 'muku-stock' | 'photos' | 'suko-sales' | 'promo' | 'upcoming-promo' | 'catalog' | 'analytics' | 'all';
 
 export async function dispatchToGitHubRunner(params: {
   action: SyncActionType;
@@ -32,16 +34,15 @@ export async function dispatchToGitHubRunner(params: {
 
   let githubToken = process.env.GITHUB_TOKEN || process.env.GH_PAT;
 
-  // Fallback: Ambil token dari Supabase Storage jika belum di-set di Vercel env
+  // Fallback: Ambil token dari Turso Storage jika belum di-set di Vercel env
   if (!githubToken) {
     try {
-      const { supabase } = await import('@/lib/supabaseClient');
-      const { data, error } = await supabase.storage.from('excel-uploads').download('secrets/gh_token.txt');
-      if (data && !error) {
-        githubToken = (await data.text()).trim();
+      const savedToken = await readTursoStorageText('secrets/gh_token.txt');
+      if (savedToken && savedToken.trim()) {
+        githubToken = savedToken.trim();
       }
     } catch (e) {
-      console.warn('[GITHUB-DISPATCH] Gagal membaca fallback token dari Storage:', e);
+      console.warn('[GITHUB-DISPATCH] Gagal membaca fallback token dari Turso Storage:', e);
     }
   }
 
@@ -62,15 +63,14 @@ export async function dispatchToGitHubRunner(params: {
   let mdsCookie = sessionCookie;
   const isMukuAction = action === 'muku-scrab' || action === 'muku-stock';
   const cookiePath = isMukuAction ? 'secrets/mds_cookie_muku.txt' : 'secrets/mds_cookie.txt';
-  if (!mdsCookie && (isMukuAction || action === 'scrab' || action === 'mds-bisa' || action === 'stock-only' || action === 'suko-sales' || action === 'all')) {
+  if (!mdsCookie && (isMukuAction || action === 'scrab' || action === 'mds-bisa' || action === 'stock-only' || action === 'suko-stock' || action === 'suko-sales' || action === 'all')) {
     try {
-      const { supabase } = await import('@/lib/supabaseClient');
-      const { data, error } = await supabase.storage.from('excel-uploads').download(cookiePath);
-      if (data && !error) {
-        mdsCookie = (await data.text()).trim();
+      const savedCookie = await readTursoStorageText(cookiePath);
+      if (savedCookie && savedCookie.trim()) {
+        mdsCookie = savedCookie.trim();
       }
     } catch (e) {
-      console.warn(`[GITHUB-DISPATCH] Gagal membaca fallback ${cookiePath} dari Storage:`, e);
+      console.warn(`[GITHUB-DISPATCH] Gagal membaca fallback ${cookiePath} dari Turso Storage:`, e);
     }
   }
 
@@ -112,9 +112,10 @@ export async function dispatchToGitHubRunner(params: {
     'scrab': 'SCRAB_BRUTAL_TRIGGER',
     'mds-bisa': 'MDS_BISA_SYNC_TRIGGER',
     'muku-scrab': 'MUKU_SCRAP_TRIGGER',
+    'stock-only': 'STOCK_SYNC_TRIGGER',
+    'suko-stock': 'SUKO_STOCK_TRIGGER',
     'muku-stock': 'MUKU_STOCK_TRIGGER',
     'photos': 'PHOTO_SYNC_TRIGGER',
-    'stock-only': 'STOCK_SYNC_TRIGGER',
     'suko-sales': 'MDS_SALES_SYNC_TRIGGER',
     'promo': 'PROMO_SYNC_TRIGGER',
     'upcoming-promo': 'UPCOMING_POP_DRAFT_TRIGGER',
@@ -124,18 +125,19 @@ export async function dispatchToGitHubRunner(params: {
   };
 
   const labelMap: Record<SyncActionType, string> = {
-    'scrab': `KATEGORI 1: Brutal Scrab (by luqman org + Foto luqman org) [v${APP_VERSION}]`,
-    'mds-bisa': `KATEGORI 1A: Brutal Scrab SUKO by luqman org [v${APP_VERSION}]`,
-    'muku-scrab': `KATEGORI 1D: Scrab Produk Mu+Ku + Foto (Jalur Akun Mu+Ku) [v${APP_VERSION}]`,
-    'muku-stock': `KATEGORI 2B: Update Stock Live Mu+Ku (Jalur Akun Mu+Ku) [v${APP_VERSION}]`,
-    'photos': `KATEGORI 1B: Brutal Scrab Foto & Pulihkan URL 404 [v${APP_VERSION}]`,
-    'stock-only': `KATEGORI 2: Update Stock Live (Mapping 84.763 SKU + Sales) [v${APP_VERSION}]`,
-    'suko-sales': `KATEGORI 2B: Tarik Sales & Stok Cepat SUKO (Turso Cloud) [v${APP_VERSION}]`,
-    'promo': `KATEGORI 3: Update Promo Email (Parser v2 + Gemini 2.5) [v${APP_VERSION}]`,
+    'scrab': `KATEGORI 1: Brutal Scrab SUKO + Mu+Ku + Foto 7-Jalur [v${APP_VERSION}]`,
+    'mds-bisa': `KATEGORI 1A: Scrab Data & Barcode SUKO Saja [v${APP_VERSION}]`,
+    'muku-scrab': `KATEGORI 1D: Scrab Produk Mu+Ku + Stok Turbo Matrix + Foto [v${APP_VERSION}]`,
+    'stock-only': `KATEGORI 2: Update Stock Semua (SUKO + Mu+Ku • Turbo Matrix) [v${APP_VERSION}]`,
+    'suko-stock': `KATEGORI 2A: Update Stock SUKO Saja (Turbo Matrix + Sales) [v${APP_VERSION}]`,
+    'muku-stock': `KATEGORI 2B: Update Stock Mu+Ku Saja (Turbo Matrix + Promo Live) [v${APP_VERSION}]`,
+    'photos': `KATEGORI 1C: Brutal Scrab Foto 7-Jalur & Pulihkan URL 404 [v${APP_VERSION}]`,
+    'suko-sales': `KATEGORI 2: Tarik Sales & Stok Cepat SUKO (Turso Cloud) [v${APP_VERSION}]`,
+    'promo': `KATEGORI 3: Update Promo Email (Parser + Gemini AI) [v${APP_VERSION}]`,
     'upcoming-promo': `KATEGORI 6: Persiapan POP H-2/H-1 (Aman, Tidak Ubah Promo Berjalan) [v${APP_VERSION}]`,
     'catalog': `KATEGORI 4: Catalog Brain & Offline Snapshot (.json.gz) [v${APP_VERSION}]`,
-    'analytics': `KATEGORI 5: Python Admin Analytics, Clean Promo, & Saran PO [v${APP_VERSION}]`,
-    'all': `ALL TRIGGER (Kategori 1 + 2 + 3 + 4 Terpadu) [v${APP_VERSION}]`,
+    'analytics': `KATEGORI 5: Python Admin Analytics, Pivot Audit, & Saran PO [v${APP_VERSION}]`,
+    'all': `ALL TRIGGER (SUKO + Mu+Ku • Turbo Matrix + Foto + Promo + Snapshot) [v${APP_VERSION}]`,
   };
 
   if (userId) {
@@ -146,7 +148,7 @@ export async function dispatchToGitHubRunner(params: {
           type: typeMap[action] || 'MDS_BISA_SYNC_TRIGGER',
           fileName: `GitHub Python Runner — ${labelMap[action] || action}`,
           status: 'SUCCESS',
-          records: 84763,
+          records: 0,
         },
       });
     } catch (e) {

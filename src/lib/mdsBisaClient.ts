@@ -15,6 +15,7 @@ const ITEM_CHECKER_URL = `${STOREHUB_BASE}/item-checker`;
 const ACTION_LOGIN_DEFAULT = '603f9b4dfafaa0e65eec411a818c1ebcaa476b889f';
 let ACTION_LOGIN = ACTION_LOGIN_DEFAULT;
 let ACTION_DETAIL = '608e569ea77f8871817d11afae932ecea7d0fcbd09';
+let ACTION_STOCK = '609a33bf9f07b2014de2e2303717cb33ca4a588314';
 let ACTION_PROMO = '60a67fb6833e81c90695ed315a2dc4394535951a87';
 
 export type StoreHubAccount = 'suko' | 'muku';
@@ -1279,19 +1280,153 @@ async function resolveDetailActionHash(activeCookie: string): Promise<boolean> {
           .catch(() => '')
       )
     );
+    let resolvedAny = false;
     for (const jsText of jsTexts) {
       const actMatch = jsText.match(/createServerReference\)?\("([a-f0-9]{40,44})"[^)]{0,160}"checkItemDetail"/);
+      const stockMatch = jsText.match(/createServerReference\)?\("([a-f0-9]{40,44})"[^)]{0,160}"checkItemStock"/);
       const promoMatch = jsText.match(/createServerReference\)?\("([a-f0-9]{40,44})"[^)]{0,160}"checkItemPromotion"/);
+      if (stockMatch?.[1]) {
+        ACTION_STOCK = stockMatch[1];
+        resolvedAny = true;
+      }
       if (promoMatch?.[1]) {
         ACTION_PROMO = promoMatch[1];
+        resolvedAny = true;
       }
       if (actMatch?.[1]) {
         ACTION_DETAIL = actMatch[1];
-        return true;
+        resolvedAny = true;
       }
     }
+    return resolvedAny;
   } catch {}
   return false;
+}
+
+type StockMatrixRow = {
+  normColor: string;
+  sizes: Map<string, number>;
+};
+
+function normStockSizeKey(s: any): string {
+  return String(s || '').trim().toUpperCase().replace(/[\s\-_.]+/g, '');
+}
+
+/**
+ * Mesin Turbo Matrix `checkItemStock`: 1 request (~50-90ms) mengembalikan stok
+ * SELURUH kombinasi Warna × Ukuran untuk satu artikel penuh!
+ */
+async function queryStoreHubStockMatrix(
+  sku: string,
+  activeCookie: string,
+  timeoutMs: number = 5000,
+  account: StoreHubAccount = 'suko'
+): Promise<{ rows: StockMatrixRow[]; authFailed: boolean; offline: boolean; actionExpired: boolean; cookie: string }> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(ITEM_CHECKER_URL, {
+      method: 'POST',
+      headers: {
+        'Accept': 'text/x-component',
+        'Content-Type': 'text/plain;charset=UTF-8',
+        'Cookie': activeCookie,
+        'Next-Action': ACTION_STOCK,
+        'Referer': ITEM_CHECKER_URL,
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15',
+        'Next-Router-State-Tree': '%5B%22%22%2C%7B%22children%22%3A%5B%22(app)%22%2C%7B%22children%22%3A%5B%22item-checker%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C0%5D%7D%2Cnull%2Cnull%2C4%5D%7D%2Cnull%2C%22refetch%22%2C24%5D',
+      },
+      body: JSON.stringify(['sku', sku]),
+      redirect: 'manual',
+      signal: controller.signal,
+    });
+  } catch {
+    clearTimeout(timeoutId);
+    return { rows: [], authFailed: false, offline: true, actionExpired: false, cookie: activeCookie };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  const updatedCookie = await persistRefreshedSessionIfAny(res, activeCookie, account);
+  if (res.status === 404) {
+    return { rows: [], authFailed: false, offline: false, actionExpired: true, cookie: updatedCookie };
+  }
+  const redirectTarget = res.headers.get('location') || res.headers.get('x-action-redirect') || '';
+  if (res.status === 401 || (res.status >= 300 && res.status < 400 && redirectTarget.includes('/login')) || redirectTarget.includes('/login')) {
+    return { rows: [], authFailed: true, offline: false, actionExpired: false, cookie: updatedCookie };
+  }
+
+  const text = await res.text();
+  if (
+    res.status === 504 ||
+    text.includes('504 Gateway') ||
+    text.includes('Gateway Time-out') ||
+    text.includes('no route to host') ||
+    text.includes('unable to open tcp connection')
+  ) {
+    return { rows: [], authFailed: false, offline: true, actionExpired: false, cookie: updatedCookie };
+  }
+  if (text.includes('NEXT_REDIRECT') && text.includes('/login')) {
+    return { rows: [], authFailed: true, offline: false, actionExpired: false, cookie: updatedCookie };
+  }
+
+  const rows: StockMatrixRow[] = [];
+  for (const line of text.split('\n')) {
+    const ci = line.indexOf(':');
+    if (ci <= 0 || ci > 3) continue;
+    try {
+      const parsed = JSON.parse(line.slice(ci + 1));
+      const data = parsed?.result?.data;
+      if (Array.isArray(data)) {
+        for (const row of data) {
+          if (!row || typeof row !== 'object') continue;
+          const colorRaw = row['COLOR & SIZE'] ?? row['COLOR'] ?? row['Color'] ?? row['color'] ?? '';
+          const normColor = normalizeRetailColorKey(colorRaw);
+          if (!normColor) continue;
+          const sizeMap = new Map<string, number>();
+          for (const [k, v] of Object.entries(row)) {
+            const ku = k.trim().toUpperCase();
+            if (ku === 'COLOR & SIZE' || ku === 'COLOR' || ku === 'TOTAL') continue;
+            const normSz = normStockSizeKey(k);
+            if (!normSz) continue;
+            const numVal = Number(v);
+            if (!Number.isNaN(numVal)) {
+              sizeMap.set(normSz, Math.max(0, Math.round(numVal)));
+            }
+          }
+          if (sizeMap.size > 0) {
+            rows.push({ normColor, sizes: sizeMap });
+          }
+        }
+        if (rows.length > 0) break;
+      }
+    } catch {}
+  }
+
+  return { rows, authFailed: false, offline: false, actionExpired: false, cookie: updatedCookie };
+}
+
+function lookupStockFromMatrix(rows: StockMatrixRow[], color: string | null | undefined, size: string | null | undefined): number | null {
+  if (!rows || rows.length === 0) return null;
+  const sibColor = normalizeRetailColorKey(color);
+  const sibSize = normStockSizeKey(size);
+  if (!sibSize) return null;
+
+  for (const entry of rows) {
+    const colorMatched =
+      !sibColor ||
+      rows.length === 1 ||
+      entry.normColor === sibColor ||
+      (entry.normColor.length >= 3 &&
+        sibColor.length >= 3 &&
+        (entry.normColor.includes(sibColor) || sibColor.includes(entry.normColor)));
+    if (!colorMatched) continue;
+    if (entry.sizes.has(sibSize)) {
+      return entry.sizes.get(sibSize)!;
+    }
+  }
+  return null;
 }
 
 /** Memanggil Server Action `checkItemPromotion` StoreHub untuk menarik harga promo live (khususnya Mu+Ku tanpa Excel) */
@@ -1524,12 +1659,11 @@ export type FastLiveStockResult = {
 };
 
 /**
- * JALUR TOL KHUSUS LIVE STOK (~0.8–2.5 detik, 0 query baca DB, 0 nyari/ngeping jalur):
- * 1. Panggil StoreHub 1 KALI langsung memakai ACTION_DETAIL tersimpan.
- * 2. Langsung petakan `allItems` + `itemData.relatedStock` ke seluruh varian warna/ukuran dari HP kasir!
- * 3. Hanya jika StoreHub tidak mengirim `relatedStock`, jalankan MAKSIMAL 1 gelombang paralel cepat
- *    (prioritas warna aktif, maks 16 SKU, batas waktu keras 3.5 detik).
- * 4. Simpan ke Supabase di latar belakang HANYA untuk SKU yang stoknya BENAR-BENAR berubah (0 write jika sama!).
+ * JALUR TOL TURBO MATRIX LIVE STOK (~0.3–1.2 detik, 0 query baca DB):
+ * 1. Panggil StoreHub `checkItemStock` (Turbo Matrix 1 request = SEMUA warna × SEMUA size) + `checkItemDetail` paralel.
+ * 2. Petakan matriks warna × ukuran ke seluruh varian artikel dari HP kasir secara instan!
+ * 3. Hanya untuk sisa varian yang tidak tercatat di matriks (jarang terjadi), lakukan 1 gelombang fallback cepat.
+ * 4. Simpan ke Turso Cloud di latar belakang HANYA untuk SKU yang stoknya BENAR-BENAR berubah (0 write jika sama!).
  */
 export async function checkLiveStockFast(
   sku: string,
@@ -1578,18 +1712,30 @@ export async function checkLiveStockFast(
     };
   }
 
-  // 1 KALI panggilan langsung ke jalur StoreHub item-checker memakai akun sesuai toko (Mu+Ku / SUKO)
-  let first = await queryStoreHubDetail('sku', cleanSku, cookie, 7000, activeAccount);
-  if (first.actionExpired && (await resolveDetailActionHash(cookie))) {
-    first = await queryStoreHubDetail('sku', cleanSku, cookie, 7000, activeAccount);
+  // Panggil paralel: 1x `checkItemDetail` (info SKU utama) + 1x `checkItemStock` (Turbo Matrix SEMUA warna & size!)
+  let [first, matrixRes] = await Promise.all([
+    queryStoreHubDetail('sku', cleanSku, cookie, 7000, activeAccount),
+    queryStoreHubStockMatrix(cleanSku, cookie, 7000, activeAccount),
+  ]);
+  if ((first.actionExpired || matrixRes.actionExpired) && (await resolveDetailActionHash(cookie))) {
+    [first, matrixRes] = await Promise.all([
+      queryStoreHubDetail('sku', cleanSku, cookie, 7000, activeAccount),
+      queryStoreHubStockMatrix(cleanSku, cookie, 7000, activeAccount),
+    ]);
   }
-  if (first.authFailed) {
+  if (first.authFailed || matrixRes.authFailed) {
     const fresh = await getStoreHubCookie(true, cookie, activeAccount).catch(() => null);
     if (fresh) {
       cookie = fresh;
-      first = await queryStoreHubDetail('sku', cleanSku, cookie, 7000, activeAccount);
-      if (first.actionExpired && (await resolveDetailActionHash(cookie))) {
-        first = await queryStoreHubDetail('sku', cleanSku, cookie, 7000, activeAccount);
+      [first, matrixRes] = await Promise.all([
+        queryStoreHubDetail('sku', cleanSku, cookie, 7000, activeAccount),
+        queryStoreHubStockMatrix(cleanSku, cookie, 7000, activeAccount),
+      ]);
+      if ((first.actionExpired || matrixRes.actionExpired) && (await resolveDetailActionHash(cookie))) {
+        [first, matrixRes] = await Promise.all([
+          queryStoreHubDetail('sku', cleanSku, cookie, 7000, activeAccount),
+          queryStoreHubStockMatrix(cleanSku, cookie, 7000, activeAccount),
+        ]);
       }
     }
   }
@@ -1597,24 +1743,33 @@ export async function checkLiveStockFast(
   // Jalan Alternatif Otomatis: jika akun utama tidak menemukan item atau stok < 0 (beda role toko), coba akun satunya!
   const firstStokRaw = first.itemData?.StockOnHand ?? first.itemData?.stockOnHand ?? first.itemData?.stock_on_hand ?? first.itemData?.soh;
   const firstStokNum = firstStokRaw !== undefined && firstStokRaw !== null ? parseInt(String(firstStokRaw), 10) : NaN;
-  if ((!first.itemData || (!Number.isNaN(firstStokNum) && firstStokNum < 0)) && !first.offline && activeAccount === primaryAccount) {
+  if (
+    (!first.itemData || (!Number.isNaN(firstStokNum) && firstStokNum < 0)) &&
+    matrixRes.rows.length === 0 &&
+    !first.offline &&
+    activeAccount === primaryAccount
+  ) {
     const altCookie = await getStoreHubCookie(false, null, fallbackAccount).catch(() => null);
     if (altCookie) {
-      const altFirst = await queryStoreHubDetail('sku', cleanSku, altCookie, 4500, fallbackAccount);
-      if (altFirst.itemData && !altFirst.offline && !altFirst.authFailed) {
+      const [altFirst, altMatrix] = await Promise.all([
+        queryStoreHubDetail('sku', cleanSku, altCookie, 4500, fallbackAccount),
+        queryStoreHubStockMatrix(cleanSku, altCookie, 4500, fallbackAccount),
+      ]);
+      if ((altFirst.itemData || altMatrix.rows.length > 0) && !altFirst.offline && !altFirst.authFailed) {
         activeAccount = fallbackAccount;
-        cookie = altFirst.cookie || altCookie;
+        cookie = altFirst.cookie || altMatrix.cookie || altCookie;
         first = altFirst;
+        matrixRes = altMatrix;
       }
     }
   }
-  if (first.authFailed) {
+  if (first.authFailed && matrixRes.rows.length === 0) {
     return {
       result: { success: false, sku: cleanSku, message: 'Sesi login luqman org gagal diperbarui. Coba tekan ulang Live Stok.' },
       persist: noop,
     };
   }
-  if (first.offline) {
+  if (first.offline && matrixRes.rows.length === 0) {
     return {
       result: {
         success: false,
@@ -1626,6 +1781,7 @@ export async function checkLiveStockFast(
     };
   }
   if (first.cookie) cookie = first.cookie;
+  else if (matrixRes.cookie) cookie = matrixRes.cookie;
 
   const stockBySku = new Map<string, number>();
   const colorSizeBySku = new Map<string, { color: string | null; size: string | null }>();
@@ -1646,46 +1802,20 @@ export async function checkLiveStockFast(
   };
   absorb(first);
 
-  // JALUR KILAT: Manfaatkan `relatedStock` dari 1 response StoreHub di atas untuk memetakan SELURUH warna & size!
-  let mappedViaRelated = 0;
-  const relStock = first.itemData?.relatedStock;
-  if (relStock && typeof relStock === 'object' && variantMeta.size > 0) {
-    const normSize = (s: any) => String(s || '').trim().toUpperCase().replace(/[\s\-_.]+/g, '');
-    const relEntries = Object.entries(relStock).map(([cKey, sizesObj]) => ({
-      relColor: normalizeRetailColorKey(cKey),
-      sizes: sizesObj && typeof sizesObj === 'object'
-        ? Object.entries(sizesObj as Record<string, any>).map(([szKey, qtyVal]) => ({
-            relSize: normSize(szKey),
-            qty: parseInt(String(qtyVal), 10) || 0,
-          }))
-        : [],
-    }));
-
+  // JALUR KILAT TURBO MATRIX: Petakan hasil `checkItemStock` ke SELURUH warna & size dalam 0ms!
+  let mappedViaMatrix = 0;
+  if (matrixRes.rows.length > 0 && variantMeta.size > 0) {
     for (const [sibSku, meta] of variantMeta.entries()) {
-      if (stockBySku.has(sibSku)) continue;
-      const sibColor = normalizeRetailColorKey(meta.color);
-      const sibSize = normSize(meta.size);
-      if (!sibColor || !sibSize) continue;
-      for (const entry of relEntries) {
-        const colorMatched =
-          entry.relColor === sibColor ||
-          (entry.relColor.length >= 3 &&
-            sibColor.length >= 3 &&
-            (entry.relColor.includes(sibColor) || sibColor.includes(entry.relColor)));
-        if (!colorMatched) continue;
-        const sizeHit = entry.sizes.find((x) => x.relSize === sibSize);
-        if (sizeHit) {
-          stockBySku.set(sibSku, sizeHit.qty);
-          colorSizeBySku.set(sibSku, { color: meta.color, size: meta.size });
-          mappedViaRelated++;
-          break;
-        }
+      const qty = lookupStockFromMatrix(matrixRes.rows, meta.color, meta.size);
+      if (qty !== null) {
+        stockBySku.set(sibSku, qty);
+        colorSizeBySku.set(sibSku, { color: meta.color, size: meta.size });
+        mappedViaMatrix++;
       }
     }
   }
 
-  // Hanya jika `relatedStock` TIDAK meng-cover varian (misal format StoreHub tanpa relatedStock):
-  // lakukan MAKSIMAL 1 gelombang paralel cepat (prioritas warna aktif, maks 16 SKU, timeout 3.5 detik)
+  // Fallback hanya bila matriks belum meng-cover sebagian varian (misal beda penamaan warna/size)
   const activeNormColor = normalizeRetailColorKey(
     first.itemData?.COLOR ?? first.itemData?.Color ?? first.itemData?.color ?? variantMeta.get(cleanSku)?.color
   );
@@ -1697,14 +1827,13 @@ export async function checkLiveStockFast(
       return aSame - bSame;
     });
 
-  if (remaining.length > 0 && mappedViaRelated === 0) {
+  if (remaining.length > 0 && mappedViaMatrix === 0) {
     const singleWave = remaining.slice(0, 16);
     const results = await Promise.all(singleWave.map((s) => queryStoreHubDetail('sku', s, cookie!, 3500, activeAccount)));
     for (const r of results) {
       if (!r.offline && !r.authFailed) absorb(r);
     }
-  } else if (remaining.length > 0 && remaining.length <= 8) {
-    // Sisa sedikit (<= 8 SKU tidak ada di relatedStock): selesaikan dalam 1 batch paralel cepat (~0.8s)
+  } else if (remaining.length > 0 && remaining.length <= 6) {
     const results = await Promise.all(remaining.map((s) => queryStoreHubDetail('sku', s, cookie!, 3000, activeAccount)));
     for (const r of results) {
       if (!r.offline && !r.authFailed) absorb(r);
@@ -2239,79 +2368,48 @@ export async function checkSingleItemStock(
       }
     }
 
-    // 3. Sinkronkan relatedStock dari StoreHub ke seluruh varian warna/ukuran DB secara batch per qty
-    if (articleToSearch && itemData.relatedStock && typeof itemData.relatedStock === 'object') {
+    // 3. Sinkronkan seluruh varian warna/ukuran DB memakai Turbo Matrix `checkItemStock` (1 request ~50-90ms)
+    if (articleToSearch && cookie) {
       try {
-        const siblings = await prisma.product.findMany({
-          where: { article: articleToSearch },
-          select: { id: true, sku: true, color: true, size: true, stok: true },
-        });
-        const normColor = (s: any) =>
-          String(s || '')
-            .trim()
-            .toUpperCase()
-            .replace(/\bMED\b|\bMDM\b/g, 'MEDIUM')
-            .replace(/\bDRK\b/g, 'DARK')
-            .replace(/\bLGT\b/g, 'LIGHT')
-            .replace(/\bBLK\b/g, 'BLACK')
-            .replace(/\bWHT\b/g, 'WHITE')
-            .replace(/\bNVY\b/g, 'NAVY')
-            .replace(/\bGRY\b/g, 'GREY')
-            .replace(/[\s\-_./]+/g, '');
-        const normSize = (s: any) => String(s || '').trim().toUpperCase().replace(/[\s\-_.]+/g, '');
-        const idsByStock = new Map<number, number[]>();
+        const seedSkuForMatrix = String(itemData.SKU ?? itemData.sku ?? cleanSku).trim();
+        const matrixRes = await queryStoreHubStockMatrix(seedSkuForMatrix, cookie, 4500, activeAccount);
+        if (matrixRes.rows.length > 0) {
+          const siblings = await prisma.product.findMany({
+            where: { article: articleToSearch },
+            select: { id: true, sku: true, color: true, size: true, stok: true },
+          });
+          const idsByStock = new Map<number, number[]>();
 
-        for (const sib of siblings) {
-          if (seenUpdatedSkus.has(sib.sku)) continue;
-          const sibColor = normColor(sib.color);
-          const sibSize = normSize(sib.size);
-          let foundQty: number | null = null;
-
-          for (const [relColorKey, sizesObj] of Object.entries(itemData.relatedStock)) {
-            const relColor = normColor(relColorKey);
-            const colorMatched =
-              relColor === sibColor ||
-              (relColor.length >= 3 && sibColor.length >= 3 && (relColor.includes(sibColor) || sibColor.includes(relColor)));
-            if (colorMatched) {
-              if (sizesObj && typeof sizesObj === 'object') {
-                for (const [relSizeKey, qtyVal] of Object.entries(sizesObj as Record<string, any>)) {
-                  const relSize = normSize(relSizeKey);
-                  if (relSize === sibSize) {
-                    foundQty = parseInt(String(qtyVal), 10) || 0;
-                    break;
-                  }
-                }
+          for (const sib of siblings) {
+            if (seenUpdatedSkus.has(sib.sku)) continue;
+            const foundQty = lookupStockFromMatrix(matrixRes.rows, sib.color, sib.size);
+            if (foundQty !== null) {
+              freshStockBySku.set(sib.sku, foundQty);
+              liveCheckedSkus.add(sib.sku);
+              if (sib.stok !== foundQty) {
+                changedCount++;
+                const list = idsByStock.get(foundQty) || [];
+                list.push(sib.id);
+                idsByStock.set(foundQty, list);
               }
+              seenUpdatedSkus.add(sib.sku);
+              updatedVariants.push({ sku: sib.sku, color: sib.color, size: sib.size, stok: foundQty });
             }
-            if (foundQty !== null) break;
           }
-
-          if (foundQty !== null) {
-            freshStockBySku.set(sib.sku, foundQty);
-            liveCheckedSkus.add(sib.sku);
-            if (sib.stok !== foundQty) {
-              changedCount++;
-              const list = idsByStock.get(foundQty) || [];
-              list.push(sib.id);
-              idsByStock.set(foundQty, list);
-            }
-            seenUpdatedSkus.add(sib.sku);
-            updatedVariants.push({ sku: sib.sku, color: sib.color, size: sib.size, stok: foundQty });
+          if (idsByStock.size > 0) {
+            const nowTs = new Date();
+            await Promise.allSettled(
+              Array.from(idsByStock.entries()).map(([qtyVal, idList]) =>
+                prisma.product.updateMany({
+                  where: { id: { in: idList } },
+                  data: { stok: qtyVal, updatedAt: nowTs },
+                })
+              )
+            );
           }
-        }
-        if (idsByStock.size > 0) {
-          const nowTs = new Date();
-          await Promise.allSettled(
-            Array.from(idsByStock.entries()).map(([qtyVal, idList]) =>
-              prisma.product.updateMany({
-                where: { id: { in: idList } },
-                data: { stok: qtyVal, updatedAt: nowTs },
-              })
-            )
-          );
         }
       } catch (sibErr) {
-        console.warn('[MDS-CLIENT] Gagal update sibling variants:', sibErr);
+        console.warn('[MDS-CLIENT] Gagal update sibling variants via Turbo Matrix:', sibErr);
       }
     }
 
@@ -2340,7 +2438,7 @@ export async function checkSingleItemStock(
           let batchRes = await Promise.all(
             batch.map(async (targetSibSku) => ({
               targetSibSku,
-              res: await queryStoreHubDetail('sku', targetSibSku, cookie!, 3500),
+              res: await queryStoreHubDetail('sku', targetSibSku, cookie!, 3500, activeAccount),
             }))
           );
 
