@@ -237,8 +237,11 @@ export async function GET(
       }
     }
 
-    // Jika scan barcode/SKU (8-14 digit) tidak ada di DB Turso, OTOMATIS langsung tembak MDS BISA + Matahari.com!
-    const allowLiveFallback = isPureDigitCode || searchParams.get('live') === '1';
+    // Jika scan barcode/SKU numerik MAUPUN QR/Barcode alfanumerik unik (mis. 2663005FS) tidak ada di DB Turso,
+    // OTOMATIS langsung tembak live server (Mu+Ku + SUKO) & simpan permanen ke Product + BarcodeAlias!
+    const isLikelyUniqueQrOrVendorCode =
+      isAlphaVendorCode && rawInput.length >= 6 && /\d{3,}/.test(rawInput);
+    const allowLiveFallback = isPureDigitCode || isLikelyUniqueQrOrVendorCode || searchParams.get('live') === '1';
 
     if (isPureDigitCode || isAlphaVendorCode) {
       if (allowLiveFallback) {
@@ -252,12 +255,14 @@ export async function GET(
 
         if (!hasDbArticleMatch) {
           try {
-            const liveTimeoutMs = isPureDigitCode ? 12000 : 6000;
+            const liveTimeoutMs = isPureDigitCode ? 12000 : 9500;
             const liveRes: any = await Promise.race([
               checkSingleItemStock(rawInput, {
                 discoverFamily: true,
                 withImages: true,
                 syncAllSizes: true,
+                // QR / barcode alfanumerik unik (mis. 2663005FS) mayoritas milik Mu+Ku / konsinyasi -> coba Mu+Ku dulu (otomatis fallback SUKO!)
+                ...(isLikelyUniqueQrOrVendorCode ? { preferredAccount: 'muku' as const } : {}),
               }),
               new Promise((resolve) => setTimeout(() => resolve({ success: false, timeout: true }), liveTimeoutMs))
             ]);

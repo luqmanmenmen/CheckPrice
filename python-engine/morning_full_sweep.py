@@ -50,6 +50,11 @@ from raw_vault_collector import (
     normalize_sku_token,
     record_raw_items_batch,
 )
+from scrap_controller import (
+    build_adaptive_sku_census,
+    build_alnum_qr_candidate_queue,
+    expand_universal_neighbors,
+)
 from turso_db import (
     format_prisma_iso,
     get_turso_table_client,
@@ -1281,20 +1286,19 @@ def build_candidate_queues(existing_skus: Set[str], existing_barcodes: Set[str])
                     seen_sku_bodies.add(b7)
                     candidate_sku_bodies.append(b7)
 
-    # Sparse census probe di klaster SKU 71xxxxxx-73xxxxxx (brand baru / ZES / 3 VANCE / TOME AME dsb.) diletakkan terdepan
-    sparse_sku8: List[str] = []
-    for b7 in range(7100000, 7350000, 125):
-        cand_s = generate_mds_sku8(b7)
-        if cand_s and cand_s not in existing_skus:
-            sparse_sku8.append(cand_s)
+    # Sensus SKU adaptif lintas SELURUH klaster aktif (SUKO, Mu+Ku, ZES, & konsinyasi baru — via Universal Scrap Controller)
+    sparse_sku8 = build_adaptive_sku_census(existing_skus, generate_mds_sku8, max_sparse=8000)
     sku_queue = sparse_sku8 + [generate_mds_sku8(b7) for b7 in candidate_sku_bodies]
-    # Tambahkan tetangga langsung (+/-3) untuk SKU 7 atau 9 digit yang ada di DB
-    extra_len_skus = [int(s) for s in existing_skus if len(s) in (7, 9) and s.isdigit()]
-    for n_sku in extra_len_skus:
+    # Tambahkan tetangga langsung (+/-3) untuk SKU 6/7/9/10 digit yang ada di DB
+    extra_len_skus = [s for s in existing_skus if len(s) in (6, 7, 9, 10) and s.isdigit()]
+    for s_raw in extra_len_skus:
+        n_sku = int(s_raw)
+        w = len(s_raw)
         for d in range(-3, 4):
-            cand_s = str(n_sku + d)
-            if cand_s not in existing_skus:
-                sku_queue.append(cand_s)
+            if d != 0 and n_sku + d > 0:
+                cand_s = f"{n_sku + d:0{w}d}"
+                if cand_s not in existing_skus:
+                    sku_queue.append(cand_s)
     sku_queue = [s for s in dict.fromkeys(sku_queue) if s and s not in existing_skus]
 
     # --- 2. KANDIDAT BARCODE: FLEKSIBEL PENUH (000001..999999 + KLASTER DINAMIS NON-234000) ---
@@ -2526,6 +2530,7 @@ def execute_morning_sweep(
     hunter_bc_queue: List[str] = []
     fill_bc_queue: List[str] = []
     sku_queue: List[str] = []
+    alnum_qr_queue: List[str] = []
 
     if custom_range:
         r_start, r_end = custom_range
@@ -2537,10 +2542,12 @@ def execute_morning_sweep(
         print(f"🎯 Mode Rentang Khusus: 234000{r_start:06d} .. 234000{r_end:06d} ({len(hunter_bc_queue):,} kandidat belum terindeks)")
     else:
         hunter_bc_queue, fill_bc_queue, sku_queue = build_candidate_queues(set(catalog_by_sku.keys()), existing_barcodes)
-        print("🎯 Strategi ARTICLE-FIRST HUNTER Aktif (Prioritas Artikel Baru + Lengkapi Barcode):")
-        print(f"   👉 [JALUR 0 - Tarik Barcode & Stok SKU Baru] : {len(missing_bc_skus):,} SKU")
-        print(f"   👉 [JALUR 1 - Hunter Stride-4 Lintas Zona]   : {len(hunter_bc_queue):,} kandidat Barcode")
-        print(f"   👉 [JALUR 2 - Isi Sisa Varian & Celah SKU]   : {len(fill_bc_queue):,} BC + {len(sku_queue):,} SKU")
+        alnum_qr_queue = build_alnum_qr_candidate_queue(existing_barcodes, catalog_by_sku, max_candidates=12000)
+        print("🎯 Strategi UNIVERSAL SCRAP CONTROLLER Aktif (SUKO • Mu+Ku • ZES • QR & Barcode Unik):")
+        print(f"   👉 [JALUR 0  - Tarik Barcode & Stok SKU Baru]     : {len(missing_bc_skus):,} SKU")
+        print(f"   👉 [JALUR 0C - QR & Barcode Alfanumerik Unik]     : {len(alnum_qr_queue):,} kandidat QR/Alnum")
+        print(f"   👉 [JALUR 1  - Hunter Stride-4 Lintas Zona]       : {len(hunter_bc_queue):,} kandidat Barcode")
+        print(f"   👉 [JALUR 2  - Isi Sisa Varian & Celah SKU Adaptif]: {len(fill_bc_queue):,} BC + {len(sku_queue):,} SKU")
 
     new_discovered = 0
     new_articles_discovered = 0
@@ -2649,34 +2656,19 @@ def execute_morning_sweep(
                             seen_articles.add(art_val_up)
                             new_articles_discovered += 1
 
-                        # HANYA saat menemukan ARTIKEL BARU (atau SKU baru dari upc), antrekan tetangga terdekat di PREFIX MANAPUN!
+                        # Ekspansi tetangga UNIVERSAL (EAN-13, QR Alfanumerik 2663005FS, Code-128, SKU 7/8/9/Alnum!)
                         if expand_on_new_article and (is_new_article or (is_new and category == "upc")):
-                            if bc_val and len(bc_val) == 13 and bc_val.isdigit():
-                                pfx6 = bc_val[:6]
-                                base6 = int(bc_val[6:12])
-                                span_bc = (-3, 12) if is_new_article else (-1, 5)
-                                min_b = 1000 if pfx6 == "234000" else 0
-                                for nb6 in range(max(min_b, base6 + span_bc[0]), min(999999, base6 + span_bc[1])):
-                                    d12 = f"{pfx6}{nb6:06d}"
-                                    nb_bc = f"{d12}{calculate_ean13_check_digit(d12)}"
-                                    if nb_bc and nb_bc not in seen_neighbor_bcs:
-                                        seen_neighbor_bcs.add(nb_bc)
-                                        neighbor_bc_queue.append(nb_bc)
-                            if len(sku_val) == 8 and sku_val.isdigit():
-                                base7 = int(sku_val[:7])
-                                span_sku = 12 if is_new_article else 6
-                                for nb7 in range(max(100000, base7 - span_sku), base7 + span_sku + 1):
-                                    nb_sku = generate_mds_sku8(nb7)
-                                    if nb_sku and nb_sku not in seen_neighbor_skus:
-                                        seen_neighbor_skus.add(nb_sku)
-                                        neighbor_sku_queue.append(nb_sku)
-                            elif len(sku_val) in (7, 9) and sku_val.isdigit():
-                                base_n = int(sku_val)
-                                for d in range(-4, 5):
-                                    nb_sku = str(base_n + d)
-                                    if nb_sku not in seen_neighbor_skus:
-                                        seen_neighbor_skus.add(nb_sku)
-                                        neighbor_sku_queue.append(nb_sku)
+                            nb_bcs, nb_skus = expand_universal_neighbors(
+                                code=bc_val or (cand if category == "upc" else ""),
+                                sku_val=sku_val,
+                                is_new_article=is_new_article,
+                                seen_bcs=seen_neighbor_bcs,
+                                seen_skus=seen_neighbor_skus,
+                                calc_ean13_cd=calculate_ean13_check_digit,
+                                gen_mds_sku8=generate_mds_sku8,
+                            )
+                            neighbor_bc_queue.extend(nb_bcs)
+                            neighbor_sku_queue.extend(nb_skus)
 
                         buffer_by_sku[sku_val] = rec
                         if is_new:
@@ -2733,7 +2725,12 @@ def execute_morning_sweep(
 
         # JALUR 0B: Lengkapi Multi-Barcode / VendorBarcode EAN-13 untuk SKU New Arrival & Aktif (supaya scan barcode hangtag 100% muncul!)
         if new_arrival_bc_refresh_skus:
-            run_sweep_phase("sku", new_arrival_bc_refresh_skus, "NEW-ARRIVAL-BARCODE-SYNC", expand_on_new_article=False, phase_max_minutes=4.0)
+            run_sweep_phase("sku", new_arrival_bc_refresh_skus, "NEW-ARRIVAL-BARCODE-SYNC", expand_on_new_article=False, phase_max_minutes=3.5)
+
+        # JALUR 0C: Sapuan Universal QR Code & Barcode Alfanumerik Unik (mis. 2663005FS, AN011809, TP010392, 001.53121SH25M)
+        if alnum_qr_queue:
+            qr_mins = 4.0 if ACTIVE_ACCOUNT == "muku" else 2.5
+            run_sweep_phase("upc", [b for b in alnum_qr_queue if b not in existing_barcodes], "ALPHANUMERIC-QR-SWEEP", expand_on_new_article=True, phase_max_minutes=qr_mins)
 
         # JALUR 1: Sapuan Article-Hunter Stride-4 merata di seluruh zona 234000* (SUKO, ZES, MUKU)
         run_sweep_phase("upc", [b for b in hunter_bc_queue if b not in existing_barcodes], "ARTICLE-HUNTER-UPC", expand_on_new_article=True, phase_max_minutes=10.0)

@@ -39,7 +39,7 @@ interface TextScannerProps {
   onScanResult: (result: string, detected?: DetectedSku, snapshot?: string) => void;
 }
 
-// FORMAT BARCODE RETAIL LENGKAP (EAN-13, EAN-8, CODE-128, CODE-39, CODE-93, UPC-A, UPC-E, ITF, CODABAR, QR)
+// FORMAT BARCODE & QR RETAIL LENGKAP (1D Batang + 2D QR, DataMatrix, Aztec, PDF417 — mendukung kode unik mis. 2663005FS!)
 const SUPPORTED_FORMATS = [
   Html5QrcodeSupportedFormats.EAN_13,
   Html5QrcodeSupportedFormats.EAN_8,
@@ -51,6 +51,9 @@ const SUPPORTED_FORMATS = [
   Html5QrcodeSupportedFormats.ITF,
   Html5QrcodeSupportedFormats.CODABAR,
   Html5QrcodeSupportedFormats.QR_CODE,
+  Html5QrcodeSupportedFormats.DATA_MATRIX,
+  Html5QrcodeSupportedFormats.AZTEC,
+  Html5QrcodeSupportedFormats.PDF_417,
 ];
 
 const ZOOM_STEPS = [1, 1.5, 2] as const;
@@ -230,14 +233,15 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       const currentCount = lastCandidateRef.current.count;
       const isStandardMdsEan13 = /^234000\d{7}$/.test(cleanCode) && passesGs1;
       const isStandardMdsSku = isValidMdsSku8(cleanCode);
+      const isCleanAlnumQrCode = /^(?=.*\d)(?=.*[A-Za-z])[A-Za-z0-9._\-/]{5,32}$/.test(cleanCode);
       const hasNative = Boolean(nativeDetectorRef.current);
 
-      // Di browser tanpa Native BarcodeDetector (mis. iOS Safari), validasi checksum GS1 / SKU 8-digit langsung eksekusi 1 frame
+      // QR Code & kode alfanumerik konsinyasi (mis. 2663005FS) punya error-correction kuat -> cukup 2 frame agar responsif!
       const requiredFrames = !passesGs1
         ? 4
-        : !hasNative && (isStandardMdsEan13 || isStandardMdsSku || isNumeric12Or13)
+        : !hasNative && (isStandardMdsEan13 || isStandardMdsSku || isNumeric12Or13 || isCleanAlnumQrCode)
           ? 1
-          : isStandardMdsEan13 || isStandardMdsSku
+          : isStandardMdsEan13 || isStandardMdsSku || isCleanAlnumQrCode
             ? 2
             : 3;
       if (currentCount < requiredFrames) {
@@ -256,7 +260,7 @@ export default function TextScanner({ onScanResult }: TextScannerProps) {
       if (typeof window !== "undefined" && "BarcodeDetector" in window) {
         const NativeBarcodeDetector = (window as any).BarcodeDetector;
         nativeDetectorRef.current = new NativeBarcodeDetector({
-          formats: ["ean_13", "ean_8", "code_128", "code_39", "code_93", "upc_a", "upc_e", "itf", "codabar", "qr_code"],
+          formats: ["ean_13", "ean_8", "code_128", "code_39", "code_93", "upc_a", "upc_e", "itf", "codabar", "qr_code", "data_matrix", "aztec", "pdf417"],
         });
       }
     } catch {
