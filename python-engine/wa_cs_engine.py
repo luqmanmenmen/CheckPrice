@@ -1178,9 +1178,13 @@ def _extract_deterministic_plan(
             matched_cats.append((cat_key, hits))
 
     raw_tokens = re.findall(r"[a-zA-Z0-9\+\-]+", search_source_low)
-    keywords: List[str] = []
+    priority_product_kws: List[str] = []
+    other_kws: List[str] = []
+    known_product_vocab = set(SYNONYM_GROUPS.keys()) | {
+        w for words in CATEGORY_SYNONYMS.values() for w in words
+    } | {"linen", "oxford", "flannel", "satin", "waffle", "denim", "twill", "rayon", "knit", "rajut", "oversized", "crop", "basic", "polo", "parka"}
     if "kaos kaki" in search_source_low:
-        keywords.append("kaoskaki")
+        priority_product_kws.append("kaoskaki")
     for tok in raw_tokens:
         if len(tok) < 2 or tok in STOPWORDS_ID or tok.isdigit():
             continue
@@ -1188,8 +1192,13 @@ def _extract_deterministic_plan(
             continue
         if size_hint and tok.upper() == size_hint:
             continue
-        if tok not in keywords:
-            keywords.append(tok)
+        if tok in known_product_vocab:
+            if tok not in priority_product_kws:
+                priority_product_kws.append(tok)
+        else:
+            if tok not in other_kws:
+                other_kws.append(tok)
+    keywords = (priority_product_kws + other_kws)[:6]
 
     # Jika customer cuma ketik gender lanjutan ("Buat cewek", "Untuk anak anak ?") -> warisi filter promo/kategori terakhir!
     if explicit_gender and not keywords and not matched_cats and not wants_promo and not wants_new and not wants_best:
@@ -2724,7 +2733,7 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
                 elif lp and plan.get("wantsColorPhotos"):
                     plan["skuOrArticle"] = str(lp[0].get("article") or lp[0].get("sku") or "")
 
-        max_prods = max(1, min(8, int(cfg.get("maxProductsPerReply", 5) or 5)))
+        max_prods = 2 if plan.get("isCompetitorConsult") else max(1, min(8, int(cfg.get("maxProductsPerReply", 5) or 5)))
         exclude_arts = list((customer_session or {}).get("shownArticles") or []) if (plan.get("wantsNextPage") or plan.get("wantsMoreLikeRef") or plan.get("wantsNewArrival") or plan.get("wantsBestSeller")) else []
         products, unavailable_labels = execute_python_catalog_search(
             plan=plan,
