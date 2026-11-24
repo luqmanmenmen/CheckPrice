@@ -55,4 +55,7 @@ scratch/
 *.db-shm
 *.sqlite
 raw_vault/
+wa-cs-bridge/node_modules/
+wa-cs-bridge/auth_info/
+
 

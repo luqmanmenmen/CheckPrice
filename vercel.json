@@ -5,6 +5,10 @@
     "api/py_live.py": {
       "maxDuration": 30,
       "includeFiles": "python-engine/storehub_live_engine.py"
+    },
+    "api/py_wa_cs.py": {
+      "maxDuration": 30,
+      "includeFiles": "python-engine/{wa_cs_engine.py,storehub_live_engine.py}"
     }
   }
 }

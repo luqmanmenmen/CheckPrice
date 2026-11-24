@@ -18,7 +18,8 @@ import {
   RefreshCw,
   UserCircle2,
   ScanBarcode,
-  ShieldAlert
+  ShieldAlert,
+  Bot
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -329,16 +330,34 @@ export default function Sidebar({ user: propUser }: { user?: any }) {
               )}
 
               {(activeUser?.role === 'SUPERVISOR' || (activeUser?.name && activeUser?.name.includes('Developer'))) && (
-                <Link 
-                  href="/super-admin" 
-                  onClick={() => setIsOpen(false)} 
-                  className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-rose-50/60 active:bg-rose-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
-                >
-                  <div className="w-9 h-9 bg-rose-100 text-rose-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                    <LayoutDashboard className="w-4 h-4" />
-                  </div>
-                  <span className="text-sm">Master Control</span>
-                </Link>
+                <>
+                  <Link 
+                    href="/super-admin" 
+                    onClick={() => setIsOpen(false)} 
+                    className="flex items-center gap-3.5 p-3.5 bg-slate-50 hover:bg-rose-50/60 active:bg-rose-100/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-slate-100 group"
+                  >
+                    <div className="w-9 h-9 bg-rose-100 text-rose-600 rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                      <LayoutDashboard className="w-4 h-4" />
+                    </div>
+                    <span className="text-sm">Master Control</span>
+                  </Link>
+
+                  <Link 
+                    href="/super-admin/wa-cs" 
+                    onClick={() => setIsOpen(false)} 
+                    className="flex items-center gap-3.5 p-3.5 bg-emerald-50/70 hover:bg-emerald-100/70 active:bg-emerald-200/60 rounded-xl transition-all font-bold text-slate-700 shadow-xs border border-emerald-200/80 group"
+                  >
+                    <div className="w-9 h-9 bg-emerald-600 text-white rounded-lg flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                      <Bot className="w-4 h-4" />
+                    </div>
+                    <div className="flex flex-col min-w-0">
+                      <span className="text-sm whitespace-normal break-words">Auto CS WhatsApp</span>
+                      <span className="text-[10px] text-emerald-700 font-semibold whitespace-normal break-words">
+                        Saklar Bot & Grup Member
+                      </span>
+                    </div>
+                  </Link>
+                </>
               )}
 
               {activeUser && (

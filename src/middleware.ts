@@ -112,5 +112,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|assets|favicon.ico|suko-logo.png|api/py_live|api/auth/login|api/auth/check-nik|api/auth/logout-all).*)'],
+  matcher: ['/((?!_next/static|_next/image|assets|favicon.ico|suko-logo.png|api/py_live|api/py_wa_cs|api/webhook/wa-cs|api/auth/login|api/auth/check-nik|api/auth/logout-all).*)'],
 };

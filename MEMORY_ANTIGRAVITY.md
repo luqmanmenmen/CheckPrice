@@ -2095,3 +2095,23 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
 
 
 
+
+
+---
+
+## 52. Ekspansi E-Commerce: Auto Customer Service WhatsApp (AI Halo BCA + Foto HD + Anti-Salah-Balas)
+
+- **Tujuan:** Membantu PIC penjualan online membalas pertanyaan produk di Grup Member Eksklusif WhatsApp secara real-time dengan gaya CS profesional ala **Halo BCA**, lengkap dengan **foto HD produk dari Turso DB**, **0% bocor angka stok** (hanya status *Ready* / *Sedang Sold Out*), serta **Saklar Master ON/OFF & Proteksi Anti-Salah-Balas** untuk chat teman/keluarga.
+- **Arsitektur 1 Otak Pure Python (`sin1`) + Bridge WA Fleksibel:**
+  1. **Python AI CS Engine ([`python-engine/wa_cs_engine.py`](file:///c:/Max%20Display/price-checker/python-engine/wa_cs_engine.py)) & Vercel Function ([`api/py_wa_cs.py`](file:///c:/Max%20Display/price-checker/api/py_wa_cs.py)):**
+     - 100% Pure Python Stdlib (`urllib`, `json`, `re`, `datetime`) — 0 external pip deps, berbagi helper Turso HTTP Pipeline v2 dari `storehub_live_engine.py`.
+     - **3-Layer Anti-Salah-Balas:** Saklar Master ON/OFF (`enabled: false` default di Turso Storage `config/wa-cs-config.json`), Auto-Schedule Jam Operasional Toko (`09:00–21:30 WIB`), Blokir 100% Chat Pribadi Teman (`ignorePrivateChats: true`), Whitelist Grup Ketat + Auto-Detect Grup Baru (`detectedGroups`), dan Perintah Darurat dari WA PIC (`!csoff`, `!cson`, `!csstatus`).
+     - **Hard Privacy Sanitizer:** Seluruh angka `stok` dihapus total di kode Python sebelum masuk Gemini 2.5 Flash / template balasan — secara matematis mustahil membocorkan jumlah pcs stok.
+     - **Filter Obrolan Santai:** Gemini 2.5 Flash + fallback regex deterministik otomatis mengabaikan candaan non-produk di grup (`CASUAL_CHAT_IGNORED`).
+  2. **Next.js Admin Bridge, Webhook & Cockpit UI:**
+     - [`src/app/api/admin/wa-cs/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/admin/wa-cs/route.ts): Bridge terproteksi JWT (`SUPERVISOR` / NIK `22054178`).
+     - [`src/app/api/webhook/wa-cs/route.ts`](file:///c:/Max%20Display/price-checker/src/app/api/webhook/wa-cs/route.ts): Siap pakai untuk gateway 24 jam (Fonnte/Wablas) dengan auto-send teks + foto produk HD.
+     - [`src/app/super-admin/wa-cs/page.tsx`](file:///c:/Max%20Display/price-checker/src/app/super-admin/wa-cs/page.tsx): Pusat Kontrol Super Admin dengan Saklar Master besar, Simulator Chat Live (preview bubble WA + foto HD), Whitelist Grup 1-Klik, dan Log Aktivitas.
+  3. **Bridge WA Lokal Gratis untuk Test Grup Dummy ([`wa-cs-bridge/index.mjs`](file:///c:/Max%20Display/price-checker/wa-cs-bridge/index.mjs)):**
+     - Menggunakan `@whiskeysockets/baileys` + `qrcode-terminal` (folder `auth_info/` & `node_modules/` aman di `.gitignore`).
+     - Dilengkapi *Human Takeover Pause* (bot otomatis diam 10 menit jika PIC ikut membalas manual di grup) dan *typing indicator* natural (2,2–3,6 detik) sebelum mengirim foto HD + caption balasan.

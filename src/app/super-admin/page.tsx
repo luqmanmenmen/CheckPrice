@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { ArrowLeft, UserCircle2, LogOut, Search, Activity, PauseCircle, Database, PackagePlus, DollarSign, FileSpreadsheet, ChevronRight, Boxes, TrendingUp, Tag, PackageSearch, Sparkles, RefreshCw } from "lucide-react";
+import { ArrowLeft, UserCircle2, LogOut, Search, Activity, PauseCircle, Database, PackagePlus, DollarSign, FileSpreadsheet, ChevronRight, Boxes, TrendingUp, Tag, PackageSearch, Sparkles, RefreshCw, Bot } from "lucide-react";
 import AnimatedLogoutButton from "@/components/AnimatedLogoutButton";
 import Link from "next/link";
 
@@ -180,6 +180,24 @@ export default function SuperAdminDashboard() {
               </div>
             </div>
             <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-indigo-600 group-hover:translate-x-0.5 transition-all" />
+          </Link>
+
+          <Link href="/super-admin/wa-cs" className="flex items-center justify-between p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/70 hover:bg-emerald-100/80 transition-all group shadow-xs mt-3">
+            <div className="flex items-center gap-3.5">
+              <div className="w-11 h-11 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform">
+                <Bot className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="font-bold text-slate-800 text-sm">Auto CS WhatsApp (AI)</p>
+                  <span className="px-1.5 py-0.5 text-[9px] font-black bg-emerald-100 text-emerald-800 rounded-md uppercase tracking-wider">
+                    Halo BCA + Foto
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600 mt-0.5">Saklar ON/OFF • Whitelist Grup Dummy & Member • Simulator Chat Live</p>
+              </div>
+            </div>
+            <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-emerald-700 group-hover:translate-x-0.5 transition-all" />
           </Link>
         </div>
       </div>
