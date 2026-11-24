@@ -2005,6 +2005,71 @@ def build_final_cards_and_text(
         )
         return txt, [{"text": txt, "imageUrl": None, "fallbackImages": []}], plan.get("engine") or "deterministic"
 
+    # Mode KHUSUS: Fokus Mengerucut ke 1 Produk Spesifik (customer me-reply kartu produk / sebut nomor tertentu)
+    is_single_focus = bool(plan.get("singleProductFocus")) and bool(products) and not plan.get("wantsColorPhotos")
+    if is_single_focus:
+        p0 = products[0]
+        req_color = str(((plan.get("multiQueries") or [{}])[0]).get("colorHint") or "").strip().upper()
+        req_size = str(((plan.get("multiQueries") or [{}])[0]).get("sizeHint") or "").strip().upper()
+        c_imgs: Dict[str, str] = p0.get("colorImages") or {}
+        chosen_img = p0.get("imageUrl")
+        matched_col_name = req_color
+        if req_color:
+            for cn, cu in c_imgs.items():
+                if _color_matches(cn, req_color):
+                    chosen_img = cu
+                    matched_col_name = cn
+                    break
+
+        price_line = (
+            f"🏷️ Harga: ~{p0['hargaNormalText']}~ ➡️ *{p0['hargaPromoText']}*"
+            + (f" — _{p0['promoLabel']}_" if p0.get("promoLabel") else "")
+            if p0.get("hargaPromoText")
+            else f"🏷️ Harga: *{p0['hargaNormalText']}*"
+        )
+        parts: List[str] = []
+        if req_color or req_size:
+            target_desc = " ".join(x for x in [f"warna *{matched_col_name}*" if req_color else "", f"ukuran *{req_size}*" if req_size else ""] if x)
+            if p0.get("requestedVariantStatus") == "REQUESTED_VARIANT_READY":
+                parts.append(f"*Ready Kak!* ✨ Untuk *{p0['name']}* {target_desc} tersedia saat ini:")
+            elif p0.get("availability") == "READY":
+                parts.append(f"Mohon maaf {sapaan}, untuk *{p0['name']}* {target_desc} saat ini sedang *sold out* 🙏 Namun warna/ukuran lain di model ini masih *Ready*:")
+            else:
+                parts.append(f"Mohon maaf {sapaan}, untuk *{p0['name']}* saat ini sedang *sold out* 🙏")
+        else:
+            parts.append(f"*{p0['name']}* ({p0['brand']})")
+
+        if p0.get("fitting"):
+            parts.append(f"✂️ Potongan: *{p0['fitting']}*")
+        parts.append(price_line)
+
+        if p0.get("availability") == "READY":
+            # Jika tanya warna spesifik & ready -> tampilkan ukuran ready di warna itu dulu biar super fokus!
+            col_line = next((cs for cs in (p0.get("readyColorSizes") or []) if req_color and _color_matches(cs.split("(")[0], req_color)), "")
+            if col_line:
+                parts.append(f"🎨 Ready di warna ini: *{col_line}*")
+            elif p0.get("readyColorSizes"):
+                parts.append("🎨 Pilihan Warna & Size Ready:")
+                for cs in p0["readyColorSizes"][:6]:
+                    parts.append(f"   • {cs}")
+
+        if p0.get("requestedVariantStatus") == "REQUESTED_VARIANT_READY":
+            target_short = " ".join(x for x in [f"*{matched_col_name}*" if req_color else "", f"size *{req_size}*" if req_size else ""] if x)
+            parts.append(
+                f"\nMau langsung saya bantu proses *QRIS / keep* untuk {target_short} ini Kak? "
+                f"Kalau jadi, boleh info *Nomor Member Matahari* (jika ada) & pilihan *ambil di store / GoSend* ya Kak 😊"
+            )
+        else:
+            parts.append("\nMau pilih warna/ukuran yang ready di atas atau mau saya carikan model SUKO lain yang serupa Kak? 😊")
+
+        final_txt = _sanitize_outgoing_reply("\n".join(parts).strip())
+        card = {
+            "text": final_txt,
+            "imageUrl": chosen_img if (bool(cfg.get("replyWithImage", True)) and is_clean_product_image(chosen_img)) else None,
+            "fallbackImages": p0.get("fallbackImages") or [],
+        }
+        return final_txt, [card], plan.get("engine") or "deterministic"
+
     # Mode KHUSUS: Customer minta "lihat warna black / foto tiap warna / warna lainnya" -> kirim Foto HD warna spesifik / tiap warna READY!
     if plan.get("wantsColorPhotos") and products:
         p0 = products[0]
@@ -2240,18 +2305,42 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
     unavailable_labels: List[str] = []
     skip_search_intents = {"GREETING", "ORDER_INTENT", "PHYSICAL_CHECK", "FAQ_SOP", "COMPLAINT"}
     if plan.get("intent") not in skip_search_intents:
-        # Jika minta foto warna lain dari artikel yang barusan dibahas -> cari artikel terakhir di sesi!
-        if plan.get("wantsColorPhotos") and not plan.get("skuOrArticle") and customer_session:
-            lp = customer_session.get("lastProducts") or []
-            if lp:
-                ref_idx = max(0, min(len(lp) - 1, int(plan.get("referencedNumber") or 1) - 1))
-                plan["skuOrArticle"] = str(lp[ref_idx].get("article") or lp[ref_idx].get("sku") or "")
+        # Deteksi Fokus Mengerucut ke 1 Produk: customer me-reply kartu produk spesifik / sebut nomor tertentu
+        # DAN tidak sedang minta "koleksi lainnya / model lain"!
+        ref_num_val = int(plan.get("referencedNumber") or 0)
+        has_quoted_product = bool(quoted_message and re.search(r"(?:^|\n|\*)\s*[123]\.\s+[A-Z0-9]|Harga:|Status:", quoted_message))
+        single_focus = bool(
+            not plan.get("wantsMoreLikeRef")
+            and not plan.get("wantsNewArrival")
+            and not plan.get("wantsBestSeller")
+            and len(plan.get("multiQueries") or []) <= 1
+            and (has_quoted_product or ref_num_val > 0 or bool(plan.get("skuOrArticle")))
+        )
+        plan["singleProductFocus"] = single_focus
+
+        # Kunci artikel persis dari memori sesi (nomor yg di-reply / dirujuk) atau nama produk di pesan yang di-reply!
+        if (single_focus or plan.get("wantsColorPhotos")) and not plan.get("skuOrArticle"):
+            if customer_session:
+                lp = customer_session.get("lastProducts") or []
+                if lp and ref_num_val > 0:
+                    ref_prod = next((p for p in lp if int(p.get("num") or 0) == ref_num_val), None)
+                    if ref_prod:
+                        plan["skuOrArticle"] = str(ref_prod.get("article") or ref_prod.get("sku") or "")
+                elif lp and has_quoted_product:
+                    # Cocokkan nama produk di teks yang di-reply dengan daftar lastProducts
+                    q_up = quoted_message.upper()
+                    matched_lp = next((p for p in lp if str(p.get("name") or "").upper() and str(p.get("name") or "").upper()[:18] in q_up), None)
+                    if matched_lp:
+                        plan["skuOrArticle"] = str(matched_lp.get("article") or matched_lp.get("sku") or "")
+                elif lp and plan.get("wantsColorPhotos"):
+                    plan["skuOrArticle"] = str(lp[0].get("article") or lp[0].get("sku") or "")
+
         exclude_arts = list((customer_session or {}).get("shownArticles") or []) if (plan.get("wantsMoreLikeRef") or plan.get("wantsNewArrival") or plan.get("wantsBestSeller")) else []
         products, unavailable_labels = execute_python_catalog_search(
             plan=plan,
             store_scope=cfg.get("storeScope", "SUKO"),
             exclude_articles=exclude_arts,
-            limit=3,
+            limit=1 if single_focus else 3,
             verify_live=True,
         )
 
