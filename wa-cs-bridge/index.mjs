@@ -48,6 +48,20 @@ const AUTH_DIR = path.resolve("./auth_info");
 const logger = pino({ level: "silent" });
 const startUnixSec = Math.floor(Date.now() / 1000);
 
+// Proteksi anti-crash saat koneksi WhatsApp drop sementara (Baileys 428 Connection Closed / Bad MAC)
+process.on("unhandledRejection", (reason) => {
+  const msg = String(reason?.message || reason || "");
+  if (msg.includes("Connection Closed") || msg.includes("Bad MAC") || reason?.output?.statusCode === 428) {
+    console.log("⚠️ [AUTO-RECOVER] Abaikan error koneksi transien Baileys:", msg.slice(0, 80));
+    return;
+  }
+  console.error("⚠️ [UNHANDLED REJECTION]", msg.slice(0, 140));
+});
+process.on("uncaughtException", (err) => {
+  const msg = String(err?.message || err || "");
+  console.error("⚠️ [UNCAUGHT EXCEPTION]", msg.slice(0, 140));
+});
+
 const botSentIds = new Set();
 // Jeda Human Takeover per chat (groupJid atau dmJid) -> timestamp ms
 const humanTakeoverUntil = new Map();
