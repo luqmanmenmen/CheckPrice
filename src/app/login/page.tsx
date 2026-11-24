@@ -565,28 +565,28 @@ export default function Login() {
       <div className="flex-grow shrink-0 min-h-[2rem]"></div>
 
       {showChangePin ? (
-        <div className="relative z-20 mx-auto bg-white p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/60 shrink-0">
+        <div className="relative z-20 mx-auto bg-white/70 p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/60 shrink-0">
           <div className="text-center mb-6">
-            <h2 className="text-xl font-black text-slate-800">Ubah PIN Default</h2>
-            <p className="text-sm text-slate-500 mt-2">Demi keamanan, silakan ganti PIN Anda sebelum melanjutkan.</p>
+            <h2 className="text-xl font-black text-slate-900">Ubah PIN Default</h2>
+            <p className="text-sm text-slate-700 font-medium mt-2">Demi keamanan, silakan ganti PIN Anda sebelum melanjutkan.</p>
           </div>
           
           {error && (
-            <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm mb-4 text-center">
+            <div className="bg-red-50 text-red-700 border border-red-200 p-3 rounded-lg text-sm mb-4 text-center font-semibold">
               {error}
             </div>
           )}
 
           <form onSubmit={handleChangePin} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">PIN Baru</label>
+              <label className="block text-sm font-semibold text-slate-800 mb-1">PIN Baru</label>
               <input
                 type="password"
                 inputMode="numeric"
                 pattern="[0-9]*"
                 required
                 maxLength={6}
-                className="w-full border border-gray-300 rounded-lg p-3 text-lg tracking-widest text-center font-mono bg-white text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                className="w-full border border-slate-300 rounded-lg p-3 text-lg tracking-widest text-center font-mono bg-white text-slate-900 shadow-xs focus:ring-2 focus:ring-blue-500 outline-none"
                 placeholder="••••••"
                 value={newPin}
                 onChange={(e) => setNewPin(e.target.value.replace(/\D/g, ''))}
@@ -601,33 +601,33 @@ export default function Login() {
                 }}
                 autoFocus
               />
-              <p className="text-xs text-slate-400 mt-2 text-center">Gunakan kombinasi angka yang mudah diingat.</p>
+              <p className="text-xs text-slate-700 font-medium mt-2 text-center">Gunakan kombinasi angka yang mudah diingat.</p>
             </div>
             
             <button
               type="submit"
               disabled={changingPin || newPin.length < 4}
-              className="w-full bg-gradient-to-r from-green-600 to-emerald-600 text-white font-black py-4 rounded-xl mt-6 shadow-lg shadow-green-500/30 hover:shadow-green-500/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full bg-gradient-to-r from-green-600 to-emerald-600 text-white font-black py-4 rounded-xl mt-6 shadow-lg shadow-green-500/30 hover:shadow-green-500/50 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {changingPin ? "MENYIMPAN..." : "SIMPAN & LANJUTKAN"}
             </button>
           </form>
         </div>
       ) : (
-        <div className="relative z-20 mx-auto bg-white p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/60 shrink-0">
+        <div className="relative z-20 mx-auto bg-white/70 p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/60 shrink-0">
           <div className="text-center mb-8 flex flex-col items-center">
             <img src="/suko-logo.png" alt="SUKO Logo" className="h-20 mb-4 object-contain drop-shadow-md" />
-            <p className="text-gray-500 text-sm font-medium">Masuk untuk memulai shift Anda</p>
+            <p className="text-slate-800 text-sm font-semibold">Masuk untuk memulai shift Anda</p>
           </div>
 
         {infoNotice && (
-          <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 p-3 rounded-lg text-sm mb-4 text-center whitespace-normal break-words font-medium">
+          <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-3 rounded-lg text-sm mb-4 text-center whitespace-normal break-words font-semibold shadow-xs">
             {infoNotice}
           </div>
         )}
 
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded-xl text-xs sm:text-sm mb-4 text-center whitespace-normal break-words space-y-2">
+          <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded-xl text-xs sm:text-sm mb-4 text-center whitespace-normal break-words space-y-2 shadow-xs">
             <p className="font-semibold">{error}</p>
             {!isBypassLocation && !geoCoords && (geoStatus === "denied" || geoStatus === "timeout" || geoStatus === "idle") && (
               <button
@@ -647,14 +647,14 @@ export default function Login() {
 
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">NIK Karyawan</label>
+            <label className="block text-sm font-semibold text-slate-800 mb-1">NIK Karyawan</label>
             <input
               type="tel"
               inputMode="numeric"
               autoComplete="off"
               spellCheck={false}
               required
-              className="w-full border border-gray-300 rounded-lg p-3 text-lg bg-white text-gray-900 caret-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border border-slate-300 rounded-lg p-3 text-lg bg-white text-slate-900 caret-blue-600 shadow-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="Contoh: 123456"
               value={nik}
               onChange={(e) => setNik(e.target.value.replace(/\D/g, ''))}
@@ -669,17 +669,17 @@ export default function Login() {
                 }
               }}
             />
-            {checkingNik && <p className="text-xs text-blue-600 mt-1 animate-pulse">Memeriksa NIK...</p>}
+            {checkingNik && <p className="text-xs font-semibold text-blue-700 mt-1 animate-pulse">Memeriksa NIK...</p>}
           </div>
 
           {toko && userName && (
             <div className="animate-in slide-in-from-top-2 duration-300 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Nama Karyawan</label>
-                <div className="w-full border border-gray-300 rounded-lg p-3 bg-gray-50 text-gray-700 font-bold flex flex-col items-start gap-1">
+                <label className="block text-sm font-semibold text-slate-800 mb-1">Nama Karyawan</label>
+                <div className="w-full border border-slate-300 rounded-lg p-3 bg-white text-slate-900 font-bold shadow-xs flex flex-col items-start gap-1">
                   <span className="text-lg leading-tight">{userName.replace(/\s*\(Developer\)/i, '').trim()}</span>
                   {userName.toLowerCase().includes('developer') && (
-                    <span className="text-xs font-bold text-indigo-600 bg-indigo-100/70 border border-indigo-200 px-2.5 py-0.5 rounded-md tracking-wide">
+                    <span className="text-xs font-bold text-indigo-700 bg-indigo-100 border border-indigo-200 px-2.5 py-0.5 rounded-md tracking-wide">
                       Developer
                     </span>
                   )}
@@ -687,22 +687,23 @@ export default function Login() {
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Penempatan Toko</label>
-                <div className="w-full border border-gray-300 rounded-lg p-3 text-lg bg-gray-50 text-gray-500 font-bold">
+                <label className="block text-sm font-semibold text-slate-800 mb-1">Penempatan Toko</label>
+                <div className="w-full border border-slate-300 rounded-lg p-3 text-lg bg-white text-slate-800 font-bold shadow-xs">
                   {toko}
                 </div>
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">PIN (Keamanan)</label>
+                <label className="block text-sm font-semibold text-slate-800 mb-1">PIN (Keamanan)</label>
                 <input
                   ref={pinRef}
                   type="password"
                   inputMode="numeric"
-                  pattern="[0-9]*"
+                  autoComplete="off"
+                  spellCheck={false}
                   required
                   maxLength={6}
-                  className="w-full border border-gray-300 rounded-lg p-3 text-lg tracking-widest text-center font-mono bg-white text-gray-900"
+                  className="w-full border border-slate-300 rounded-lg p-3 text-lg tracking-widest text-center font-mono bg-white text-slate-900 caret-blue-600 shadow-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
                   placeholder="••••••"
                   value={pin}
                   onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
@@ -719,7 +720,7 @@ export default function Login() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Posisi / Role</label>
+                <label className="block text-sm font-semibold text-slate-800 mb-2">Posisi / Role</label>
                 <div className="grid grid-cols-2 gap-3">
                   {[
                     { name: "Cashier", icon: ShoppingCart },
@@ -734,13 +735,13 @@ export default function Login() {
                         key={role.name}
                         type="button"
                         onClick={() => setJobTitle(role.name)}
-                        className={`flex flex-col items-center justify-center p-3 rounded-xl border-2 transition-all duration-200 ${
+                        className={`flex flex-col items-center justify-center p-3 rounded-xl border-2 transition-all duration-200 shadow-xs ${
                           isSelected
-                            ? "border-blue-500 bg-blue-50 text-blue-700 shadow-sm ring-2 ring-blue-500/20 ring-offset-1"
-                            : "border-slate-100 bg-slate-50 text-slate-500 hover:border-slate-200 hover:bg-slate-100"
+                            ? "border-blue-600 bg-blue-50 text-blue-700 shadow-sm ring-2 ring-blue-500/25 ring-offset-1"
+                            : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
                         }`}
                       >
-                        <Icon className={`w-6 h-6 mb-1 ${isSelected ? "text-blue-600" : "text-slate-400"}`} />
+                        <Icon className={`w-6 h-6 mb-1 ${isSelected ? "text-blue-600" : "text-slate-500"}`} />
                         <span className="text-[11px] font-bold tracking-wide uppercase">{role.name}</span>
                       </button>
                     );
