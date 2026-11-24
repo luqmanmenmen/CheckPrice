@@ -576,6 +576,15 @@ async function startSocket() {
               : [{ text: aiRes.replyText, imageUrl: aiRes.imageUrl || null }];
           const sentPhotos = await sendCardsToJid(sock, jid, cards, msg);
           console.log(`   ✅ Balasan PC VIP terkirim (${cards.length} pesan, ${sentPhotos} foto HD)!\n`);
+          // Jika customer siap ORDER/KEEP atau KOMPLAIN -> kirim alert ke WA PIC + pause bot di chat ini!
+          if (aiRes.notifyPicPhone && aiRes.notifyPicMessage) {
+            const picJid = `${normalizePhone(aiRes.notifyPicPhone)}@s.whatsapp.net`;
+            await sock.sendMessage(picJid, { text: aiRes.notifyPicMessage }).then(trackBotSent).catch(() => {});
+            console.log(`   🔔 Alert eskalasi terkirim ke WA PIC (${aiRes.notifyPicPhone})!`);
+          }
+          if (aiRes.pauseAfterReply) {
+            humanTakeoverUntil.set(jid, Date.now() + Math.max(10, currentHumanTakeoverMins) * 60 * 1000);
+          }
           continue;
         }
 
@@ -628,6 +637,14 @@ async function startSocket() {
           } catch (dmErr) {
             console.error(`   ⚠️ Gagal kirim PC ke ${dmJid} (${dmErr?.message || dmErr}), fallback kirim ke grup...`);
             await sendCardsToJid(sock, jid, pcCards, null);
+          }
+          if (aiRes.notifyPicPhone && aiRes.notifyPicMessage) {
+            const picJid = `${normalizePhone(aiRes.notifyPicPhone)}@s.whatsapp.net`;
+            await sock.sendMessage(picJid, { text: aiRes.notifyPicMessage }).then(trackBotSent).catch(() => {});
+            console.log(`   🔔 Alert eskalasi terkirim ke WA PIC (${aiRes.notifyPicPhone})!`);
+          }
+          if (aiRes.pauseAfterReply) {
+            humanTakeoverUntil.set(dmJid, Date.now() + Math.max(10, currentHumanTakeoverMins) * 60 * 1000);
           }
           continue;
         }

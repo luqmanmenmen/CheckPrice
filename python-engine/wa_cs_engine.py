@@ -1,24 +1,29 @@
 """
-wa_cs_engine.py
+wa_cs_engine.py — v2 TRUE AI AGENT ORCHESTRATOR (SUKO OFFICIAL)
 =============================================================================
-PURE PYTHON AI CUSTOMER SERVICE ENGINE UNTUK WHATSAPP (0% External Pip Deps!)
-Berjalan cepat di Vercel Python Serverless Function (`api/py_wa_cs.py` — sin1).
+100% Pure Python Stdlib (0% External Pip Deps) berjalan di Vercel (`sin1`).
 
-Prinsip Utama:
-1. 100% Pure Python Stdlib (`urllib`, `json`, `re`, `datetime`) -> Cold start < 300ms.
-2. 3-Layer Anti-Salah-Balas:
-   - Master Switch ON/OFF (`enabled`, default `False` agar aman!)
-   - Auto-Schedule Jam Operasional Toko WIB (`09:00 - 21:30 WIB`)
-   - Blokir 100% Chat Pribadi / Teman (`ignorePrivateChats: True` default)
-   - Whitelist Grup Ketat + Auto-Detect Grup Baru (1-klik aktifkan di UI!)
-   - Perintah Darurat dari WA PIC Sendiri (`!csoff`, `!cson`, `!csstatus`)
-3. ATURAN KERAS PRIVASI STOK (HARD-CODED DI PYTHON, BUKAN CUMA PROMPT!):
-   - DILARANG KERAS membocorkan angka qty stok (`1 pcs`, `2 pcs`, `-1`).
-   - Semua angka stok dihapus total sebelum dikirim ke AI / template balasan.
-   - Hanya mengembalikan status boolean (`READY` vs `SOLD_OUT`) + warna & ukuran ready.
-4. Balasan Hangat Profesional ala Halo BCA + Foto HD Resmi Produk dari Turso DB.
-5. Filter Obrolan Santai (Gemini 2.5 Flash + Fallback Regex Cerdas):
-   - Mengabaikan candaan / obrolan non-produk di grup agar tidak spam.
+Arsitektur 3 Tahap (AI Agent -> Python Tool Eksekutor -> AI Copywriter):
+1. SMART ORCHESTRATOR + QUOTA CIRCUIT BREAKER (< 10% AUTO-FLASH!):
+   - Pertanyaan Ringan (sapaan, 1 barang) -> Executor Cepat (`gemini-3-flash-preview` LOW/MEDIUM)
+   - Pertanyaan Berat (multi-kategori, memori "no 3", komplain, closing) ->
+     Orchestrator (`gemini-3.1-pro-preview` -> `gemini-3.6-flash` HIGH -> `gemini-3-flash-preview` HIGH)
+   - Quota Guard: begitu sisa kuota Orchestrator < 10% ATAU kena 429/503, otomatis
+     circuit-breaker turun ke Flash (`gemini-3-flash-preview` LOW) tanpa buang waktu!
+   - Jalur Cadangan Anti-Mati: fallback deterministik Python jika semua API AI limit.
+
+2. 7+ LOGIKA EMAS HASIL ROLEPLAY (TERKUNCI DI PYTHON — 0% HALUSINASI!):
+   - 100% SUKO ONLY (`storeScope = "SUKO"`, `storeName = "SUKO Official"`).
+   - Filter Gender Ketat (`LADIES` / `MEN` / `KIDS`) + Anti-Nyasar (`kemeja` != `T-SHIRT`).
+   - 4 Mode Query Nyata Turso DB: Promo, Terbaru (`NEWEST`), Best Seller (`sales_mtd` POS
+     tanpa bocor angka jualan!), & Relevansi Multi-Kategori (`multiQueries[]`).
+   - Memori Sesi Private Chat 30 Menit (ingat gender, 6 chat terakhir, No. 1-3 terakhir,
+     anti-duplikat `excludeArticles[]`, paham "koleksi lainnya nomor 3"!).
+   - Verifikasi Stok LIVE Real-Time (`run_fast_stock` paralel + cache 90 dtk) +
+     WAJIB Foto HD + HANYA warna & size yang READY per warna + NOL angka qty stok!
+   - SOP Hand-Off Grup -> Private Chat + link klik `https://wa.me/...`.
+   - Eskalasi Otomatis ke WA PIC (`picAlertPhone = 6281296393972`) saat customer
+     siap beli/keep atau komplain!
 =============================================================================
 """
 
@@ -46,10 +51,6 @@ from storehub_live_engine import (
     utc_iso_now,
 )
 
-# Cache hasil live-stock di memori container (90 dtk) agar tidak boros tembak StoreHub/Turso berulang
-_LIVE_STOCK_MEM_CACHE: Dict[str, Tuple[float, Dict[str, int]]] = {}
-_LIVE_STOCK_CACHE_TTL_SEC = 90.0
-
 CONFIG_STORAGE_PATH = "config/wa-cs-config.json"
 LOGS_STORAGE_PATH = "logs/wa-cs-logs.json"
 BRIDGE_STATE_PATH = "config/wa-cs-bridge-state.json"
@@ -57,7 +58,35 @@ SESSIONS_STORAGE_PATH = "config/wa-cs-sessions.json"
 MAX_LOGS = 40
 MAX_DETECTED_GROUPS = 30
 
-GEMINI_MODEL = os.environ.get("WA_CS_GEMINI_MODEL") or "gemini-2.5-flash"
+# Rantai Model Smart Orchestrator & Executor (sesuai model aktif Google AI Studio)
+ORCHESTRATOR_CHAIN: List[Tuple[str, str]] = [
+    (os.environ.get("WA_CS_PRO_MODEL") or "gemini-3.1-pro-preview", "MEDIUM"),
+    (os.environ.get("WA_CS_ORCHESTRATOR_MODEL") or "gemini-3.6-flash", "HIGH"),
+    (os.environ.get("WA_CS_FLASH_MODEL") or "gemini-3-flash-preview", "HIGH"),
+]
+EXECUTOR_CHAIN: List[Tuple[str, str]] = [
+    (os.environ.get("WA_CS_FLASH_MODEL") or "gemini-3-flash-preview", "LOW"),
+    (os.environ.get("WA_CS_ORCHESTRATOR_MODEL") or "gemini-3.6-flash", "LOW"),
+]
+
+# Cache RAM container Vercel: hemat kuota Turso, StoreHub, & hindari model yang kena 429/503!
+_LIVE_STOCK_MEM_CACHE: Dict[str, Tuple[float, Dict[str, int]]] = {}
+_LIVE_STOCK_CACHE_TTL_SEC = 90.0
+_MODEL_COOLDOWN_UNTIL: Dict[str, float] = {}  # model_name -> unix ts sampai kapan di-skip
+_DAILY_USAGE_MEM: Dict[str, Any] = {
+    "dateWib": "",
+    "heavyCalls": 0,
+    "flashCalls": 0,
+    "heavyDailyBudget": 60,  # Jika sisa < 10% (< 6 call tersisa) -> auto downgrade ke Flash!
+}
+
+DEFAULT_SOP_TEXT = (
+    "- Toko resmi: SUKO Official (khusus produk SUKO, bukan merek lain).\n"
+    "- Jam operasional layanan: 09:00 - 21:30 WIB.\n"
+    "- Pemesanan / Keep barang: Customer cukup info pilihan model/nomor, warna, ukuran, dan nama; "
+    "tim PIC kami (Kak Luqman) akan segera bantu proses pembayaran & keep.\n"
+    "- Jangan pernah mengarang harga, promo, stok, atau ongkir di luar data sistem."
+)
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "enabled": False,
@@ -70,28 +99,32 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "handoffToPrivateChat": True,
     "privateSessionMinutes": 30,
     "replyGreetings": True,
-    "storeScope": "ALL",  # ALL | SUKO | MUKU | ZES
+    "storeScope": "SUKO",  # Terkunci khusus SUKO Official!
     "csName": "Luqman",
-    "adminPhone": "6281296393972",
-    "storeName": "SUKO & Mu+Ku Official",
+    "adminPhone": "6285771123000",
+    "picAlertPhone": "6281296393972",
+    "storeName": "SUKO Official",
+    "storeSop": DEFAULT_SOP_TEXT,
+    "heavyDailyBudget": 60,
     "humanTakeoverMinutes": 10,
     "replyWithImage": True,
     "allowedGroups": [],
     "detectedGroups": [],
     "fonnteToken": "",
+    "customGeminiApiKey": "",
     "updatedAt": "",
 }
 
-# Kamus sinonim Indonesia -> Bahasa Inggris / istilah katalog ritel DB
 SYNONYM_GROUPS: Dict[str, List[str]] = {
     "kaos": ["KAOS", "T-SHIRT", "TSHIRT", "TEE", "CREW NECK", "POLO"],
     "tshirt": ["T-SHIRT", "TSHIRT", "TEE", "KAOS"],
     "tee": ["TEE", "T-SHIRT", "KAOS"],
     "kemeja": ["KEMEJA", "OXFORD", "FLANNEL", "WOVEN", "LS SHI", "SS SHI", "SHIRT"],
-    "blouse": ["BLOUSE", "BLUS", "TOP", "ATASAN"],
-    "atasan": ["TOP", "SHIRT", "T-SHIRT", "BLOUSE", "TEE", "KAOS", "KEMEJA"],
+    "blouse": ["BLOUSE", "BLUS", "TOP", "WOVEN"],
+    "atasan": ["TOP", "SHIRT", "T-SHIRT", "BLOUSE", "TEE", "KAOS", "KEMEJA", "KNIT"],
     "polo": ["POLO", "KAOS"],
-    "jaket": ["JACKET", "JAKET", "HOODIE", "SWEATER", "CARDIGAN", "OUTER", "PARKA", "BOMBER", "DENIM JACKET"],
+    "jaket": ["JACKET", "JAKET", "HOODIE", "SWEATER", "CARDIGAN", "OUTER", "PARKA", "BOMBER"],
+    "winter": ["WINTER", "PUFFER", "COAT", "PARKA", "JACKET", "HOODIE", "SWEATER"],
     "hoodie": ["HOODIE", "SWEATSHIRT", "JACKET", "JAKET"],
     "sweater": ["SWEATER", "KNIT", "CARDIGAN", "SWEATSHIRT"],
     "cardigan": ["CARDIGAN", "KNIT", "OUTER"],
@@ -106,47 +139,44 @@ SYNONYM_GROUPS: Dict[str, List[str]] = {
     "gamis": ["GAMIS", "DRESS", "KAFTAN", "TUNIK"],
     "tunik": ["TUNIC", "TUNIK", "DRESS"],
     "sepatu": ["SHOE", "SHOES", "SNEAKER", "SNEAKERS", "LOAFER", "HEELS", "BOOTS", "FLATS", "SEPATU"],
-    "sneaker": ["SNEAKER", "SNEAKERS", "SHOE"],
     "sandal": ["SANDAL", "SANDALS", "SLIPPER", "SLIPPERS", "SLIDE"],
-    "sendal": ["SANDAL", "SANDALS", "SLIPPER", "SLIDE"],
     "tas": ["BAG", "BAGS", "BACKPACK", "TOTE", "SLING", "POUCH", "WALLET", "TAS"],
     "dompet": ["WALLET", "DOMPET", "CARD HOLDER"],
     "topi": ["CAP", "HAT", "TOPI", "BEANIE"],
     "kaoskaki": ["SOCK", "SOCKS", "KAOS KAKI"],
     "boxer": ["BOXER", "BRIEF", "UNDERWEAR", "TRUNK"],
-    "kolor": ["BOXER", "SHORT", "BRIEF"],
     "piyama": ["PAJAMA", "PYJAMA", "SLEEP", "PIYAMA"],
-    "parfum": ["PERFUME", "PARFUM", "EDT", "EDP", "FRAGRANCE", "MIST"],
-    "serum": ["SERUM", "ESSENCE"],
-    "baju": ["SHIRT", "T-SHIRT", "TEE", "BLOUSE", "TOP", "DRESS", "KAOS", "KEMEJA"],
+    "baju": ["SHIRT", "T-SHIRT", "TEE", "BLOUSE", "TOP", "DRESS", "KAOS", "KEMEJA", "KNIT"],
 }
 
 COLOR_SYNONYMS: Dict[str, List[str]] = {
     "BLACK": ["HITAM", "BLACK", "BLK", "ITEM", "JET BLACK"],
-    "WHITE": ["PUTIH", "WHITE", "WHT", "OFF WHITE", "BROKEN WHITE", "IVORY"],
+    "WHITE": ["PUTIH", "WHITE", "WHT", "OFF WHITE", "BROKEN WHITE", "IVORY", "CHALK"],
     "NAVY": ["NAVY", "DONGKER", "BIRU DONGKER", "BIRU TUA", "DARK BLUE", "NVY"],
-    "BLUE": ["BIRU", "BLUE", "BLU", "DENIM", "SKY BLUE", "LIGHT BLUE", "AQUA"],
-    "GREY": ["ABU", "ABU-ABU", "GREY", "GRAY", "GRY", "CHARCOAL", "MISTY", "SILVER"],
+    "BLUE": ["BIRU", "BLUE", "BLU", "DENIM", "SKY BLUE", "LIGHT BLUE", "AQUA", "PASTEL BLUE"],
+    "GREY": ["ABU", "ABU-ABU", "GREY", "GRAY", "GRY", "CHARCOAL", "MISTY", "SILVER", "PASTEL GREY"],
     "RED": ["MERAH", "RED", "MAROON", "MARUN", "BURGUNDY", "WINE", "CRIMSON"],
-    "GREEN": ["HIJAU", "IJO", "GREEN", "GRN", "OLIVE", "ARMY", "SAGE", "EMERALD", "MINT", "TOSCA"],
-    "BEIGE": ["CREAM", "KREM", "BEIGE", "KHAKI", "TAN", "SAND", "OAT", "MOCCA", "MOKA", "TAUPE", "NUDE"],
+    "GREEN": ["HIJAU", "IJO", "GREEN", "GRN", "OLIVE", "ARMY", "SAGE", "EMERALD", "MINT", "TOSCA", "JADE"],
+    "BEIGE": ["CREAM", "KREM", "BEIGE", "KHAKI", "TAN", "SAND", "OAT", "MOCCA", "MOKA", "TAUPE", "NUDE", "CERAMIC"],
     "BROWN": ["COKLAT", "COKELAT", "BROWN", "BRN", "CHOCO", "CARAMEL", "COFFEE", "ESPRESSO"],
-    "PINK": ["PINK", "MERAH MUDA", "DUSTY PINK", "ROSE", "SALMON", "MAGENTA", "FUCHSIA"],
+    "PINK": ["PINK", "MERAH MUDA", "DUSTY PINK", "PASTEL PINK", "ROSE", "SALMON", "MAGENTA", "FUCHSIA"],
     "YELLOW": ["KUNING", "YELLOW", "MUSTARD", "GOLD", "OCHRE"],
     "ORANGE": ["ORANYE", "OREN", "ORANGE", "TERRACOTTA", "CORAL", "PEACH"],
-    "PURPLE": ["UNGU", "PURPLE", "LILAC", "LAVENDER", "VIOLET"],
+    "PURPLE": ["UNGU", "PURPLE", "LILAC", "LAVENDER", "VIOLET", "EGGPLANT"],
 }
 
 CATEGORY_SYNONYMS: Dict[str, List[str]] = {
     "ATASAN": ["kaos", "kemeja", "tshirt", "t-shirt", "tee", "polo", "blouse", "blus", "atasan", "top", "baju", "tanktop", "crop"],
-    "JAKET": ["jaket", "jacket", "hoodie", "sweater", "cardigan", "outer", "blazer", "vest", "parka", "bomber", "knit"],
+    "JAKET": ["jaket", "jacket", "winter", "puffer", "coat", "hoodie", "sweater", "cardigan", "outer", "blazer", "vest", "parka", "bomber", "knit"],
     "CELANA": ["celana", "jeans", "denim", "chino", "jogger", "short", "pant", "pants", "trouser", "legging", "kulot", "culotte"],
     "DRESS_ROK": ["dress", "rok", "skirt", "gamis", "tunik", "tunic", "kaftan", "jumpsuit"],
     "SEPATU_SANDAL": ["sepatu", "sandal", "sendal", "sneaker", "loafer", "heels", "boots", "flats", "slipper"],
     "TAS_AKSESORIS": ["tas", "bag", "dompet", "wallet", "topi", "cap", "hat", "belt", "sabuk", "kaos kaki", "sock", "backpack", "pouch"],
-    "BEAUTY": ["serum", "parfum", "perfume", "cream", "krim", "lotion", "lip", "masker", "toner", "cleanser", "skincare", "makeup", "nayoung"],
+    "BEAUTY": ["serum", "parfum", "perfume", "cream", "krim", "lotion", "lip", "masker", "toner", "cleanser", "skincare"],
     "TIDUR_DALAM": ["boxer", "brief", "underwear", "dalam", "bra", "panty", "piyama", "pajama", "singlet", "tidur"],
 }
+
+OTHER_BRAND_WORDS = ("muku", "mu+ku", "mu ku", "zes", "nevada", "cole", "connexion", "st yves", "fladeo", "nayoung", "byrch", "uniqlo", "zara", "h&m")
 
 STOPWORDS_ID = {
     "mas", "mbak", "mba", "kak", "kakak", "min", "admin", "bang", "bro", "sis", "gan", "om", "tante", "bu", "pak",
@@ -158,18 +188,21 @@ STOPWORDS_ID = {
     "liat", "lihat", "spill", "spil", "info", "infonya", "detail", "masih", "habis", "sold", "out", "kosong",
     "beli", "order", "pesan", "keep", "booking", "ambil", "kirim", "cod", "toko", "buka", "tutup", "halo", "hai",
     "hi", "hello", "permisi", "punten", "selamat", "pagi", "siang", "sore", "malam", "terima", "kasih", "makasih",
-    "thanks", "thx", "mohon", "bantu", "bantuan", "dong", "kah", "kan", "sih", "deh", "lho", "loh", "nya", "punya",
+    "thanks", "thx", "mohon", "bantu", "bantuan", "kah", "kan", "sih", "deh", "lho", "loh", "nya", "punya",
     "jual", "tersedia", "lagi", "sedang", "bisa", "boleh", "minta", "kasih", "rekomendasi", "rekomen", "bagus",
+    "terbaru", "baru", "masuk", "koleksi", "lainnya", "lain", "best", "seller", "bestseller", "terlaris", "laku",
+    "cewek", "wanita", "perempuan", "ladies", "women", "cowok", "pria", "laki", "men", "anak", "kids", "gitu",
+    "nomor", "no", "nomer", "saya", "aku", "gue", "gw", "kalo", "kalau", "mana", "dong", "barang",
 }
 
 INQUIRY_TRIGGER_WORDS = {
     "harga", "brp", "berapa", "berapaan", "ready", "redi", "stok", "stock", "promo", "diskon", "sale",
     "size", "ukuran", "warna", "order", "pesan", "beli", "keep", "booking", "katalog", "produk", "barang",
-    "spill", "spil", "foto", "gambar", "cek", "cekin", "tersedia", "sold", "habis", "ada",
-    "suko", "muku", "mu+ku", "zes", "nevada", "cole", "connexion", "styves", "fladeo", "nayoung", "byrch",
+    "spill", "spil", "foto", "gambar", "cek", "cekin", "tersedia", "sold", "habis", "ada", "suko",
     "kaos", "kemeja", "celana", "jaket", "hoodie", "sweater", "cardigan", "dress", "rok", "gamis", "tunik",
-    "sepatu", "sandal", "sendal", "sneaker", "tas", "dompet", "topi", "boxer", "piyama", "parfum", "serum",
-    "baju", "atasan", "blouse", "polo", "jeans", "chino", "jogger", "kaos kaki", "sock", "sku", "artikel", "barcode",
+    "sepatu", "sandal", "sendal", "sneaker", "tas", "dompet", "topi", "boxer", "piyama", "baju", "atasan",
+    "blouse", "polo", "jeans", "chino", "jogger", "kaos kaki", "sock", "sku", "artikel", "barcode",
+    "terbaru", "best", "seller", "terlaris", "koleksi", "lainnya", "nomor", "winter", "transfer", "bayar", "ongkir",
 }
 
 CASUAL_SHORT_RE = re.compile(
@@ -184,7 +217,6 @@ SIZE_ORDER = {
     "ALL SIZE": 20, "FREE SIZE": 21, "OS": 22, "ONE SIZE": 22,
 }
 
-# Daftar istilah internal yang DILARANG muncul di balasan customer
 FORBIDDEN_INTERNAL_TERMS = [
     (re.compile(r"\bMDS\s*BISA\b", re.IGNORECASE), "sistem stok toko"),
     (re.compile(r"\bStoreHub\b", re.IGNORECASE), "sistem stok toko"),
@@ -193,15 +225,14 @@ FORBIDDEN_INTERNAL_TERMS = [
     (re.compile(r"\bSupabase\b", re.IGNORECASE), "database toko"),
 ]
 
-# Guard anti-bocor angka stok di teks final
 STOCK_QTY_LEAK_RE = re.compile(
-    r"(?:stok(?:nya)?|sisa(?:\s+stok)?|tersisa|tinggal|qty)\s*[:=]?\s*\d+\s*(?:pcs|unit|buah|biji|pasang)?",
+    r"(?:stok(?:nya)?|sisa(?:\s+stok)?|tersisa|tinggal|qty|terjual|laku)\s*[:=]?\s*\d+\s*(?:pcs|unit|buah|biji|pasang)?",
     re.IGNORECASE,
 )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  1. HELPER WAKTU WIB, AUTH, CONFIG & LOGS (TURSO STORAGE)
+#  1. WAKTU WIB, AUTH, CONFIG, LOGS, BRIDGE STATE & MEMORI SESI
 # ─────────────────────────────────────────────────────────────────────────────
 
 def wib_now() -> datetime:
@@ -234,7 +265,6 @@ def verify_secret(provided: str) -> bool:
 
 
 def normalize_wa_phone(raw: Any) -> str:
-    """Normalisasi nomor WA Indonesia ke format digit internasional (misal 081296393972 -> 6281296393972)."""
     s = str(raw or "").split("@")[0].split(":")[0]
     digits = re.sub(r"[^0-9]", "", s)
     if not digits:
@@ -252,7 +282,6 @@ def _merge_config(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         for k in DEFAULT_CONFIG:
             if k in raw and raw[k] is not None:
                 cfg[k] = raw[k]
-    # Sanitasi tipe data
     cfg["enabled"] = bool(cfg.get("enabled", False))
     cfg["autoSchedule"] = bool(cfg.get("autoSchedule", True))
     cfg["ignorePrivateChats"] = bool(cfg.get("ignorePrivateChats", True))
@@ -265,16 +294,20 @@ def _merge_config(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     cfg["closeHourWib"] = max(0, min(23, int(cfg.get("closeHourWib", 21) or 21)))
     cfg["closeMinuteWib"] = max(0, min(59, int(cfg.get("closeMinuteWib", 30) or 30)))
     cfg["humanTakeoverMinutes"] = max(0, min(120, int(cfg.get("humanTakeoverMinutes", 10) or 10)))
-    scope = str(cfg.get("storeScope") or "ALL").strip().upper()
-    cfg["storeScope"] = scope if scope in ("ALL", "SUKO", "MUKU", "ZES") else "ALL"
+    cfg["heavyDailyBudget"] = max(10, min(1000, int(cfg.get("heavyDailyBudget", 60) or 60)))
+    scope = str(cfg.get("storeScope") or "SUKO").strip().upper()
+    cfg["storeScope"] = scope if scope in ("SUKO", "ALL", "MUKU", "ZES") else "SUKO"
     cfg["csName"] = str(cfg.get("csName") or "Luqman").strip()[:40] or "Luqman"
-    cfg["adminPhone"] = normalize_wa_phone(cfg.get("adminPhone") or "6281296393972") or "6281296393972"
-    cfg["storeName"] = str(cfg.get("storeName") or "SUKO & Mu+Ku Official").strip()[:60] or "SUKO & Mu+Ku Official"
+    cfg["adminPhone"] = normalize_wa_phone(cfg.get("adminPhone") or "6285771123000") or "6285771123000"
+    cfg["picAlertPhone"] = normalize_wa_phone(cfg.get("picAlertPhone") or "6281296393972") or "6281296393972"
+    cfg["storeName"] = str(cfg.get("storeName") or "SUKO Official").strip()[:60] or "SUKO Official"
+    cfg["storeSop"] = str(cfg.get("storeSop") or DEFAULT_SOP_TEXT).strip()[:1800] or DEFAULT_SOP_TEXT
     if not isinstance(cfg.get("allowedGroups"), list):
         cfg["allowedGroups"] = []
     if not isinstance(cfg.get("detectedGroups"), list):
         cfg["detectedGroups"] = []
     cfg["fonnteToken"] = str(cfg.get("fonnteToken") or "").strip()
+    cfg["customGeminiApiKey"] = str(cfg.get("customGeminiApiKey") or "").strip()
     return cfg
 
 
@@ -282,8 +315,7 @@ def load_config() -> Dict[str, Any]:
     try:
         txt = storage_read_text(CONFIG_STORAGE_PATH, timeout=3.5)
         if txt:
-            parsed = json.loads(txt)
-            return _merge_config(parsed)
+            return _merge_config(json.loads(txt))
     except Exception:
         pass
     return _merge_config(None)
@@ -297,20 +329,43 @@ def save_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return merged
 
 
+def _get_quota_status(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    today = wib_now().strftime("%Y-%m-%d")
+    if _DAILY_USAGE_MEM["dateWib"] != today:
+        _DAILY_USAGE_MEM["dateWib"] = today
+        _DAILY_USAGE_MEM["heavyCalls"] = 0
+        _DAILY_USAGE_MEM["flashCalls"] = 0
+    budget = int((cfg or {}).get("heavyDailyBudget") or _DAILY_USAGE_MEM.get("heavyDailyBudget") or 60)
+    _DAILY_USAGE_MEM["heavyDailyBudget"] = budget
+    used = int(_DAILY_USAGE_MEM["heavyCalls"])
+    rem_pct = max(0, int(round(((budget - used) / max(1, budget)) * 100)))
+    return {
+        "dateWib": today,
+        "heavyCalls": used,
+        "flashCalls": int(_DAILY_USAGE_MEM["flashCalls"]),
+        "heavyDailyBudget": budget,
+        "heavyRemainingPct": rem_pct,
+        "autoDowngradedToFlash": rem_pct < 10,
+        "orchestratorPrimary": ORCHESTRATOR_CHAIN[0][0],
+        "orchestratorFallback": ORCHESTRATOR_CHAIN[1][0],
+        "executorFlash": EXECUTOR_CHAIN[0][0],
+    }
+
+
 def mask_config_for_ui(cfg: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(cfg)
     tok = str(out.get("fonnteToken") or "").strip()
     out["fonnteTokenConfigured"] = bool(tok)
-    if len(tok) > 8:
-        out["fonnteTokenPreview"] = f"{tok[:4]}••••{tok[-4:]}"
-    elif tok:
-        out["fonnteTokenPreview"] = "••••"
-    else:
-        out["fonnteTokenPreview"] = ""
+    out["fonnteTokenPreview"] = f"{tok[:4]}••••{tok[-4:]}" if len(tok) > 8 else ("••••" if tok else "")
     out.pop("fonnteToken", None)
+    gkey = str(out.get("customGeminiApiKey") or "").strip()
+    out["customGeminiKeyConfigured"] = bool(gkey)
+    out["customGeminiKeyPreview"] = f"{gkey[:6]}••••{gkey[-4:]}" if len(gkey) > 10 else ("••••" if gkey else "")
+    out.pop("customGeminiApiKey", None)
     now_wib = wib_now()
     out["serverWibTime"] = now_wib.strftime("%H:%M WIB")
     out["withinStoreHours"] = is_within_store_hours(cfg, now_wib)
+    out["aiQuota"] = _get_quota_status(cfg)
     return out
 
 
@@ -329,15 +384,13 @@ def load_logs() -> List[Dict[str, Any]]:
 def append_log(entry: Dict[str, Any]) -> None:
     try:
         logs = load_logs()
-        entry_with_id = {
+        logs.insert(0, {
             "id": f"log_{int(time.time() * 1000)}",
             "timestamp": utc_iso_now(),
             "wibTime": wib_now().strftime("%d/%m %H:%M WIB"),
             **entry,
-        }
-        logs.insert(0, entry_with_id)
-        trimmed = logs[:MAX_LOGS]
-        payload = json.dumps(trimmed, ensure_ascii=False).encode("utf-8")
+        })
+        payload = json.dumps(logs[:MAX_LOGS], ensure_ascii=False).encode("utf-8")
         storage_write_bytes(LOGS_STORAGE_PATH, payload, content_type="application/json", timeout=3.5)
     except Exception:
         pass
@@ -356,7 +409,7 @@ def _session_key_variants(raw_sender: str) -> List[str]:
     if s:
         keys.append(s)
     digits = normalize_wa_phone(raw_sender)
-    if digits and digits not in keys:
+    if digits and len(digits) >= 8 and digits not in keys:
         keys.append(digits)
     return keys
 
@@ -377,23 +430,72 @@ def load_private_sessions() -> Dict[str, Any]:
     return {}
 
 
-def has_active_private_session(raw_sender: str) -> bool:
+def get_customer_session(raw_sender: str) -> Optional[Dict[str, Any]]:
     sessions = load_private_sessions()
     if not sessions:
-        return False
+        return None
     for k in _session_key_variants(raw_sender):
         if k in sessions:
-            return True
-    return False
+            return dict(sessions[k])
+    return None
 
 
-def register_private_session(raw_sender: str, sender_name: str, group_name: str, minutes: int = 30) -> None:
+def save_customer_session(
+    raw_sender: str,
+    sender_name: str,
+    group_name: str,
+    minutes: int = 30,
+    preferred_gender: str = "",
+    new_products: Optional[List[Dict[str, Any]]] = None,
+    user_msg: str = "",
+    bot_summary: str = "",
+) -> None:
+    """Simpan memori percakapan ringkas per customer (30 menit, hemat Turso!)."""
+    if not raw_sender:
+        return
     try:
         sessions = load_private_sessions()
+        existing: Dict[str, Any] = {}
+        for k in _session_key_variants(raw_sender):
+            if k in sessions:
+                existing = dict(sessions[k])
+                break
+
         expires_ms = int(time.time() * 1000) + max(5, int(minutes or 30)) * 60 * 1000
+        history: List[Dict[str, str]] = list(existing.get("history") or [])
+        if user_msg:
+            history.append({"u": user_msg[:140], "b": bot_summary[:180]})
+        history = history[-6:]  # Simpan 6 giliran terakhir saja (super ringan!)
+
+        shown_articles: List[str] = list(existing.get("shownArticles") or [])
+        last_products: List[Dict[str, Any]] = list(existing.get("lastProducts") or [])
+        if new_products:
+            last_products = [
+                {
+                    "num": idx + 1,
+                    "sku": p.get("sku") or "",
+                    "article": p.get("article") or "",
+                    "name": p.get("name") or "",
+                    "category": p.get("category") or "",
+                    "hargaText": p.get("hargaPromoText") or p.get("hargaNormalText") or "",
+                }
+                for idx, p in enumerate(new_products[:3])
+            ]
+            for p in new_products:
+                art = str(p.get("article") or p.get("sku") or "").strip().upper()
+                if art and art not in shown_articles:
+                    shown_articles.append(art)
+            shown_articles = shown_articles[-18:]
+
+        gender = preferred_gender or str(existing.get("preferredGender") or "")
         entry = {
-            "senderName": str(sender_name or "Kak")[:40],
-            "groupName": str(group_name or "")[:60],
+            "senderName": str(sender_name or existing.get("senderName") or "Kak")[:40],
+            "groupName": str(group_name or existing.get("groupName") or "")[:60],
+            "preferredGender": gender,
+            "lastProducts": last_products,
+            "shownArticles": shown_articles,
+            "history": history,
+            "turnCount": int(existing.get("turnCount") or 0) + 1,
             "expiresAtMs": expires_ms,
         }
         for k in _session_key_variants(raw_sender):
@@ -459,12 +561,10 @@ def is_within_store_hours(cfg: Dict[str, Any], now_wib: Optional[datetime] = Non
     close_mins = int(cfg.get("closeHourWib", 21)) * 60 + int(cfg.get("closeMinuteWib", 30))
     if open_mins <= close_mins:
         return open_mins <= cur_mins <= close_mins
-    # Jadwal lintas tengah malam
     return cur_mins >= open_mins or cur_mins <= close_mins
 
 
 def _record_detected_group(cfg: Dict[str, Any], group_id: str, group_name: str, message: str) -> bool:
-    """Catat grup masuk ke detectedGroups agar user tinggal 1 klik Aktifkan di UI."""
     gid = str(group_id or "").strip()
     if not gid:
         return False
@@ -482,25 +582,15 @@ def _record_detected_group(cfg: Dict[str, Any], group_id: str, group_name: str, 
             found = True
             break
     if not found:
-        detected.insert(0, {
-            "id": gid,
-            "name": gname,
-            "lastSeenAt": now_iso,
-            "lastMessage": preview,
-        })
+        detected.insert(0, {"id": gid, "name": gname, "lastSeenAt": now_iso, "lastMessage": preview})
     detected.sort(key=lambda x: str(x.get("lastSeenAt") or ""), reverse=True)
     cfg["detectedGroups"] = detected[:MAX_DETECTED_GROUPS]
-    # Sinkronkan nama grup jika sudah ada di allowedGroups
     for ag in cfg.get("allowedGroups") or []:
         if str(ag.get("id") or "").strip() == gid and gname and gname != gid:
             if not ag.get("name") or ag.get("name") == gid:
                 ag["name"] = gname
     return True
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  2. PEMBERSIHAN URL GAMBAR & SORTING UKURAN
-# ─────────────────────────────────────────────────────────────────────────────
 
 def is_clean_product_image(url: Any) -> bool:
     s = str(url or "").strip()
@@ -538,30 +628,40 @@ def _parse_json_list(raw: Any) -> List[str]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  3. GEMINI 2.5 FLASH HTTP CLIENT (PURE STDLIB, ZERO PIP DEPS!)
+#  2. SMART ORCHESTRATOR + EXECUTOR GEMINI CLIENT (QUOTA < 10% AUTO-FLASH!)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _call_gemini_json(
+def _call_gemini_model(
+    model: str,
     prompt: str,
-    timeout: float = 4.2,
-    temperature: float = 0.2,
-    max_tokens: int = 450,
-) -> Optional[Dict[str, Any]]:
-    api_key = (os.environ.get("GEMINI_API_KEY") or "").strip()
+    thinking_level: str = "MEDIUM",
+    expect_json: bool = False,
+    timeout: float = 5.5,
+    temperature: float = 0.25,
+    max_tokens: int = 750,
+    custom_api_key: str = "",
+) -> Tuple[Optional[str], int]:
+    """Panggil 1 model Gemini via stdlib urllib. Mengembalikan (text, http_status)."""
+    api_key = (str(custom_api_key or "").strip() or os.environ.get("GEMINI_API_KEY") or "").strip()
     if not api_key:
-        return None
+        return None, 0
+
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{urllib.parse.quote(GEMINI_MODEL)}:generateContent?key={urllib.parse.quote(api_key)}"
+        f"{urllib.parse.quote(model)}:generateContent?key={urllib.parse.quote(api_key)}"
     )
+    gen_cfg: Dict[str, Any] = {
+        "temperature": temperature,
+        "maxOutputTokens": max_tokens,
+    }
+    if expect_json:
+        gen_cfg["responseMimeType"] = "application/json"
+    if thinking_level:
+        gen_cfg["thinkingConfig"] = {"thinkingLevel": thinking_level}
+
     body = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": temperature,
-            "maxOutputTokens": max_tokens,
-            "responseMimeType": "application/json",
-            "thinkingConfig": {"thinkingBudget": 0},
-        },
+        "generationConfig": gen_cfg,
     }
     req = urllib.request.Request(
         url,
@@ -574,65 +674,112 @@ def _call_gemini_json(
             data = json.loads(resp.read().decode("utf-8", errors="ignore"))
         candidates = data.get("candidates") or []
         if not candidates:
-            return None
+            return None, 200
         parts = ((candidates[0].get("content") or {}).get("parts")) or []
-        raw_text = "".join(str(p.get("text") or "") for p in parts).strip()
-        if not raw_text:
-            return None
-        # Bersihkan kemungkinan markdown fence
-        raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
-        raw_text = re.sub(r"\s*```$", "", raw_text)
-        parsed = json.loads(raw_text)
+        # Filter bagian non-thought agar jawaban murni bersih
+        text_parts = [str(p.get("text") or "") for p in parts if not p.get("thought")]
+        raw_text = "".join(text_parts).strip()
+        return (raw_text or None), 200
+    except urllib.error.HTTPError as e:
+        return None, int(e.code or 500)
+    except Exception:
+        return None, 0
+
+
+def _invoke_smart_ai(
+    prompt: str,
+    tier: str = "LIGHT",  # "HEAVY" (Orchestrator) | "LIGHT" (Executor Flash)
+    cfg: Optional[Dict[str, Any]] = None,
+    expect_json: bool = False,
+    timeout: float = 5.5,
+    temperature: float = 0.25,
+    max_tokens: int = 750,
+) -> Tuple[Optional[str], str]:
+    """
+    Router AI Cerdas:
+    - Jika `tier == 'HEAVY'` & sisa kuota Orchestrator >= 10% -> coba rantai ORCHESTRATOR_CHAIN!
+    - Jika kuota < 10% ATAU `tier == 'LIGHT'` -> langsung pakai EXECUTOR_CHAIN (Flash cepat & irit)!
+    - Circuit Breaker otomatis: model yang kena 429 (quota habis) di-cooldown 15 menit,
+      404 (deprecated) di-cooldown 60 menit, 503 (padat) di-cooldown 3 menit!
+    """
+    q_stat = _get_quota_status(cfg)
+    use_heavy = (tier == "HEAVY") and (not q_stat["autoDowngradedToFlash"])
+    chain = (ORCHESTRATOR_CHAIN + EXECUTOR_CHAIN) if use_heavy else EXECUTOR_CHAIN
+
+    now_ts = time.time()
+    tried = set()
+    for model_name, think_lvl in chain:
+        key = f"{model_name}:{think_lvl}"
+        if key in tried:
+            continue
+        tried.add(key)
+
+        cooldown_until = _MODEL_COOLDOWN_UNTIL.get(model_name, 0.0)
+        if now_ts < cooldown_until:
+            continue
+
+        txt, status = _call_gemini_model(
+            model=model_name,
+            prompt=prompt,
+            thinking_level=think_lvl,
+            expect_json=expect_json,
+            timeout=timeout,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            custom_api_key=str((cfg or {}).get("customGeminiApiKey") or ""),
+        )
+        if txt:
+            if model_name == ORCHESTRATOR_CHAIN[0][0] or (use_heavy and think_lvl == "HIGH"):
+                _DAILY_USAGE_MEM["heavyCalls"] += 1
+            else:
+                _DAILY_USAGE_MEM["flashCalls"] += 1
+            return txt, f"{model_name}({think_lvl})"
+
+        if status == 429:
+            _MODEL_COOLDOWN_UNTIL[model_name] = now_ts + 900.0  # 15 menit auto-downgrade ke Flash!
+        elif status == 404:
+            _MODEL_COOLDOWN_UNTIL[model_name] = now_ts + 3600.0
+        elif status == 503:
+            _MODEL_COOLDOWN_UNTIL[model_name] = now_ts + 180.0
+
+    return None, "deterministic"
+
+
+def _parse_json_loose(raw_text: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not raw_text:
+        return None
+    s = raw_text.strip()
+    s = re.sub(r"^```(?:json)?\s*", "", s)
+    s = re.sub(r"\s*```$", "", s)
+    try:
+        parsed = json.loads(s)
         return parsed if isinstance(parsed, dict) else None
     except Exception:
-        return None
-
-
-def _call_gemini_text(
-    prompt: str,
-    timeout: float = 4.5,
-    temperature: float = 0.45,
-    max_tokens: int = 420,
-) -> Optional[str]:
-    api_key = (os.environ.get("GEMINI_API_KEY") or "").strip()
-    if not api_key:
-        return None
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{urllib.parse.quote(GEMINI_MODEL)}:generateContent?key={urllib.parse.quote(api_key)}"
-    )
-    body = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": temperature,
-            "maxOutputTokens": max_tokens,
-            "thinkingConfig": {"thinkingBudget": 0},
-        },
-    }
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with _STD_OPENER.open(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8", errors="ignore"))
-        candidates = data.get("candidates") or []
-        if not candidates:
-            return None
-        parts = ((candidates[0].get("content") or {}).get("parts")) or []
-        text = "".join(str(p.get("text") or "") for p in parts).strip()
-        return text or None
-    except Exception:
-        return None
+        m = re.search(r"\{[\s\S]*\}", s)
+        if m:
+            try:
+                parsed = json.loads(m.group(0))
+                return parsed if isinstance(parsed, dict) else None
+            except Exception:
+                return None
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  4. ANALISIS INTENT & EKSTRAKSI QUERY (GEMINI + FALLBACK DETERMINISTIK)
+#  3. TAHAP 1: AGENT AI PLANNER / FILTER (DETEKSI RINGAN VS BERAT + MEMORI!)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _extract_deterministic_intent(message: str) -> Dict[str, Any]:
+def _detect_gender_deterministic(low: str) -> str:
+    if re.search(r"\b(cewek|cewe|wanita|perempuan|ladies|women|woman|ibu|mbak|rok|dress|blouse|gamis|tunik)\b", low):
+        return "LADIES"
+    if re.search(r"\b(cowok|cowo|pria|laki|men|man|bapak|boxer)\b", low):
+        return "MEN"
+    if re.search(r"\b(anak|kids|bocah|junior|boys|girls)\b", low):
+        return "KIDS"
+    return ""
+
+
+def _extract_deterministic_plan(message: str, session: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     clean = re.sub(r"\s+", " ", str(message or "").strip())
     low = clean.lower()
 
@@ -640,17 +787,67 @@ def _extract_deterministic_intent(message: str) -> Dict[str, Any]:
         return {
             "intent": "CASUAL_CHAT",
             "shouldReply": False,
-            "searchKeywords": [],
-            "brandHint": "",
-            "categoryHint": "",
-            "colorHint": "",
-            "sizeHint": "",
-            "skuOrArticle": "",
+            "complexity": "LIGHT",
+            "genderHint": "",
+            "referencedNumber": 0,
+            "wantsMoreLikeRef": False,
             "wantsPromo": False,
+            "wantsNewArrival": False,
+            "wantsBestSeller": False,
+            "multiQueries": [],
+            "skuOrArticle": "",
+            "directAnswer": "",
             "engine": "deterministic",
         }
 
-    # Deteksi kode SKU (7-13 digit) atau kode artikel (contoh: TD21638, S2S084D1, T1KT1351, MK-123)
+    # Sapaan ramah (SOP CS: halo/hai/permisi/pagi/assalamualaikum WAJIB dibalas!)
+    is_pure_greeting = bool(
+        re.match(
+            r"^\s*(?:halo+|hallo+|hello+|hai+|hi+|hey+|permisi|punten|assalamu['\s]?alaikum|salam|"
+            r"selamat\s+(?:pagi|siang|sore|malam)|pagi+|siang+|sore+|malam+)"
+            r"(?:\s+(?:kak|kakak|min|admin|mas|mbak|mba|cs|suko))?[\s!?.,]*$",
+            low,
+        )
+    )
+    if is_pure_greeting:
+        return {
+            "intent": "GREETING",
+            "shouldReply": True,
+            "complexity": "LIGHT",
+            "genderHint": str((session or {}).get("preferredGender") or ""),
+            "referencedNumber": 0,
+            "wantsMoreLikeRef": False,
+            "wantsPromo": False,
+            "wantsNewArrival": False,
+            "wantsBestSeller": False,
+            "multiQueries": [],
+            "skuOrArticle": "",
+            "directAnswer": "",
+            "engine": "deterministic",
+        }
+
+    # Deteksi niat Order / Keep / Bayar
+    if re.search(r"\b(mau\s+keep|fix\s+(?:beli|order|ambil|keep)|jadi\s+beli|mau\s+transfer|kirim\s+rekening|gimana\s+cara\s+bayar|mau\s+order|pesan\s+(?:no|nomor|yang))\b", low):
+        ref_m = re.search(r"\b(?:no|nomor|nomer)\s*\.?\s*([123])\b", low)
+        return {
+            "intent": "ORDER_INTENT",
+            "shouldReply": True,
+            "complexity": "HEAVY",
+            "genderHint": str((session or {}).get("preferredGender") or ""),
+            "referencedNumber": int(ref_m.group(1)) if ref_m else 0,
+            "wantsMoreLikeRef": False,
+            "wantsPromo": False,
+            "wantsNewArrival": False,
+            "wantsBestSeller": False,
+            "multiQueries": [],
+            "skuOrArticle": "",
+            "directAnswer": "",
+            "engine": "deterministic",
+        }
+
+    # Deteksi brand luar SUKO
+    asked_other_brand = next((b for b in OTHER_BRAND_WORDS if re.search(rf"\b{re.escape(b)}\b", low)), "")
+
     sku_match = re.search(r"\b(\d{7,13})\b", clean)
     art_match = re.search(r"\b([A-Z]{1,4}\d[A-Z0-9\-]{3,12})\b", clean.upper())
     sku_or_article = ""
@@ -659,31 +856,22 @@ def _extract_deterministic_intent(message: str) -> Dict[str, Any]:
     elif art_match and not re.match(r"^(?:RP|IDR|WA|HP|COD)\d", art_match.group(1)):
         sku_or_article = art_match.group(1)
 
-    # Deteksi Brand
-    brand_hint = ""
-    if "suko" in low:
-        brand_hint = "SUKO"
-    elif "muku" in low or "mu+ku" in low or "mu ku" in low:
-        brand_hint = "MUKU"
-    elif re.search(r"\bzes\b", low):
-        brand_hint = "ZES"
-    else:
-        for b in ("nevada", "cole", "connexion", "st yves", "fladeo", "nayoung", "byrch", "pipa", "volo", "little m", "trisse"):
-            if b in low:
-                brand_hint = b.upper()
-                break
+    gender_hint = _detect_gender_deterministic(low) or str((session or {}).get("preferredGender") or "")
+    wants_promo = any(w in low for w in ("promo", "diskon", "sale", "potongan", "spesial", "special price", "murah"))
+    wants_new = any(w in low for w in ("terbaru", "baru masuk", "model baru", "koleksi baru", "new arrival", "barang baru"))
+    wants_best = any(w in low for w in ("best seller", "bestseller", "terlaris", "paling laku", "favorit", "paling laris"))
 
-    # Deteksi Warna
+    # Deteksi referensi nomor ("koleksi lainnya nomor 3", "yang nomor 2")
+    ref_m = re.search(r"\b(?:no|nomor|nomer)\s*\.?\s*([123])\b", low)
+    ref_num = int(ref_m.group(1)) if ref_m else 0
+    wants_more_like_ref = bool(ref_num and any(w in low for w in ("lain", "lainnya", "mirip", "koleksi", "model lain", "alternatif")))
+
     color_hint = ""
     for canon_color, syns in COLOR_SYNONYMS.items():
-        for syn in syns:
-            if re.search(rf"\b{re.escape(syn.lower())}\b", low):
-                color_hint = canon_color
-                break
-        if color_hint:
+        if any(re.search(rf"\b{re.escape(s.lower())}\b", low) for s in syns):
+            color_hint = canon_color
             break
 
-    # Deteksi Ukuran
     size_hint = ""
     sz_m = re.search(r"\b(?:size|ukuran|sz)\s*[:=]?\s*(xxs|xs|s|m|l|xl|xxl|2xl|3xl|\d{2})\b", low)
     if sz_m:
@@ -692,29 +880,20 @@ def _extract_deterministic_intent(message: str) -> Dict[str, Any]:
         sz_m2 = re.search(r"\b(xxs|xs|xxl|2xl|3xl|xl)\b", low)
         if sz_m2:
             size_hint = sz_m2.group(1).upper()
-        elif re.search(r"\b(ukuran|size|sz)\b", low):
-            sz_m3 = re.search(r"\b(s|m|l|\d{2})\b", low)
-            if sz_m3:
-                size_hint = sz_m3.group(1).upper()
 
-    # Deteksi Kategori
-    category_hint = ""
+    # Deteksi Multi-Kategori (misal "jaket winter atau celana pendek atau rok")
+    matched_cats: List[Tuple[str, List[str]]] = []
     for cat_key, cat_words in CATEGORY_SYNONYMS.items():
-        if any(re.search(rf"\b{re.escape(w)}\b", low) for w in cat_words):
-            category_hint = cat_key
-            break
+        hits = [w for w in cat_words if re.search(rf"\b{re.escape(w)}\b", low)]
+        if hits:
+            matched_cats.append((cat_key, hits))
 
-    wants_promo = any(w in low for w in ("promo", "diskon", "sale", "potongan", "spesial", "special price", "murah"))
-
-    # Token kata kunci produk
     raw_tokens = re.findall(r"[a-zA-Z0-9\+\-]+", low)
     keywords: List[str] = []
     if "kaos kaki" in low:
         keywords.append("kaoskaki")
     for tok in raw_tokens:
-        if len(tok) < 2:
-            continue
-        if tok in STOPWORDS_ID:
+        if len(tok) < 2 or tok in STOPWORDS_ID:
             continue
         if color_hint and any(tok == s.lower() for s in COLOR_SYNONYMS.get(color_hint, [])):
             continue
@@ -723,90 +902,150 @@ def _extract_deterministic_intent(message: str) -> Dict[str, Any]:
         if tok not in keywords:
             keywords.append(tok)
 
-    has_trigger = bool(sku_or_article or brand_hint or category_hint or wants_promo)
-    if not has_trigger:
-        has_trigger = any(re.search(rf"\b{re.escape(w)}\b", low) for w in INQUIRY_TRIGGER_WORDS)
+    multi_queries: List[Dict[str, Any]] = []
+    if len(matched_cats) >= 2:
+        for cat_key, hits in matched_cats[:3]:
+            q_kws = list(hits[:2])
+            if cat_key == "CELANA" and "pendek" in low:
+                q_kws.append("pendek")
+            if cat_key == "JAKET" and "winter" in low:
+                q_kws.append("winter")
+            multi_queries.append({
+                "label": " ".join(q_kws),
+                "keywords": q_kws,
+                "categoryHint": cat_key,
+                "colorHint": color_hint,
+                "sizeHint": size_hint,
+            })
+    elif wants_more_like_ref and session:
+        last_prods = session.get("lastProducts") or []
+        ref_prod = next((p for p in last_prods if int(p.get("num") or 0) == ref_num), None)
+        if ref_prod:
+            multi_queries.append({
+                "label": ref_prod.get("name") or ref_prod.get("category") or "koleksi lain",
+                "keywords": [w.lower() for w in re.findall(r"[A-Za-z]+", str(ref_prod.get("name") or "")) if len(w) > 3][:3],
+                "categoryHint": str(ref_prod.get("category") or ""),
+                "colorHint": color_hint,
+                "sizeHint": size_hint,
+            })
+    elif keywords or matched_cats or wants_promo or wants_new or wants_best or sku_or_article:
+        multi_queries.append({
+            "label": " ".join(keywords[:3]) or (matched_cats[0][1][0] if matched_cats else "produk SUKO"),
+            "keywords": keywords[:5],
+            "categoryHint": matched_cats[0][0] if matched_cats else "",
+            "colorHint": color_hint,
+            "sizeHint": size_hint,
+        })
 
-    # Sapaan ramah (SOP CS: sapaan seperti halo/hai/permisi/pagi/siang/sore/malam/assalamualaikum WAJIB dibalas!)
-    is_direct_greeting = bool(
-        re.search(
-            r"^\s*(?:halo+|hallo+|hello+|hai+|hi+|hey+|permisi|punten|assalamu['\s]?alaikum|salam|"
-            r"selamat\s+(?:pagi|siang|sore|malam)|pagi+|siang+|sore+|malam+)\b",
-            low,
-        )
-        or (
-            re.search(r"\b(halo|hallo|hai|hi|permisi|punten)\b", low)
-            and re.search(r"\b(min|admin|kak|mas|mbak|cs|toko|suko|muku)\b", low)
-        )
+    has_trigger = bool(
+        sku_or_article or multi_queries or wants_promo or wants_new or wants_best or wants_more_like_ref or asked_other_brand
+        or any(re.search(rf"\b{re.escape(w)}\b", low) for w in INQUIRY_TRIGGER_WORDS)
+    )
+    is_complex = bool(
+        len(matched_cats) >= 2 or wants_more_like_ref or ref_num > 0 or len(clean) > 55 or asked_other_brand
+        or (session and len(session.get("history") or []) > 0)
     )
 
-    if sku_or_article or keywords or category_hint or brand_hint:
-        intent = "PROMO_INQUIRY" if (wants_promo and not keywords and not sku_or_article) else "PRODUCT_INQUIRY"
-        should_reply = has_trigger
-    elif wants_promo:
+    if asked_other_brand and not multi_queries:
+        intent = "OTHER_BRAND"
+    elif wants_more_like_ref:
+        intent = "MORE_LIKE_NUMBER"
+    elif wants_new:
+        intent = "NEW_ARRIVAL"
+    elif wants_best:
+        intent = "BEST_SELLER"
+    elif wants_promo and not keywords:
         intent = "PROMO_INQUIRY"
-        should_reply = True
-    elif is_direct_greeting:
-        intent = "GREETING"
-        should_reply = True
+    elif has_trigger:
+        intent = "PRODUCT_INQUIRY"
     else:
         intent = "CASUAL_CHAT"
-        should_reply = False
 
     return {
         "intent": intent,
-        "shouldReply": should_reply,
-        "searchKeywords": keywords[:6],
-        "brandHint": brand_hint,
-        "categoryHint": category_hint,
-        "colorHint": color_hint,
-        "sizeHint": size_hint,
-        "skuOrArticle": sku_or_article,
+        "shouldReply": has_trigger,
+        "complexity": "HEAVY" if is_complex else "LIGHT",
+        "genderHint": gender_hint,
+        "referencedNumber": ref_num,
+        "wantsMoreLikeRef": wants_more_like_ref,
         "wantsPromo": wants_promo,
+        "wantsNewArrival": wants_new,
+        "wantsBestSeller": wants_best,
+        "askedOtherBrand": asked_other_brand,
+        "multiQueries": multi_queries,
+        "skuOrArticle": sku_or_article,
+        "directAnswer": "",
         "engine": "deterministic",
     }
 
 
-def analyze_message_intent(message: str, is_group: bool) -> Dict[str, Any]:
-    """Gabungkan pre-filter kilat + Gemini 2.5 Flash intent classifier."""
-    det = _extract_deterministic_intent(message)
+def run_ai_agent_planner(
+    message: str,
+    is_group: bool,
+    session: Optional[Dict[str, Any]],
+    cfg: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    TAHAP 1 AGENT AI:
+    Menyaring & merencanakan aksi (memilih model RINGAN Flash vs BERAT Orchestrator).
+    """
+    det = _extract_deterministic_plan(message, session=session)
     clean = str(message or "").strip()
 
-    # Jika pesan sangat pendek / jelas bukan tanya produk (wkwk, ok, siap), skip Gemini -> 0ms!
+    # Fast-path 0ms untuk obrolan sangat pendek, sapaan murni, atau exact SKU
     if not clean or len(clean) < 2 or CASUAL_SHORT_RE.match(clean):
         return det
-
-    # Jika ada kode SKU / artikel yang jelas, langsung proses tanpa tunggu Gemini classifier!
-    if det.get("skuOrArticle"):
+    if det["intent"] == "GREETING" or det.get("skuOrArticle"):
         return det
 
-    # Jika sapaan sopan ('halo', 'permisi', 'pagi kak') -> langsung proses GREETING tanpa menunggu Gemini!
-    if det.get("intent") == "GREETING" and det.get("shouldReply"):
-        return det
+    mem_ctx = {
+        "preferredGender": (session or {}).get("preferredGender") or "",
+        "lastProducts": (session or {}).get("lastProducts") or [],
+        "recentHistory": ((session or {}).get("history") or [])[-3:],
+    }
+    tier = "HEAVY" if det.get("complexity") == "HEAVY" else "LIGHT"
 
     prompt = (
-        "Kamu adalah classifier pesan untuk Customer Service toko fashion ritel (SUKO, Mu+Ku, ZES, Nevada, Cole, dll) di grup WhatsApp member eksklusif.\n"
-        f"Konteks: {'Pesan masuk di GRUP WhatsApp member' if is_group else 'Pesan masuk via private chat CS / simulasi'}.\n"
-        f"Pesan customer: {json.dumps(clean, ensure_ascii=False)}\n\n"
-        "Tugasmu HANYA membalas JSON murni dengan format:\n"
+        f"Kamu adalah AI Orchestrator & Filter Customer Service resmi *{cfg.get('storeName', 'SUKO Official')}* (KHUSUS produk SUKO saja!).\n"
+        f"Konteks: {'Pesan masuk di GRUP WA member' if is_group else 'Lanjutan obrolan di PRIVATE CHAT VIP'}.\n"
+        f"SOP Toko SUKO:\n{cfg.get('storeSop', DEFAULT_SOP_TEXT)}\n\n"
+        f"Memori Sesi Customer: {json.dumps(mem_ctx, ensure_ascii=False)}\n"
+        f"Pesan Customer Terbaru: {json.dumps(clean, ensure_ascii=False)}\n\n"
+        "Tugasmu: analisis pesan + memori, lalu balas HANYA JSON murni dengan skema ini:\n"
         "{\n"
-        '  "intent": "PRODUCT_INQUIRY" | "PROMO_INQUIRY" | "ORDER_INFO" | "GREETING" | "CASUAL_CHAT",\n'
-        '  "shouldReply": true atau false,\n'
-        '  "searchKeywords": ["kata kunci produk inti, maks 4 kata, misal kaos, jaket, celana, sepatu"],\n'
-        '  "brandHint": "SUKO" | "MUKU" | "ZES" | nama brand lain | "",\n'
-        '  "categoryHint": "ATASAN" | "JAKET" | "CELANA" | "DRESS_ROK" | "SEPATU_SANDAL" | "TAS_AKSESORIS" | "BEAUTY" | "TIDUR_DALAM" | "",\n'
-        '  "colorHint": "BLACK" | "WHITE" | "NAVY" | "BLUE" | "GREY" | "RED" | "GREEN" | "BEIGE" | "BROWN" | "PINK" | "YELLOW" | "ORANGE" | "PURPLE" | "",\n'
-        '  "sizeHint": "XS"|"S"|"M"|"L"|"XL"|"XXL"|angka ukuran|"",\n'
-        '  "skuOrArticle": "kode SKU/artikel jika ada atau kosong",\n'
-        '  "wantsPromo": true atau false\n'
+        '  "intent": "PRODUCT_INQUIRY"|"PROMO_INQUIRY"|"NEW_ARRIVAL"|"BEST_SELLER"|"MORE_LIKE_NUMBER"|"ORDER_INTENT"|"FAQ_SOP"|"COMPLAINT"|"OTHER_BRAND"|"GREETING"|"CASUAL_CHAT",\n'
+        '  "shouldReply": true/false,\n'
+        '  "genderHint": "LADIES"|"MEN"|"KIDS"|"",\n'
+        '  "referencedNumber": 0 atau 1/2/3 jika merujuk produk nomor sebelumnya,\n'
+        '  "wantsMoreLikeRef": true/false (true jika minta koleksi lain / mirip produk nomor sebelumnya),\n'
+        '  "wantsPromo": true/false,\n'
+        '  "wantsNewArrival": true/false,\n'
+        '  "wantsBestSeller": true/false,\n'
+        '  "multiQueries": [\n'
+        '    {"label": "frasa produk yg dicari", "keywords": ["kata", "inti"], "categoryHint": "ATASAN|JAKET|CELANA|DRESS_ROK|SEPATU_SANDAL|TAS_AKSESORIS|TIDUR_DALAM|", "colorHint": "BLACK|WHITE|NAVY|BLUE|GREY|RED|GREEN|BEIGE|BROWN|PINK|YELLOW|ORANGE|PURPLE|", "sizeHint": "XS|S|M|L|XL|XXL|"}\n'
+        '  ],\n'
+        '  "skuOrArticle": "",\n'
+        '  "directAnswer": "isi jawaban sopan Halo BCA HANYA jika intent adalah FAQ_SOP/ORDER_INTENT/COMPLAINT/OTHER_BRAND yang tidak butuh cari produk baru"\n'
         "}\n\n"
         "ATURAN KETAT:\n"
-        "- Jika pesan HANYA obrolan santai / candaan antar teman (contoh: 'bro nongkrong yuk', 'lagi dimana', 'wkwkwk', 'mantap', 'info kopi', 'kapan gajian', 'otw'), WAJIB set intent='CASUAL_CHAT' dan shouldReply=false!\n"
-        "- Jika pesan menyapa ('halo', 'hai', 'permisi', 'selamat pagi/siang/sore/malam', 'assalamualaikum') -> intent='GREETING', shouldReply=true!\n"
-        "- Jika pesan menanyakan ketersediaan barang, harga, ukuran, warna, foto, promo/diskon, atau cara order/keep -> shouldReply=true.\n"
+        "1. Obrolan santai non-belanja ('bro nongkrong yuk', 'wkwk', 'otw') -> intent='CASUAL_CHAT', shouldReply=false.\n"
+        "2. Sapaan ('halo', 'hai', 'permisi', 'pagi') -> intent='GREETING', shouldReply=true.\n"
+        "3. Jika customer tanya beberapa jenis sekaligus (misal 'jaket winter atau celana pendek atau rok'), pecah ke array `multiQueries` (maks 3 item terpisah!).\n"
+        "4. Jika customer bilang 'koleksi lainnya nomor 3' -> lihat `lastProducts` di Memori, set `wantsMoreLikeRef=true`, `referencedNumber=3`, dan isi `multiQueries` sesuai kategori produk nomor 3!\n"
+        "5. Warisi `preferredGender` dari memori jika customer tidak menyebut gender baru.\n"
+        "6. Jika customer bilang fix beli / mau keep / minta transfer -> intent='ORDER_INTENT', shouldReply=true.\n"
     )
 
-    ai_res = _call_gemini_json(prompt, timeout=3.8, temperature=0.1, max_tokens=260)
+    raw_txt, used_model = _invoke_smart_ai(
+        prompt,
+        tier=tier,
+        cfg=cfg,
+        expect_json=True,
+        timeout=5.5,
+        temperature=0.1,
+        max_tokens=550,
+    )
+    ai_res = _parse_json_loose(raw_txt)
     if not ai_res:
         return det
 
@@ -815,28 +1054,49 @@ def analyze_message_intent(message: str, is_group: bool) -> Dict[str, Any]:
     if intent == "CASUAL_CHAT":
         should_reply = False
 
-    kws = ai_res.get("searchKeywords")
-    if isinstance(kws, list):
-        clean_kws = [str(k).strip().lower() for k in kws if str(k or "").strip()][:6]
-    else:
-        clean_kws = det["searchKeywords"]
+    mq_raw = ai_res.get("multiQueries")
+    multi_queries: List[Dict[str, Any]] = []
+    if isinstance(mq_raw, list):
+        for item in mq_raw[:3]:
+            if isinstance(item, dict):
+                kws = [str(k).strip().lower() for k in (item.get("keywords") or []) if str(k or "").strip()][:5]
+                cat = str(item.get("categoryHint") or "").strip().upper()
+                if kws or cat:
+                    multi_queries.append({
+                        "label": str(item.get("label") or " ".join(kws) or cat).strip(),
+                        "keywords": kws,
+                        "categoryHint": cat,
+                        "colorHint": str(item.get("colorHint") or "").strip().upper(),
+                        "sizeHint": str(item.get("sizeHint") or "").strip().upper(),
+                    })
+
+    if not multi_queries and det.get("multiQueries"):
+        multi_queries = det["multiQueries"]
+
+    gender_hint = str(ai_res.get("genderHint") or det.get("genderHint") or "").strip().upper()
+    if gender_hint not in ("LADIES", "MEN", "KIDS"):
+        gender_hint = str((session or {}).get("preferredGender") or "")
 
     return {
         "intent": intent,
         "shouldReply": should_reply,
-        "searchKeywords": clean_kws or det["searchKeywords"],
-        "brandHint": str(ai_res.get("brandHint") or det["brandHint"] or "").strip().upper(),
-        "categoryHint": str(ai_res.get("categoryHint") or det["categoryHint"] or "").strip().upper(),
-        "colorHint": str(ai_res.get("colorHint") or det["colorHint"] or "").strip().upper(),
-        "sizeHint": str(ai_res.get("sizeHint") or det["sizeHint"] or "").strip().upper(),
-        "skuOrArticle": str(ai_res.get("skuOrArticle") or det["skuOrArticle"] or "").strip().upper(),
-        "wantsPromo": bool(ai_res.get("wantsPromo", det["wantsPromo"])),
-        "engine": "gemini-2.5-flash",
+        "complexity": tier,
+        "genderHint": gender_hint,
+        "referencedNumber": int(ai_res.get("referencedNumber") or det.get("referencedNumber") or 0),
+        "wantsMoreLikeRef": bool(ai_res.get("wantsMoreLikeRef", det.get("wantsMoreLikeRef", False))),
+        "wantsPromo": bool(ai_res.get("wantsPromo", det.get("wantsPromo", False))),
+        "wantsNewArrival": bool(ai_res.get("wantsNewArrival", det.get("wantsNewArrival", False))),
+        "wantsBestSeller": bool(ai_res.get("wantsBestSeller", det.get("wantsBestSeller", False))),
+        "askedOtherBrand": det.get("askedOtherBrand") or "",
+        "multiQueries": multi_queries,
+        "skuOrArticle": str(ai_res.get("skuOrArticle") or det.get("skuOrArticle") or "").strip().upper(),
+        "directAnswer": str(ai_res.get("directAnswer") or "").strip(),
+        "engine": used_model,
     }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  5. PENCARIAN KATALOG TURSO DB + HARD PRIVACY SANITIZER (NO STOCK QTY!)
+#  4. TAHAP 2: PYTHON EKSEKUTOR DB (100% SUKO, GENDER, NEWEST, BEST SELLER, LIVE STOK!)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _expand_keyword_terms(keywords: List[str]) -> List[str]:
@@ -861,10 +1121,7 @@ def _color_matches(variant_color: str, color_hint: str) -> bool:
         return False
     if color_hint in vc:
         return True
-    for syn in COLOR_SYNONYMS.get(color_hint, []):
-        if syn.upper() in vc:
-            return True
-    return False
+    return any(syn.upper() in vc for syn in COLOR_SYNONYMS.get(color_hint, []))
 
 
 def _size_matches(variant_size: str, size_hint: str) -> bool:
@@ -874,13 +1131,31 @@ def _size_matches(variant_size: str, size_hint: str) -> bool:
     sh = str(size_hint or "").strip().upper()
     if not vs:
         return False
-    if vs == sh:
-        return True
-    if sh == "XXL" and vs in ("2XL", "XXL"):
-        return True
-    if sh == "2XL" and vs in ("2XL", "XXL"):
+    if vs == sh or (sh in ("XXL", "2XL") and vs in ("XXL", "2XL")):
         return True
     return bool(re.search(rf"(?:^|[\s/\-])({re.escape(sh)})(?:$|[\s/\-])", vs))
+
+
+def _matches_gender(row: Dict[str, Any], gender_hint: str) -> Tuple[bool, int]:
+    """Cek kecocokan gender berdasarkan kolom dept & description (anti baju cowok masuk saat cari cewek!)."""
+    if not gender_hint:
+        return True, 0
+    txt = f"{row.get('dept') or ''} {row.get('description') or ''} {row.get('article') or ''}".upper()
+    is_ladies = any(k in txt for k in ("LADIES", "WOMEN", "WOMAN", "FEMALE", "BLOUSE", "DRESS", "SKIRT", "ROK", "TUNIC", "TUNIK", "GAMIS", "CULOTTE", "CROP"))
+    is_men = bool(re.search(r"\b(MEN|MENS|MAN|PRIA|BOYS|BOXER)\b", txt)) and not is_ladies
+    is_kids = any(k in txt for k in ("KIDS", "CHILD", "JUNIOR", "BOYS", "GIRLS"))
+
+    if gender_hint == "LADIES":
+        if is_men or is_kids:
+            return False, -250
+        return True, (110 if is_ladies else 0)
+    if gender_hint == "MEN":
+        if is_ladies or is_kids:
+            return False, -250
+        return True, (110 if is_men else 0)
+    if gender_hint == "KIDS":
+        return (True, 120) if is_kids else (False, -200)
+    return True, 0
 
 
 def _verify_live_stock_for_article(
@@ -889,35 +1164,18 @@ def _verify_live_stock_for_article(
     brand_group: str,
     v_list: List[Dict[str, Any]],
 ) -> Dict[str, int]:
-    """
-    Cek stok LIVE real-time ke toko (via run_fast_stock) sebelum kirim ke customer.
-    Dilengkapi cache 90 detik di RAM agar super hemat kuota Turso & tidak boros request!
-    """
     cache_key = (article or primary_sku).strip().upper()
     now_mono = time.monotonic()
     cached = _LIVE_STOCK_MEM_CACHE.get(cache_key)
     if cached and (now_mono - cached[0]) < _LIVE_STOCK_CACHE_TTL_SEC:
         return cached[1]
-
     try:
         fam = [
-            {
-                "sku": str(v.get("sku") or ""),
-                "color": v.get("color"),
-                "size": v.get("size"),
-                "stok": int(v.get("stok") or 0),
-            }
-            for v in v_list
-            if v.get("sku")
+            {"sku": str(v.get("sku") or ""), "color": v.get("color"), "size": v.get("size"), "stok": int(v.get("stok") or 0)}
+            for v in v_list if v.get("sku")
         ]
-        res = run_fast_stock(
-            sku=primary_sku,
-            family_variants=fam,
-            article=article or None,
-            brand_group=brand_group or None,
-        )
+        res = run_fast_stock(sku=primary_sku, family_variants=fam, article=article or None, brand_group=brand_group or None)
         if res.get("success") and isinstance(res.get("updatedVariants"), list):
-            # Bangun peta stok terbaru dari hasil live (gabungkan dengan stok existing untuk varian tak berubah)
             live_map: Dict[str, int] = {str(v.get("sku") or ""): int(v.get("stok") or 0) for v in v_list if v.get("sku")}
             for uv in res["updatedVariants"]:
                 if uv.get("sku") is not None and uv.get("stok") is not None:
@@ -931,232 +1189,238 @@ def _verify_live_stock_for_article(
     return {}
 
 
-def search_sanitized_catalog(
-    intent_info: Dict[str, Any],
-    store_scope: str = "ALL",
-    limit: int = 3,
-    verify_live: bool = True,
-) -> List[Dict[str, Any]]:
+def _fetch_best_seller_articles(store_scope: str) -> Dict[str, int]:
+    """Ambil ranking artikel terlaris dari POS `sales_mtd` (1 query ringan, tidak bocor ke customer!)."""
+    scope_sql = 'AND UPPER(COALESCE(brand, \'\')) LIKE \'%SUKO%\'' if store_scope == "SUKO" else ""
+    rows = turso_query(
+        f'SELECT article, SUM(COALESCE(sales_mtd, 0)) AS mtd_sum, SUM(COALESCE(sales_wtd, 0)) AS wtd_sum '
+        f'FROM "Product" WHERE article IS NOT NULL AND article != \'\' AND stok > 0 {scope_sql} '
+        f'GROUP BY article ORDER BY mtd_sum DESC, wtd_sum DESC LIMIT 40',
+        (),
+        timeout=3.5,
+    )
+    out: Dict[str, int] = {}
+    for rank_idx, r in enumerate(rows):
+        ak = str(r.get("article") or "").strip().upper()
+        if ak:
+            # Hanya simpan skor peringkat abstrak (bukan angka pcs terjual!)
+            out[ak] = max(10, 400 - rank_idx * 9)
+    return out
+
+
+def _query_single_subsearch(
+    subq: Dict[str, Any],
+    store_scope: str,
+    gender_hint: str,
+    wants_promo: bool,
+    wants_new: bool,
+    wants_best: bool,
+    exclude_articles: set,
+    best_seller_ranks: Dict[str, int],
+    sku_or_art: str = "",
+    max_candidates: int = 6,
+) -> Tuple[List[Dict[str, Any]], bool]:
     """
-    Cari produk di Turso DB (`CatalogArticle` + `Product`):
-    1. WAJIB prioritaskan produk yang punya FOTO HD BERSIH + STOK > 0.
-    2. Verifikasi STOK LIVE REAL-TIME ke toko (paralel) sebelum kirim ke customer
-       agar produk yang baru habis terjual di kasir OTOMATIS DICORET!
-    3. Kembalikan HANYA warna & ukuran yang stoknya READY (> 0), dikelompokkan
-       akurat per warna -> ukuran ready-nya, 100% TANPA ANGKA QTY STOK!
+    Kembalikan (list kandidat artikel CatalogArticle, exact_matched_flag).
+    Jika sub-pencarian spesifik (misal 'jaket winter') tidak ada persis -> coba alternatif kategori!
     """
-    sku_or_art = str(intent_info.get("skuOrArticle") or "").strip()
-    keywords = list(intent_info.get("searchKeywords") or [])
-    brand_hint = str(intent_info.get("brandHint") or "").strip().upper()
-    category_hint = str(intent_info.get("categoryHint") or "").strip().upper()
-    color_hint = str(intent_info.get("colorHint") or "").strip().upper()
-    size_hint = str(intent_info.get("sizeHint") or "").strip().upper()
-    wants_promo = bool(intent_info.get("wantsPromo", False))
+    keywords = list(subq.get("keywords") or [])
+    category_hint = str(subq.get("categoryHint") or "").strip().upper()
+    color_hint = str(subq.get("colorHint") or "").strip().upper()
+    size_hint = str(subq.get("sizeHint") or "").strip().upper()
     kw_lower_set = {str(k).lower().strip() for k in keywords}
-    wants_kemeja = "kemeja" in kw_lower_set or "oxford" in kw_lower_set or "flannel" in kw_lower_set
+    wants_kemeja = any(k in kw_lower_set for k in ("kemeja", "oxford", "flannel"))
+    wants_winter = any(k in kw_lower_set for k in ("winter", "puffer", "coat"))
 
-    scope_sql = ""
-    scope_params: List[Any] = []
-    if store_scope in ("SUKO", "MUKU", "ZES"):
-        scope_sql = ' AND "brandGroup" = ?'
-        scope_params.append(store_scope)
-
-    candidates: List[Dict[str, Any]] = []
-
-    # 1. Exact SKU / Barcode / Article match di tabel CatalogArticle & Product
+    # Exact SKU/Article lookup
     if sku_or_art:
+        scope_sql = ' AND "brandGroup" = ?' if store_scope in ("SUKO", "MUKU", "ZES") else ""
+        scope_p = [store_scope] if store_scope in ("SUKO", "MUKU", "ZES") else []
         rows = turso_query(
             'SELECT key, sku, barcode, article, description, brand, dept, "brandGroup", "subBrand", '
             '"categoryKey", color, size, "hargaNormal", "hargaPromo", diskon, "discountType", "toDate", '
-            '"imageUrl", "articleTotalStok", "articleColors", "articleSizes", "articleHasPromo", "articlePromoLabel" '
+            '"imageUrl", "articleTotalStok", "articleColors", "articleSizes", "articleHasPromo", "articlePromoLabel", "updatedAt" '
             'FROM "CatalogArticle" '
             'WHERE (UPPER(sku) = UPPER(?) OR UPPER(COALESCE(barcode, \'\')) = UPPER(?) OR UPPER(COALESCE(article, \'\')) LIKE UPPER(?))'
-            + scope_sql +
-            ' ORDER BY ("articleTotalStok" > 0) DESC, ("imageUrl" IS NOT NULL AND "imageUrl" != \'\') DESC, "sortRank" ASC LIMIT 10',
-            tuple([sku_or_art, sku_or_art, f"%{sku_or_art}%"] + scope_params),
-            timeout=4.5,
+            + scope_sql + ' ORDER BY ("articleTotalStok" > 0) DESC LIMIT 8',
+            tuple([sku_or_art, sku_or_art, f"%{sku_or_art}%"] + scope_p),
+            timeout=4.0,
         )
-        candidates.extend(rows)
+        return rows[:max_candidates], bool(rows)
 
-        if not candidates:
-            p_rows = turso_query(
-                'SELECT sku, barcode, article, description, brand, dept, color, size, stok, '
-                '"hargaNormal", "hargaPromo", diskon, "discountType", "toDate", "imageUrl", images '
-                'FROM "Product" '
-                'WHERE UPPER(sku) = UPPER(?) OR UPPER(COALESCE(barcode, \'\')) = UPPER(?) OR UPPER(COALESCE(article, \'\')) LIKE UPPER(?) '
-                'ORDER BY (stok > 0) DESC LIMIT 10',
-                (sku_or_art, sku_or_art, f"%{sku_or_art}%"),
-                timeout=4.5,
-            )
-            for pr in p_rows:
-                candidates.append({
-                    "key": pr.get("article") or pr.get("sku"),
-                    "sku": pr.get("sku"),
-                    "barcode": pr.get("barcode"),
-                    "article": pr.get("article") or pr.get("sku"),
-                    "description": pr.get("description"),
-                    "brand": pr.get("brand"),
-                    "dept": pr.get("dept"),
-                    "brandGroup": "SUKO" if "SUKO" in str(pr.get("brand") or "").upper() else "MUKU",
-                    "subBrand": pr.get("brand") or "",
-                    "categoryKey": "",
-                    "hargaNormal": pr.get("hargaNormal"),
-                    "hargaPromo": pr.get("hargaPromo"),
-                    "diskon": pr.get("diskon"),
-                    "discountType": pr.get("discountType"),
-                    "toDate": pr.get("toDate"),
-                    "imageUrl": pr.get("imageUrl"),
-                    "articleTotalStok": pr.get("stok") or 0,
-                    "articleColors": json.dumps([pr.get("color")] if pr.get("color") else []),
-                    "articleSizes": json.dumps([pr.get("size")] if pr.get("size") else []),
-                    "articleHasPromo": bool(pr.get("hargaPromo") or pr.get("diskon")),
-                    "articlePromoLabel": pr.get("discountType") or pr.get("diskon") or "",
-                })
+    expanded_terms = _expand_keyword_terms(keywords)
+    where_clauses: List[str] = [
+        '"articleTotalStok" > 0',
+        '"imageUrl" IS NOT NULL AND "imageUrl" != \'\'',
+    ]
+    params: List[Any] = []
 
-    # 2. Pencarian umum di CatalogArticle — HEMAT KUOTA (LIMIT 30) + KETAT STOK > 0 & ADA FOTO!
-    if not candidates:
-        expanded_terms = _expand_keyword_terms(keywords)
-        where_clauses: List[str] = [
-            '"articleTotalStok" > 0',
-            '"imageUrl" IS NOT NULL AND "imageUrl" != \'\'',
-        ]
-        params: List[Any] = []
+    if store_scope in ("SUKO", "MUKU", "ZES"):
+        where_clauses.append('"brandGroup" = ?')
+        params.append(store_scope)
+    if wants_promo:
+        where_clauses.append('"articleHasPromo" = 1')
 
-        if store_scope in ("SUKO", "MUKU", "ZES"):
-            where_clauses.append('"brandGroup" = ?')
-            params.append(store_scope)
+    or_parts: List[str] = []
+    or_params: List[Any] = []
+    for term in expanded_terms[:8]:
+        like_val = f"%{term}%"
+        or_parts.append('(UPPER(description) LIKE ? OR UPPER(COALESCE(article, \'\')) LIKE ? OR UPPER(COALESCE(dept, \'\')) LIKE ?)')
+        or_params.extend([like_val, like_val, like_val])
+    if category_hint:
+        or_parts.append('"categoryKey" = ?')
+        or_params.append(category_hint)
+    if or_parts:
+        where_clauses.append("(" + " OR ".join(or_parts) + ")")
+        params.extend(or_params)
 
-        if brand_hint:
-            if brand_hint in ("SUKO", "MUKU", "ZES"):
-                where_clauses.append('("brandGroup" = ? OR UPPER(COALESCE("subBrand", \'\')) LIKE ? OR UPPER(COALESCE(brand, \'\')) LIKE ?)')
-                params.extend([brand_hint, f"%{brand_hint}%", f"%{brand_hint}%"])
-            else:
-                where_clauses.append('(UPPER(COALESCE("subBrand", \'\')) LIKE ? OR UPPER(COALESCE(brand, \'\')) LIKE ? OR UPPER(COALESCE(dept, \'\')) LIKE ?)')
-                params.extend([f"%{brand_hint}%", f"%{brand_hint}%", f"%{brand_hint}%"])
+    order_sql = '"updatedAt" DESC, "sortRank" ASC' if wants_new else ('"articleHasPromo" DESC, "sortRank" ASC')
+    sql = (
+        'SELECT key, sku, barcode, article, description, brand, dept, "brandGroup", "subBrand", '
+        '"categoryKey", color, size, "hargaNormal", "hargaPromo", diskon, "discountType", "toDate", '
+        '"imageUrl", "articleTotalStok", "articleColors", "articleSizes", "articleHasPromo", "articlePromoLabel", "updatedAt" '
+        f'FROM "CatalogArticle" WHERE {" AND ".join(where_clauses)} ORDER BY {order_sql} LIMIT 35'
+    )
+    rows = turso_query(sql, tuple(params), timeout=4.2)
 
-        if wants_promo and not expanded_terms and not category_hint:
-            where_clauses.append('"articleHasPromo" = 1')
-
-        or_parts: List[str] = []
-        or_params: List[Any] = []
-        for term in expanded_terms[:8]:
-            like_val = f"%{term}%"
-            or_parts.append(
-                '(UPPER(description) LIKE ? OR UPPER(COALESCE(article, \'\')) LIKE ? '
-                'OR UPPER(COALESCE("subBrand", \'\')) LIKE ? OR UPPER(COALESCE(dept, \'\')) LIKE ?)'
-            )
-            or_params.extend([like_val, like_val, like_val, like_val])
-        if category_hint:
-            or_parts.append('"categoryKey" = ?')
-            or_params.append(category_hint)
-
-        if or_parts:
-            where_clauses.append("(" + " OR ".join(or_parts) + ")")
-            params.extend(or_params)
-
-        sql = (
+    # Jika mencari promo tapi ketat 0 hasil, coba relaksasi tanpa wajib promo
+    if not rows and wants_promo and (or_parts):
+        relaxed_where = [w for w in where_clauses if w != '"articleHasPromo" = 1']
+        rows = turso_query(
             'SELECT key, sku, barcode, article, description, brand, dept, "brandGroup", "subBrand", '
             '"categoryKey", color, size, "hargaNormal", "hargaPromo", diskon, "discountType", "toDate", '
-            '"imageUrl", "articleTotalStok", "articleColors", "articleSizes", "articleHasPromo", "articlePromoLabel" '
-            'FROM "CatalogArticle" '
-            f'WHERE {" AND ".join(where_clauses)} '
-            'ORDER BY "articleHasPromo" DESC, "sortRank" ASC LIMIT 30'
+            '"imageUrl", "articleTotalStok", "articleColors", "articleSizes", "articleHasPromo", "articlePromoLabel", "updatedAt" '
+            f'FROM "CatalogArticle" WHERE {" AND ".join(relaxed_where)} ORDER BY {order_sql} LIMIT 25',
+            tuple(params),
+            timeout=4.0,
         )
-        candidates = turso_query(sql, tuple(params), timeout=4.5)
 
-        if not candidates and brand_hint and (expanded_terms or category_hint):
-            fb_clauses = [
-                '"articleTotalStok" > 0',
-                '"imageUrl" IS NOT NULL AND "imageUrl" != \'\'',
-            ]
-            fb_params: List[Any] = []
-            if store_scope in ("SUKO", "MUKU", "ZES"):
-                fb_clauses.append('"brandGroup" = ?')
-                fb_params.append(store_scope)
-            if or_parts:
-                fb_clauses.append("(" + " OR ".join(or_parts) + ")")
-                fb_params.extend(or_params)
-            sql_fb = (
-                'SELECT key, sku, barcode, article, description, brand, dept, "brandGroup", "subBrand", '
-                '"categoryKey", color, size, "hargaNormal", "hargaPromo", diskon, "discountType", "toDate", '
-                '"imageUrl", "articleTotalStok", "articleColors", "articleSizes", "articleHasPromo", "articlePromoLabel" '
-                'FROM "CatalogArticle" '
-                f'WHERE {" AND ".join(fb_clauses)} '
-                'ORDER BY "articleHasPromo" DESC, "sortRank" ASC LIMIT 24'
-            )
-            candidates = turso_query(sql_fb, tuple(fb_params), timeout=4.5)
-
-    if not candidates:
-        return []
-
-    # 3. Skoring Relevansi Ketat (Anti-Nyasar Kemeja vs T-Shirt + Wajib Foto Bersih!)
-    expanded_set = set(_expand_keyword_terms(keywords))
+    # Skoring ketat (Gender + Anti-Duplikat + Anti-Nyasar + Best Seller / Newest / Promo!)
     scored: List[Tuple[int, Dict[str, Any]]] = []
-    seen_articles = set()
+    exact_term_found = False
+    seen = set()
 
-    for c in candidates:
+    for c in rows:
         art_key = str(c.get("article") or c.get("sku") or "").strip().upper()
-        if not art_key or art_key in seen_articles:
+        if not art_key or art_key in seen or art_key in exclude_articles:
             continue
-        seen_articles.add(art_key)
-
-        has_clean_img = is_clean_product_image(c.get("imageUrl"))
-        # Untuk pencarian umum (bukan exact SKU), TOLAK produk yang fotonya kosong / logo placeholder!
-        if not sku_or_art and not has_clean_img:
+        seen.add(art_key)
+        if not is_clean_product_image(c.get("imageUrl")):
             continue
 
-        score = 0
+        gender_ok, gender_bonus = _matches_gender(c, gender_hint)
+        if not gender_ok:
+            continue
+
         desc_only = str(c.get("description") or "").upper()
-        desc_up = f"{desc_only} {c.get('article') or ''} {c.get('subBrand') or ''} {c.get('dept') or ''}".upper()
-        total_stok = int(c.get("articleTotalStok") or 0)
+        desc_up = f"{desc_only} {c.get('dept') or ''} {c.get('article') or ''}".upper()
+        score = 100 + gender_bonus
 
-        if total_stok > 0:
-            score += 120
-        if has_clean_img:
-            score += 100
-        if sku_or_art and (
-            sku_or_art.upper() == str(c.get("sku") or "").upper()
-            or sku_or_art.upper() in str(c.get("article") or "").upper()
-        ):
-            score += 300
-        if brand_hint and (
-            brand_hint == str(c.get("brandGroup") or "").upper()
-            or brand_hint in str(c.get("subBrand") or "").upper()
-            or brand_hint in str(c.get("brand") or "").upper()
-        ):
-            score += 80
-        if category_hint and str(c.get("categoryKey") or "").upper() == category_hint:
-            score += 65
-
-        # Anti-nyasar: cari "kemeja" JANGAN sampai masuk T-Shirt / Kaos / Polo!
         if wants_kemeja:
             if any(k in desc_only for k in ("KEMEJA", "OXFORD", "FLANNEL", "WOVEN")):
-                score += 140
+                score += 150
             if any(bad in desc_only for bad in ("T-SHIRT", "TSHIRT", "POCKET TEE", "KAOS", "POLO")):
-                score -= 220
+                score -= 260
 
-        for term in expanded_set:
+        if wants_winter and any(k in desc_only for k in ("WINTER", "PUFFER", "COAT")):
+            exact_term_found = True
+            score += 200
+        elif not wants_winter:
+            exact_term_found = True
+
+        if category_hint and str(c.get("categoryKey") or "").upper() == category_hint:
+            score += 75
+        for term in expanded_terms:
             if term == "SHIRT" and "T-SHIRT" in desc_only and wants_kemeja:
                 continue
             if term in desc_up:
                 score += 45
+
         if wants_promo and bool(c.get("articleHasPromo")):
-            score += 60
+            score += 95
+        if wants_best and art_key in best_seller_ranks:
+            score += best_seller_ranks[art_key]
 
         colors_list = _parse_json_list(c.get("articleColors"))
         sizes_list = _parse_json_list(c.get("articleSizes"))
         if color_hint and any(_color_matches(col, color_hint) for col in colors_list):
-            score += 55
+            score += 65
         if size_hint and any(_size_matches(sz, size_hint) for sz in sizes_list):
-            score += 55
+            score += 65
 
-        scored.append((score, c))
+        if score > 0:
+            scored.append((score, c))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    # Ambil pool cadangan (limit + 2) supaya jika ada 1 produk yg stok live-nya ternyata 0, otomatis diganti cadangan!
-    pool_rows = [row for _, row in scored[: max(limit + 2, 5)]]
+    picked = [row for _, row in scored[:max_candidates]]
+    return picked, (exact_term_found and bool(picked))
 
-    # 4. Tarik detail varian asli dari tabel Product (1 query batch hemat kuota!)
+
+def execute_python_catalog_search(
+    plan: Dict[str, Any],
+    store_scope: str = "SUKO",
+    exclude_articles: Optional[List[str]] = None,
+    limit: int = 3,
+    verify_live: bool = True,
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """
+    TAHAP 2 EKSEKUTOR PYTHON:
+    Menjalankan pencarian 1 atau Multi-Kategori, cek stok LIVE paralel, filter READY-ONLY
+    per warna/size, wajib Foto HD, dan mengembalikan (sanitized_products, unavailable_labels).
+    """
+    exclude_set = {str(a).strip().upper() for a in (exclude_articles or []) if str(a or "").strip()}
+    gender_hint = str(plan.get("genderHint") or "").strip().upper()
+    wants_promo = bool(plan.get("wantsPromo", False))
+    wants_new = bool(plan.get("wantsNewArrival", False))
+    wants_best = bool(plan.get("wantsBestSeller", False))
+    sku_or_art = str(plan.get("skuOrArticle") or "").strip()
+    multi_queries = list(plan.get("multiQueries") or [])
+    if not multi_queries:
+        multi_queries = [{"label": "produk SUKO", "keywords": [], "categoryHint": "", "colorHint": "", "sizeHint": ""}]
+
+    best_ranks = _fetch_best_seller_articles(store_scope) if wants_best else {}
+    pool_rows: List[Dict[str, Any]] = []
+    unavailable_labels: List[str] = []
+    used_articles = set(exclude_set)
+
+    if len(multi_queries) >= 2 and not sku_or_art:
+        # Multi-Kategori: ambil maks 1-2 kandidat terbaik per kategori (total 3 produk seimbang!)
+        for mq in multi_queries[:3]:
+            cands, exact_ok = _query_single_subsearch(
+                mq, store_scope, gender_hint, wants_promo, wants_new, wants_best, used_articles, best_ranks, max_candidates=2
+            )
+            if not exact_ok and mq.get("label"):
+                unavailable_labels.append(str(mq["label"]))
+            for row in cands[:1]:
+                ak = str(row.get("article") or row.get("sku") or "").strip().upper()
+                if ak not in used_articles:
+                    used_articles.add(ak)
+                    r_copy = dict(row)
+                    r_copy["_queryLabel"] = str(mq.get("label") or "")
+                    r_copy["_isAlternative"] = not exact_ok
+                    r_copy["_colorHint"] = str(mq.get("colorHint") or "")
+                    r_copy["_sizeHint"] = str(mq.get("sizeHint") or "")
+                    pool_rows.append(r_copy)
+    else:
+        mq0 = multi_queries[0]
+        cands, exact_ok = _query_single_subsearch(
+            mq0, store_scope, gender_hint, wants_promo, wants_new, wants_best, used_articles, best_ranks,
+            sku_or_art=sku_or_art, max_candidates=max(limit + 2, 5),
+        )
+        if not exact_ok and mq0.get("label") and not sku_or_art:
+            unavailable_labels.append(str(mq0["label"]))
+        for row in cands:
+            r_copy = dict(row)
+            r_copy["_queryLabel"] = str(mq0.get("label") or "")
+            r_copy["_isAlternative"] = not exact_ok
+            r_copy["_colorHint"] = str(mq0.get("colorHint") or "")
+            r_copy["_sizeHint"] = str(mq0.get("sizeHint") or "")
+            pool_rows.append(r_copy)
+
+    if not pool_rows:
+        return [], unavailable_labels
+
+    # 1 query batch ambil semua varian Product
     pool_articles = [str(r.get("article") or "").strip() for r in pool_rows if str(r.get("article") or "").strip()]
     variants_by_article: Dict[str, List[Dict[str, Any]]] = {}
     if pool_articles:
@@ -1172,8 +1436,7 @@ def search_sanitized_catalog(
             ak = str(vr.get("article") or "").strip().upper()
             variants_by_article.setdefault(ak, []).append(vr)
 
-    # 5. VERIFIKASI STOK LIVE REAL-TIME TOKO (PARALEL UNTUK KANDIDAT TERATAS!)
-    #    Memastikan 100% produk & warna/size yang dikirim ke customer benar-benar READY detik ini!
+    # Cek Stok LIVE paralel (cache 90 detik di RAM -> hemat kuota!)
     live_stock_by_article: Dict[str, Dict[str, int]] = {}
     if verify_live and pool_rows:
         targets = pool_rows[: min(len(pool_rows), limit + 1)]
@@ -1184,10 +1447,9 @@ def search_sanitized_catalog(
                 ak = art.upper()
                 sku_main = str(r.get("sku") or "").strip()
                 bg = str(r.get("brandGroup") or "").strip()
-                v_list = variants_by_article.get(ak) or []
                 if sku_main:
-                    fut_map[ex.submit(_verify_live_stock_for_article, sku_main, art, bg, v_list)] = ak
-            done, _ = concurrent.futures.wait(fut_map.keys(), timeout=3.4)
+                    fut_map[ex.submit(_verify_live_stock_for_article, sku_main, art, bg, variants_by_article.get(ak) or [])] = ak
+            done, _ = concurrent.futures.wait(fut_map.keys(), timeout=3.2)
             for fut in done:
                 ak = fut_map[fut]
                 try:
@@ -1197,18 +1459,18 @@ def search_sanitized_catalog(
                 except Exception:
                     pass
 
-    # 6. HARD PRIVACY SANITIZER + FILTER READY-ONLY (WARNA & UKURAN READY SAJA + WAJIB ADA FOTO!)
-    sanitized_products: List[Dict[str, Any]] = []
+    # Hard Privacy Sanitizer: NOL ANGKA STOK, HANYA WARNA & SIZE READY, WAJIB FOTO HD!
+    sanitized: List[Dict[str, Any]] = []
     for r in pool_rows:
-        if len(sanitized_products) >= limit:
+        if len(sanitized) >= limit:
             break
-
         art = str(r.get("article") or "").strip()
         ak = art.upper()
         v_list = variants_by_article.get(ak) or []
         live_map = live_stock_by_article.get(ak) or {}
+        color_hint = str(r.get("_colorHint") or "")
+        size_hint = str(r.get("_sizeHint") or "")
 
-        # Peta warna READY -> set ukuran READY (100% akurat per warna!)
         ready_by_color: Dict[str, set] = {}
         ready_colors_set = set()
         ready_sizes_set = set()
@@ -1218,23 +1480,20 @@ def search_sanitized_catalog(
         harga_normal = parse_retail_price(r.get("hargaNormal")) or 0
         harga_promo = parse_retail_price(r.get("hargaPromo"))
         promo_label = str(r.get("articlePromoLabel") or r.get("discountType") or r.get("diskon") or "").strip()
-        promo_until = str(r.get("toDate") or "").strip()
 
         if is_clean_product_image(r.get("imageUrl")):
             all_clean_images.append(str(r.get("imageUrl")).strip())
 
         any_ready = False
-        requested_variant_matched = False
-        requested_variant_ready = False
+        req_matched = False
+        req_ready = False
 
         if v_list:
             for v in v_list:
                 v_sku = str(v.get("sku") or "").strip()
-                # Pakai stok LIVE jika berhasil ditarik, kalau toko tutup fallback ke stok DB
                 v_stok = int(live_map[v_sku]) if v_sku in live_map else int(v.get("stok") or 0)
                 v_col = str(v.get("color") or "").strip()
                 v_sz = str(v.get("size") or "").strip()
-
                 col_valid = bool(v_col and v_col.upper() not in ("NO COLOR", "NONE", "-"))
                 sz_valid = bool(v_sz and v_sz.upper() not in ("NONE", "-"))
 
@@ -1251,18 +1510,16 @@ def search_sanitized_catalog(
                 col_ok = _color_matches(v_col, color_hint) if color_hint else True
                 sz_ok = _size_matches(v_sz, size_hint) if size_hint else True
                 if (color_hint or size_hint) and col_ok and sz_ok:
-                    requested_variant_matched = True
+                    req_matched = True
                     if v_stok > 0:
-                        requested_variant_ready = True
+                        req_ready = True
 
-                # Kumpulkan foto bersih dari varian (utamakan warna yang ready & cocok dengan permintaan!)
                 cand_imgs: List[str] = []
                 if is_clean_product_image(v.get("imageUrl")):
                     cand_imgs.append(str(v.get("imageUrl")).strip())
                 for extra_img in _parse_json_list(v.get("images")):
                     if is_clean_product_image(extra_img) and extra_img not in cand_imgs:
                         cand_imgs.append(extra_img)
-
                 for ci in cand_imgs:
                     if v_stok > 0 and color_hint and col_ok and not matching_color_image:
                         matching_color_image = ci
@@ -1274,12 +1531,8 @@ def search_sanitized_catalog(
                 ready_colors_set.update(_parse_json_list(r.get("articleColors")))
                 ready_sizes_set.update(_parse_json_list(r.get("articleSizes")))
 
-        # ATURAN KERAS USER:
-        # 1. Jika bukan pencarian exact SKU tertentu & stok LIVE ternyata HABIS (0) -> CORET, jangan kirim ke customer!
         if not sku_or_art and not any_ready:
             continue
-
-        # 2. WAJIB ADA FOTO BERSIH untuk rekomendasi produk!
         final_image = matching_color_image or (all_clean_images[0] if all_clean_images else "")
         fallback_images = [u for u in all_clean_images if u != final_image][:4]
         if not sku_or_art and not final_image:
@@ -1288,38 +1541,42 @@ def search_sanitized_catalog(
         if harga_promo and harga_normal and harga_promo >= harga_normal:
             harga_promo = None
 
-        availability = "READY" if any_ready else "SOLD_OUT"
-        requested_status = ""
-        if color_hint or size_hint:
-            if requested_variant_ready:
-                requested_status = "REQUESTED_VARIANT_READY"
-            elif requested_variant_matched or any_ready:
-                requested_status = "REQUESTED_VARIANT_SOLD_OUT_OTHERS_READY" if any_ready else "SOLD_OUT"
-            else:
-                requested_status = "REQUESTED_VARIANT_NOT_AVAILABLE"
-
-        # Susun ringkasan akurat per warna READY -> ukuran READY (max 6 warna)
         ready_color_sizes: List[str] = []
         for col_name in sorted(ready_by_color.keys())[:6]:
             szs = sorted(ready_by_color[col_name], key=_size_sort_key)
-            if szs:
-                ready_color_sizes.append(f"{col_name} ({', '.join(szs[:6])})")
+            ready_color_sizes.append(f"{col_name} ({', '.join(szs[:6])})" if szs else col_name)
+
+        req_status = ""
+        if color_hint or size_hint:
+            if req_ready:
+                req_status = "REQUESTED_VARIANT_READY"
+            elif req_matched or any_ready:
+                req_status = "REQUESTED_VARIANT_SOLD_OUT_OTHERS_READY" if any_ready else "SOLD_OUT"
             else:
-                ready_color_sizes.append(col_name)
+                req_status = "REQUESTED_VARIANT_NOT_AVAILABLE"
 
         raw_desc = str(r.get("description") or "").strip()
         clean_name = raw_desc.split(":")[0].strip() if ":" in raw_desc else raw_desc
 
-        sanitized_products.append({
+        badge = ""
+        if r.get("_isAlternative"):
+            badge = "Alternatif Pilihan"
+        elif wants_best and ak in best_ranks:
+            badge = "Best Seller 🔥"
+        elif wants_new:
+            badge = "New Arrival 🆕"
+
+        sanitized.append({
             "sku": str(r.get("sku") or ""),
             "article": art,
             "name": clean_name or art,
-            "brand": str(r.get("subBrand") or r.get("brand") or r.get("brandGroup") or "").strip(),
-            "storeGroup": str(r.get("brandGroup") or "").strip(),
+            "brand": str(r.get("subBrand") or r.get("brand") or "SUKO").strip(),
+            "storeGroup": str(r.get("brandGroup") or "SUKO").strip(),
             "category": str(r.get("categoryKey") or "").strip(),
-            "availability": availability,  # HANYA "READY" | "SOLD_OUT" (NOL ANGKA STOK!)
+            "badge": badge,
+            "availability": "READY" if any_ready else "SOLD_OUT",
             "liveStockVerified": bool(live_map),
-            "requestedVariantStatus": requested_status,
+            "requestedVariantStatus": req_status,
             "readyColors": sorted(ready_colors_set)[:8],
             "readySizes": sorted(ready_sizes_set, key=_size_sort_key)[:10],
             "readyColorSizes": ready_color_sizes,
@@ -1328,20 +1585,18 @@ def search_sanitized_catalog(
             "hargaPromo": harga_promo,
             "hargaPromoText": format_idr(harga_promo) if harga_promo else None,
             "promoLabel": promo_label if (harga_promo or r.get("articleHasPromo")) else "",
-            "promoUntil": promo_until if (harga_promo or r.get("articleHasPromo")) else "",
             "imageUrl": final_image,
             "fallbackImages": fallback_images,
         })
 
-    return sanitized_products
+    return sanitized, unavailable_labels
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  6. GENERATOR BALASAN HALO BCA (GEMINI + TEMPLATE FALLBACK + PRIVACY GUARD)
+#  5. TAHAP 3: AI COPYWRITER HALO BCA (PEMBUKA & PENUTUP ALAMI + KARTU HARGA 100% AKURAT!)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sanitize_outgoing_reply(text: str) -> str:
-    """Lapisan pengaman terakhir agar tidak ada istilah internal atau angka stok yang bocor."""
     out = str(text or "").strip()
     for pat, repl in FORBIDDEN_INTERNAL_TERMS:
         out = pat.sub(repl, out)
@@ -1359,8 +1614,9 @@ def _friendly_sapaan(sender_name: str) -> str:
 
 def _format_single_product_block(idx: int, total: int, p: Dict[str, Any]) -> str:
     prefix = f"*{idx}. {p['name']}*" if total > 1 else f"*{p['name']}*"
+    badge_tag = f" — _{p['badge']}_" if p.get("badge") else ""
     brand_tag = f" ({p['brand']})" if p.get("brand") else ""
-    lines: List[str] = [f"{prefix}{brand_tag}"]
+    lines: List[str] = [f"{prefix}{brand_tag}{badge_tag}"]
 
     if p.get("hargaPromoText"):
         promo_extra = f" — _{p['promoLabel']}_" if p.get("promoLabel") else ""
@@ -1373,7 +1629,6 @@ def _format_single_product_block(idx: int, total: int, p: Dict[str, Any]) -> str
             lines.append("📦 Status: Warna/ukuran yang ditanya sedang *sold out*, varian lain masih *Ready*:")
         else:
             lines.append("📦 Status: *Ready* Kak! ✨")
-        # Tampilkan akurat per warna -> ukuran yang benar-benar READY saja!
         if p.get("readyColorSizes"):
             lines.append("🎨 Pilihan Warna & Size Ready:")
             for cs in p["readyColorSizes"][:6]:
@@ -1388,133 +1643,181 @@ def _format_single_product_block(idx: int, total: int, p: Dict[str, Any]) -> str
     return "\n".join(lines)
 
 
-def _build_template_reply(
-    sender_name: str,
-    intent_info: Dict[str, Any],
-    products: List[Dict[str, Any]],
-    cfg: Dict[str, Any],
-) -> str:
-    sapaan = _friendly_sapaan(sender_name)
-    cs_name = cfg.get("csName") or "Luqman"
-    store_name = cfg.get("storeName") or "SUKO & Mu+Ku Official"
-    intent = intent_info.get("intent") or "PRODUCT_INQUIRY"
-
-    if intent == "GREETING":
-        return (
-            f"Halo {sapaan}, selamat datang di *{store_name}*! 😊\n"
-            f"Dengan saya *{cs_name}*, ada produk, ukuran, warna, atau info promo yang bisa saya bantu cekkan hari ini Kak? Silakan info saja ya, dengan senang hati saya bantu 🙏"
-        )
-
-    if not products:
-        return (
-            f"Halo {sapaan}, terima kasih sudah menghubungi kami 😊\n"
-            f"Mohon maaf Kak, untuk produk yang Kakak maksud saat ini belum kami temukan atau sedang *sold out* di katalog kami.\n\n"
-            f"Boleh info nama model / kode artikel / warna yang Kakak cari agar saya bantu cekkan alternatif terbaik yang sedang *ready* ya Kak? 🙏"
-        )
-
-    lines: List[str] = [f"Halo {sapaan}, terima kasih sudah bertanya! Dengan senang hati saya bantu cekkan ya 😊\n"]
-    for idx, p in enumerate(products[:3], start=1):
-        lines.append(_format_single_product_block(idx, len(products[:3]), p))
-        lines.append("")
-
-    lines.append(
-        "Jika Kakak berminat, boleh info *pilihan model, warna & ukuran* yang diinginkan agar segera saya bantu siapkan/keep ya Kak 🙏"
-    )
-    return "\n".join(lines).strip()
-
-
-def build_reply_messages(
-    sender_name: str,
-    reply_text: str,
-    products: List[Dict[str, Any]],
-    cfg: Dict[str, Any],
-    from_group_name: str = "",
-) -> List[Dict[str, Optional[str]]]:
-    """
-    Bangun daftar pesan WhatsApp multi-foto agar SETIAP produk yang ditemukan
-    tampil bersama foto HD miliknya sendiri (1 foto + caption rapi per model)!
-    """
-    send_img = bool(cfg.get("replyWithImage", True))
-    sapaan = _friendly_sapaan(sender_name)
-    group_ctx = f" di grup *{from_group_name}*" if from_group_name else ""
-
-    if not products or len(products) <= 1 or not send_img:
-        first_img = None
-        if send_img and products:
-            for p in products:
-                if is_clean_product_image(p.get("imageUrl")):
-                    first_img = p["imageUrl"]
-                    break
-        final_txt = reply_text
-        if from_group_name and final_txt and from_group_name.lower() not in final_txt.lower():
-            final_txt = f"Halo {sapaan}, melanjutkan pertanyaan Kakak{group_ctx} ya 😊\n\n{final_txt}"
-        return [{"text": _sanitize_outgoing_reply(final_txt), "imageUrl": first_img}]
-
-    shown = products[:3]
-    cards: List[Dict[str, Optional[str]]] = []
-    for idx, p in enumerate(shown, start=1):
-        img = p["imageUrl"] if is_clean_product_image(p.get("imageUrl")) else None
-        parts: List[str] = []
-        if idx == 1:
-            parts.append(
-                f"Halo {sapaan}, melanjutkan pertanyaan Kakak{group_ctx} ya 😊 "
-                f"Dengan senang hati saya bantu cekkan pilihan yang *ready*:\n"
-            )
-        parts.append(_format_single_product_block(idx, len(shown), p))
-        if idx == len(shown):
-            parts.append(
-                "\nJika Kakak berminat dengan salah satu model di atas (No. 1 / 2 / 3), "
-                "boleh info *nomor, warna & ukuran* yang diinginkan agar segera saya bantu siapkan/keep ya Kak 🙏"
-            )
-        cards.append({
-            "text": _sanitize_outgoing_reply("\n".join(parts).strip()),
-            "imageUrl": img,
-            "fallbackImages": p.get("fallbackImages") or [],
-        })
-    return cards
-
-
-def generate_halo_bca_reply(
+def _generate_ai_framing(
     sender_name: str,
     message: str,
-    intent_info: Dict[str, Any],
+    plan: Dict[str, Any],
     products: List[Dict[str, Any]],
+    unavailable_labels: List[str],
+    session: Optional[Dict[str, Any]],
+    from_group_name: str,
     cfg: Dict[str, Any],
-) -> str:
-    cs_name = cfg.get("csName") or "Luqman"
-    store_name = cfg.get("storeName") or "SUKO & Mu+Ku Official"
-    sapaan = sender_name.split()[0] if sender_name and sender_name.lower() not in ("customer", "user", "member") else "Kak"
+) -> Tuple[str, str, str]:
+    """
+    TAHAP 3 AGENT AI:
+    Menghasilkan (opening_text, closing_text, used_model) yang 100% alami, hangat ala Halo BCA,
+    sadar konteks/memori (tidak mengulang salam kaku di tengah PC!), jujur jika ada item kosong,
+    dan mengarahkan lembut ke closing!
+    Sementara detail harga/promo/warna/size di tengah TETAP dicetak Python (0% halusinasi!).
+    """
+    sapaan = _friendly_sapaan(sender_name)
+    is_followup = bool(session and int(session.get("turnCount") or 0) > 0 and not from_group_name)
+    store_name = cfg.get("storeName") or "SUKO Official"
 
-    if intent_info.get("intent") == "GREETING" and not products:
-        return _build_template_reply(sender_name, intent_info, [], cfg)
+    # Fallback teks rapi bila AI tidak terpanggil
+    if from_group_name:
+        fb_open = f"Halo {sapaan}, melanjutkan pertanyaan Kakak di grup *{from_group_name}* ya 😊 Dengan senang hati saya bantu cekkan pilihan *SUKO* yang *ready*:"
+    elif is_followup:
+        fb_open = f"Ada dong {sapaan}! Ini pilihan koleksi *SUKO* yang sedang *ready* saat ini ✨"
+    else:
+        fb_open = f"Halo {sapaan}, terima kasih sudah menghubungi *{store_name}*! Dengan senang hati saya bantu cekkan pilihan yang *ready* ya 😊"
 
-    prompt = (
-        f"Kamu adalah *{cs_name}*, Customer Service profesional, hangat, sopan, dan responsif ala *Halo BCA* "
-        f"untuk grup WhatsApp member eksklusif *{store_name}*.\n\n"
-        f"Nama Customer: {sapaan}\n"
-        f"Pesan Customer: {json.dumps(message, ensure_ascii=False)}\n"
-        f"Detail Permintaan Terdeteksi: {json.dumps({'intent': intent_info.get('intent'), 'colorHint': intent_info.get('colorHint'), 'sizeHint': intent_info.get('sizeHint'), 'wantsPromo': intent_info.get('wantsPromo')}, ensure_ascii=False)}\n"
-        f"Data Produk Resmi (SUDAH TER-SANITASI): {json.dumps(products, ensure_ascii=False)}\n\n"
-        "ATURAN WAJIB BALASAN (IKUTI 100%):\n"
-        "1. Gunakan bahasa Indonesia yang sangat ramah, hangat, solutif, sopan ala Halo BCA (sapa 'Halo Kak ...', akhiri dengan penawaran bantuan / keep barang).\n"
-        "2. DILARANG KERAS menyebut angka jumlah stok / qty (jangan pernah tulis 'sisa 1', 'stok 2 pcs', dll)! HANYA sebut '*Ready*' atau '*sedang sold out*'.\n"
-        "3. Jika `requestedVariantStatus == 'REQUESTED_VARIANT_SOLD_OUT_OTHERS_READY'`, sampaikan dengan lembut bahwa warna/ukuran spesifik yang ditanya sedang *sold out*, lalu tawarkan warna/ukuran lain yang *ready*.\n"
-        "4. Tampilkan nama produk, harga normal, dan harga promo (jika `hargaPromoText` ada, pakai format coret ~Rp Normal~ ➡️ *Rp Promo*), serta warna & ukuran yang ready.\n"
-        "5. Jika `imageUrl` produk pertama tersedia, boleh sebut singkat 'Berikut foto produknya ya Kak' karena foto otomatis dilampirkan bersama pesan ini.\n"
-        "6. Jika daftar produk kosong, minta maaf dengan ramah dan tanyakan detail model/warna/ukuran agar bisa dicarikan alternatif.\n"
-        "7. Format rapi untuk WhatsApp (*tebal*, emoji secukupnya 2-4 saja), singkat jelas (maks 110 kata), JANGAN sebut nama sistem internal (MDS, StoreHub, Matahari.com, Turso).\n"
-        "Balas HANYA teks pesan WhatsApp siap kirim tanpa pembuka atau penjelasan tambahan."
+    if unavailable_labels:
+        fb_open = (
+            f"Mohon maaf {sapaan}, untuk *{', '.join(unavailable_labels)}* saat ini sedang *sold out / belum tersedia* 🙏\n"
+            f"Namun kami punya alternatif pilihan *SUKO* lain yang sedang *ready* saat ini:"
+        )
+    fb_close = (
+        "Dari pilihan di atas, ada model atau warna yang Kakak taksir? "
+        "Boleh info *nomor, warna & sizenya* biar bisa langsung saya bantu cekkan atau *keep* ya Kak 🙏"
     )
 
-    ai_reply = _call_gemini_text(prompt, timeout=4.2, temperature=0.45, max_tokens=380)
-    if ai_reply and len(ai_reply) >= 20:
-        return _sanitize_outgoing_reply(ai_reply)
+    prod_brief = [
+        {
+            "no": idx + 1,
+            "name": p["name"],
+            "badge": p.get("badge") or "",
+            "availability": p["availability"],
+            "hasPromo": bool(p.get("hargaPromoText")),
+        }
+        for idx, p in enumerate(products[:3])
+    ]
+    tier = "HEAVY" if (unavailable_labels or plan.get("complexity") == "HEAVY") else "LIGHT"
+    prompt = (
+        f"Kamu adalah *{cfg.get('csName', 'Luqman')}*, Customer Service profesional hangat ala *Halo BCA* untuk *{store_name}* (khusus produk SUKO).\n"
+        f"Sapaan customer: {sapaan}\n"
+        f"Status percakapan: {'Lanjutan obrolan di Private Chat (JANGAN ulangi salam formal Halo terima kasih sudah menghubungi lagi!)' if is_followup else ('Hand-off dari grup ' + from_group_name if from_group_name else 'Awal percakapan')}\n"
+        f"Pesan customer: {json.dumps(message, ensure_ascii=False)}\n"
+        f"Intent: {plan.get('intent')} | Gender: {plan.get('genderHint')} | Produk ditemukan: {json.dumps(prod_brief, ensure_ascii=False)}\n"
+        f"Item yg diminta tapi kosong/diganti alternatif: {json.dumps(unavailable_labels, ensure_ascii=False)}\n"
+        f"Brand luar SUKO yg ditanya: {json.dumps(plan.get('askedOtherBrand') or '', ensure_ascii=False)}\n\n"
+        "Balas HANYA JSON murni:\n"
+        '{"opening": "1-2 kalimat pembuka hangat natural ala CS manusia", "closing": "1-2 kalimat penutup ramah yang mengarahkan ke pilihan/keep tanpa memaksa"}\n'
+        "ATURAN KERAS: Dilarang menyebut angka qty stok atau angka penjualan! Dilarang menyebut nama merek selain SUKO sebagai jualan kita!"
+    )
 
-    return _sanitize_outgoing_reply(_build_template_reply(sender_name, intent_info, products, cfg))
+    raw_txt, used_model = _invoke_smart_ai(
+        prompt,
+        tier=tier,
+        cfg=cfg,
+        expect_json=True,
+        timeout=4.5,
+        temperature=0.45,
+        max_tokens=280,
+    )
+    parsed = _parse_json_loose(raw_txt)
+    if parsed and parsed.get("opening") and parsed.get("closing"):
+        return (
+            _sanitize_outgoing_reply(str(parsed["opening"])),
+            _sanitize_outgoing_reply(str(parsed["closing"])),
+            used_model,
+        )
+    return fb_open, fb_close, "deterministic"
+
+
+def build_final_cards_and_text(
+    sender_name: str,
+    message: str,
+    plan: Dict[str, Any],
+    products: List[Dict[str, Any]],
+    unavailable_labels: List[str],
+    session: Optional[Dict[str, Any]],
+    from_group_name: str,
+    cfg: Dict[str, Any],
+) -> Tuple[str, List[Dict[str, Any]], str]:
+    sapaan = _friendly_sapaan(sender_name)
+    cs_name = cfg.get("csName") or "Luqman"
+    store_name = cfg.get("storeName") or "SUKO Official"
+    intent = plan.get("intent") or "PRODUCT_INQUIRY"
+
+    # Kasus tanpa produk: Greeting, FAQ SOP, Order/Keep, Komplain, Brand luar SUKO
+    if intent == "GREETING" and not products:
+        txt = (
+            f"Halo {sapaan}, selamat datang di *{store_name}*! 😊\n"
+            f"Dengan saya *{cs_name}*, ada koleksi *SUKO* (promo, terbaru, best seller, atau model/ukuran tertentu) yang bisa saya bantu cekkan hari ini Kak? Silakan info saja ya 🙏"
+        )
+        return txt, [{"text": txt, "imageUrl": None, "fallbackImages": []}], plan.get("engine") or "deterministic"
+
+    if intent == "ORDER_INTENT" and not products:
+        direct = plan.get("directAnswer") or (
+            f"Baik {sapaan}, dengan senang hati saya bantu proses ya! 😊\n"
+            f"Boleh konfirmasi sekali lagi:\n"
+            f"• *Model / Nomor produk:*\n"
+            f"• *Warna & Ukuran:*\n"
+            f"• *Pengambilan di toko / kirim alamat:*\n\n"
+            f"Begitu lengkap, tim PIC kami (*Kak {cs_name}*) segera meneruskan detail pembayaran & proses *keep*-nya untuk Kakak 🙏"
+        )
+        direct = _sanitize_outgoing_reply(direct)
+        return direct, [{"text": direct, "imageUrl": None, "fallbackImages": []}], plan.get("engine") or "deterministic"
+
+    if intent in ("FAQ_SOP", "COMPLAINT", "OTHER_BRAND") and not products:
+        if plan.get("directAnswer"):
+            direct = _sanitize_outgoing_reply(plan["directAnswer"])
+        elif intent == "OTHER_BRAND":
+            direct = (
+                f"Mohon maaf {sapaan}, layanan CS ini khusus untuk koleksi resmi *{store_name}* ya 😊\n"
+                f"Namun kalau Kakak mau, saya bisa bantu carikan model serupa dari koleksi *SUKO* yang sedang *ready* — Kakak lagi cari model & ukuran apa nih? 🙏"
+            )
+        elif intent == "COMPLAINT":
+            direct = (
+                f"Mohon maaf atas ketidaknyamanannya ya {sapaan} 🙏\n"
+                f"Saya langsung teruskan kendala Kakak ke PIC kami (*Kak {cs_name}*) agar segera dibantu selesaikan dengan cepat ya Kak."
+            )
+        else:
+            direct = (
+                f"Halo {sapaan}, dengan senang hati saya bantu 😊 "
+                f"Sebentar saya koordinasikan dengan tim PIC toko kami (*Kak {cs_name}*) ya agar infonya 100% akurat untuk Kakak 🙏"
+            )
+        return direct, [{"text": direct, "imageUrl": None, "fallbackImages": []}], plan.get("engine") or "deterministic"
+
+    if not products:
+        txt = (
+            f"Mohon maaf {sapaan}, untuk produk *SUKO* yang Kakak maksud saat ini belum tersedia atau sedang *sold out* 🙏\n\n"
+            f"Boleh info alternatif model, warna, atau ukuran yang Kakak cari agar saya bantu cekkan koleksi *SUKO* lain yang sedang *ready* ya Kak? 😊"
+        )
+        return txt, [{"text": txt, "imageUrl": None, "fallbackImages": []}], plan.get("engine") or "deterministic"
+
+    # Ada produk READY -> Bungkus dengan pembuka & penutup AI Halo BCA + 1 Foto HD per Produk!
+    opening, closing, copy_model = _generate_ai_framing(
+        sender_name, message, plan, products, unavailable_labels, session, from_group_name, cfg
+    )
+    send_img = bool(cfg.get("replyWithImage", True))
+    shown = products[:3]
+    cards: List[Dict[str, Any]] = []
+    full_parts: List[str] = [opening, ""]
+
+    for idx, p in enumerate(shown, start=1):
+        block = _format_single_product_block(idx, len(shown), p)
+        full_parts.append(block)
+        full_parts.append("")
+        parts: List[str] = []
+        if idx == 1:
+            parts.append(opening + "\n")
+        parts.append(block)
+        if idx == len(shown):
+            parts.append("\n" + closing)
+        cards.append({
+            "text": _sanitize_outgoing_reply("\n".join(parts).strip()),
+            "imageUrl": p["imageUrl"] if (send_img and is_clean_product_image(p.get("imageUrl"))) else None,
+            "fallbackImages": p.get("fallbackImages") or [],
+        })
+
+    full_parts.append(closing)
+    return _sanitize_outgoing_reply("\n".join(full_parts).strip()), cards, copy_model
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  7. ORCHESTRATOR UTAMA (`handle_wa_cs_request`)
+#  6. ORCHESTRATOR UTAMA (`handle_wa_cs_request`)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _handle_self_command(text: str, cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1544,10 +1847,10 @@ def _handle_self_command(text: str, cfg: Dict[str, Any]) -> Optional[Dict[str, A
             "shouldReply": True,
             "reason": "SELF_CMD_ON",
             "replyText": (
-                "🟢 *[AUTO CS AKTIF]*\n"
-                f"Auto CS resmi menyala!\n"
+                "🟢 *[AUTO CS SUKO AKTIF]*\n"
                 f"• Grup aktif: {grp_info}\n"
-                f"• Chat pribadi teman: {'100% DIBLOKIR 🔒' if cfg.get('ignorePrivateChats', True) else 'Diizinkan'}\n"
+                f"• Katalog: *{cfg.get('storeScope', 'SUKO')} ONLY*\n"
+                f"• SOP: Grup singkat → Private Chat VIP + Foto HD\n"
                 "Ketik *!csoff* kapan saja saat toko tutup."
             ),
             "imageUrl": None,
@@ -1556,6 +1859,7 @@ def _handle_self_command(text: str, cfg: Dict[str, Any]) -> Optional[Dict[str, A
     if cmd in ("!csstatus", "/csstatus", "!cs status"):
         now_wib = wib_now()
         within = is_within_store_hours(cfg, now_wib)
+        q_stat = _get_quota_status(cfg)
         active_grps = [g.get("name") or g.get("id") for g in (cfg.get("allowedGroups") or []) if g.get("enabled", True)]
         status_label = "🟢 AKTIF" if cfg.get("enabled") else "🔴 NON-AKTIF"
         return {
@@ -1563,10 +1867,10 @@ def _handle_self_command(text: str, cfg: Dict[str, Any]) -> Optional[Dict[str, A
             "shouldReply": True,
             "reason": "SELF_CMD_STATUS",
             "replyText": (
-                f"🤖 *[STATUS AUTO CS]*\n"
+                f"🤖 *[STATUS AUTO CS SUKO]*\n"
                 f"• Saklar Master: *{status_label}*\n"
                 f"• Jam WIB: {now_wib.strftime('%H:%M WIB')} ({'Dalam Jam Toko ✅' if within else 'Di Luar Jam Toko 🌙'})\n"
-                f"• Chat Pribadi: {'Diblokir Aman 🔒' if cfg.get('ignorePrivateChats', True) else 'Aktif'}\n"
+                f"• Mode AI: {'⚡ Hemat Flash (<10%)' if q_stat['autoDowngradedToFlash'] else '🧠 Smart Orchestrator'} (Sisa {q_stat['heavyRemainingPct']}%)\n"
                 f"• Grup Whitelist ({len(active_grps)}): {', '.join(active_grps[:5]) or '-'}"
             ),
             "imageUrl": None,
@@ -1592,185 +1896,100 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
     if not message:
         return {"success": True, "shouldReply": False, "reason": "EMPTY_MESSAGE", "elapsedMs": 0}
 
-    # 1. Perintah darurat PIC dari WA Admin sendiri (fromMe ATAU nomor adminPhone terdaftar)
-    admin_digits = normalize_wa_phone(cfg.get("adminPhone") or "6281296393972")
+    # 1. Perintah darurat PIC (hanya fromMe atau nomor adminPhone terdaftar)
+    admin_digits = normalize_wa_phone(cfg.get("adminPhone") or "6285771123000")
     sender_digits = normalize_wa_phone(sender)
     is_admin_sender = bool(from_me or (admin_digits and sender_digits and sender_digits == admin_digits))
-
     if is_admin_sender and not is_simulation:
         cmd_res = _handle_self_command(message, cfg)
         if cmd_res is not None:
             cmd_res["elapsedMs"] = int((time.monotonic() - t0) * 1000)
             append_log({
-                "source": source,
-                "groupId": group_id or sender,
-                "groupName": group_name or "Perintah PIC",
-                "senderName": sender_name or "PIC",
-                "message": message,
-                "decision": "COMMAND",
-                "reason": cmd_res["reason"],
-                "replyPreview": cmd_res["replyText"][:140],
-                "imageUrl": None,
-                "matchedSku": None,
-                "elapsedMs": cmd_res["elapsedMs"],
+                "source": source, "groupId": group_id or sender, "groupName": group_name or "Perintah PIC",
+                "senderName": "PIC", "message": message, "decision": "COMMAND", "reason": cmd_res["reason"],
+                "replyPreview": cmd_res["replyText"][:140], "imageUrl": None, "matchedSku": None, "elapsedMs": cmd_res["elapsedMs"],
             })
             return cmd_res
-        return {
-            "success": True,
-            "shouldReply": False,
-            "reason": "SELF_MESSAGE_IGNORED",
-            "elapsedMs": int((time.monotonic() - t0) * 1000),
-        }
+        return {"success": True, "shouldReply": False, "reason": "SELF_MESSAGE_IGNORED", "elapsedMs": int((time.monotonic() - t0) * 1000)}
 
-    # 2. Auto-detect grup baru (bahkan saat bot OFF atau belum di-whitelist!)
+    # 2. Auto-detect grup baru
     config_dirty = False
     if is_group and group_id and not is_simulation:
         config_dirty = _record_detected_group(cfg, group_id, group_name, message)
 
-    # 3. Proteksi Chat Pribadi Teman / Keluarga (KECUALI customer yang sedang punya sesi aktif hand-off dari grup!)
-    in_active_dm_session = False
+    # 3. Proteksi Chat Pribadi Teman (kecuali customer yang sedang punya sesi VIP dari grup!)
+    session_key = sender or ("SIM_SESSION" if is_simulation else "")
+    customer_session = get_customer_session(session_key) if session_key else None
     if not is_simulation and not is_group:
-        in_active_dm_session = has_active_private_session(sender)
-        if cfg.get("ignorePrivateChats", True) and not in_active_dm_session:
+        if cfg.get("ignorePrivateChats", True) and not customer_session:
             if config_dirty:
                 save_config(cfg)
-            elapsed = int((time.monotonic() - t0) * 1000)
-            return {
-                "success": True,
-                "shouldReply": False,
-                "reason": "PRIVATE_CHAT_BLOCKED",
-                "elapsedMs": elapsed,
-            }
+            return {"success": True, "shouldReply": False, "reason": "PRIVATE_CHAT_BLOCKED", "elapsedMs": int((time.monotonic() - t0) * 1000)}
 
     # 4. Proteksi Whitelist Grup Ketat
     if not is_simulation and is_group:
-        allowed = cfg.get("allowedGroups") or []
-        is_allowed = any(
-            str(g.get("id") or "").strip() == group_id and bool(g.get("enabled", True))
-            for g in allowed
-        )
+        is_allowed = any(str(g.get("id") or "").strip() == group_id and bool(g.get("enabled", True)) for g in (cfg.get("allowedGroups") or []))
         if not is_allowed:
             if config_dirty:
                 save_config(cfg)
             elapsed = int((time.monotonic() - t0) * 1000)
             append_log({
-                "source": source,
-                "groupId": group_id,
-                "groupName": group_name,
-                "senderName": sender_name,
-                "message": message[:140],
-                "decision": "IGNORED",
-                "reason": "GROUP_NOT_WHITELISTED",
-                "replyPreview": "Grup baru terdeteksi — aktifkan di panel Whitelist Grup untuk mulai membalas.",
-                "imageUrl": None,
-                "matchedSku": None,
-                "elapsedMs": elapsed,
+                "source": source, "groupId": group_id, "groupName": group_name, "senderName": sender_name,
+                "message": message[:140], "decision": "IGNORED", "reason": "GROUP_NOT_WHITELISTED",
+                "replyPreview": "Grup baru terdeteksi — aktifkan di panel Whitelist Grup.",
+                "imageUrl": None, "matchedSku": None, "elapsedMs": elapsed,
             })
-            return {
-                "success": True,
-                "shouldReply": False,
-                "reason": "GROUP_NOT_WHITELISTED",
-                "groupDetected": True,
-                "elapsedMs": elapsed,
-            }
+            return {"success": True, "shouldReply": False, "reason": "GROUP_NOT_WHITELISTED", "groupDetected": True, "elapsedMs": elapsed}
 
     if config_dirty:
         save_config(cfg)
 
-    # 5. Cek Master Switch ON/OFF & Jadwal Operasional Toko WIB
+    # 5. Master Switch & Jam Toko WIB
     if not ignore_switch:
         if not cfg.get("enabled", False):
-            elapsed = int((time.monotonic() - t0) * 1000)
-            if not is_simulation:
-                append_log({
-                    "source": source,
-                    "groupId": group_id or sender,
-                    "groupName": group_name,
-                    "senderName": sender_name,
-                    "message": message[:140],
-                    "decision": "IGNORED",
-                    "reason": "MASTER_SWITCH_OFF",
-                    "replyPreview": "Saklar Auto CS sedang NON-AKTIF.",
-                    "imageUrl": None,
-                    "matchedSku": None,
-                    "elapsedMs": elapsed,
-                })
-            return {
-                "success": True,
-                "shouldReply": False,
-                "reason": "MASTER_SWITCH_OFF",
-                "elapsedMs": elapsed,
-            }
-
+            return {"success": True, "shouldReply": False, "reason": "MASTER_SWITCH_OFF", "elapsedMs": int((time.monotonic() - t0) * 1000)}
         if cfg.get("autoSchedule", True) and not is_within_store_hours(cfg):
-            elapsed = int((time.monotonic() - t0) * 1000)
-            if not is_simulation:
-                append_log({
-                    "source": source,
-                    "groupId": group_id or sender,
-                    "groupName": group_name,
-                    "senderName": sender_name,
-                    "message": message[:140],
-                    "decision": "IGNORED",
-                    "reason": "OUTSIDE_STORE_HOURS",
-                    "replyPreview": "Di luar jam operasional toko (auto-off).",
-                    "imageUrl": None,
-                    "matchedSku": None,
-                    "elapsedMs": elapsed,
-                })
-            return {
-                "success": True,
-                "shouldReply": False,
-                "reason": "OUTSIDE_STORE_HOURS",
-                "elapsedMs": elapsed,
-            }
+            return {"success": True, "shouldReply": False, "reason": "OUTSIDE_STORE_HOURS", "elapsedMs": int((time.monotonic() - t0) * 1000)}
 
-    # 6. Analisis Intent & Filter Obrolan Santai
-    intent_info = analyze_message_intent(message, is_group=is_group)
-    if not intent_info.get("shouldReply", False):
+    # 6. TAHAP 1: AGENT AI PLANNER (Smart Orchestrator vs Executor Flash + Memori!)
+    plan = run_ai_agent_planner(message, is_group=is_group, session=customer_session, cfg=cfg)
+    if not plan.get("shouldReply", False):
         elapsed = int((time.monotonic() - t0) * 1000)
         append_log({
-            "source": source,
-            "groupId": group_id or sender or "SIM",
-            "groupName": group_name,
-            "senderName": sender_name,
-            "message": message[:140],
-            "decision": "IGNORED",
-            "reason": "CASUAL_CHAT_IGNORED",
-            "replyPreview": "Obrolan santai non-produk diabaikan oleh AI.",
-            "imageUrl": None,
-            "matchedSku": None,
-            "elapsedMs": elapsed,
+            "source": source, "groupId": group_id or sender or "SIM", "groupName": group_name,
+            "senderName": sender_name, "message": message[:140], "decision": "IGNORED",
+            "reason": "CASUAL_CHAT_IGNORED", "replyPreview": "Obrolan santai diabaikan Agent AI.",
+            "imageUrl": None, "matchedSku": None, "elapsedMs": elapsed,
         })
-        return {
-            "success": True,
-            "shouldReply": False,
-            "reason": "CASUAL_CHAT_IGNORED",
-            "intent": intent_info.get("intent", "CASUAL_CHAT"),
-            "intentDetail": intent_info,
-            "elapsedMs": elapsed,
-        }
+        return {"success": True, "shouldReply": False, "reason": "CASUAL_CHAT_IGNORED", "intent": plan.get("intent"), "intentDetail": plan, "elapsedMs": elapsed}
 
-    # 7. Query Produk Real-Time dari Turso DB (100% Tanpa Angka Qty Stok!)
+    # 7. TAHAP 2: EKSEKUTOR PROGRAM PYTHON (100% SUKO, Gender, Multi-Query, Live Stock, Foto HD!)
     products: List[Dict[str, Any]] = []
-    if intent_info.get("intent") != "GREETING":
-        products = search_sanitized_catalog(intent_info, store_scope=cfg.get("storeScope", "ALL"), limit=3)
+    unavailable_labels: List[str] = []
+    skip_search_intents = {"GREETING", "ORDER_INTENT", "FAQ_SOP", "COMPLAINT"}
+    if plan.get("intent") not in skip_search_intents:
+        exclude_arts = list((customer_session or {}).get("shownArticles") or []) if (plan.get("wantsMoreLikeRef") or plan.get("wantsNewArrival") or plan.get("wantsBestSeller")) else []
+        products, unavailable_labels = execute_python_catalog_search(
+            plan=plan,
+            store_scope=cfg.get("storeScope", "SUKO"),
+            exclude_articles=exclude_arts,
+            limit=3,
+            verify_live=True,
+        )
 
-    # 8. Susun Balasan Profesional ala Halo BCA + SOP Hand-Off Grup -> Private Chat
+    # 8. TAHAP 3: AI COPYWRITER HALO BCA + SOP HAND-OFF GRUP -> PRIVATE CHAT + ESCALATION PIC!
     handoff_enabled = bool(cfg.get("handoffToPrivateChat", True))
-    reply_text = generate_halo_bca_reply(sender_name, message, intent_info, products, cfg)
-    reply_messages = build_reply_messages(
-        sender_name,
-        reply_text,
-        products,
-        cfg,
+    reply_text, reply_messages, copy_model = build_final_cards_and_text(
+        sender_name=sender_name,
+        message=message,
+        plan=plan,
+        products=products,
+        unavailable_labels=unavailable_labels,
+        session=customer_session,
         from_group_name=group_name if (is_group and handoff_enabled) else "",
+        cfg=cfg,
     )
-    best_image_url: Optional[str] = None
-    for rm in reply_messages:
-        if rm.get("imageUrl"):
-            best_image_url = rm["imageUrl"]
-            break
+    best_image_url = next((rm.get("imageUrl") for rm in reply_messages if rm.get("imageUrl")), None)
 
     sapaan = _friendly_sapaan(sender_name)
     session_mins = int(cfg.get("privateSessionMinutes", 30) or 30)
@@ -1779,42 +1998,70 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
 
     delivery_mode = "GROUP_DIRECT"
     group_reply_text: Optional[str] = None
-    private_messages: List[Dict[str, Optional[str]]] = []
+    private_messages: List[Dict[str, Any]] = []
 
     if is_group and handoff_enabled:
         delivery_mode = "GROUP_HANDOFF_TO_PRIVATE"
         if products:
             group_reply_text = (
                 f"Halo {sapaan}, dengan senang hati akan saya bantu 😊\n"
-                f"Mohon izin saya teruskan detail produk & fotonya melalui *private chat (japri)* ya Kak "
+                f"Mohon izin saya teruskan detail produk *SUKO* & fotonya melalui *private chat (japri)* ya Kak "
                 f"agar tidak mengganggu member lain di grup ini 🙏\n\n"
-                f"👉 *Klik di sini untuk langsung ke Private Chat CS:*\n"
-                f"{cs_jump_link}"
+                f"👉 *Klik di sini untuk langsung ke Private Chat CS:*\n{cs_jump_link}"
             )
         else:
             group_reply_text = (
-                f"Halo {sapaan}, terima kasih sudah menghubungi kami 😊\n"
+                f"Halo {sapaan}, terima kasih sudah menghubungi *{cfg.get('storeName', 'SUKO Official')}* 😊\n"
                 f"Dengan senang hati akan saya bantu — mohon izin saya lanjutkan melalui *private chat (japri)* ya Kak "
                 f"agar tidak mengganggu member lain di grup ini 🙏\n\n"
-                f"👉 *Klik di sini untuk langsung ke Private Chat CS:*\n"
-                f"{cs_jump_link}"
+                f"👉 *Klik di sini untuk langsung ke Private Chat CS:*\n{cs_jump_link}"
             )
         private_messages = reply_messages
-        if not is_simulation and sender:
-            register_private_session(sender, sender_name, group_name, minutes=session_mins)
     elif not is_group:
         delivery_mode = "PRIVATE_SESSION_REPLY"
         private_messages = reply_messages
-        if not is_simulation and sender:
-            register_private_session(sender, sender_name, group_name, minutes=session_mins)
 
-    if products:
-        any_ready = any(p.get("availability") == "READY" for p in products)
-        reason = "PRODUCT_FOUND_READY" if any_ready else "PRODUCT_FOUND_SOLD_OUT"
-    elif intent_info.get("intent") == "GREETING":
-        reason = "GREETING_REPLIED"
-    else:
-        reason = "PRODUCT_NOT_FOUND"
+    # Simpan memori sesi 30 menit (untuk Private Chat VIP follow-up & konteks!)
+    if session_key and not is_simulation:
+        save_customer_session(
+            raw_sender=session_key,
+            sender_name=sender_name,
+            group_name=group_name if is_group else ((customer_session or {}).get("groupName") or "Private Chat VIP"),
+            minutes=session_mins,
+            preferred_gender=plan.get("genderHint") or "",
+            new_products=products if products else None,
+            user_msg=message,
+            bot_summary=reply_text[:160],
+        )
+
+    # Notifikasi otomatis ke WA PIC (081296393972) saat customer siap ORDER/KEEP atau KOMPLAIN!
+    notify_pic_phone = None
+    notify_pic_message = None
+    pause_after_reply = False
+    if plan.get("intent") in ("ORDER_INTENT", "COMPLAINT"):
+        notify_pic_phone = cfg.get("picAlertPhone") or "6281296393972"
+        last_prods_str = ", ".join(
+            f"No.{p.get('num')} {p.get('name')}" for p in ((customer_session or {}).get("lastProducts") or [])
+        ) or "-"
+        tag = "🛒 *[CLOSING / KEEP ORDER SUKO]*" if plan["intent"] == "ORDER_INTENT" else "⚠️ *[ESKALASI KOMPLAIN CUSTOMER]*"
+        notify_pic_message = (
+            f"{tag}\n"
+            f"• Customer: *{sender_name}* ({sender_digits or sender})\n"
+            f"• Pesan: \"{message}\"\n"
+            f"• Produk terakhir dilihat: {last_prods_str}\n"
+            f"• Bot otomatis minggir sementara agar Kakak bisa langsung handle pembayaran/closing!"
+        )
+        pause_after_reply = True
+
+    reason = (
+        "ORDER_ESCALATED_TO_PIC" if plan.get("intent") == "ORDER_INTENT"
+        else "COMPLAINT_ESCALATED_TO_PIC" if plan.get("intent") == "COMPLAINT"
+        else "PRODUCT_FOUND_READY" if any(p.get("availability") == "READY" for p in products)
+        else "PRODUCT_FOUND_SOLD_OUT" if products
+        else "GREETING_REPLIED" if plan.get("intent") == "GREETING"
+        else "FAQ_OR_SOP_REPLIED" if plan.get("intent") in ("FAQ_SOP", "OTHER_BRAND")
+        else "PRODUCT_NOT_FOUND"
+    )
 
     elapsed = int((time.monotonic() - t0) * 1000)
     append_log({
@@ -1824,15 +2071,13 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
         "senderName": sender_name,
         "message": message[:140],
         "decision": (
-            "HANDOFF_PRIVATE_PHOTO"
-            if (delivery_mode == "GROUP_HANDOFF_TO_PRIVATE" and best_image_url)
-            else "HANDOFF_PRIVATE_TEXT"
-            if delivery_mode == "GROUP_HANDOFF_TO_PRIVATE"
-            else "REPLIED_WITH_IMAGE"
-            if best_image_url
+            "ESCALATED_TO_PIC" if pause_after_reply
+            else "HANDOFF_PRIVATE_PHOTO" if (delivery_mode == "GROUP_HANDOFF_TO_PRIVATE" and best_image_url)
+            else "HANDOFF_PRIVATE_TEXT" if delivery_mode == "GROUP_HANDOFF_TO_PRIVATE"
+            else "REPLIED_WITH_IMAGE" if best_image_url
             else "REPLIED_TEXT"
         ),
-        "reason": reason,
+        "reason": f"{reason} [{plan.get('engine')}]",
         "replyPreview": (group_reply_text or reply_text)[:180],
         "imageUrl": best_image_url,
         "matchedSku": products[0]["sku"] if products else None,
@@ -1844,8 +2089,10 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
         "shouldReply": True,
         "deliveryMode": delivery_mode,
         "reason": reason,
-        "intent": intent_info.get("intent"),
-        "intentDetail": intent_info,
+        "intent": plan.get("intent"),
+        "intentDetail": plan,
+        "aiModelUsed": {"planner": plan.get("engine"), "copywriter": copy_model},
+        "aiQuota": _get_quota_status(cfg),
         "groupReplyText": group_reply_text,
         "privateMessages": private_messages,
         "privateSessionMinutes": session_mins,
@@ -1853,6 +2100,9 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
         "imageUrl": best_image_url,
         "replyMessages": reply_messages,
         "matchedProducts": products,
+        "notifyPicPhone": notify_pic_phone,
+        "notifyPicMessage": notify_pic_message,
+        "pauseAfterReply": pause_after_reply,
         "humanTakeoverMinutes": cfg.get("humanTakeoverMinutes", 10),
         "elapsedMs": elapsed,
     }
@@ -1865,16 +2115,17 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
         cfg = load_config()
         return {
             "success": True,
-            "engine": "python-wa-cs-stdlib",
+            "engine": "python-wa-cs-orchestrator-v2",
             "geminiConfigured": bool((os.environ.get("GEMINI_API_KEY") or "").strip()),
             "tursoConfigured": bool((os.environ.get("TURSO_DATABASE_URL") or "").strip()),
+            "storeScope": cfg.get("storeScope", "SUKO"),
             "enabled": bool(cfg.get("enabled", False)),
             "withinStoreHours": is_within_store_hours(cfg),
             "serverWibTime": wib_now().strftime("%H:%M WIB"),
+            "aiQuota": _get_quota_status(cfg),
             "whitelistedGroupsCount": len([g for g in (cfg.get("allowedGroups") or []) if g.get("enabled", True)]),
         }
 
-    # Semua action lain wajib membawa secret valid
     provided_secret = header_secret or str(payload.get("secret") or "")
     if not verify_secret(provided_secret):
         return {"success": False, "error": "Unauthorized WA CS secret", "status": 401}
@@ -1894,8 +2145,8 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
 
     if action == "request-pairing":
         cfg = load_config()
-        raw_phone = str(payload.get("phone") or cfg.get("adminPhone") or "6281296393972").strip()
-        norm_phone = normalize_wa_phone(raw_phone) or "6281296393972"
+        raw_phone = str(payload.get("phone") or cfg.get("adminPhone") or "6285771123000").strip()
+        norm_phone = normalize_wa_phone(raw_phone) or "6285771123000"
         if norm_phone != cfg.get("adminPhone"):
             cfg["adminPhone"] = norm_phone
             save_config(cfg)
@@ -1906,19 +2157,16 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
         st["pairingCodeAt"] = 0
         st["phone"] = norm_phone
         st["statusMessage"] = f"Meminta kode pairing 8 digit ke WhatsApp untuk +{norm_phone}..."
-        saved_st = save_bridge_state(st)
-        return {"success": True, "config": mask_config_for_ui(cfg), "bridge": saved_st}
+        return {"success": True, "config": mask_config_for_ui(cfg), "bridge": save_bridge_state(st)}
 
     if action == "request-logout":
         st = load_bridge_state()
-        now_ms = int(time.time() * 1000)
-        st["logoutRequestedAt"] = now_ms
+        st["logoutRequestedAt"] = int(time.time() * 1000)
         st["connected"] = False
         st["pairingCode"] = ""
         st["pairingCodeAt"] = 0
         st["statusMessage"] = "Memutuskan tautan WhatsApp..."
-        saved_st = save_bridge_state(st)
-        return {"success": True, "bridge": saved_st}
+        return {"success": True, "bridge": save_bridge_state(st)}
 
     if action == "bridge-sync":
         cfg = load_config()
@@ -1926,7 +2174,6 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
         now_ms = int(time.time() * 1000)
         prev_hb = int(st.get("lastHeartbeatAt") or 0)
         changed = False
-
         if "connected" in payload and bool(payload["connected"]) != bool(st.get("connected", False)):
             st["connected"] = bool(payload["connected"])
             changed = True
@@ -1947,7 +2194,6 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
             st["pairingCodeAt"] = 0
             changed = True
 
-        # Hemat Write Turso: hanya tulis jika state berubah ATAU heartbeat sudah lewat > 55 detik!
         if changed or (now_ms - prev_hb) >= 55_000:
             st["lastHeartbeatAt"] = now_ms
             saved_st = save_bridge_state(st)
@@ -1957,7 +2203,7 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
         return {
             "success": True,
             "bridge": saved_st,
-            "adminPhone": cfg.get("adminPhone") or "6281296393972",
+            "adminPhone": cfg.get("adminPhone") or "6285771123000",
             "humanTakeoverMinutes": cfg.get("humanTakeoverMinutes", 10),
         }
 
@@ -1965,43 +2211,29 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
         current = load_config()
         patch = payload.get("config") if isinstance(payload.get("config"), dict) else payload
         for field in (
-            "enabled",
-            "autoSchedule",
-            "openHourWib",
-            "openMinuteWib",
-            "closeHourWib",
-            "closeMinuteWib",
-            "ignorePrivateChats",
-            "handoffToPrivateChat",
-            "privateSessionMinutes",
-            "replyGreetings",
-            "storeScope",
-            "csName",
-            "adminPhone",
-            "storeName",
-            "humanTakeoverMinutes",
-            "replyWithImage",
-            "allowedGroups",
+            "enabled", "autoSchedule", "openHourWib", "openMinuteWib", "closeHourWib", "closeMinuteWib",
+            "ignorePrivateChats", "handoffToPrivateChat", "privateSessionMinutes", "replyGreetings",
+            "storeScope", "csName", "adminPhone", "picAlertPhone", "storeName", "storeSop",
+            "heavyDailyBudget", "humanTakeoverMinutes", "replyWithImage", "allowedGroups",
         ):
             if field in patch and patch[field] is not None:
                 current[field] = patch[field]
-        # Update fonnteToken hanya jika dikirim non-kosong atau eksplisit clearFonnteToken
         if patch.get("clearFonnteToken"):
             current["fonnteToken"] = ""
         elif isinstance(patch.get("fonnteToken"), str) and patch["fonnteToken"].strip():
             current["fonnteToken"] = patch["fonnteToken"].strip()
-
-        saved = save_config(current)
-        return {"success": True, "config": mask_config_for_ui(saved)}
+        if patch.get("clearCustomGeminiApiKey"):
+            current["customGeminiApiKey"] = ""
+            _MODEL_COOLDOWN_UNTIL.clear()
+        elif isinstance(patch.get("customGeminiApiKey"), str) and patch["customGeminiApiKey"].strip():
+            current["customGeminiApiKey"] = patch["customGeminiApiKey"].strip()
+            _MODEL_COOLDOWN_UNTIL.clear()
+        return {"success": True, "config": mask_config_for_ui(save_config(current))}
 
     if action == "toggle":
         current = load_config()
-        if "enabled" in payload:
-            current["enabled"] = bool(payload["enabled"])
-        else:
-            current["enabled"] = not bool(current.get("enabled", False))
-        saved = save_config(current)
-        return {"success": True, "config": mask_config_for_ui(saved)}
+        current["enabled"] = bool(payload["enabled"]) if "enabled" in payload else (not bool(current.get("enabled", False)))
+        return {"success": True, "config": mask_config_for_ui(save_config(current))}
 
     if action == "upsert-group":
         current = load_config()
@@ -2019,25 +2251,15 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
                 updated = True
                 break
         if not updated:
-            allowed.insert(0, {
-                "id": gid,
-                "name": gname or gid,
-                "enabled": genabled,
-                "addedAt": utc_iso_now(),
-            })
+            allowed.insert(0, {"id": gid, "name": gname or gid, "enabled": genabled, "addedAt": utc_iso_now()})
         current["allowedGroups"] = allowed
-        saved = save_config(current)
-        return {"success": True, "config": mask_config_for_ui(saved)}
+        return {"success": True, "config": mask_config_for_ui(save_config(current))}
 
     if action == "remove-group":
         current = load_config()
         gid = str(payload.get("groupId") or "").strip()
-        current["allowedGroups"] = [
-            g for g in (current.get("allowedGroups") or [])
-            if str(g.get("id") or "").strip() != gid
-        ]
-        saved = save_config(current)
-        return {"success": True, "config": mask_config_for_ui(saved)}
+        current["allowedGroups"] = [g for g in (current.get("allowedGroups") or []) if str(g.get("id") or "").strip() != gid]
+        return {"success": True, "config": mask_config_for_ui(save_config(current))}
 
     if action == "clear-logs":
         clear_logs()

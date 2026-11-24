@@ -73,13 +73,29 @@ type WaCsConfig = {
   storeScope: "ALL" | "SUKO" | "MUKU" | "ZES";
   csName: string;
   adminPhone?: string;
+  picAlertPhone?: string;
   storeName: string;
+  storeSop?: string;
+  heavyDailyBudget?: number;
   humanTakeoverMinutes: number;
   replyWithImage: boolean;
   allowedGroups: AllowedGroup[];
   detectedGroups: DetectedGroup[];
   fonnteTokenConfigured?: boolean;
   fonnteTokenPreview?: string;
+  customGeminiKeyConfigured?: boolean;
+  customGeminiKeyPreview?: string;
+  aiQuota?: {
+    dateWib: string;
+    heavyCalls: number;
+    flashCalls: number;
+    heavyDailyBudget: number;
+    heavyRemainingPct: number;
+    autoDowngradedToFlash: boolean;
+    orchestratorPrimary: string;
+    orchestratorFallback: string;
+    executorFlash: string;
+  };
   serverWibTime?: string;
   withinStoreHours?: boolean;
   updatedAt?: string;
@@ -194,8 +210,9 @@ export default function WaCsSuperAdminPage() {
   const [newGroupId, setNewGroupId] = useState("");
   const [newGroupName, setNewGroupName] = useState("");
 
-  // Fonnte token input
+  // Fonnte token & Custom Gemini API Key input
   const [fonnteTokenInput, setFonnteTokenInput] = useState("");
+  const [geminiKeyInput, setGeminiKeyInput] = useState("");
   const [setupTab, setSetupTab] = useState<"dummy" | "fonnte">("dummy");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
@@ -348,12 +365,16 @@ export default function WaCsSuperAdminPage() {
           replyGreetings: config.replyGreetings ?? true,
           storeScope: config.storeScope,
           csName: config.csName,
-          adminPhone: config.adminPhone || "6281296393972",
+          adminPhone: config.adminPhone || "6285771123000",
+          picAlertPhone: config.picAlertPhone || "6281296393972",
           storeName: config.storeName,
+          storeSop: config.storeSop || "",
+          heavyDailyBudget: config.heavyDailyBudget ?? 60,
           humanTakeoverMinutes: config.humanTakeoverMinutes,
           replyWithImage: config.replyWithImage,
           allowedGroups: config.allowedGroups,
           ...(fonnteTokenInput.trim() ? { fonnteToken: fonnteTokenInput.trim() } : {}),
+          ...(geminiKeyInput.trim() ? { customGeminiApiKey: geminiKeyInput.trim() } : {}),
           ...(extraPatch || {}),
         },
       };
@@ -366,6 +387,7 @@ export default function WaCsSuperAdminPage() {
       if (data?.success && data?.config) {
         setConfig(data.config);
         setFonnteTokenInput("");
+        setGeminiKeyInput("");
         showToast("ok", "Pengaturan Auto CS berhasil disimpan ke Turso Cloud!");
       } else {
         showToast("err", data?.error || "Gagal menyimpan pengaturan");
@@ -1263,7 +1285,60 @@ export default function WaCsSuperAdminPage() {
                 value={config.storeName}
                 onChange={(e) => setConfig({ ...config, storeName: e.target.value })}
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-base text-slate-900"
-                placeholder="SUKO & Mu+Ku Official"
+                placeholder="SUKO Official"
+              />
+            </div>
+
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-bold text-slate-600 mb-1">Nomor WA Notifikasi Order / Closing PIC</label>
+              <input
+                type="tel"
+                value={config.picAlertPhone || "6281296393972"}
+                onChange={(e) => setConfig({ ...config, picAlertPhone: e.target.value })}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-base font-mono text-slate-900"
+                placeholder="081296393972"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">Ringkasan pesanan / komplain otomatis dikirim ke nomor ini</p>
+            </div>
+
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-bold text-slate-600 mb-1">
+                Gemini API Key Akun Pro {config.customGeminiKeyConfigured ? `(Aktif Custom: ${config.customGeminiKeyPreview})` : "(Pakai Env Default Server)"}
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  value={geminiKeyInput}
+                  onChange={(e) => setGeminiKeyInput(e.target.value)}
+                  placeholder="Tempel API Key baru dari aistudio.google.com/apikey..."
+                  className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-base text-slate-900"
+                />
+                {config.customGeminiKeyConfigured && (
+                  <button
+                    type="button"
+                    onClick={() => handleSaveSettings({ clearCustomGeminiApiKey: true })}
+                    disabled={saving}
+                    className="px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold shrink-0"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1">
+                Smart Orchestrator: Pro/3.6 HIGH (berat) → auto-turun ke Flash jika kuota &lt; 10% (Sisa: {config.aiQuota?.heavyRemainingPct ?? 100}%)
+              </p>
+            </div>
+
+            <div className="sm:col-span-2 lg:col-span-4">
+              <label className="block text-xs font-bold text-slate-600 mb-1">
+                Buku Pintar / SOP Toko SUKO (Dibaca Langsung oleh Agent AI)
+              </label>
+              <textarea
+                rows={4}
+                value={config.storeSop || ""}
+                onChange={(e) => setConfig({ ...config, storeSop: e.target.value })}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-sm text-slate-900 leading-relaxed"
+                placeholder="Tulis aturan toko SUKO: jam buka, metode bayar (QRIS/Transfer), aturan keep barang, pengiriman..."
               />
             </div>
           </div>
