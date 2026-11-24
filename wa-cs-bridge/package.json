@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Bridge WhatsApp ringan (Baileys) untuk test & operasional Auto CS Grup Dummy & Member Eksklusif",
   "scripts": {
-    "start": "node index.mjs"
+    "start": "node index.mjs",
+    "pair": "node index.mjs --pair"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.16",

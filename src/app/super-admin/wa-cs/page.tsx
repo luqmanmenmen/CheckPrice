@@ -51,6 +51,7 @@ type WaCsConfig = {
   ignorePrivateChats: boolean;
   storeScope: "ALL" | "SUKO" | "MUKU" | "ZES";
   csName: string;
+  adminPhone?: string;
   storeName: string;
   humanTakeoverMinutes: number;
   replyWithImage: boolean;
@@ -236,6 +237,7 @@ export default function WaCsSuperAdminPage() {
           ignorePrivateChats: config.ignorePrivateChats,
           storeScope: config.storeScope,
           csName: config.csName,
+          adminPhone: config.adminPhone || "6281296393972",
           storeName: config.storeName,
           humanTakeoverMinutes: config.humanTakeoverMinutes,
           replyWithImage: config.replyWithImage,
@@ -944,7 +946,7 @@ export default function WaCsSuperAdminPage() {
               <p className="text-[11px] text-slate-400 mt-1">Bot minggir saat PIC ikut nimbrung</p>
             </div>
 
-            <div className="sm:col-span-2">
+            <div>
               <label className="block text-xs font-bold text-slate-600 mb-1">Nama CS di Sapaan</label>
               <input
                 type="text"
@@ -953,6 +955,18 @@ export default function WaCsSuperAdminPage() {
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-base text-slate-900"
                 placeholder="Luqman"
               />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">Nomor WA Admin CS (PIC)</label>
+              <input
+                type="tel"
+                value={config.adminPhone || "6281296393972"}
+                onChange={(e) => setConfig({ ...config, adminPhone: e.target.value })}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-base font-mono text-slate-900"
+                placeholder="081296393972"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">Hanya nomor ini yang berhak pakai !csoff / !cson</p>
             </div>
 
             <div className="sm:col-span-2">

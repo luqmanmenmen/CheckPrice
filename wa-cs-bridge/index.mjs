@@ -32,6 +32,11 @@ const API_SECRET = (
   process.env.WEBHOOK_SECRET ||
   "B4mb4ng123!Aman"
 ).trim();
+const ADMIN_PHONE = (process.env.WA_ADMIN_PHONE || "6281296393972")
+  .replace(/[^0-9]/g, "")
+  .replace(/^0/, "62");
+const USE_PAIRING_CODE =
+  process.argv.includes("--pair") || process.env.WA_USE_PAIRING === "1";
 
 const logger = pino({ level: "silent" });
 const startUnixSec = Math.floor(Date.now() / 1000);
@@ -139,8 +144,10 @@ async function startBridge() {
 
   console.log("==============================================================");
   console.log("  AUTO CS WHATSAPP BRIDGE (SUKO & Mu+Ku — Halo BCA AI Engine)");
-  console.log(`  Server AI : ${API_URL}`);
-  console.log(`  WA Proto  : v${version.join(".")}`);
+  console.log(`  Nomor Admin : +${ADMIN_PHONE} (0${ADMIN_PHONE.slice(2)})`);
+  console.log(`  Server AI   : ${API_URL}`);
+  console.log(`  WA Proto    : v${version.join(".")}`);
+  console.log(`  Mode Tautan : ${USE_PAIRING_CODE ? "KODE PAIRING 8 DIGIT (TANPA SCAN QR)" : "QR CODE TERMINAL"}`);
   console.log("==============================================================\n");
 
   const sock = makeWASocket({
@@ -148,17 +155,36 @@ async function startBridge() {
     auth: state,
     logger,
     printQRInTerminal: false,
-    browser: ["SUKO Auto CS", "Chrome", "124.0.0"],
+    browser: ["Ubuntu", "Chrome", "124.0.0"],
     syncFullHistory: false,
   });
+
+  // Mode Pairing Code 8-Digit langsung ke nomor 081296393972 (jika belum login & pakai `npm run pair`)
+  if (USE_PAIRING_CODE && !state.creds.registered) {
+    setTimeout(async () => {
+      try {
+        const code = await sock.requestPairingCode(ADMIN_PHONE);
+        const formatted = code?.match(/.{1,4}/g)?.join("-") || code;
+        console.log("\n==============================================================");
+        console.log(`  🔑 KODE PAIRING WA UNTUK 0${ADMIN_PHONE.slice(2)}:  ${formatted}`);
+        console.log("  Cara masukkan di HP:");
+        console.log("  WA -> Perangkat Tertaut -> Tautkan Perangkat ->");
+        console.log("  Pilih 'Tautkan dengan nomor telepon saja' -> ketik kode di atas!");
+        console.log("==============================================================\n");
+      } catch (err) {
+        console.error("⚠️ Gagal meminta kode pairing:", err?.message || err);
+        console.log("   Gunakan `npm start` untuk scan QR Code sebagai alternatif.");
+      }
+    }, 3000);
+  }
 
   sock.ev.on("creds.update", saveCreds);
 
   sock.ev.on("connection.update", (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    if (qr) {
-      console.log("\n📱 SCAN QR CODE INI DI WHATSAPP HP KAKAK:");
+    if (qr && !USE_PAIRING_CODE) {
+      console.log("\n📱 SCAN QR CODE INI DI WHATSAPP HP KAKAK (0" + ADMIN_PHONE.slice(2) + "):");
       console.log("   (Buka WA -> Titik 3 / Pengaturan -> Perangkat Tertaut -> Tautkan Perangkat)\n");
       qrcode.generate(qr, { small: true });
     }

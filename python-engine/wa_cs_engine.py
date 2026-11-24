@@ -61,6 +61,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "ignorePrivateChats": True,
     "storeScope": "ALL",  # ALL | SUKO | MUKU | ZES
     "csName": "Luqman",
+    "adminPhone": "6281296393972",
     "storeName": "SUKO & Mu+Ku Official",
     "humanTakeoverMinutes": 10,
     "replyWithImage": True,
@@ -221,6 +222,19 @@ def verify_secret(provided: str) -> bool:
     return str(provided or "").strip() == expected
 
 
+def normalize_wa_phone(raw: Any) -> str:
+    """Normalisasi nomor WA Indonesia ke format digit internasional (misal 081296393972 -> 6281296393972)."""
+    s = str(raw or "").split("@")[0].split(":")[0]
+    digits = re.sub(r"[^0-9]", "", s)
+    if not digits:
+        return ""
+    if digits.startswith("0"):
+        digits = "62" + digits[1:]
+    elif digits.startswith("8"):
+        digits = "62" + digits
+    return digits
+
+
 def _merge_config(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     cfg = dict(DEFAULT_CONFIG)
     if isinstance(raw, dict):
@@ -240,6 +254,7 @@ def _merge_config(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     scope = str(cfg.get("storeScope") or "ALL").strip().upper()
     cfg["storeScope"] = scope if scope in ("ALL", "SUKO", "MUKU", "ZES") else "ALL"
     cfg["csName"] = str(cfg.get("csName") or "Luqman").strip()[:40] or "Luqman"
+    cfg["adminPhone"] = normalize_wa_phone(cfg.get("adminPhone") or "6281296393972") or "6281296393972"
     cfg["storeName"] = str(cfg.get("storeName") or "SUKO & Mu+Ku Official").strip()[:60] or "SUKO & Mu+Ku Official"
     if not isinstance(cfg.get("allowedGroups"), list):
         cfg["allowedGroups"] = []
@@ -1252,8 +1267,12 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
     if not message:
         return {"success": True, "shouldReply": False, "reason": "EMPTY_MESSAGE", "elapsedMs": 0}
 
-    # 1. Perintah darurat PIC dari WA sendiri (!csoff / !cson / !csstatus)
-    if from_me and not is_simulation:
+    # 1. Perintah darurat PIC dari WA Admin sendiri (fromMe ATAU nomor adminPhone terdaftar)
+    admin_digits = normalize_wa_phone(cfg.get("adminPhone") or "6281296393972")
+    sender_digits = normalize_wa_phone(sender)
+    is_admin_sender = bool(from_me or (admin_digits and sender_digits and sender_digits == admin_digits))
+
+    if is_admin_sender and not is_simulation:
         cmd_res = _handle_self_command(message, cfg)
         if cmd_res is not None:
             cmd_res["elapsedMs"] = int((time.monotonic() - t0) * 1000)
@@ -1501,6 +1520,7 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
             "ignorePrivateChats",
             "storeScope",
             "csName",
+            "adminPhone",
             "storeName",
             "humanTakeoverMinutes",
             "replyWithImage",
