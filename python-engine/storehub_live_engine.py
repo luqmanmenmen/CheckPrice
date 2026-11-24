@@ -857,48 +857,77 @@ def lookup_matahari_images(sku: str = "", article: str = "", barcode: str = "") 
     if not queries:
         return []
 
-    def _fetch_suggest(q: str) -> List[str]:
+    found_handles: List[str] = []
+
+    def _fetch_suggest(q: str) -> Tuple[List[str], List[str]]:
         qs = urllib.parse.urlencode({"q": q, "resources[type]": "product"})
         status, txt = _http_get_text(f"https://matahari.com/search/suggest.json?{qs}", timeout=1.6)
         if status != 200 or not txt:
-            return []
+            return [], []
         try:
             data = json.loads(txt)
             prods = (((data.get("resources") or {}).get("results") or {}).get("products")) or []
         except Exception:
-            return []
+            return [], []
         q_low = q.lower()
         found: List[str] = []
+        handles: List[str] = []
         for p in prods:
             img = str(p.get("image") or "").strip()
             if img.startswith("//"):
                 img = f"https:{img}"
-            if "cdn.shopify.com/s/files/1/0666/9212/0727/" not in img:
-                continue
-            if _is_junk_image_url(img):
-                continue
-            handle = str(p.get("handle") or "").lower()
+            handle = str(p.get("handle") or "").strip()
             url_p = str(p.get("url") or "").lower()
             title = str(p.get("title") or "").lower()
-            if q_low in img.lower() or q_low in handle or q_low in url_p or (article and article.lower() in title):
+            matched_q = (
+                q_low in img.lower()
+                or q_low in handle.lower()
+                or q_low in url_p
+                or (article and article.lower() in title)
+            )
+            if not matched_q:
+                continue
+            if handle and handle not in handles:
+                handles.append(handle)
+            if "cdn.shopify.com/s/files/1/0666/9212/0727/" in img and not _is_junk_image_url(img):
                 if img not in found:
                     found.append(img)
-        return found
+        return found, handles
 
     candidates: List[str] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(queries)) as pool:
-        for res_list in pool.map(_fetch_suggest, queries):
-            for u in res_list:
+        for res_imgs, res_handles in pool.map(_fetch_suggest, queries):
+            for u in res_imgs:
                 if u not in candidates:
                     candidates.append(u)
+            for h in res_handles:
+                if h not in found_handles:
+                    found_handles.append(h)
+
+    # Bonus: coba Ajax Shopify `/products/<handle>.js` (ringan, tanpa rate-limit .json) untuk sudut foto lengkap
+    if found_handles:
+        st_js, txt_js = _http_get_text(f"https://matahari.com/products/{found_handles[0]}.js", timeout=1.4)
+        if st_js == 200 and txt_js:
+            try:
+                pjs = json.loads(txt_js)
+                raw_imgs = pjs.get("images") or []
+                for raw_u in raw_imgs[:8]:
+                    u = str(raw_u or "").strip()
+                    if u.startswith("//"):
+                        u = f"https:{u}"
+                    if "cdn.shopify.com/s/files/1/0666/9212/0727/" in u and not _is_junk_image_url(u):
+                        if u not in candidates:
+                            candidates.append(u)
+            except Exception:
+                pass
 
     if not candidates:
         return []
 
     # Verifikasi paralel anti logo abu-abu (2.238B / 3.163B) dalam 1 round-trip (~200-400ms!)
-    top_cands = candidates[:4]
+    top_cands = candidates[:6]
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(top_cands)) as pool:
-        ok_flags = list(pool.map(lambda u: _verify_image_not_grey_logo(u, timeout=1.1), top_cands))
+        ok_flags = list(pool.map(lambda u: _verify_image_not_grey_logo(u, timeout=1.2), top_cands))
     return [u for u, ok in zip(top_cands, ok_flags) if ok]
 
 
@@ -1538,39 +1567,77 @@ def run_fast_stock(
 
 def run_heal_image(sku: str = "", article: str = "", barcode: str = "") -> Dict[str, Any]:
     t0 = time.time()
-    imgs = lookup_matahari_images(sku=sku, article=article, barcode=barcode)
-    if not imgs:
-        return {"success": True, "healed": False, "images": [], "elapsedMs": int((time.time() - t0) * 1000)}
+    clean_sku = str(sku or "").strip()
+    clean_art = str(article or "").strip()
+    clean_bc = str(barcode or "").strip()
 
+    # Jika artikel belum dikirim, baca dari Turso agar seluruh keluarga varian ikut ter-update
+    if not clean_art and clean_sku:
+        r0 = turso_query('SELECT article FROM "Product" WHERE sku = ? LIMIT 1', (clean_sku,), timeout=2.0)
+        if r0 and r0[0].get("article"):
+            clean_art = str(r0[0]["article"]).strip()
+
+    imgs = lookup_matahari_images(sku=clean_sku, article=clean_art, barcode=clean_bc)
     now_iso = utc_iso_now()
-    primary_img = imgs[0]
-    imgs_json = json.dumps(imgs[:6], ensure_ascii=False)
-    stmts: List[Tuple[str, Tuple[Any, ...]]] = []
-    if article:
-        stmts.append(
-            ('UPDATE "Product" SET "imageUrl" = ?, images = ?, "updatedAt" = ? WHERE article = ?', (primary_img, imgs_json, now_iso, article))
-        )
-        stmts.append(
-            ('UPDATE "CatalogArticle" SET "imageUrl" = ?, "updatedAt" = ? WHERE key = ? OR article = ?', (primary_img, now_iso, article.upper(), article))
-        )
-    elif sku:
-        stmts.append(
-            ('UPDATE "Product" SET "imageUrl" = ?, images = ?, "updatedAt" = ? WHERE sku = ?', (primary_img, imgs_json, now_iso, sku))
-        )
-        stmts.append(
-            ('UPDATE "CatalogArticle" SET "imageUrl" = ?, "updatedAt" = ? WHERE sku = ?', (primary_img, now_iso, sku))
-        )
-    if stmts:
-        try:
-            turso_pipeline(stmts, timeout=3.5)
-        except Exception:
-            pass
+    updated_count = 0
+
+    if imgs:
+        primary_img = imgs[0]
+        imgs_json = json.dumps(imgs[:6], ensure_ascii=False)
+        stmts: List[Tuple[str, Tuple[Any, ...]]] = []
+        if clean_art:
+            stmts.append(
+                ('UPDATE "Product" SET "imageUrl" = ?, images = ?, "updatedAt" = ? WHERE article = ?', (primary_img, imgs_json, now_iso, clean_art))
+            )
+            stmts.append(
+                ('UPDATE "CatalogArticle" SET "imageUrl" = ?, "updatedAt" = ? WHERE key = ? OR article = ?', (primary_img, now_iso, clean_art.upper(), clean_art))
+            )
+        elif clean_sku:
+            stmts.append(
+                ('UPDATE "Product" SET "imageUrl" = ?, images = ?, "updatedAt" = ? WHERE sku = ?', (primary_img, imgs_json, now_iso, clean_sku))
+            )
+            stmts.append(
+                ('UPDATE "CatalogArticle" SET "imageUrl" = ?, "updatedAt" = ? WHERE sku = ?', (primary_img, now_iso, clean_sku))
+            )
+        if stmts:
+            try:
+                turso_pipeline(stmts, timeout=3.5)
+                updated_count = 1
+            except Exception:
+                pass
+
+    # WAJIB kembalikan `data` + `siblings` terbaru dari Turso agar UI HP & IndexedDB langsung sinkron
+    # (bahkan bila HP tadinya memegang URL foto lama yang rusak sementara Turso sudah punya foto bersih!)
+    sib_rows = (
+        turso_query('SELECT * FROM "Product" WHERE article = ? ORDER BY sku ASC LIMIT 120', (clean_art,), timeout=3.0)
+        if clean_art
+        else turso_query('SELECT * FROM "Product" WHERE sku = ? LIMIT 1', (clean_sku,), timeout=3.0)
+    )
+    siblings = [_deserialize_product_row(r) for r in sib_rows]
+    main_prod = next((s for s in siblings if s.get("sku") == clean_sku), siblings[0] if siblings else None)
+
+    final_imgs = imgs[:6] if imgs else ((main_prod.get("images") or ([main_prod["imageUrl"]] if main_prod and main_prod.get("imageUrl") else [])) if main_prod else [])
+    final_primary = final_imgs[0] if final_imgs else (main_prod.get("imageUrl") if main_prod else None)
+    healed_ok = bool(final_imgs)
+    if healed_ok and updated_count == 0 and siblings:
+        updated_count = len(siblings)
+    elif updated_count > 0 and siblings:
+        updated_count = len(siblings)
 
     return {
         "success": True,
-        "healed": True,
-        "imageUrl": primary_img,
-        "images": imgs[:6],
+        "healed": healed_ok,
+        "activeColorMatched": healed_ok,
+        "updatedCount": updated_count,
+        "imageUrl": final_primary,
+        "images": final_imgs,
+        "data": main_prod,
+        "siblings": siblings,
+        "message": (
+            f"Berhasil menyinkronkan {len(final_imgs)} foto studio terbaru ke layar & cache HP."
+            if healed_ok
+            else "Foto produk ini belum tersedia di katalog online saat ini."
+        ),
         "source": "PYTHON_IMAGE_HEALER",
         "elapsedMs": int((time.time() - t0) * 1000),
     }

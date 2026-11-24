@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, TouchEvent } from "react";
 import { ChevronLeft, ChevronRight, Maximize2, Image as ImageIcon } from "lucide-react";
 import ImageLightboxModal from "@/components/ImageLightboxModal";
 import {
+  buildRetryImageUrl,
   isJunkRetailImageDimensions,
   optimizeRetailImageUrl,
   reportJunkImageToServer,
@@ -66,16 +67,21 @@ export default function ProductImageSlider({
   const cleanImages = sanitizeRetailImageList(images);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isZoomed, setIsZoomed] = useState(false);
-  const [useRawFallback, setUseRawFallback] = useState<Record<number, boolean>>({});
+  const [retryAttempts, setRetryAttempts] = useState<Record<number, number>>({});
+  const [thumbRetryAttempts, setThumbRetryAttempts] = useState<Record<number, number>>({});
   const [hasError, setHasError] = useState<Record<number, boolean>>({});
   const [thumbError, setThumbError] = useState<Record<number, boolean>>({});
   const healTriggeredKeyRef = useRef<string>("");
+  const retryTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   // Reset state ketika daftar gambar berganti ATAU setelah manual Update Gambar (refreshVersion naik)
   const imagesKey = cleanImages.join("|");
   useEffect(() => {
+    retryTimersRef.current.forEach((t) => clearTimeout(t));
+    retryTimersRef.current = [];
     setCurrentIndex(0);
-    setUseRawFallback({});
+    setRetryAttempts({});
+    setThumbRetryAttempts({});
     setHasError({});
     setThumbError({});
     healTriggeredKeyRef.current = "";
@@ -83,6 +89,10 @@ export default function ProductImageSlider({
     if (cleanImages.length > 1) {
       preloadProductImages(cleanImages.slice(1), imageWidth);
     }
+    return () => {
+      retryTimersRef.current.forEach((t) => clearTimeout(t));
+      retryTimersRef.current = [];
+    };
   }, [imagesKey, imageWidth, refreshVersion]);
 
   const triggerBrokenHeal = () => {
@@ -145,9 +155,9 @@ export default function ProductImageSlider({
 
   const safeIndex = currentIndex < cleanImages.length ? currentIndex : 0;
   const rawCurrentSrc = cleanImages[safeIndex] || cleanImages[0];
-  const displaySrc = useRawFallback[safeIndex]
-    ? rawCurrentSrc
-    : optimizeRetailImageUrl(rawCurrentSrc, imageWidth);
+  const baseSrc = optimizeRetailImageUrl(rawCurrentSrc, imageWidth);
+  const activeAttempt = retryAttempts[safeIndex] || 0;
+  const displaySrc = activeAttempt > 0 ? buildRetryImageUrl(baseSrc, activeAttempt) : baseSrc;
   const isMulti = cleanImages.length > 1;
 
   // Untuk Lightbox Zoom gunakan resolusi HD (width=1000)
@@ -174,6 +184,19 @@ export default function ProductImageSlider({
                 <>
                   <ImageIcon className="w-8 h-8 opacity-40 mb-1" />
                   <span className="text-[10px] font-bold">Foto tidak tersedia</span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setHasError((prev) => ({ ...prev, [safeIndex]: false }));
+                      setRetryAttempts((prev) => ({ ...prev, [safeIndex]: (prev[safeIndex] || 0) + 1 }));
+                      healTriggeredKeyRef.current = "";
+                      triggerBrokenHeal();
+                    }}
+                    className="mt-2 px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-extrabold shadow-xs cursor-pointer"
+                  >
+                    Muat Ulang / Sinkron Foto
+                  </button>
                 </>
               )}
             </div>
@@ -200,8 +223,13 @@ export default function ProductImageSlider({
                 }
               }}
               onError={() => {
-                if (!useRawFallback[safeIndex] && displaySrc !== rawCurrentSrc) {
-                  setUseRawFallback((prev) => ({ ...prev, [safeIndex]: true }));
+                const curTry = retryAttempts[safeIndex] || 0;
+                if (curTry < 2) {
+                  const delayMs = curTry === 0 ? 500 : 1400;
+                  const t = setTimeout(() => {
+                    setRetryAttempts((prev) => ({ ...prev, [safeIndex]: curTry + 1 }));
+                  }, delayMs);
+                  retryTimersRef.current.push(t);
                 } else {
                   setHasError((prev) => ({ ...prev, [safeIndex]: true }));
                   triggerBrokenHeal();
@@ -278,7 +306,9 @@ export default function ProductImageSlider({
       {showThumbnails && isMulti && (
         <div className="flex items-center gap-1.5 overflow-x-auto px-3 sm:px-0 pb-0.5">
           {cleanImages.map((imgUrl, idx) => {
-            const thumbSrc = optimizeRetailImageUrl(imgUrl, 160);
+            const baseThumbSrc = optimizeRetailImageUrl(imgUrl, 160);
+            const tAttempt = thumbRetryAttempts[idx] || 0;
+            const thumbSrc = tAttempt > 0 ? buildRetryImageUrl(baseThumbSrc, tAttempt) : baseThumbSrc;
             const active = idx === safeIndex;
             return (
               <button
@@ -315,8 +345,16 @@ export default function ProductImageSlider({
                       }
                     }}
                     onError={() => {
-                      setThumbError((prev) => ({ ...prev, [idx]: true }));
-                      triggerBrokenHeal();
+                      const curTry = thumbRetryAttempts[idx] || 0;
+                      if (curTry < 2) {
+                        const t = setTimeout(() => {
+                          setThumbRetryAttempts((prev) => ({ ...prev, [idx]: curTry + 1 }));
+                        }, curTry === 0 ? 600 : 1500);
+                        retryTimersRef.current.push(t);
+                      } else {
+                        setThumbError((prev) => ({ ...prev, [idx]: true }));
+                        triggerBrokenHeal();
+                      }
                     }}
                     className="w-full h-full object-cover object-top"
                   />

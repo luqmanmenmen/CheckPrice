@@ -636,6 +636,11 @@ export default function Home() {
       if (attempt.ok && json?.success) {
         const healedSibs: ProductData[] = Array.isArray(json.siblings) ? json.siblings : [];
         const healedMain: ProductData | undefined = json.data;
+        const fallbackImgs: string[] = Array.isArray(json.images) && json.images.length > 0
+          ? json.images
+          : json.imageUrl
+            ? [String(json.imageUrl)]
+            : [];
         const sibMap = new Map(healedSibs.map((s) => [s.sku, s]));
 
         if (healedSibs.length > 0 && healedMain) {
@@ -646,13 +651,15 @@ export default function Home() {
           });
         }
 
-        if (healedMain) {
+        if (healedMain || fallbackImgs.length > 0) {
           setProduct((cur) => {
             if (!cur) return cur;
-            const match = sibMap.get(cur.sku) || (cur.sku === healedMain.sku ? healedMain : undefined);
-            if (!match && (!cur.article || cur.article !== healedMain.article)) return cur;
-            const img = match?.imageUrl || healedMain.imageUrl;
-            const imgs = match?.images || healedMain.images;
+            const match = healedMain ? (sibMap.get(cur.sku) || (cur.sku === healedMain.sku ? healedMain : undefined)) : undefined;
+            if (healedMain && !match && (!cur.article || cur.article !== healedMain.article)) return cur;
+            const img = match?.imageUrl || healedMain?.imageUrl || fallbackImgs[0];
+            const imgs = (match?.images && match.images.length > 0 ? match.images : null)
+              || (healedMain?.images && healedMain.images.length > 0 ? healedMain.images : null)
+              || (fallbackImgs.length > 0 ? fallbackImgs : null);
             return {
               ...cur,
               ...(match ? {
@@ -666,7 +673,7 @@ export default function Home() {
                 hargaNormal: match.hargaNormal || cur.hargaNormal,
               } : {}),
               imageUrl: img || cur.imageUrl,
-              images: imgs && imgs.length > 0 ? imgs : cur.images,
+              images: imgs || cur.images,
             };
           });
         }
@@ -703,6 +710,8 @@ export default function Home() {
           }
           const { updateOfflineFamilyImages } = await import("@/lib/offlineDb");
           await updateOfflineFamilyImages(healedSibs, healedMain?.article || target.article);
+        } else if (fallbackImgs.length > 0) {
+          setSiblings((prev) => prev.map((s) => ({ ...s, imageUrl: fallbackImgs[0], images: fallbackImgs })));
         }
 
         // Paksa slider foto me-reset status error & me-remount <img> di klik pertama
