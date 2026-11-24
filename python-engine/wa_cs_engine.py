@@ -707,8 +707,12 @@ def _invoke_smart_ai(
     chain = (ORCHESTRATOR_CHAIN + EXECUTOR_CHAIN) if use_heavy else EXECUTOR_CHAIN
 
     now_ts = time.time()
+    deadline = now_ts + min(float(timeout), 4.8)
     tried = set()
+    attempts = 0
     for model_name, think_lvl in chain:
+        if attempts >= 2 or time.time() >= deadline:
+            break
         key = f"{model_name}:{think_lvl}"
         if key in tried:
             continue
@@ -718,12 +722,14 @@ def _invoke_smart_ai(
         if now_ts < cooldown_until:
             continue
 
+        rem_sec = max(1.6, min(3.4, deadline - time.time()))
+        attempts += 1
         txt, status = _call_gemini_model(
             model=model_name,
             prompt=prompt,
             thinking_level=think_lvl,
             expect_json=expect_json,
-            timeout=timeout,
+            timeout=rem_sec,
             temperature=temperature,
             max_tokens=max_tokens,
             custom_api_key=str((cfg or {}).get("customGeminiApiKey") or ""),
@@ -736,10 +742,10 @@ def _invoke_smart_ai(
             return txt, f"{model_name}({think_lvl})"
 
         if status == 429:
-            _MODEL_COOLDOWN_UNTIL[model_name] = now_ts + 900.0  # 15 menit auto-downgrade ke Flash!
+            _MODEL_COOLDOWN_UNTIL[model_name] = now_ts + 900.0
         elif status == 404:
             _MODEL_COOLDOWN_UNTIL[model_name] = now_ts + 3600.0
-        elif status == 503:
+        elif status in (503, 0):
             _MODEL_COOLDOWN_UNTIL[model_name] = now_ts + 180.0
 
     return None, "deterministic"
@@ -906,9 +912,9 @@ def _extract_deterministic_plan(message: str, session: Optional[Dict[str, Any]] 
     if len(matched_cats) >= 2:
         for cat_key, hits in matched_cats[:3]:
             q_kws = list(hits[:2])
-            if cat_key == "CELANA" and "pendek" in low:
+            if cat_key == "CELANA" and "pendek" in low and "pendek" not in q_kws:
                 q_kws.append("pendek")
-            if cat_key == "JAKET" and "winter" in low:
+            if cat_key == "JAKET" and "winter" in low and "winter" not in q_kws:
                 q_kws.append("winter")
             multi_queries.append({
                 "label": " ".join(q_kws),
@@ -1274,14 +1280,31 @@ def _query_single_subsearch(
         where_clauses.append("(" + " OR ".join(or_parts) + ")")
         params.extend(or_params)
 
-    order_sql = '"updatedAt" DESC, "sortRank" ASC' if wants_new else ('"articleHasPromo" DESC, "sortRank" ASC')
-    sql = (
-        'SELECT key, sku, barcode, article, description, brand, dept, "brandGroup", "subBrand", '
-        '"categoryKey", color, size, "hargaNormal", "hargaPromo", diskon, "discountType", "toDate", '
-        '"imageUrl", "articleTotalStok", "articleColors", "articleSizes", "articleHasPromo", "articlePromoLabel", "updatedAt" '
-        f'FROM "CatalogArticle" WHERE {" AND ".join(where_clauses)} ORDER BY {order_sql} LIMIT 35'
-    )
-    rows = turso_query(sql, tuple(params), timeout=4.2)
+    rows: List[Dict[str, Any]] = []
+    if wants_best and best_seller_ranks and not or_parts:
+        top_arts = list(best_seller_ranks.keys())[:24]
+        ph = ",".join("?" for _ in top_arts)
+        scope_b = ' AND "brandGroup" = ?' if store_scope in ("SUKO", "MUKU", "ZES") else ""
+        p_b = top_arts + ([store_scope] if store_scope in ("SUKO", "MUKU", "ZES") else [])
+        rows = turso_query(
+            'SELECT key, sku, barcode, article, description, brand, dept, "brandGroup", "subBrand", '
+            '"categoryKey", color, size, "hargaNormal", "hargaPromo", diskon, "discountType", "toDate", '
+            '"imageUrl", "articleTotalStok", "articleColors", "articleSizes", "articleHasPromo", "articlePromoLabel", "updatedAt" '
+            f'FROM "CatalogArticle" WHERE "articleTotalStok" > 0 AND "imageUrl" IS NOT NULL AND "imageUrl" != \'\' '
+            f'AND UPPER(COALESCE(article, \'\')) IN ({ph}){scope_b} LIMIT 25',
+            tuple(p_b),
+            timeout=3.5,
+        )
+
+    if not rows:
+        order_sql = '"updatedAt" DESC, "sortRank" ASC' if wants_new else ('"articleHasPromo" DESC, "sortRank" ASC')
+        sql = (
+            'SELECT key, sku, barcode, article, description, brand, dept, "brandGroup", "subBrand", '
+            '"categoryKey", color, size, "hargaNormal", "hargaPromo", diskon, "discountType", "toDate", '
+            '"imageUrl", "articleTotalStok", "articleColors", "articleSizes", "articleHasPromo", "articlePromoLabel", "updatedAt" '
+            f'FROM "CatalogArticle" WHERE {" AND ".join(where_clauses)} ORDER BY {order_sql} LIMIT 35'
+        )
+        rows = turso_query(sql, tuple(params), timeout=4.2)
 
     # Jika mencari promo tapi ketat 0 hasil, coba relaksasi tanpa wajib promo
     if not rows and wants_promo and (or_parts):
@@ -1449,7 +1472,7 @@ def execute_python_catalog_search(
                 bg = str(r.get("brandGroup") or "").strip()
                 if sku_main:
                     fut_map[ex.submit(_verify_live_stock_for_article, sku_main, art, bg, variants_by_article.get(ak) or [])] = ak
-            done, _ = concurrent.futures.wait(fut_map.keys(), timeout=3.2)
+            done, _ = concurrent.futures.wait(fut_map.keys(), timeout=2.2)
             for fut in done:
                 ak = fut_map[fut]
                 try:
