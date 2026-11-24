@@ -65,6 +65,10 @@ process.on("uncaughtException", (err) => {
 const botSentIds = new Set();
 // Jeda Human Takeover per chat (groupJid atau dmJid) -> timestamp ms
 const humanTakeoverUntil = new Map();
+// Buffer penggabung chat pendek beruntun (anti-spam bubble: "P" + "mau tanya celana" + "tapi bukan chino"!)
+// key = `${jid}::${sender}` -> { texts: [], quotedText, lastMsg, senderName, isGroup, groupName, dmInfo, timer }
+const pendingMessageBuffers = new Map();
+const DEBOUNCE_WINDOW_MS = 2600;
 // Sesi Private Chat VIP aktif (hanya untuk customer yang baru di-handoff dari grup!)
 // key (jid / phone digits) -> expiresAtMs
 const activeDmSessions = new Map();
@@ -580,49 +584,73 @@ async function startSocket() {
           continue;
         }
 
-        // 3. Jika PRIVATE CHAT (DM):
-        //    - Jika "Blokir Chat Pribadi" ON di Web -> hanya layani sesi aktif dari grup (aman untuk nomor pribadi).
-        //    - Jika "Blokir Chat Pribadi" OFF di Web -> LAYANI SEMUA NOMOR yang langsung japri ke nomor CS!
+        // 3. Buffer penggabung chat beruntun (2,6 detik) untuk Private Chat!
+        //    Jika customer kirim 4-5 bubble pendek ("P" -> "mau tanya celana" -> "bukan chino" -> "eh chino aja"),
+        //    digabung otomatis jadi 1 pesan utuh agar AI paham konteks penuh & tidak membalas 5 kali!
         if (!isGroup) {
           const altRemote = String(msg.key?.remoteJidAlt || "");
           if (currentIgnorePrivateChats && !isDmSessionActive(jid, altRemote)) {
             continue;
           }
-          console.log(`💬 [PC VIP] ${senderName}: "${text.slice(0, 70)}"`);
-          const aiRes = await callPythonWaCs({
-            action: "incoming",
-            source: "WA_BRIDGE_PC",
-            message: text,
-            quotedMessage: quotedText,
-            sender: altRemote || jid,
+          const bufKey = `DM::${jid}`;
+          const existing = pendingMessageBuffers.get(bufKey);
+          if (existing) {
+            clearTimeout(existing.timer);
+            existing.texts.push(text);
+            if (quotedText && !existing.quotedText) existing.quotedText = quotedText;
+            existing.lastMsg = msg;
+          }
+          const entry = existing || {
+            texts: [text],
+            quotedText,
+            lastMsg: msg,
             senderName,
-            groupId: "",
-            groupName: "Private Chat VIP",
-            isGroup: false,
-            fromMe: false,
-          });
-          if (!aiRes?.shouldReply) {
-            console.log(`   ↳ Diam di PC (${aiRes?.reason || "IGNORED"}) [${aiRes?.elapsedMs || 0}ms]`);
-            continue;
-          }
-          markDmSessionActive([jid, altRemote], aiRes.privateSessionMinutes || 30);
-          const cards =
-            Array.isArray(aiRes.privateMessages) && aiRes.privateMessages.length > 0
-              ? aiRes.privateMessages
-              : Array.isArray(aiRes.replyMessages) && aiRes.replyMessages.length > 0
-              ? aiRes.replyMessages
-              : [{ text: aiRes.replyText, imageUrl: aiRes.imageUrl || null }];
-          const sentPhotos = await sendCardsToJid(sock, jid, cards, msg);
-          console.log(`   ✅ Balasan PC VIP terkirim (${cards.length} pesan, ${sentPhotos} foto HD)!\n`);
-          // Jika customer siap ORDER/KEEP atau KOMPLAIN -> kirim alert ke WA PIC + pause bot di chat ini!
-          if (aiRes.notifyPicPhone && aiRes.notifyPicMessage) {
-            const picJid = `${normalizePhone(aiRes.notifyPicPhone)}@s.whatsapp.net`;
-            await sock.sendMessage(picJid, { text: aiRes.notifyPicMessage }).then(trackBotSent).catch(() => {});
-            console.log(`   🔔 Alert eskalasi terkirim ke WA PIC (${aiRes.notifyPicPhone})!`);
-          }
-          if (aiRes.pauseAfterReply) {
-            humanTakeoverUntil.set(jid, Date.now() + Math.max(10, currentHumanTakeoverMins) * 60 * 1000);
-          }
+            altRemote,
+            timer: null,
+          };
+          entry.timer = setTimeout(async () => {
+            pendingMessageBuffers.delete(bufKey);
+            const combinedText = entry.texts.join("\n").trim();
+            try {
+              console.log(`💬 [PC VIP] ${entry.senderName}: "${combinedText.replace(/\n/g, " | ").slice(0, 90)}"`);
+              const aiRes = await callPythonWaCs({
+                action: "incoming",
+                source: "WA_BRIDGE_PC",
+                message: combinedText,
+                quotedMessage: entry.quotedText,
+                sender: entry.altRemote || jid,
+                senderName: entry.senderName,
+                groupId: "",
+                groupName: "Private Chat VIP",
+                isGroup: false,
+                fromMe: false,
+              });
+              if (!aiRes?.shouldReply) {
+                console.log(`   ↳ Diam di PC (${aiRes?.reason || "IGNORED"}) [${aiRes?.elapsedMs || 0}ms]`);
+                return;
+              }
+              markDmSessionActive([jid, entry.altRemote], aiRes.privateSessionMinutes || 30);
+              const cards =
+                Array.isArray(aiRes.privateMessages) && aiRes.privateMessages.length > 0
+                  ? aiRes.privateMessages
+                  : Array.isArray(aiRes.replyMessages) && aiRes.replyMessages.length > 0
+                  ? aiRes.replyMessages
+                  : [{ text: aiRes.replyText, imageUrl: aiRes.imageUrl || null }];
+              const sentPhotos = await sendCardsToJid(sock, jid, cards, entry.lastMsg);
+              console.log(`   ✅ Balasan PC VIP terkirim (${cards.length} pesan, ${sentPhotos} foto HD)!\n`);
+              if (aiRes.notifyPicPhone && aiRes.notifyPicMessage) {
+                const picJid = `${normalizePhone(aiRes.notifyPicPhone)}@s.whatsapp.net`;
+                await sock.sendMessage(picJid, { text: aiRes.notifyPicMessage }).then(trackBotSent).catch(() => {});
+                console.log(`   🔔 Alert eskalasi terkirim ke WA PIC (${aiRes.notifyPicPhone})!`);
+              }
+              if (aiRes.pauseAfterReply) {
+                humanTakeoverUntil.set(jid, Date.now() + Math.max(10, currentHumanTakeoverMins) * 60 * 1000);
+              }
+            } catch (e) {
+              console.error("❌ Error proses DM tergabung:", e?.message || e);
+            }
+          }, DEBOUNCE_WINDOW_MS);
+          pendingMessageBuffers.set(bufKey, entry);
           continue;
         }
 
