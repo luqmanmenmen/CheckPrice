@@ -50,6 +50,11 @@ from storehub_live_engine import (
     turso_query,
     utc_iso_now,
 )
+from suko_product_knowledge import (
+    build_product_knowledge_answer,
+    detect_fabric_tech_badge,
+    get_compact_pk_prompt_block,
+)
 
 CONFIG_STORAGE_PATH = "config/wa-cs-config.json"
 LOGS_STORAGE_PATH = "logs/wa-cs-logs.json"
@@ -163,7 +168,26 @@ SYNONYM_GROUPS: Dict[str, List[str]] = {
     "melar": ["STRETCH", "RELAX", "ELASTIC", "JOGGER", "CHINO"],
     "karet": ["RELAX", "ELASTIC", "JOGGER", "DRAWSTRING", "KARET", "PINGGANG"],
     "rajut": ["KNIT", "RAJUT", "SWEATER", "CARDIGAN", "WAFFLE"],
-    "hangat": ["JACKET", "JAKET", "HOODIE", "SWEATER", "CARDIGAN", "OUTER", "PARKA", "KNIT"],
+    "hangat": ["JACKET", "JAKET", "HOODIE", "SWEATER", "CARDIGAN", "OUTER", "PARKA", "KNIT", "SOUFFLE", "FLEECE"],
+    "sport": ["SPORTS", "SPORT", "ACTIVE", "QUICK DRY", "4-WAY", "ULTRA STRETCH", "HIGH REC", "JOGGER", "LEGGING", "WINDBREAKER", "NILON PARASUT"],
+    "sports": ["SPORTS", "SPORT", "ACTIVE", "QUICK DRY", "4-WAY", "ULTRA STRETCH", "HIGH REC", "JOGGER", "LEGGING"],
+    "olahraga": ["SPORTS", "SPORT", "ACTIVE", "QUICK DRY", "4-WAY", "ULTRA STRETCH", "JOGGER", "LEGGING", "WINDBREAKER"],
+    "training": ["ACTIVE", "JOGGER", "SPORTS", "SPORT", "NILON PARASUT", "4-WAY", "ULTRA STRETCH", "SWEAT"],
+    "gym": ["SPORTS", "SPORT", "ACTIVE", "QUICK DRY", "JOGGER", "LEGGING", "HIGH REC", "SLEEVELESS"],
+    "lari": ["SPORTS", "SPORT", "ACTIVE", "QUICK DRY", "WINDBREAKER", "ULTRA STRETCH", "PARASUT"],
+    "jogging": ["SPORTS", "SPORT", "ACTIVE", "QUICK DRY", "JOGGER", "WINDBREAKER", "PARASUT"],
+    "padel": ["SPORTS", "ROK CELANA", "GAUN POLO SPORTS", "ANTI BAKTERI", "QUICK DRY", "POLO SPORTS"],
+    "tenis": ["SPORTS", "ROK CELANA", "GAUN POLO SPORTS", "ANTI BAKTERI", "QUICK DRY", "POLO SPORTS"],
+    "yoga": ["LEGGING", "HIGH REC", "CROP BRA", "SPORTS", "ULTRA STRETCH"],
+    "activewear": ["SPORTS", "ACTIVE", "QUICK DRY", "4-WAY", "HIGH REC", "JOGGER", "LEGGING"],
+    "legging": ["LEGGING", "HIGH REC", "SPORTS"],
+    "skort": ["SKORT", "ROK CELANA"],
+    "supima": ["SUPIMA"],
+    "clima": ["CLIMA", "QUICK DRY"],
+    "souffle": ["SOUFFLE"],
+    "seersucker": ["SEERSUCKER"],
+    "bamboo": ["BAMBOO"],
+    "windbreaker": ["WINDBREAKER", "PARKA", "PARASUT"],
 }
 
 SLANG_NORMALIZE_MAP: List[Tuple[re.Pattern, str]] = [
@@ -213,8 +237,9 @@ CATEGORY_SYNONYMS: Dict[str, List[str]] = {
     "ATASAN": ["kaos", "kemeja", "tshirt", "t-shirt", "tee", "polo", "blouse", "blus", "atasan", "top", "baju", "tanktop", "crop"],
     "JAKET": ["jaket", "jacket", "winter", "puffer", "coat", "hoodie", "sweater", "cardigan", "outer", "blazer", "vest", "parka", "bomber", "knit"],
     "CELANA": ["celana", "bawahan", "jeans", "denim", "chino", "jogger", "short", "pant", "pants", "trouser", "legging", "kulot", "culotte"],
-    "DRESS_ROK": ["dress", "rok", "skirt", "gamis", "tunik", "tunic", "kaftan", "jumpsuit"],
-    "SEPATU_SANDAL": ["sepatu", "sandal", "sendal", "sneaker", "loafer", "heels", "boots", "flats", "slipper"],
+    "DRESS_ROK": ["dress", "rok", "skirt", "skort", "gamis", "tunik", "tunic", "kaftan", "jumpsuit"],
+    "SPORT": ["sport", "sports", "olahraga", "training", "gym", "lari", "jogging", "padel", "tenis", "badminton", "yoga", "active", "activewear", "legging", "windbreaker", "quick dry"],
+    "SEPATU_SANDAL": ["sepatu", "sandal", "sendal", "sneaker", "loafer", "heels", "boots", "flats", "slipper", "mule", "ballerina"],
     "TAS_AKSESORIS": ["tas", "bag", "dompet", "wallet", "topi", "cap", "hat", "belt", "sabuk", "kaos kaki", "sock", "backpack", "pouch"],
     "BEAUTY": ["serum", "parfum", "perfume", "cream", "krim", "lotion", "lip", "masker", "toner", "cleanser", "skincare"],
     "TIDUR_DALAM": ["boxer", "brief", "underwear", "dalam", "bra", "panty", "piyama", "pajama", "singlet", "tidur"],
@@ -247,6 +272,8 @@ INQUIRY_TRIGGER_WORDS = {
     "sepatu", "sandal", "sendal", "sneaker", "tas", "dompet", "topi", "boxer", "piyama", "baju", "atasan",
     "blouse", "polo", "jeans", "chino", "jogger", "kaos kaki", "sock", "sku", "artikel", "barcode",
     "terbaru", "best", "seller", "terlaris", "koleksi", "lainnya", "nomor", "winter", "transfer", "bayar", "ongkir",
+    "sport", "sports", "olahraga", "training", "gym", "lari", "jogging", "padel", "tenis", "yoga", "legging",
+    "teknologi", "supima", "clima", "souffle", "seersucker", "bamboo", "windbreaker", "parasut", "activewear",
 }
 
 CASUAL_SHORT_RE = re.compile(
@@ -1192,6 +1219,41 @@ def _extract_deterministic_plan(
             "engine": "deterministic",
         }
 
+    # 0D0. PERTANYAAN EDUKASI PRODUCT KNOWLEDGE SUKO ("SUKO jual apa aja?", "Teknologi bahan SUKO apa aja?", "Bedanya Supima/Clima Tech?")
+    is_pk_question = bool(
+        re.search(
+            r"\b(suko\s+(?:itu\s+)?(?:jual|punya|produk(?:nya)?)\s+apa\s+aja|jenis\s+pakaian\s+(?:yang\s+dijual|suko)|"
+            r"teknologi\s+(?:bahan\s+)?(?:apa\s+aja|suko)|bedanya\s+(?:supima|clima|quick\s*dry|4[\-\s]?way|souffle|bamboo|seersucker)|"
+            r"apa\s+itu\s+(?:supima|clima\s*tech|souffle\s*yarn|4[\-\s]?way\s*stretch|seersucker|suko\s*go))\b",
+            low,
+        )
+    )
+    if is_pk_question:
+        return {
+            "intent": "PRODUCT_KNOWLEDGE_QA",
+            "shouldReply": True,
+            "complexity": "HEAVY",
+            "genderHint": str((session or {}).get("preferredGender") or ""),
+            "referencedNumber": 0,
+            "wantsMoreLikeRef": False,
+            "wantsNextPage": False,
+            "wantsColorPhotos": False,
+            "wantsPromo": False,
+            "wantsNewArrival": False,
+            "wantsBestSeller": False,
+            "maxPrice": None,
+            "minPrice": None,
+            "excludeKeywords": [],
+            "excludeColors": [],
+            "colorHints": [],
+            "multiQueries": [],
+            "skuOrArticle": "",
+            "shouldSearchProducts": False,
+            "handleMessage": "",
+            "directAnswer": "",
+            "engine": "deterministic",
+        }
+
     # 0D. KOMPARASI KOMPETITOR (Uniqlo/Zara/H&M) — dipisah dari pertanyaan bahan/BB-TB biasa!
     is_competitor_consult = bool(
         re.search(r"\b(uniqlo|zara|h&m|bagusan\s+mana|beda\s+tipis|cutting(?:\-nya)?\s+sama)\b", low)
@@ -1432,6 +1494,14 @@ def _extract_deterministic_plan(
         if last_q.get("wantsBestSeller"):
             wants_best = True
 
+    # Jika user menyebut "sport/training/olahraga" + "celana/kaos/jaket/rok" -> JANGAN pecah jadi 2 kategori terpisah!
+    # Gabungkan jadi 1 query SPORT yang super tajam (misal "celana training / sport" -> hanya celana SUKO Sports!)
+    matched_cat_keys = {ck for ck, _ in matched_cats}
+    if "SPORT" in matched_cat_keys and len(matched_cats) == 2:
+        other_ck = next((ck for ck, _ in matched_cats if ck != "SPORT"), "")
+        if other_ck in ("CELANA", "ATASAN", "JAKET", "DRESS_ROK"):
+            matched_cats = [("SPORT", [w for _, ws in matched_cats for w in ws][:4])]
+
     multi_queries: List[Dict[str, Any]] = []
     if is_mix_match and session:
         last_prods = session.get("lastProducts") or []
@@ -1628,9 +1698,10 @@ def run_ai_agent_planner(
     quoted_ctx = f"\nPesan/Postingan Promo yang Di-Reply Customer: {json.dumps(quoted_message[:400], ensure_ascii=False)}" if quoted_message else ""
 
     prompt = (
-        f"Kamu adalah Personal Shopper & CS VIP Eksklusif *{cfg.get('storeName', 'SUKO Official')}* (private brand minimalist everyday wear — clean look, earth tone, nyaman untuk iklim tropis Indonesia — berlokasi di **Store SUKO PTC Surabaya**).\n"
-        f"Gaya komunikasi: **Komunikasi Interpersonal Eksklusif ala Halo BCA + Personal Shopper Butik** (hangat, empatik, tulus, menjawab SEMUA poin pertanyaan customer secara mendalam SEBELUM menawarkan produk — BUKAN robot katalog yang asal lempar foto!).\n"
+        f"Kamu adalah Personal Shopper & CS VIP Eksklusif *{cfg.get('storeName', 'SUKO Official')}* dengan pengalaman 20 tahun di ritel fashion Matahari & SUKO — berlokasi di **Store SUKO PTC Surabaya**.\n"
+        f"Gaya komunikasi: **Komunikasi Interpersonal Eksklusif ala Halo BCA + Senior Product Specialist Butik** (hangat, empatik, tulus, menguasai *product knowledge* & teknologi bahan SUKO secara mendalam SEBELUM menawarkan produk — BUKAN robot katalog yang asal lempar foto!).\n"
         f"Konteks: {'Pesan masuk di GRUP WA member eksklusif' if is_group else 'Obrolan 1-on-1 di PRIVATE CHAT VIP'}.\n"
+        f"{get_compact_pk_prompt_block()}\n\n"
         f"SOP Toko SUKO PTC Surabaya:\n{cfg.get('storeSop', DEFAULT_SOP_TEXT)}\n\n"
         f"Memori Sesi Customer: {json.dumps(mem_ctx, ensure_ascii=False)}{quoted_ctx}\n"
         f"Pesan Customer Terbaru: {json.dumps(clean, ensure_ascii=False)}\n\n"
@@ -1685,8 +1756,8 @@ def run_ai_agent_planner(
     if intent == "CASUAL_CHAT":
         should_reply = False
 
-    # Hormati guardrail keras deterministik (Prompt Injection, Komplain, Grosir, Marketplace, Non-Katalog, Cabang Lain!)
-    if det["intent"] in ("PROMPT_INJECTION", "COMPLAINT", "WHOLESALE_B2B", "MARKETPLACE_ORDER", "OUT_OF_CATALOG", "SOP_RETUR_REWARDS", "OTHER_BRANCH_STOCK", "POST_LIST_ANALYSIS"):
+    # Hormati guardrail keras deterministik (Prompt Injection, Komplain, Grosir, Marketplace, Non-Katalog, Cabang Lain, Edukasi PK!)
+    if det["intent"] in ("PROMPT_INJECTION", "COMPLAINT", "WHOLESALE_B2B", "MARKETPLACE_ORDER", "OUT_OF_CATALOG", "SOP_RETUR_REWARDS", "OTHER_BRANCH_STOCK", "POST_LIST_ANALYSIS", "PRODUCT_KNOWLEDGE_QA"):
         intent = det["intent"]
         should_reply = True
 
@@ -1732,7 +1803,7 @@ def run_ai_agent_planner(
 
     handle_msg = str(ai_res.get("handleMessage") or ai_res.get("directAnswer") or "").strip()
     no_search_intents = {
-        "GREETING", "CONSULT_FIRST", "POST_LIST_ANALYSIS", "PROMPT_INJECTION", "COMPLAINT",
+        "GREETING", "CONSULT_FIRST", "POST_LIST_ANALYSIS", "PRODUCT_KNOWLEDGE_QA", "PROMPT_INJECTION", "COMPLAINT",
         "WHOLESALE_B2B", "MARKETPLACE_ORDER", "OUT_OF_CATALOG", "SOP_RETUR_REWARDS",
         "OTHER_BRANCH_STOCK", "ORDER_INTENT", "PHYSICAL_CHECK", "FAQ_SOP", "OTHER_BRAND",
     }
@@ -1948,6 +2019,15 @@ def _query_single_subsearch(
     kw_lower_set = {str(k).lower().strip() for k in keywords}
     wants_kemeja = any(k in kw_lower_set for k in ("kemeja", "oxford", "flannel"))
     wants_winter = any(k in kw_lower_set for k in ("winter", "puffer", "coat"))
+    wants_sport = category_hint == "SPORT" or any(
+        k in kw_lower_set for k in ("sport", "sports", "olahraga", "training", "gym", "lari", "jogging", "padel", "tenis", "yoga", "active", "activewear", "legging")
+    )
+    wants_sport_bottom = wants_sport and any(
+        k in kw_lower_set for k in ("celana", "training", "jogger", "legging", "short", "bawahan", "pants")
+    )
+    wants_sport_top = wants_sport and any(
+        k in kw_lower_set for k in ("kaos", "baju", "atasan", "polo", "tshirt", "t-shirt", "jersey")
+    )
 
     # Exact SKU/Article lookup
     if sku_or_art:
@@ -2102,10 +2182,33 @@ def _query_single_subsearch(
 
         # Jika mencari ATASAN (bukan rok/celana) -> cegah ROK/SKIRT/CELANA bocor hanya karena kata "WOVEN"!
         row_cat = str(c.get("categoryKey") or "").upper()
+        row_dept = str(c.get("dept") or "").upper()
         if category_hint == "ATASAN" and row_cat in ("DRESS_ROK", "CELANA", "SEPATU_SANDAL", "TAS_AKSESORIS"):
             continue
         if category_hint == "CELANA" and row_cat in ("ATASAN", "JAKET", "SEPATU_SANDAL"):
             continue
+        # Jika mencari SPORT / TRAINING / OLAHRAGA -> kunci ketat ke lini SUKO SPORTS / ACTIVE / JOGGER / LEGGING / QUICK DRY!
+        if wants_sport:
+            is_sport_item = (
+                row_cat == "SPORT"
+                or "SPORTS" in row_dept
+                or any(k in desc_only for k in ("SPORT", "ACTIVE", "JOGGER", "LEGGING", "QUICK DRY", "4-WAY", "ULTRA STR", "HIGH REC", "WINDBREAKER", "NILON PARASUT", "PARASUT TAS"))
+            )
+            if not is_sport_item:
+                continue
+            score += 180
+            if wants_sport_bottom:
+                if any(k in desc_only for k in ("CELANA", "PANTS", "JOGGER", "LEGGING", "SHORT", "ROK CELANA")):
+                    score += 160
+                else:
+                    continue
+                if "KNIT SHORT" in desc_only and "SPORT" not in desc_only:
+                    continue
+            elif wants_sport_top:
+                if any(k in desc_only for k in ("T-SHIRT", "KAOS", "POLO", "BRA")):
+                    score += 140
+                else:
+                    continue
 
         if wants_winter and any(k in desc_only for k in ("WINTER", "PUFFER", "COAT")):
             exact_term_found = True
@@ -2380,6 +2483,7 @@ def execute_python_catalog_search(
             "article": art,
             "name": clean_name or art,
             "fitting": _detect_fitting_label(raw_desc),
+            "fabricTech": detect_fabric_tech_badge(raw_desc, str(r.get("dept") or "")),
             "brand": str(r.get("subBrand") or r.get("brand") or "SUKO").strip(),
             "storeGroup": str(r.get("brandGroup") or "SUKO").strip(),
             "category": str(r.get("categoryKey") or "").strip(),
@@ -2430,6 +2534,8 @@ def _format_single_product_block(idx: int, total: int, p: Dict[str, Any]) -> str
     lines: List[str] = [f"{prefix}{brand_tag}{badge_tag}"]
     if p.get("fitting"):
         lines.append(f"✂️ Potongan: *{p['fitting']}*")
+    if p.get("fabricTech"):
+        lines.append(f"🧵 Bahan/Fitur: {p['fabricTech']}")
 
     if p.get("hargaPromoText"):
         promo_extra = f" — _{p['promoLabel']}_" if p.get("promoLabel") else ""
@@ -2480,6 +2586,12 @@ def _generate_ai_framing(
     # Fallback teks rapi bila AI tidak terpanggil
     if from_group_name:
         fb_open = f"Halo {sapaan}, melanjutkan pertanyaan Kakak di grup *{from_group_name}* ya 😊 Dengan senang hati saya bantu cekkan pilihan *SUKO* yang *ready*:"
+    elif re.search(r"\b(sport|sports|olahraga|training|gym|lari|jogging|padel|tenis|yoga|activewear)\b", str(message or "").lower()):
+        fb_open = (
+            f"Ada banget {sapaan}! Di SUKO kami punya lini khusus *SUKO Sports (SUKO GO)* yang memang dirancang untuk aktivitas olahraga & gerak aktif "
+            f"(mulai dari teknologi *4-Way / Ultra Stretch* yang melar 4 arah, *Quick Dry* cepat kering, *High Recovery* anti-melar, sampai bahan *Nilon Parasut* yang super ringan) ✨\n"
+            f"Ini pilihan *SUKO Sports* yang sedang *ready* saat ini:"
+        )
     elif is_followup:
         fb_open = f"Ada dong {sapaan}! Ini pilihan koleksi *SUKO* yang sedang *ready* saat ini ✨"
     else:
@@ -2515,7 +2627,7 @@ def _generate_ai_framing(
         f"Item yg diminta tapi kosong/diganti alternatif: {json.dumps(unavailable_labels, ensure_ascii=False)}\n"
         f"Brand luar SUKO yg ditanya: {json.dumps(plan.get('askedOtherBrand') or '', ensure_ascii=False)}\n\n"
         "Balas HANYA JSON murni:\n"
-        '{"opening": "1-2 kalimat pembuka hangat natural ala CS manusia", "closing": "1-2 kalimat penutup ramah yang mengarahkan ke pilihan/keep tanpa memaksa"}\n'
+        '{"opening": "1-2 kalimat pembuka hangat natural ala Senior Product Specialist SUKO (jelaskan singkat keunggulan bahan/lini seperti SUKO Sports 4-Way Stretch / Quick Dry / Supima / Oxford jika relevan!)", "closing": "1-2 kalimat penutup ramah yang mengarahkan ke pilihan/keep tanpa memaksa"}\n'
         "ATURAN KERAS: Dilarang menyebut angka qty stok atau angka penjualan! Dilarang menyebut nama merek selain SUKO sebagai jualan kita!"
     )
 
@@ -2761,6 +2873,13 @@ def build_final_cards_and_text(
                 f"(koleksi *SUKO* berfokus pada pakaian kasual harian *minimalist everyday wear* seperti kaos, kemeja, polo, outer/jaket harian, dan celana santai) 🙏\n\n"
                 f"Kalau Kakak sedang cari jaket harian, kemeja, atau celana kasual *SUKO* yang sedang *ready*, dengan senang hati saya bantu cekkan ya Kak! 😊"
             )
+        return direct, [{"text": direct, "imageUrl": None, "fallbackImages": []}], plan.get("engine") or "deterministic"
+
+    # Kasus PRODUCT_KNOWLEDGE_QA (Edukasi Veteran 20 Tahun SUKO: jenis produk, lini, & teknologi bahan!)
+    if intent == "PRODUCT_KNOWLEDGE_QA":
+        direct = _sanitize_outgoing_reply(
+            plan.get("handleMessage") or build_product_knowledge_answer(message, sapaan=sapaan)
+        )
         return direct, [{"text": direct, "imageUrl": None, "fallbackImages": []}], plan.get("engine") or "deterministic"
 
     # Kasus POST_LIST_ANALYSIS (Coreference: bandingkan No.1 vs No.3, yang paling murah, warna selain hitam di No.2, BB/TB!)
@@ -3217,7 +3336,7 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
     products: List[Dict[str, Any]] = []
     unavailable_labels: List[str] = []
     skip_search_intents = {
-        "GREETING", "CONSULT_FIRST", "POST_LIST_ANALYSIS", "PROMPT_INJECTION", "OTHER_BRANCH_STOCK",
+        "GREETING", "CONSULT_FIRST", "POST_LIST_ANALYSIS", "PRODUCT_KNOWLEDGE_QA", "PROMPT_INJECTION", "OTHER_BRANCH_STOCK",
         "SOP_RETUR_REWARDS", "WHOLESALE_B2B", "MARKETPLACE_ORDER", "OUT_OF_CATALOG",
         "ORDER_INTENT", "PHYSICAL_CHECK", "FAQ_SOP", "COMPLAINT", "OTHER_BRAND",
     }
@@ -3362,6 +3481,7 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
         else "MARKETPLACE_REDIRECTED" if plan.get("intent") == "MARKETPLACE_ORDER"
         else "OUT_OF_CATALOG_HONEST" if plan.get("intent") == "OUT_OF_CATALOG"
         else "POST_LIST_ANALYZED" if plan.get("intent") == "POST_LIST_ANALYSIS"
+        else "PRODUCT_KNOWLEDGE_ANSWERED" if plan.get("intent") == "PRODUCT_KNOWLEDGE_QA"
         else "OTHER_BRANCH_HONEST" if plan.get("intent") == "OTHER_BRANCH_STOCK"
         else "SOP_RETUR_REWARDS_REPLIED" if plan.get("intent") == "SOP_RETUR_REWARDS"
         else "PROMPT_INJECTION_BLOCKED" if plan.get("intent") == "PROMPT_INJECTION"
