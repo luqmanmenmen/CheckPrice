@@ -620,31 +620,38 @@ async function startControlPoller() {
     lastHandledLogoutReq = Number(initState.logoutRequestedAt || 0);
   }
 
-  setInterval(async () => {
-    const st = await syncBridgeState();
-    if (!st) return;
-
-    const reqLogout = Number(st.logoutRequestedAt || 0);
-    if (reqLogout > lastHandledLogoutReq) {
-      lastHandledLogoutReq = reqLogout;
-      console.log("🔌 [WEB CMD] Permintaan putuskan tautan WA diterima dari Super Admin!");
-      try {
-        if (currentSock && isConnected) {
-          await currentSock.logout().catch(() => {});
+  // Adaptive Polling Hemat Kuota 95%:
+  // - Saat BELUM tersambung (menunggu klik Build Kode di Web): cek tiap 4 detik
+  // - Saat SUDAH tersambung WA: cukup heartbeat ringan tiap 60 detik!
+  const tick = async () => {
+    try {
+      const st = await syncBridgeState();
+      if (st) {
+        const reqLogout = Number(st.logoutRequestedAt || 0);
+        if (reqLogout > lastHandledLogoutReq) {
+          lastHandledLogoutReq = reqLogout;
+          console.log("🔌 [WEB CMD] Permintaan putuskan tautan WA diterima dari Super Admin!");
+          try {
+            if (currentSock && isConnected) {
+              await currentSock.logout().catch(() => {});
+            }
+          } catch {}
+          await restartSocket(true, "");
+        } else {
+          const reqPair = Number(st.pairingRequestedAt || 0);
+          if (reqPair > lastHandledPairingReq) {
+            lastHandledPairingReq = reqPair;
+            const target = normalizePhone(st.phone || currentPhone || DEFAULT_ADMIN_PHONE);
+            console.log(`🔑 [WEB CMD] Tombol BUILD KODE PAIRING ditekan di Web untuk +${target}!`);
+            await restartSocket(true, target);
+          }
         }
-      } catch {}
-      await restartSocket(true, "");
-      return;
-    }
-
-    const reqPair = Number(st.pairingRequestedAt || 0);
-    if (reqPair > lastHandledPairingReq) {
-      lastHandledPairingReq = reqPair;
-      const target = normalizePhone(st.phone || currentPhone || DEFAULT_ADMIN_PHONE);
-      console.log(`🔑 [WEB CMD] Tombol BUILD KODE PAIRING ditekan di Web untuk +${target}!`);
-      await restartSocket(true, target);
-    }
-  }, 3000);
+      }
+    } catch {}
+    const nextMs = isConnected ? 60_000 : 4_000;
+    setTimeout(tick, nextMs);
+  };
+  setTimeout(tick, isConnected ? 60_000 : 4_000);
 }
 
 startSocket().then(() => startControlPoller()).catch((err) => {

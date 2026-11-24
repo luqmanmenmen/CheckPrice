@@ -420,7 +420,7 @@ def load_bridge_state() -> Dict[str, Any]:
     now_ms = int(time.time() * 1000)
     hb = int(default_state.get("lastHeartbeatAt") or 0)
     code_at = int(default_state.get("pairingCodeAt") or 0)
-    default_state["bridgeOnline"] = (now_ms - hb) < 25_000
+    default_state["bridgeOnline"] = (now_ms - hb) < 135_000
     default_state["pairingCodeFresh"] = bool(default_state.get("pairingCode")) and ((now_ms - code_at) < 110_000)
     default_state["serverNowMs"] = now_ms
     return default_state
@@ -440,7 +440,7 @@ def save_bridge_state(state: Dict[str, Any]) -> Dict[str, Any]:
     payload = json.dumps(clean, ensure_ascii=False).encode("utf-8")
     storage_write_bytes(BRIDGE_STATE_PATH, payload, content_type="application/json", timeout=3.5)
     now_ms = int(time.time() * 1000)
-    clean["bridgeOnline"] = (now_ms - clean["lastHeartbeatAt"]) < 25_000
+    clean["bridgeOnline"] = (now_ms - clean["lastHeartbeatAt"]) < 135_000
     clean["pairingCodeFresh"] = bool(clean["pairingCode"]) and ((now_ms - clean["pairingCodeAt"]) < 110_000)
     clean["serverNowMs"] = now_ms
     return clean
