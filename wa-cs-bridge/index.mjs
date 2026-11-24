@@ -278,7 +278,7 @@ async function fetchImageBuffer(imageUrl, fallbackUrls = []) {
   return null;
 }
 
-async function callPythonWaCs(payload, timeoutMs = 22000) {
+async function callPythonWaCs(payload, timeoutMs = 30000) {
   const res = await fetch(API_URL, {
     method: "POST",
     headers: {
