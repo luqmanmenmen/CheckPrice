@@ -316,6 +316,8 @@ function formatDate(dateStr: string | null): string {
 export default function Home() {
   const [isScanning, setIsScanning] = useState(false);
   const [manualInput, setManualInput] = useState("");
+  const [hasInputText, setHasInputText] = useState(false);
+  const manualInputRef = useRef("");
   const [loading, setLoading] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [product, setProduct] = useState<ProductData | null>(null);
@@ -352,6 +354,17 @@ export default function Home() {
   } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const activeSearchAbortRef = useRef<AbortController | null>(null);
+
+  // Sinkronkan teks kotak pencarian secara langsung ke DOM native (uncontrolled input)
+  // agar Android Chrome / Gboard IME 100% bebas bentrok & 0 re-render 5.000 baris saat mengetik!
+  const setSearchInputValue = (val: string) => {
+    manualInputRef.current = val;
+    if (inputRef.current && inputRef.current.value !== val) {
+      inputRef.current.value = val;
+    }
+    setHasInputText(val.length > 0);
+    setManualInput(val);
+  };
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -1251,7 +1264,7 @@ export default function Home() {
       if (productRef.current || (productsListRef.current && productsListRef.current.length > 0)) {
         setProduct(null);
         setProductsList([]);
-        setManualInput("");
+        setSearchInputValue("");
         setError("");
         try { window.history.pushState({ portalRoot: true }, "", window.location.href); } catch (e) {}
         return;
@@ -1415,7 +1428,7 @@ export default function Home() {
 
   // Ganti varian warna/ukuran secara instan (0ms) dari memori tanpa reload layar
   const handleSelectVariant = (targetSku: string, scrollToPhoto: boolean = false) => {
-    setManualInput(targetSku);
+    setSearchInputValue(targetSku);
 
     // 1. Cek dari daftar siblings yang sedang aktif di memori
     const existing = siblings.find(s => s.sku === targetSku);
@@ -1440,7 +1453,7 @@ export default function Home() {
     const prev = preDetailSearchRef.current;
     preDetailSearchRef.current = null;
     if (prev) {
-      setManualInput(prev.query);
+      setSearchInputValue(prev.query);
       if (prev.query.trim() || selectedBrandGroup !== "ALL" || selectedCategory !== "ALL" || selectedSubBrand) {
         searchProduct(prev.query, prev.page, true);
         return;
@@ -1713,7 +1726,7 @@ export default function Home() {
       );
       if (existingSibling) {
         applySelectedProductFamily(existingSibling, siblings);
-        setManualInput(existingSibling.sku);
+        setSearchInputValue(existingSibling.sku);
         setProductsList([]);
         setLoading(false);
         if (isScanning) setIsScanning(false);
@@ -2354,7 +2367,7 @@ export default function Home() {
 
   const handleTextScanSuccess = (sku: string) => {
     if (sku) {
-      setManualInput(sku);
+      setSearchInputValue(sku);
       searchProduct(sku);
       setIsScanning(false);
     }
@@ -2516,7 +2529,7 @@ export default function Home() {
     }
 
     setProduct(null);
-    setManualInput("");
+    setSearchInputValue("");
     showToast(`Berhasil masuk keranjang (+${totalPcsAdded} pcs). Total keranjang: ${nextTotalPcs} pcs`, "success");
     if (continuousMode) {
       setIsScanning(true);
@@ -2557,7 +2570,12 @@ export default function Home() {
 
   const handleManualSearchSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    const rawQuery = (inputRef.current?.value ?? manualInput).trim();
+    const rawText = inputRef.current ? inputRef.current.value : manualInputRef.current;
+    const rawQuery = String(rawText || "").trim();
+    manualInputRef.current = rawText || "";
+    setManualInput(rawText || "");
+    setHasInputText(Boolean(rawText && rawText.length > 0));
+
     if (!rawQuery) {
       if (selectedBrandGroup === "ALL" && selectedCategory === "ALL" && !selectedSubBrand && selectedGender === "ALL") {
         setLoading(false);
@@ -2589,7 +2607,7 @@ export default function Home() {
     setLoading(false);
     setError("");
     setNotFoundCode("");
-    setManualInput("");
+    setSearchInputValue("");
     setResultFilter("ALL");
     setSelectedBrandGroup("ALL");
     setSelectedSubBrand("");
@@ -3056,32 +3074,28 @@ export default function Home() {
               </span>
             </div>
 
-            <form onSubmit={handleManualSearchSubmit} className="flex gap-2 items-center">
+            <form onSubmit={handleManualSearchSubmit} noValidate className="flex gap-2 items-center">
               <div className="relative flex-1 min-w-0">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
                 <input
                   ref={inputRef}
                   type="text"
+                  name="q"
                   enterKeyHint="search"
                   autoComplete="off"
-                  autoCorrect="off"
                   spellCheck={false}
+                  defaultValue={manualInput}
                   placeholder="Ketik Artikel, SKU, Barcode, atau Nama Produk..."
-                  className="w-full pl-9 pr-9 py-3 rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-400 transition-all text-sm font-medium shadow-xs placeholder:text-slate-400"
-                  value={manualInput}
-                  onChange={(e) => {
-                    setManualInput(e.target.value);
+                  className="w-full pl-9 pr-9 py-3 rounded-xl border border-slate-200 bg-white text-slate-900 caret-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-400 transition-all text-sm font-medium shadow-xs placeholder:text-slate-400"
+                  onInput={(e) => {
+                    const val = e.currentTarget.value;
+                    manualInputRef.current = val;
+                    const nonEmpty = val.length > 0;
+                    if (nonEmpty !== hasInputText) setHasInputText(nonEmpty);
                     if (loading) setLoading(false);
                   }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      handleManualSearchSubmit();
-                    }
-                  }}
-                  autoFocus
                 />
-                {manualInput && (
+                {hasInputText && (
                   <button
                     type="button"
                     onClick={handleClear}
@@ -3259,10 +3273,10 @@ export default function Home() {
                           type="button"
                           onClick={() => {
                             if (isTechActive) {
-                              setManualInput("");
+                              setSearchInputValue("");
                               searchProduct("", 1, false, "SUKO", selectedCategory, "", groupByCategory);
                             } else {
-                              setManualInput(tech.query);
+                              setSearchInputValue(tech.query);
                               searchProduct(tech.query, 1, false, "SUKO", "ALL", "", false);
                             }
                           }}
@@ -3355,7 +3369,7 @@ export default function Home() {
                         key={term}
                         type="button"
                         onClick={() => {
-                          setManualInput(term);
+                          setSearchInputValue(term);
                           searchProduct(term);
                         }}
                         className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-white hover:bg-blue-50 hover:text-blue-700 text-slate-600 border border-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-2xs"
@@ -3651,7 +3665,7 @@ export default function Home() {
                 setProduct(p);
                 setSiblings([p]);
                 setProductsList([]);
-                setManualInput(p.sku);
+                setSearchInputValue(p.sku);
                 scrollPageToTop();
                 searchProduct(p.sku, 1, false, "ALL", "ALL", "", undefined, undefined, "ALL");
               }}
