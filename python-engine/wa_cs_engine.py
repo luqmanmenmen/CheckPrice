@@ -279,7 +279,31 @@ STOPWORDS_ID = {
     "terbaru", "baru", "masuk", "koleksi", "lainnya", "lain", "best", "seller", "bestseller", "terlaris", "laku",
     "cewek", "wanita", "perempuan", "ladies", "women", "cowok", "pria", "laki", "men", "anak", "kids", "gitu",
     "nomor", "no", "nomer", "saya", "aku", "gue", "gw", "kalo", "kalau", "mana", "dong", "barang",
+    "produk", "item", "pakaian", "busana", "saja", "aja", "semua", "pilihan", "macam", "jenis",
+    "gimana", "bagaimana", "kira", "coba", "hanya", "cuma", "tau", "tahu", "pengen", "ingin", "official",
 }
+
+# Kata meta non-pakaian yang WAJIB dibersihkan dari SQL `LIKE '%...%'` (mencegah bug "produk baru apa saja" -> cari kata "PRODUK"/"SAJA" -> 0 hasil!)
+META_NON_GARMENT_WORDS = {
+    "produk", "produknya", "barang", "barangnya", "koleksi", "koleksinya", "item", "model", "modelnya",
+    "pakaian", "busana", "fashion", "outfit", "style", "baru", "barunya", "terbaru", "terbarunya", "new", "arrival", "arrivals",
+    "promo", "promonya", "diskon", "diskonnya", "sale", "murah", "spesial", "potongan",
+    "best", "seller", "bestseller", "terlaris", "laris", "favorit", "rekomendasi", "rekomen", "pilihan",
+    "suko", "matahari", "official", "store", "toko", "ptc", "surabaya",
+    "apa", "saja", "aja", "semua", "semuanya", "macam", "jenis", "daftar", "list", "info", "infonya",
+    "ada", "ready", "stok", "stock", "tersedia", "kalau", "kalo", "nya", "yang", "yg", "dong", "kak", "min", "engga", "gak", "tidak",
+}
+
+
+def _clean_garment_keywords(raw_kws: List[Any]) -> List[str]:
+    cleaned: List[str] = []
+    for k in raw_kws or []:
+        for tok in re.findall(r"[a-zA-Z0-9\+\-]+", str(k or "").lower()):
+            if len(tok) < 2 or tok.isdigit() or tok in STOPWORDS_ID or tok in META_NON_GARMENT_WORDS:
+                continue
+            if tok not in cleaned:
+                cleaned.append(tok)
+    return cleaned[:5]
 
 INQUIRY_TRIGGER_WORDS = {
     "harga", "brp", "berapa", "berapaan", "ready", "redi", "stok", "stock", "promo", "diskon", "sale",
@@ -792,31 +816,69 @@ def _invoke_smart_ai(
     tier: str = "LIGHT",
     cfg: Optional[Dict[str, Any]] = None,
     expect_json: bool = False,
-    timeout: float = 9.5,
+    timeout: float = 8.5,
     temperature: float = 0.3,
     max_tokens: int = 900,
 ) -> Tuple[Optional[str], str]:
     """
-    PARALLEL-RACE AI ROUTER (Anti-503 & Sub-2 Detik!):
-    Menembak 2 model terbaik secara PARALEL (`gemini-3-flash-preview` + `gemini-3.6-flash` MINIMAL)
-    dan mengambil pemenang HTTP 200 pertama! Jika keduanya kena 503 sesaat, otomatis lakukan 1 retry cepat
-    dengan API key cadangan (env fallback) agar tingkat keberhasilan AI mendekati 99%!
+    MULTI-MODEL + MULTI-KEY SMART AI ROUTER v6 (Sub-1 Detik & Anti-429!):
+    1. Mengutamakan `gemini-3.5-flash-lite(LOW)` (terbukti ~960ms & kuota harian besar) +
+       `gemini-3.6-flash(MINIMAL)` + `gemini-3-flash-preview(MINIMAL)`.
+    2. Smart 429 Cooldown: pasangan (key_prefix, model) yang kena HTTP 429 otomatis di-skip 15 menit (0ms!)
+       sehingga chat berikutnya tidak pernah buang waktu menembak model yang sedang habis kuota.
+    3. Mendukung Multi-Key (`customGeminiApiKey`, `backupGeminiApiKey`, & `GEMINI_API_KEY`) secara otomatis.
     """
-    custom_key = str((cfg or {}).get("customGeminiApiKey") or "").strip()
-    env_key = (os.environ.get("GEMINI_API_KEY") or "").strip()
-    primary_key = custom_key or env_key
-    backup_key = env_key if (custom_key and env_key and custom_key != env_key) else ""
-    if not primary_key:
+    raw_keys = [
+        str((cfg or {}).get("customGeminiApiKey") or "").strip(),
+        str((cfg or {}).get("backupGeminiApiKey") or "").strip(),
+        (os.environ.get("GEMINI_API_KEY") or "").strip(),
+    ]
+    api_keys: List[str] = []
+    for rk in raw_keys:
+        if rk and rk not in api_keys:
+            api_keys.append(rk)
+    if not api_keys:
         return None, "deterministic"
 
     _get_quota_status(cfg)
-    race_models = [
-        (os.environ.get("WA_CS_FLASH_MODEL") or "gemini-3-flash-preview", "MINIMAL"),
+    now_ts = time.time()
+
+    primary_candidates: List[Tuple[str, str]] = [
+        (os.environ.get("WA_CS_LITE_MODEL") or "gemini-3.5-flash-lite", "LOW"),
         (os.environ.get("WA_CS_ORCHESTRATOR_MODEL") or "gemini-3.6-flash", "MINIMAL"),
+        (os.environ.get("WA_CS_FLASH_MODEL") or "gemini-3-flash-preview", "MINIMAL"),
+    ]
+    fallback_candidates: List[Tuple[str, str]] = [
+        ("gemini-3.5-flash-lite", ""),
+        ("gemini-4-hydrogen", ""),
+        ("gemini-3.1-flash-lite-preview", "MINIMAL"),
     ]
 
-    def _race_once(api_key: str, per_call_timeout: float) -> Tuple[Optional[str], str]:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+    # Kumpulkan pasangan (api_key, model, thinking_level) yang TIDAK sedang cooldown 429
+    healthy_jobs: List[Tuple[str, str, str]] = []
+    for k in api_keys:
+        k_tag = k[-6:]
+        for m_name, t_lvl in primary_candidates:
+            cd_key = f"{k_tag}:{m_name}"
+            if _MODEL_COOLDOWN_UNTIL.get(cd_key, 0.0) <= now_ts:
+                healthy_jobs.append((k, m_name, t_lvl))
+
+    if not healthy_jobs:
+        for k in api_keys:
+            k_tag = k[-6:]
+            for m_name, t_lvl in fallback_candidates:
+                cd_key = f"{k_tag}:{m_name}"
+                if _MODEL_COOLDOWN_UNTIL.get(cd_key, 0.0) <= now_ts:
+                    healthy_jobs.append((k, m_name, t_lvl))
+
+    if not healthy_jobs:
+        healthy_jobs = [(api_keys[0], "gemini-3.5-flash-lite", "LOW")]
+
+    # Ronde 1: Parallel Race hingga 3 kombinasi sehat teratas sekaligus -> ambil pemenang HTTP 200 tercepat!
+    race_slice = healthy_jobs[:3]
+    per_timeout = min(6.5, float(timeout))
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(race_slice)) as pool:
             futs = {
                 pool.submit(
                     _call_gemini_model,
@@ -824,53 +886,54 @@ def _invoke_smart_ai(
                     prompt,
                     t_lvl,
                     expect_json,
-                    per_call_timeout,
+                    per_timeout,
                     temperature,
                     max_tokens,
-                    api_key,
-                ): f"{m_name}({t_lvl})"
-                for m_name, t_lvl in race_models
+                    k_val,
+                ): (k_val, m_name, t_lvl)
+                for (k_val, m_name, t_lvl) in race_slice
             }
-            for fut in concurrent.futures.as_completed(futs, timeout=per_call_timeout + 0.5):
-                label = futs[fut]
+            for fut in concurrent.futures.as_completed(futs, timeout=per_timeout + 0.5):
+                k_val, m_name, t_lvl = futs[fut]
+                cd_key = f"{k_val[-6:]}:{m_name}"
                 try:
                     txt, status = fut.result()
+                    if status == 429 or status == 404:
+                        _MODEL_COOLDOWN_UNTIL[cd_key] = time.time() + (900.0 if status == 429 else 3600.0)
+                        continue
                     if txt and status == 200:
                         if tier == "HEAVY":
                             _DAILY_USAGE_MEM["heavyCalls"] += 1
                         else:
                             _DAILY_USAGE_MEM["flashCalls"] += 1
-                        return txt, label
+                        return txt, f"{m_name}({t_lvl or 'STD'})"
                 except Exception:
                     continue
-        return None, ""
-
-    # Ronde 1: Parallel Race 2 model terbaik (timeout 7.5 detik)
-    try:
-        txt, label = _race_once(primary_key, min(7.5, float(timeout)))
-        if txt:
-            return txt, label
     except Exception:
         pass
 
-    # Ronde 2 (Auto-Retry saat 503 spike): coba cepat 1x lagi dengan key cadangan / primary
-    retry_key = backup_key or primary_key
-    try:
+    # Ronde 2 (Auto-Fallback saat 503 sesaat): coba kombinasi berikutnya atau fallback model
+    remaining = healthy_jobs[3:5] + [(api_keys[-1], m, t) for (m, t) in fallback_candidates[:2]]
+    for k_val, m_name, t_lvl in remaining[:2]:
+        cd_key = f"{k_val[-6:]}:{m_name}"
+        if _MODEL_COOLDOWN_UNTIL.get(cd_key, 0.0) > time.time():
+            continue
         txt2, status2 = _call_gemini_model(
-            model=race_models[0][0],
+            model=m_name,
             prompt=prompt,
-            thinking_level="MINIMAL",
+            thinking_level=t_lvl,
             expect_json=expect_json,
             timeout=5.5,
             temperature=temperature,
             max_tokens=max_tokens,
-            custom_api_key=retry_key,
+            custom_api_key=k_val,
         )
+        if status2 == 429 or status2 == 404:
+            _MODEL_COOLDOWN_UNTIL[cd_key] = time.time() + 900.0
+            continue
         if txt2 and status2 == 200:
             _DAILY_USAGE_MEM["flashCalls"] += 1
-            return txt2, f"{race_models[0][0]}(MINIMAL-retry)"
-    except Exception:
-        pass
+            return txt2, f"{m_name}({t_lvl or 'STD'}-fb)"
 
     return None, "deterministic"
 
@@ -1486,7 +1549,7 @@ def _extract_deterministic_plan(
         else:
             if tok not in other_kws:
                 other_kws.append(tok)
-    keywords = (priority_product_kws + other_kws)[:6]
+    keywords = _clean_garment_keywords(priority_product_kws + other_kws)
 
     # Deteksi Multi-Turn Price Refinement ("kemahalan semua, ada yang di bawah 200rb?") -> warisi lastQuery!
     is_price_refine = bool(
@@ -1625,8 +1688,9 @@ def _extract_deterministic_plan(
         or quoted_clean or max_price or wants_color_photos or wants_next_page or (session and len(session.get("history") or []) > 0)
     )
 
-    # Deteksi pertanyaan TERLALU UMUM / LEBAR -> Konsep Komunikasi Interpersonal Eksklusif (CONSULT_FIRST!)
-    # Jangan asal bombardir foto saat customer baru bilang "Promo", "Produk baru ada apa aja", "Baju formal ada?" tanpa gender/spesifikasi!
+    # Deteksi pertanyaan TERLALU UMUM / LEBAR ->
+    # PENTING: Jika customer tanya "produk baru", "promo apa saja", atau "best seller", JANGAN diblokir tanpa contoh!
+    # Langsung tampilkan kurasi beragam lintas kategori + penjelasan cerdas + tawaran filter Pria/Wanita/Anak di penutup!
     has_prior_gender = bool(str((session or {}).get("preferredGender") or "").strip())
     is_broad_unscoped = bool(
         not quoted_clean
@@ -1639,13 +1703,11 @@ def _extract_deterministic_plan(
         and not wants_next_page
         and not wants_more_like_ref
         and not wants_color_photos
-        and occasion_profile.get("id") not in ("SLEEPWEAR_HOME", "INNER_ESSENTIAL", "SPORT_ACTIVE", "COLD_AC_WIND", "HOT_WEATHER_TRAVEL", "GIFT_HOME_LIVING")
-        and (
-            (wants_promo and not keywords and not matched_cats)
-            or (wants_new and not keywords and not matched_cats)
-            or (wants_best and not keywords and not matched_cats)
-            or (len(keywords) <= 1 and (not matched_cats or matched_cats[0][0] == "ATASAN") and not has_occasion and any(w in low for w in ("baju", "koleksi", "produk", "barang")))
-        )
+        and not wants_new
+        and not wants_promo
+        and not wants_best
+        and not has_occasion
+        and (len(keywords) == 0 and not matched_cats and any(w in low for w in ("baju", "koleksi", "produk", "barang", "jual apa")))
     )
 
     if is_post_list_compare:
@@ -1800,11 +1862,13 @@ def run_ai_agent_planner(
     if isinstance(mq_raw, list):
         for item in mq_raw[:3]:
             if isinstance(item, dict):
-                kws = [str(k).strip().lower() for k in (item.get("keywords") or []) if str(k or "").strip()][:5]
+                kws = _clean_garment_keywords(item.get("keywords") or [])
                 cat = str(item.get("categoryHint") or "").strip().upper()
-                if kws or cat:
+                if cat not in CATEGORY_SYNONYMS:
+                    cat = ""
+                if kws or cat or det.get("wantsPromo") or det.get("wantsNewArrival") or det.get("wantsBestSeller"):
                     multi_queries.append({
-                        "label": str(item.get("label") or " ".join(kws) or cat).strip(),
+                        "label": str(item.get("label") or " ".join(kws) or cat or "koleksi SUKO").strip(),
                         "keywords": kws,
                         "categoryHint": cat,
                         "colorHint": str(item.get("colorHint") or "").strip().upper(),
@@ -2022,6 +2086,27 @@ def _fetch_best_seller_articles(store_scope: str) -> Dict[str, int]:
     return out
 
 
+def _fetch_true_new_arrival_articles(store_scope: str) -> Dict[str, int]:
+    """
+    Ambil urutan BARANG BARU SEJATI berdasarkan `MAX(id) DESC` di tabel `Product`
+    (100% sinkron dengan halaman `/barang-baru` toko, tidak ketimpa sync stok harian!).
+    """
+    scope_sql = 'AND UPPER(COALESCE(brand, \'\')) LIKE \'%SUKO%\'' if store_scope == "SUKO" else ""
+    rows = turso_query(
+        f'SELECT article, MAX(id) AS max_id '
+        f'FROM "Product" WHERE article IS NOT NULL AND article != \'\' AND stok > 0 {scope_sql} '
+        f'GROUP BY article ORDER BY max_id DESC LIMIT 55',
+        (),
+        timeout=3.5,
+    )
+    out: Dict[str, int] = {}
+    for rank_idx, r in enumerate(rows):
+        ak = str(r.get("article") or "").strip().upper()
+        if ak:
+            out[ak] = max(20, 500 - rank_idx * 8)
+    return out
+
+
 def _query_single_subsearch(
     subq: Dict[str, Any],
     store_scope: str,
@@ -2038,6 +2123,7 @@ def _query_single_subsearch(
     exclude_colors: Optional[List[str]] = None,
     color_hints: Optional[List[str]] = None,
     occasion_profile: Optional[Dict[str, Any]] = None,
+    new_arrival_ranks: Optional[Dict[str, int]] = None,
 ) -> Tuple[List[Dict[str, Any]], bool]:
     """
     Kembalikan (list kandidat artikel CatalogArticle, exact_matched_flag).
@@ -2130,7 +2216,22 @@ def _query_single_subsearch(
         params.extend(or_params)
 
     rows: List[Dict[str, Any]] = []
-    if wants_best and best_seller_ranks and not or_parts:
+    if wants_new and new_arrival_ranks and not or_parts:
+        top_new_arts = [a for a in new_arrival_ranks.keys() if a not in exclude_articles][:36]
+        if top_new_arts:
+            ph = ",".join("?" for _ in top_new_arts)
+            scope_n = ' AND "brandGroup" = ?' if store_scope in ("SUKO", "MUKU", "ZES") else ""
+            p_n = top_new_arts + ([store_scope] if store_scope in ("SUKO", "MUKU", "ZES") else [])
+            rows = turso_query(
+                'SELECT key, sku, barcode, article, description, brand, dept, "brandGroup", "subBrand", '
+                '"categoryKey", color, size, "hargaNormal", "hargaPromo", diskon, "discountType", "toDate", '
+                '"imageUrl", "articleTotalStok", "articleColors", "articleSizes", "articleHasPromo", "articlePromoLabel", "updatedAt" '
+                f'FROM "CatalogArticle" WHERE "articleTotalStok" > 0 AND "imageUrl" IS NOT NULL AND "imageUrl" != \'\' '
+                f'AND UPPER(COALESCE(article, \'\')) IN ({ph}){scope_n} LIMIT 36',
+                tuple(p_n),
+                timeout=3.8,
+            )
+    elif wants_best and best_seller_ranks and not or_parts:
         top_arts = list(best_seller_ranks.keys())[:24]
         ph = ",".join("?" for _ in top_arts)
         scope_b = ' AND "brandGroup" = ?' if store_scope in ("SUKO", "MUKU", "ZES") else ""
@@ -2278,6 +2379,8 @@ def _query_single_subsearch(
             score += 95
         if wants_best and art_key in best_seller_ranks:
             score += best_seller_ranks[art_key]
+        if wants_new and new_arrival_ranks and art_key in new_arrival_ranks:
+            score += new_arrival_ranks[art_key]
 
         # Occasion Smart Router Scoring: angkat departemen & fabric DNA yang sesuai momen, tekan yang salah kamar!
         if occ_depts and row_dept in occ_depts:
@@ -2320,7 +2423,32 @@ def _query_single_subsearch(
             scored.append((score, c))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    picked = [row for _, row in scored[:max_candidates]]
+    # Smart Category Diversity: jika pencarian umum ("produk baru", "promo apa saja", "best seller") tanpa kata kunci spesifik,
+    # kurasikan lintas kategori/jenis pakaian agar customer tidak dikirimi 5 kaos yang mirip terus!
+    if not keywords and not category_hint and (wants_new or wants_promo or wants_best) and len(scored) > max_candidates:
+        diverse_rows: List[Dict[str, Any]] = []
+        used_buckets = set()
+        leftover_rows: List[Dict[str, Any]] = []
+        for _, row in scored:
+            d_up = str(row.get("description") or "").upper()
+            cat_b = str(row.get("categoryKey") or "OTHER").upper()
+            sub_b = (
+                "OUTER" if any(x in d_up for x in ("SWEATSHIRT", "JAKET", "CARDIGAN", "HOODIE", "PARKA"))
+                else "POLO_SHIRT" if any(x in d_up for x in ("POLO", "KEMEJA", "BLOUSE"))
+                else "DRESS_ROK" if any(x in d_up for x in ("GAUN", "DRESS", "ROK", "SKIRT"))
+                else "BOTTOM" if any(x in d_up for x in ("CELANA", "JEANS", "CHINO", "JOGGER", "LEGGING"))
+                else f"{cat_b}_{str(row.get('dept') or '')}"
+            )
+            if sub_b not in used_buckets:
+                used_buckets.add(sub_b)
+                diverse_rows.append(row)
+            else:
+                leftover_rows.append(row)
+            if len(diverse_rows) >= max_candidates:
+                break
+        picked = (diverse_rows + leftover_rows)[:max_candidates]
+    else:
+        picked = [row for _, row in scored[:max_candidates]]
     return picked, (exact_term_found and bool(picked))
 
 
@@ -2352,9 +2480,15 @@ def execute_python_catalog_search(
         multi_queries = [{"label": "produk SUKO", "keywords": [], "categoryHint": "", "colorHint": "", "sizeHint": ""}]
 
     best_ranks = _fetch_best_seller_articles(store_scope) if wants_best else {}
+    new_ranks = _fetch_true_new_arrival_articles(store_scope) if wants_new else {}
     pool_rows: List[Dict[str, Any]] = []
     unavailable_labels: List[str] = []
     used_articles = set(exclude_set)
+
+    # Sanitasi ulang semua keyword di multi_queries agar 0% kata meta ("produk", "baru", "saja", "promo") bocor ke SQL!
+    for mq in multi_queries:
+        if isinstance(mq, dict) and "keywords" in mq:
+            mq["keywords"] = _clean_garment_keywords(mq.get("keywords") or [])
 
     if len(multi_queries) >= 2 and not sku_or_art:
         # Multi-Kategori: ambil maks 1-2 kandidat terbaik per kategori (total 3 produk seimbang!)
@@ -2363,6 +2497,7 @@ def execute_python_catalog_search(
                 mq, store_scope, gender_hint, wants_promo, wants_new, wants_best, used_articles, best_ranks,
                 max_candidates=2, max_price=max_price, exclude_keywords=exclude_kws,
                 exclude_colors=exclude_colors, color_hints=color_hints, occasion_profile=occasion_profile,
+                new_arrival_ranks=new_ranks,
             )
             if not exact_ok and mq.get("label"):
                 unavailable_labels.append(str(mq["label"]))
@@ -2382,7 +2517,7 @@ def execute_python_catalog_search(
             mq0, store_scope, gender_hint, wants_promo, wants_new, wants_best, used_articles, best_ranks,
             sku_or_art=sku_or_art, max_candidates=max(limit + 3, 6), max_price=max_price,
             exclude_keywords=exclude_kws, exclude_colors=exclude_colors, color_hints=color_hints,
-            occasion_profile=occasion_profile,
+            occasion_profile=occasion_profile, new_arrival_ranks=new_ranks,
         )
         if not exact_ok and mq0.get("label") and not sku_or_art:
             unavailable_labels.append(str(mq0["label"]))
@@ -2670,6 +2805,20 @@ def _generate_ai_framing(
         fb_open = f"Halo {sapaan}, melanjutkan pertanyaan Kakak di grup *{from_group_name}* ya 😊 Dengan senang hati saya bantu cekkan pilihan *SUKO* yang *ready*:"
     elif occ_open_tpl:
         fb_open = occ_open_tpl.format(sapaan=sapaan)
+    elif plan.get("wantsNewArrival"):
+        fb_open = (
+            f"Ini dia {sapaan}, kurasi *Koleksi Terbaru (New Arrival) SUKO* yang baru mendarat dan sedang *ready* di Store SUKO PTC Surabaya! 🆕✨ "
+            f"Pilihannya saya rangkumkan lintas kategori biar Kakak bisa lihat variasinya langsung:"
+        )
+    elif plan.get("wantsPromo") and not (plan.get("multiQueries") or [{}])[0].get("keywords"):
+        fb_open = (
+            f"Siap {sapaan}! Minggu ini banyak banget *Harga Spesial & Promo SUKO* yang super hemat di Store SUKO PTC 🔥 "
+            f"Berikut saya kurasikan beberapa promo terbaik dari berbagai kategori yang sedang *ready*:"
+        )
+    elif plan.get("wantsBestSeller"):
+        fb_open = (
+            f"Ini dia {sapaan}, jajaran produk *Best Seller SUKO* yang paling digemari pelanggan kami dan sedang *ready* di Store SUKO PTC 🔥✨:"
+        )
     elif is_followup:
         fb_open = f"Ada dong {sapaan}! Ini pilihan koleksi *SUKO* yang sedang *ready* saat ini ✨"
     else:
@@ -2680,33 +2829,38 @@ def _generate_ai_framing(
             f"Mohon maaf {sapaan}, untuk *{', '.join(unavailable_labels)}* saat ini sedang *sold out / belum tersedia* 🙏\n"
             f"Namun kami punya alternatif pilihan *SUKO* lain yang sedang *ready* saat ini:"
         )
+    is_broad_showcase = bool((plan.get("wantsNewArrival") or plan.get("wantsPromo") or plan.get("wantsBestSeller")) and not plan.get("genderHint"))
     fb_close = (
-        "Dari pilihan di atas, ada model atau warna yang Kakak taksir? "
-        "Boleh info *nomor, warna & sizenya* biar bisa langsung saya bantu cekkan atau *keep* ya Kak 🙏"
+        f"Kalau {sapaan} ingin saya saringkan khusus untuk *Pria, Wanita, atau Anak-anak* (atau incar kategori tertentu seperti *kemeja, celana, jaket, atau SUKO Sports*), tinggal sebut aja ya Kak biar saya pilihkan yang paling pas! 😊🙏"
+        if is_broad_showcase
+        else "Dari pilihan di atas, ada model atau warna yang Kakak taksir? Boleh info *nomor, warna & sizenya* biar bisa langsung saya bantu cekkan atau *keep* ya Kak 🙏"
     )
 
     prod_brief = [
         {
             "no": idx + 1,
             "name": p["name"],
+            "category": p.get("category") or "",
+            "fitting": p.get("fitting") or "",
+            "fabricTech": p.get("fabricTech") or "",
             "badge": p.get("badge") or "",
-            "availability": p["availability"],
+            "promoPrice": p.get("hargaPromoText") or p.get("hargaNormalText") or "",
             "hasPromo": bool(p.get("hargaPromoText")),
         }
-        for idx, p in enumerate(products[:3])
+        for idx, p in enumerate(products[:5])
     ]
     tier = "HEAVY" if (unavailable_labels or plan.get("complexity") == "HEAVY") else "LIGHT"
     prompt = (
-        f"Kamu adalah *{cfg.get('csName', 'Luqman')}*, Customer Service profesional hangat ala *Halo BCA* untuk *{store_name}* (khusus produk SUKO).\n"
+        f"Kamu adalah *{cfg.get('csName', 'Luqman')}*, Senior Personal Shopper & Product Specialist 20 tahun di *{store_name}* (Store SUKO PTC Surabaya, gaya hangat interpersonal ala *Halo BCA*).\n"
+        f"{get_compact_pk_prompt_block()}\n\n"
         f"Sapaan customer: {sapaan}\n"
-        f"Status percakapan: {'Lanjutan obrolan di Private Chat (JANGAN ulangi salam formal Halo terima kasih sudah menghubungi lagi!)' if is_followup else ('Hand-off dari grup ' + from_group_name if from_group_name else 'Awal percakapan')}\n"
+        f"Status percakapan: {'Lanjutan obrolan di Private Chat (JANGAN ulangi salam formal Halo terima kasih sudah menghubungi lagi! Langsung jawab nyambung & cerdas!)' if is_followup else ('Hand-off dari grup ' + from_group_name if from_group_name else 'Awal percakapan')}\n"
         f"Pesan customer: {json.dumps(message, ensure_ascii=False)}\n"
-        f"Intent: {plan.get('intent')} | Gender: {plan.get('genderHint')} | Produk ditemukan: {json.dumps(prod_brief, ensure_ascii=False)}\n"
-        f"Item yg diminta tapi kosong/diganti alternatif: {json.dumps(unavailable_labels, ensure_ascii=False)}\n"
-        f"Brand luar SUKO yg ditanya: {json.dumps(plan.get('askedOtherBrand') or '', ensure_ascii=False)}\n\n"
+        f"Intent: {plan.get('intent')} | Gender: {plan.get('genderHint') or 'Semua/Belum disebut'} | Produk nyata yang akan ditampilkan di bawah: {json.dumps(prod_brief, ensure_ascii=False)}\n"
+        f"Item yg diminta tapi kosong/diganti alternatif: {json.dumps(unavailable_labels, ensure_ascii=False)}\n\n"
         "Balas HANYA JSON murni:\n"
-        '{"opening": "1-2 kalimat pembuka hangat natural ala Senior Product Specialist SUKO (jelaskan singkat keunggulan bahan/lini seperti SUKO Sports 4-Way Stretch / Quick Dry / Supima / Oxford jika relevan!)", "closing": "1-2 kalimat penutup ramah yang mengarahkan ke pilihan/keep tanpa memaksa"}\n'
-        "ATURAN KERAS: Dilarang menyebut angka qty stok atau angka penjualan! Dilarang menyebut nama merek selain SUKO sebagai jualan kita!"
+        '{"opening": "2-3 kalimat pembuka yang SANGAT CERDAS, NYAMBUNG langsung menjawab maksud pertanyaan customer, dan merangkum daya tarik/teknologi bahan dari produk nyata yang ditemukan di atas (misal sebutkan variasi produk baru/promo/bahan seperti Quick Dry, 4-Way Stretch, Oxford, The Simpsons, dll secara alami)", "closing": "1-2 kalimat penutup hangat personal (jika gender belum disebut pada pertanyaan produk baru/promo umum, tawarkan juga filter Pria/Wanita/Anak atau kategori spesifik; jika sudah spesifik, tawarkan cek warna/size atau keep QRIS)"}\n'
+        "ATURAN KERAS: Dilarang menyebut angka qty stok atau angka penjualan! Dilarang mengarang produk di luar daftar di atas!"
     )
 
     raw_txt, used_model = _invoke_smart_ai(
@@ -2714,9 +2868,9 @@ def _generate_ai_framing(
         tier=tier,
         cfg=cfg,
         expect_json=True,
-        timeout=4.5,
-        temperature=0.45,
-        max_tokens=280,
+        timeout=5.5,
+        temperature=0.4,
+        max_tokens=360,
     )
     parsed = _parse_json_loose(raw_txt)
     if parsed and parsed.get("opening") and parsed.get("closing"):
@@ -3220,11 +3374,15 @@ def build_final_cards_and_text(
                 f"Berikut pilihan celana *SUKO* yang adem & sedang *ready*:"
             )
 
-    if pre_handle and len(pre_handle) >= 25:
+    needs_special_pre_consult = bool(
+        plan.get("isCompetitorConsult")
+        or re.search(r"\b(bb\s*\d{2,3}|tinggi\s*\d{3}|ld\s*(?:nya)?\s*(?:min\s*)?\d{2,3})\b", str(message or "").lower())
+    )
+    if needs_special_pre_consult and pre_handle and len(pre_handle) >= 25:
         opening = pre_handle
         closing = (
-            "Kalau Kakak mau saya cekkan detail warna atau size M yang paling cocok (untuk pria atau wanita), "
-            "boleh info aja ya Kak — dengan senang hati saya bantu! 😊"
+            "Dari pilihan di bawah, kalau ada model atau warna yang Kakak taksir boleh info *nomor, warna & sizenya* "
+            "biar langsung saya bantu cekkan atau *keep* ya Kak 😊🙏"
         )
         copy_model = plan.get("engine") or "gemini-parallel"
     else:
