@@ -61,6 +61,7 @@ CONFIG_STORAGE_PATH = "config/wa-cs-config.json"
 LOGS_STORAGE_PATH = "logs/wa-cs-logs.json"
 BRIDGE_STATE_PATH = "config/wa-cs-bridge-state.json"
 SESSIONS_STORAGE_PATH = "config/wa-cs-sessions.json"
+AUTH_BACKUP_STORAGE_PATH = "secrets/wa-bridge-auth.json"
 MAX_LOGS = 40
 MAX_DETECTED_GROUPS = 30
 
@@ -3977,6 +3978,31 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
     if action == "clear-logs":
         clear_logs()
         return {"success": True, "logs": []}
+
+    if action == "bridge-auth-get":
+        try:
+            raw_auth = storage_read_text(AUTH_BACKUP_STORAGE_PATH, timeout=4.0)
+            if raw_auth:
+                parsed_auth = json.loads(raw_auth)
+                if isinstance(parsed_auth, dict) and parsed_auth.get("creds"):
+                    return {"success": True, "creds": parsed_auth.get("creds"), "updatedAt": parsed_auth.get("updatedAt")}
+        except Exception:
+            pass
+        return {"success": True, "creds": None}
+
+    if action == "bridge-auth-save":
+        try:
+            if payload.get("clear"):
+                storage_write_bytes(AUTH_BACKUP_STORAGE_PATH, b"{}", content_type="application/json", timeout=4.0)
+                return {"success": True, "cleared": True}
+            creds_str = str(payload.get("creds") or "").strip()
+            if not creds_str or len(creds_str) > 250_000:
+                return {"success": False, "error": "Invalid creds payload"}
+            blob = json.dumps({"creds": creds_str, "updatedAt": utc_iso_now()}, ensure_ascii=False).encode("utf-8")
+            storage_write_bytes(AUTH_BACKUP_STORAGE_PATH, blob, content_type="application/json", timeout=4.5)
+            return {"success": True, "saved": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     if action == "simulate":
         return _process_incoming_or_simulate(payload, is_simulation=True)

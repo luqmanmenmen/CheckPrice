@@ -407,6 +407,7 @@ async function restartSocket(cleanAuth = false, requestPairingForPhone = "") {
     isConnected = false;
     if (cleanAuth) {
       clearAuthDir();
+      await clearCloudAuthBackup();
     }
     pendingWebPairingPhone = requestPairingForPhone;
     await sleep(600);
@@ -416,7 +417,65 @@ async function restartSocket(cleanAuth = false, requestPairingForPhone = "") {
   startSocket();
 }
 
+let lastCloudCredsSnapshot = "";
+let cloudAuthBackupTimer = null;
+let skipNextCloudRestore = false;
+
+async function restoreAuthFromCloudIfMissing() {
+  if (skipNextCloudRestore) {
+    skipNextCloudRestore = false;
+    return false;
+  }
+  const credsPath = path.join(AUTH_DIR, "creds.json");
+  if (fs.existsSync(credsPath)) return false;
+  try {
+    const res = await callPythonWaCs({ action: "bridge-auth-get" }, 10000);
+    if (res?.success && typeof res.creds === "string" && res.creds.trim().startsWith("{")) {
+      fs.mkdirSync(AUTH_DIR, { recursive: true });
+      fs.writeFileSync(credsPath, res.creds, "utf-8");
+      lastCloudCredsSnapshot = res.creds;
+      console.log("☁️ [CLOUD AUTH] Sesi WhatsApp berhasil dipulihkan otomatis dari Turso Cloud!");
+      return true;
+    }
+  } catch (err) {
+    console.log("⚠️ [CLOUD AUTH] Gagal pull sesi dari cloud:", err?.message || err);
+  }
+  return false;
+}
+
+function scheduleAuthCloudBackup(immediate = false) {
+  const run = async () => {
+    cloudAuthBackupTimer = null;
+    try {
+      const credsPath = path.join(AUTH_DIR, "creds.json");
+      if (!fs.existsSync(credsPath)) return;
+      const raw = fs.readFileSync(credsPath, "utf-8");
+      if (!raw || raw === lastCloudCredsSnapshot || !raw.includes('"registered":true')) return;
+      const res = await callPythonWaCs({ action: "bridge-auth-save", creds: raw }, 10000);
+      if (res?.success) {
+        lastCloudCredsSnapshot = raw;
+        console.log("☁️ [CLOUD AUTH] Backup creds.json tersimpan aman ke Turso Cloud.");
+      }
+    } catch {}
+  };
+  if (cloudAuthBackupTimer) clearTimeout(cloudAuthBackupTimer);
+  if (immediate) {
+    run();
+  } else {
+    cloudAuthBackupTimer = setTimeout(run, 20000);
+  }
+}
+
+async function clearCloudAuthBackup() {
+  lastCloudCredsSnapshot = "";
+  skipNextCloudRestore = true;
+  try {
+    await callPythonWaCs({ action: "bridge-auth-save", clear: true }, 8000);
+  } catch {}
+}
+
 async function startSocket() {
+  await restoreAuthFromCloudIfMissing();
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
 
@@ -468,7 +527,10 @@ async function startSocket() {
     }, 2800);
   }
 
-  sock.ev.on("creds.update", saveCreds);
+  sock.ev.on("creds.update", async () => {
+    await saveCreds();
+    scheduleAuthCloudBackup(false);
+  });
 
   sock.ev.on("connection.update", async (update) => {
     if (currentSock !== sock) return;
@@ -496,6 +558,7 @@ async function startSocket() {
         clearPairingCode: true,
         statusMessage: `WhatsApp +${mePhone} aktif tersambung!`,
       });
+      scheduleAuthCloudBackup(true);
     }
 
     if (connection === "close") {
@@ -517,6 +580,7 @@ async function startSocket() {
       });
       if (isLoggedOut) {
         clearAuthDir();
+        await clearCloudAuthBackup();
       }
       setTimeout(() => {
         if (currentSock === sock) startSocket();
@@ -781,7 +845,6 @@ if (HEALTH_PORT > 0) {
       ok: true,
       service: "suko-wa-cs-bridge",
       connected: isConnected,
-      phone: currentPhone || null,
       uptimeSec: Math.floor(Date.now() / 1000) - startUnixSec,
     });
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });

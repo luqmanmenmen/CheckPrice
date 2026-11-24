@@ -8,13 +8,13 @@ RUN npm ci --omit=dev
 
 COPY index.mjs ./
 
-# Persistent volume path for WhatsApp Baileys session (creds.json)
+# Hugging Face Spaces default port is 7860 & runs as non-root UID 1000
 ENV NODE_ENV=production
-ENV PORT=8080
+ENV PORT=7860
 ENV WA_AUTH_DIR=/data/auth_info
 
-RUN mkdir -p /data/auth_info
+RUN mkdir -p /data/auth_info && chmod -R 777 /data /app
 
-EXPOSE 8080
+EXPOSE 7860
 
 CMD ["node", "index.mjs"]
