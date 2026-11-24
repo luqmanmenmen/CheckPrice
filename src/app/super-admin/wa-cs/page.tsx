@@ -77,6 +77,7 @@ type WaCsConfig = {
   storeName: string;
   storeSop?: string;
   heavyDailyBudget?: number;
+  maxProductsPerReply?: number;
   humanTakeoverMinutes: number;
   replyWithImage: boolean;
   allowedGroups: AllowedGroup[];
@@ -370,6 +371,7 @@ export default function WaCsSuperAdminPage() {
           storeName: config.storeName,
           storeSop: config.storeSop || "",
           heavyDailyBudget: config.heavyDailyBudget ?? 60,
+          maxProductsPerReply: config.maxProductsPerReply ?? 5,
           humanTakeoverMinutes: config.humanTakeoverMinutes,
           replyWithImage: config.replyWithImage,
           allowedGroups: config.allowedGroups,
@@ -1235,6 +1237,21 @@ export default function WaCsSuperAdminPage() {
                 <option value="MUKU">Khusus Mu+Ku (Multibrand)</option>
                 <option value="ZES">Khusus ZES</option>
               </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">Jumlah Produk per Balasan</label>
+              <select
+                value={config.maxProductsPerReply ?? 5}
+                onChange={(e) => setConfig({ ...config, maxProductsPerReply: Number(e.target.value) })}
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 bg-white text-base font-bold text-slate-900"
+              >
+                <option value={3}>3 Produk + Ketik &ldquo;lainnya&rdquo;</option>
+                <option value={5}>5 Produk + Ketik &ldquo;lainnya&rdquo; (Rekomendasi)</option>
+                <option value={6}>6 Produk + Ketik &ldquo;lainnya&rdquo;</option>
+                <option value={8}>8 Produk (Maksimal Anti-Spam WA)</option>
+              </select>
+              <p className="text-[11px] text-slate-400 mt-1">Customer tinggal ketik &ldquo;lainnya&rdquo; untuk batch berikutnya</p>
             </div>
 
             <div>
