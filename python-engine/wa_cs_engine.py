@@ -934,22 +934,33 @@ def _extract_deterministic_plan(
             "engine": "deterministic",
         }
 
-    # Deteksi niat Order / Keep / Bayar / QRIS / GoSend / Reply promo "Mau navy S kak"
-    is_direct_buy_quote = bool(
-        quoted_clean and re.search(r"\b(mau|ambil|keep|pesan|order|fix|beli)\b", low)
+    # Deteksi niat Order / Keep / Bayar / QRIS / GoSend
+    # PENTING: jika customer masih bilang "lihat / foto / ada / bisa / ?" -> BUKAN closing, masih tanya/minta foto!
+    is_asking_or_viewing = bool(
+        re.search(r"\b(lihat|liat|foto|fotoin|gambar|contoh|cek|ada|ready|bisa|warna\s+lain)\b", low)
+        or "?" in low
     )
-    if is_direct_buy_quote or re.search(
-        r"\b(mau\s+keep|fix\s+(?:beli|order|ambil|keep)|jadi\s+beli|mau\s+transfer|kirim\s+rekening|"
-        r"gimana\s+cara\s+bayar|mau\s+order|qris|tak\s+tf|tak\s+gosend|pesan\s+(?:no|nomor|yang)|ambil\s+store)\b",
-        low,
-    ):
+    is_direct_buy_quote = bool(
+        quoted_clean
+        and not is_asking_or_viewing
+        and re.search(r"\b(mau|ambil|keep|pesan|order|fix|beli)\b", low)
+    )
+    is_explicit_checkout = bool(
+        re.search(
+            r"\b(mau\s+keep|fix\s+(?:beli|order|ambil|keep)|jadi\s+beli|mau\s+transfer|mau\s+bayar|"
+            r"kirim\s+rekening|gimana\s+cara\s+bayar|mau\s+order|qris|tak\s+tf|tak\s+gosend|ambil\s+store)\b",
+            low,
+        )
+    )
+    if is_direct_buy_quote or is_explicit_checkout:
         ref_m = re.search(r"\b(?:no|nomor|nomer)\s*\.?\s*([123])\b", low)
+        q_ref_m = re.search(r"(?:^|\n|\*)\s*([123])\.\s+[A-Z0-9]", quoted_clean)
         return {
             "intent": "ORDER_INTENT",
             "shouldReply": True,
             "complexity": "HEAVY",
             "genderHint": str((session or {}).get("preferredGender") or ""),
-            "referencedNumber": int(ref_m.group(1)) if ref_m else 0,
+            "referencedNumber": int(ref_m.group(1)) if ref_m else (int(q_ref_m.group(1)) if q_ref_m else 0),
             "wantsMoreLikeRef": False,
             "wantsColorPhotos": False,
             "wantsPromo": False,
@@ -966,10 +977,11 @@ def _extract_deterministic_plan(
 
     min_price, max_price, exclude_kws = _extract_price_and_exclusions(low)
 
-    # Deteksi permintaan "foto tiap warna / foto yang putih / warna lainnya" (dari chat real #3 & #4!)
+    # Deteksi permintaan "foto tiap warna / lihat warna black / warna lainnya"
     wants_color_photos = bool(
         re.search(
-            r"\b(foto\s+tiap\s+warna|lihat\s+warna\s+lain|warna\s+lain(?:nya)?|contoh\s+foto|foto\s+(?:yang|yg)\s+\w+|fotoin\s+warna)\b",
+            r"\b(foto\s+tiap\s+warna|lihat\s+warna|liat\s+warna|warna\s+lain(?:nya)?|contoh\s+foto|"
+            r"foto\s+(?:yang|yg)\s+\w+|fotoin\s+warna|foto\s+warna)\b",
             low,
         )
     )
@@ -990,8 +1002,9 @@ def _extract_deterministic_plan(
     wants_best = any(w in low for w in ("best seller", "bestseller", "terlaris", "paling laku", "favorit", "paling laris"))
 
     ref_m = re.search(r"\b(?:no|nomor|nomer)\s*\.?\s*([123])\b", low)
-    ref_num = int(ref_m.group(1)) if ref_m else 0
-    wants_more_like_ref = bool(ref_num and any(w in low for w in ("lain", "lainnya", "mirip", "koleksi", "model lain", "alternatif")))
+    q_ref_m = re.search(r"(?:^|\n|\*)\s*([123])\.\s+[A-Z0-9]", quoted_clean)
+    ref_num = int(ref_m.group(1)) if ref_m else (int(q_ref_m.group(1)) if q_ref_m else 0)
+    wants_more_like_ref = bool(ref_num and any(w in low for w in ("lain", "lainnya", "mirip", "koleksi", "model lain", "alternatif")) and not wants_color_photos)
 
     color_hint = ""
     for canon_color, syns in COLOR_SYNONYMS.items():
@@ -1171,7 +1184,7 @@ def run_ai_agent_planner(
         "1. Obrolan santai non-belanja ('bro nongkrong yuk', 'wkwk', 'otw') -> intent='CASUAL_CHAT', shouldReply=false.\n"
         "2. Jika customer bertanya pilihan A atau B (misal 'reg fit atau slim fit', 'putih bersih atau putih tulang'), JANGAN pernah jawab 'Iya kak'!\n"
         "3. Jika customer minta foto asli di hanger / tanya kancing-resleting / lingkar dada fisik -> intent='PHYSICAL_CHECK'.\n"
-        "4. Jika customer reply postingan promo lalu ketik 'Mau navy S kak' / 'QRIS' / 'keep' -> intent='ORDER_INTENT'.\n"
+        "4. Jika customer bilang 'fix beli' / 'mau keep' / 'QRIS' / 'transfer' (TANPA kata 'lihat/foto/bisa?') -> intent='ORDER_INTENT'. Jika masih bilang 'mau yang ini tapi lihat warna black' -> intent='COLOR_PHOTOS_INQUIRY' (BUKAN ORDER_INTENT)!\n"
         "5. Jika customer tanya beberapa jenis sekaligus -> pecah ke `multiQueries` (maks 3 item!).\n"
         "6. Jika customer bilang 'under 100' / 'dibawah 100rb' -> isi `maxPrice: 100000`!\n"
     )
@@ -1992,16 +2005,26 @@ def build_final_cards_and_text(
         )
         return txt, [{"text": txt, "imageUrl": None, "fallbackImages": []}], plan.get("engine") or "deterministic"
 
-    # Mode KHUSUS: Customer minta "foto tiap warna / warna lainnya" -> kirim 1 kartu Foto HD per warna READY!
+    # Mode KHUSUS: Customer minta "lihat warna black / foto tiap warna / warna lainnya" -> kirim Foto HD warna spesifik / tiap warna READY!
     if plan.get("wantsColorPhotos") and products:
         p0 = products[0]
         c_imgs: Dict[str, str] = p0.get("colorImages") or {}
-        if len(c_imgs) >= 2:
+        req_color = str(((plan.get("multiQueries") or [{}])[0]).get("colorHint") or "").strip().upper()
+        req_size = str(((plan.get("multiQueries") or [{}])[0]).get("sizeHint") or "").strip().upper()
+
+        # Jika customer minta 1 warna spesifik (misal "lihat warna black ukuran s") -> fokus ke warna itu dulu!
+        filtered_items = list(c_imgs.items())
+        if req_color:
+            exact_cols = [(cn, cu) for cn, cu in filtered_items if _color_matches(cn, req_color)]
+            if exact_cols:
+                filtered_items = exact_cols
+
+        if filtered_items:
             opening, closing, copy_model = _generate_ai_framing(
                 sender_name, message, plan, [p0], unavailable_labels, session, from_group_name, cfg
             )
             color_cards: List[Dict[str, Any]] = []
-            color_items = list(c_imgs.items())[:4]
+            color_items = filtered_items[:4]
             price_line = (
                 f"🏷️ Harga: ~{p0['hargaNormalText']}~ ➡️ *{p0['hargaPromoText']}*"
                 if p0.get("hargaPromoText")
@@ -2011,12 +2034,21 @@ def build_final_cards_and_text(
                 sz_match = next((cs for cs in (p0.get("readyColorSizes") or []) if cs.upper().startswith(col_name.upper())), col_name)
                 parts = []
                 if idx == 1:
-                    parts.append(opening + "\n")
+                    if req_color and not any(_color_matches(cn, req_color) for cn, _ in color_items):
+                        parts.append(f"Mohon maaf {sapaan}, warna *{req_color}* untuk model ini sedang *sold out* 🙏 Berikut warna lain yang sedang *ready*:\n")
+                    else:
+                        parts.append(opening + "\n")
                 parts.append(f"*{p0['name']}* — Warna *{col_name}*")
                 if p0.get("fitting"):
                     parts.append(f"✂️ Potongan: *{p0['fitting']}*")
                 parts.append(price_line)
-                parts.append(f"📦 Ready: {sz_match}")
+                if req_size and req_color and _color_matches(col_name, req_color):
+                    has_req_sz = bool(re.search(rf"\b{re.escape(req_size)}\b", sz_match.upper()))
+                    if has_req_sz:
+                        parts.append(f"📦 Status: Warna *{col_name}* ukuran *{req_size}* *Ready* Kak! ✨")
+                    else:
+                        parts.append(f"📦 Status: Mohon maaf ukuran *{req_size}* untuk warna *{col_name}* sedang *sold out* 🙏")
+                parts.append(f"🎨 Ready: {sz_match}")
                 if idx == len(color_items):
                     parts.append("\n" + closing)
                 color_cards.append({
