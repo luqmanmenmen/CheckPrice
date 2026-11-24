@@ -125,20 +125,27 @@ export async function POST(req: NextRequest) {
       const target = groupId || senderRaw;
 
       if (fonnteToken && target) {
-        const form = new FormData();
-        form.append("target", target);
-        form.append("message", String(aiRes.replyText));
-        if (aiRes.imageUrl) {
-          form.append("url", String(aiRes.imageUrl));
-        }
-        form.append("delay", "2");
+        const cards: Array<{ text?: string; imageUrl?: string | null }> =
+          Array.isArray(aiRes.replyMessages) && aiRes.replyMessages.length > 0
+            ? aiRes.replyMessages
+            : [{ text: aiRes.replyText, imageUrl: aiRes.imageUrl || null }];
 
-        await fetch("https://api.fonnte.com/send", {
-          method: "POST",
-          headers: { Authorization: fonnteToken },
-          body: form,
-          signal: AbortSignal.timeout(10000),
-        }).catch(() => null);
+        for (const card of cards) {
+          const form = new FormData();
+          form.append("target", target);
+          form.append("message", String(card.text || ""));
+          if (card.imageUrl) {
+            form.append("url", String(card.imageUrl));
+          }
+          form.append("delay", "2");
+
+          await fetch("https://api.fonnte.com/send", {
+            method: "POST",
+            headers: { Authorization: fonnteToken },
+            body: form,
+            signal: AbortSignal.timeout(10000),
+          }).catch(() => null);
+        }
       }
     }
 

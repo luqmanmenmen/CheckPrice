@@ -1143,13 +1143,46 @@ def _sanitize_outgoing_reply(text: str) -> str:
     return out
 
 
+def _friendly_sapaan(sender_name: str) -> str:
+    first = str(sender_name or "").strip().split()[0] if str(sender_name or "").strip() else ""
+    clean = re.sub(r"[^a-zA-Z0-9]", "", first)
+    if len(clean) < 2 or clean.lower() in ("customer", "user", "member", "admin", "guest", "wa", "kak"):
+        return "Kak"
+    return f"Kak {first}"
+
+
+def _format_single_product_block(idx: int, total: int, p: Dict[str, Any]) -> str:
+    prefix = f"*{idx}. {p['name']}*" if total > 1 else f"*{p['name']}*"
+    brand_tag = f" ({p['brand']})" if p.get("brand") else ""
+    lines: List[str] = [f"{prefix}{brand_tag}"]
+
+    if p.get("hargaPromoText"):
+        promo_extra = f" — _{p['promoLabel']}_" if p.get("promoLabel") else ""
+        lines.append(f"🏷️ Harga: ~{p['hargaNormalText']}~ ➡️ *{p['hargaPromoText']}*{promo_extra}")
+    else:
+        lines.append(f"🏷️ Harga: *{p['hargaNormalText']}*")
+
+    if p["availability"] == "READY":
+        if p.get("requestedVariantStatus") == "REQUESTED_VARIANT_SOLD_OUT_OTHERS_READY":
+            lines.append("📦 Status: Warna/ukuran yang ditanya sedang *sold out*, varian lain masih *Ready*:")
+        else:
+            lines.append("📦 Status: *Ready* Kak! ✨")
+        if p.get("readyColors"):
+            lines.append(f"🎨 Warna ready: {', '.join(p['readyColors'][:6])}")
+        if p.get("readySizes"):
+            lines.append(f"📏 Ukuran ready: {', '.join(p['readySizes'][:8])}")
+    else:
+        lines.append("📦 Status: Mohon maaf Kak, produk ini saat ini sedang *sold out* 🙏")
+    return "\n".join(lines)
+
+
 def _build_template_reply(
     sender_name: str,
     intent_info: Dict[str, Any],
     products: List[Dict[str, Any]],
     cfg: Dict[str, Any],
 ) -> str:
-    sapaan = f"Kak {sender_name.split()[0]}" if sender_name and sender_name.lower() not in ("customer", "user", "member") else "Kak"
+    sapaan = _friendly_sapaan(sender_name)
     cs_name = cfg.get("csName") or "Luqman"
     store_name = cfg.get("storeName") or "SUKO & Mu+Ku Official"
     intent = intent_info.get("intent") or "PRODUCT_INQUIRY"
@@ -1169,33 +1202,54 @@ def _build_template_reply(
 
     lines: List[str] = [f"Halo {sapaan}, terima kasih sudah bertanya! Dengan senang hati saya bantu cekkan ya 😊\n"]
     for idx, p in enumerate(products[:3], start=1):
-        prefix = f"*{idx}. {p['name']}*" if len(products) > 1 else f"*{p['name']}*"
-        brand_tag = f" ({p['brand']})" if p.get("brand") else ""
-        lines.append(f"{prefix}{brand_tag}")
-
-        if p.get("hargaPromoText"):
-            promo_extra = f" — _{p['promoLabel']}_" if p.get("promoLabel") else ""
-            lines.append(f"🏷️ Harga: ~{p['hargaNormalText']}~ ➡️ *{p['hargaPromoText']}*{promo_extra}")
-        else:
-            lines.append(f"🏷️ Harga: *{p['hargaNormalText']}*")
-
-        if p["availability"] == "READY":
-            if p.get("requestedVariantStatus") == "REQUESTED_VARIANT_SOLD_OUT_OTHERS_READY":
-                lines.append("📦 Status: Mohon maaf Kak, warna/ukuran yang Kakak tanyakan sedang *sold out*, namun varian lain masih *Ready*:")
-            else:
-                lines.append("📦 Status: *Ready* Kak! ✨")
-            if p.get("readyColors"):
-                lines.append(f"🎨 Warna ready: {', '.join(p['readyColors'][:6])}")
-            if p.get("readySizes"):
-                lines.append(f"📏 Ukuran ready: {', '.join(p['readySizes'][:8])}")
-        else:
-            lines.append("📦 Status: Mohon maaf Kak, produk ini saat ini sedang *sold out* 🙏")
+        lines.append(_format_single_product_block(idx, len(products[:3]), p))
         lines.append("")
 
     lines.append(
-        "Jika Kakak berminat, boleh info *warna & ukuran* yang diinginkan agar segera saya bantu siapkan/keep ya Kak 🙏"
+        "Jika Kakak berminat, boleh info *pilihan model, warna & ukuran* yang diinginkan agar segera saya bantu siapkan/keep ya Kak 🙏"
     )
     return "\n".join(lines).strip()
+
+
+def build_reply_messages(
+    sender_name: str,
+    reply_text: str,
+    products: List[Dict[str, Any]],
+    cfg: Dict[str, Any],
+) -> List[Dict[str, Optional[str]]]:
+    """
+    Bangun daftar pesan WhatsApp multi-foto agar SETIAP produk yang ditemukan
+    tampil bersama foto HD miliknya sendiri (1 foto + caption rapi per model)!
+    """
+    send_img = bool(cfg.get("replyWithImage", True))
+    if not products or len(products) <= 1 or not send_img:
+        first_img = None
+        if send_img and products:
+            for p in products:
+                if is_clean_product_image(p.get("imageUrl")):
+                    first_img = p["imageUrl"]
+                    break
+        return [{"text": reply_text, "imageUrl": first_img}]
+
+    sapaan = _friendly_sapaan(sender_name)
+    shown = products[:3]
+    cards: List[Dict[str, Optional[str]]] = []
+    for idx, p in enumerate(shown, start=1):
+        img = p["imageUrl"] if is_clean_product_image(p.get("imageUrl")) else None
+        parts: List[str] = []
+        if idx == 1:
+            parts.append(f"Halo {sapaan}, terima kasih sudah bertanya! Dengan senang hati saya bantu cekkan pilihan yang *ready* ya 😊\n")
+        parts.append(_format_single_product_block(idx, len(shown), p))
+        if idx == len(shown):
+            parts.append(
+                "\nJika Kakak berminat dengan salah satu model di atas (No. 1 / 2 / 3), "
+                "boleh info *nomor, warna & ukuran* yang diinginkan agar segera saya bantu siapkan/keep ya Kak 🙏"
+            )
+        cards.append({
+            "text": _sanitize_outgoing_reply("\n".join(parts).strip()),
+            "imageUrl": img,
+        })
+    return cards
 
 
 def generate_halo_bca_reply(
@@ -1477,14 +1531,14 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
     if intent_info.get("intent") != "GREETING":
         products = search_sanitized_catalog(intent_info, store_scope=cfg.get("storeScope", "ALL"), limit=3)
 
-    # 8. Susun Balasan Profesional ala Halo BCA + Pilih Foto HD Terbaik
+    # 8. Susun Balasan Profesional ala Halo BCA + Kartu Multi-Foto HD per Produk
     reply_text = generate_halo_bca_reply(sender_name, message, intent_info, products, cfg)
+    reply_messages = build_reply_messages(sender_name, reply_text, products, cfg)
     best_image_url: Optional[str] = None
-    if cfg.get("replyWithImage", True) and products:
-        for p in products:
-            if is_clean_product_image(p.get("imageUrl")):
-                best_image_url = p["imageUrl"]
-                break
+    for rm in reply_messages:
+        if rm.get("imageUrl"):
+            best_image_url = rm["imageUrl"]
+            break
 
     if products:
         any_ready = any(p.get("availability") == "READY" for p in products)
@@ -1517,6 +1571,7 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
         "intentDetail": intent_info,
         "replyText": reply_text,
         "imageUrl": best_image_url,
+        "replyMessages": reply_messages,
         "matchedProducts": products,
         "humanTakeoverMinutes": cfg.get("humanTakeoverMinutes", 10),
         "elapsedMs": elapsed,

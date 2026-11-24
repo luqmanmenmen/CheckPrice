@@ -105,6 +105,10 @@ type SimResult = {
   intent?: string;
   replyText?: string;
   imageUrl?: string | null;
+  replyMessages?: Array<{
+    text: string;
+    imageUrl?: string | null;
+  }>;
   matchedProducts?: Array<{
     sku: string;
     article: string;
@@ -844,27 +848,34 @@ export default function WaCsSuperAdminPage() {
                   </div>
                 </div>
 
-                {/* Bubble balasan CS + foto */}
+                {/* Bubble balasan CS + multi foto per produk */}
                 {simResult.shouldReply && simResult.replyText ? (
-                  <div className="flex justify-end">
-                    <div className="max-w-md bg-[#d9fdd3] rounded-2xl rounded-tr-sm p-3 shadow-xs border border-emerald-200 space-y-2.5">
-                      <p className="text-[11px] font-bold text-emerald-800">
-                        {config.csName} (Auto CS)
-                      </p>
-                      {simResult.imageUrl && (
-                        <div className="rounded-xl overflow-hidden bg-white border border-emerald-200">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={simResult.imageUrl}
-                            alt="Foto Produk Terpilih"
-                            className="w-full max-h-72 object-contain bg-white"
-                          />
+                  <div className="space-y-2.5">
+                    {(simResult.replyMessages && simResult.replyMessages.length > 0
+                      ? simResult.replyMessages
+                      : [{ text: simResult.replyText, imageUrl: simResult.imageUrl }]
+                    ).map((card, idx) => (
+                      <div key={idx} className="flex justify-end">
+                        <div className="max-w-md bg-[#d9fdd3] rounded-2xl rounded-tr-sm p-3 shadow-xs border border-emerald-200 space-y-2.5">
+                          <p className="text-[11px] font-bold text-emerald-800">
+                            {config.csName} (Auto CS){simResult.replyMessages && simResult.replyMessages.length > 1 ? ` • Foto ${idx + 1}/${simResult.replyMessages.length}` : ""}
+                          </p>
+                          {card.imageUrl && (
+                            <div className="rounded-xl overflow-hidden bg-white border border-emerald-200">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={card.imageUrl}
+                                alt={`Foto Produk ${idx + 1}`}
+                                className="w-full max-h-72 object-contain bg-white"
+                              />
+                            </div>
+                          )}
+                          <p className="text-sm text-slate-900 whitespace-pre-wrap leading-relaxed">
+                            {card.text}
+                          </p>
                         </div>
-                      )}
-                      <p className="text-sm text-slate-900 whitespace-pre-wrap leading-relaxed">
-                        {simResult.replyText}
-                      </p>
-                    </div>
+                      </div>
+                    ))}
                   </div>
                 ) : (
                   <div className="rounded-xl bg-white/90 border border-slate-300 px-3.5 py-2.5 text-xs text-slate-700 font-semibold">

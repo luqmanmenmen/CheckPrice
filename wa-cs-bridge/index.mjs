@@ -400,39 +400,64 @@ async function startSocket() {
           continue;
         }
 
+        const outgoingCards =
+          Array.isArray(aiRes.replyMessages) && aiRes.replyMessages.length > 0
+            ? aiRes.replyMessages
+            : [{ text: aiRes.replyText, imageUrl: aiRes.imageUrl || null }];
+
         const delayMs = randomHumanDelayMs();
-        console.log(`   ↳ Mengetik ${(delayMs / 1000).toFixed(1)} dtk... (${aiRes.reason}${aiRes.imageUrl ? " + FOTO HD" : ""})`);
+        console.log(`   ↳ Mengetik ${(delayMs / 1000).toFixed(1)} dtk... (${aiRes.reason} • ${outgoingCards.length} kartu produk)`);
 
         await sock.sendPresenceUpdate("composing", jid).catch(() => {});
-        const [imgBuffer] = await Promise.all([
-          aiRes.imageUrl ? fetchImageBuffer(aiRes.imageUrl) : Promise.resolve(null),
+        // Unduh semua foto produk secara paralel selama simulasi mengetik agar pengiriman cepat & mulus!
+        const [imgBuffers] = await Promise.all([
+          Promise.all(
+            outgoingCards.map((card) =>
+              card.imageUrl ? fetchImageBuffer(card.imageUrl) : Promise.resolve(null)
+            )
+          ),
           sleep(delayMs),
         ]);
 
-        let sent;
-        if (imgBuffer) {
-          sent = await sock.sendMessage(
-            jid,
-            { image: imgBuffer, caption: aiRes.replyText },
-            { quoted: msg }
-          );
-        } else {
-          sent = await sock.sendMessage(
-            jid,
-            { text: aiRes.replyText },
-            { quoted: msg }
-          );
-        }
+        let sentPhotos = 0;
+        for (let i = 0; i < outgoingCards.length; i++) {
+          const card = outgoingCards[i];
+          const imgBuffer = imgBuffers[i];
+          const captionText = String(card.text || "").trim();
+          if (!captionText && !imgBuffer) continue;
 
-        if (sent?.key?.id) {
-          botSentIds.add(sent.key.id);
-          if (botSentIds.size > 300) {
-            const first = botSentIds.values().next().value;
-            botSentIds.delete(first);
+          // Quote pesan customer pada kartu pertama saja agar tampilan rapi
+          const sendOpts = i === 0 ? { quoted: msg } : {};
+          let sent;
+          if (imgBuffer) {
+            sentPhotos++;
+            sent = await sock.sendMessage(
+              jid,
+              { image: imgBuffer, caption: captionText },
+              sendOpts
+            );
+          } else {
+            sent = await sock.sendMessage(
+              jid,
+              { text: captionText },
+              sendOpts
+            );
+          }
+
+          if (sent?.key?.id) {
+            botSentIds.add(sent.key.id);
+            if (botSentIds.size > 300) {
+              const first = botSentIds.values().next().value;
+              botSentIds.delete(first);
+            }
+          }
+
+          if (i < outgoingCards.length - 1) {
+            await sleep(1100);
           }
         }
         await sock.sendPresenceUpdate("paused", jid).catch(() => {});
-        console.log(`   ✅ Terkirim ke [${groupName}]${imgBuffer ? " (dengan foto produk HD)" : ""}!\n`);
+        console.log(`   ✅ Terkirim ${outgoingCards.length} pesan ke [${groupName}] (${sentPhotos} foto produk HD)!\n`);
       } catch (err) {
         console.error("❌ Error memproses pesan:", err?.message || err);
       }
