@@ -3,19 +3,19 @@
  * =============================================================================
  * Bridge WhatsApp Ringan (Baileys) -> Python AI CS Engine (www.luqmanganteng.my.id)
  *
- * Cara pakai:
- *   1. npm install
- *   2. npm start
- *   3. Scan QR Code di terminal via WA HP (Perangkat Tertaut / Linked Devices)
- *   4. Kirim 1 chat di Grup Dummy -> klik "Segarkan" di /super-admin/wa-cs -> Aktifkan Grup!
- *
- * Keamanan Anti-Salah-Balas:
+ * Fitur Utama:
+ *   - Sinkronisasi dua arah dengan tombol "BUILD KODE PAIRING 8 DIGIT" di Web
+ *     (`/super-admin/wa-cs`) — cukup klik tombol di HP/browser, kode 8 digit
+ *     langsung muncul di layar web!
+ *   - Juga mendukung QR Code di terminal atau mode `npm run pair`.
  *   - 100% logic saklar ON/OFF, blokir chat pribadi, & whitelist grup ada di server Python.
- *   - Human Takeover otomatis: jika PIC ikut membalas manual di grup, bot otomatis diam 10 menit!
- *   - Typing indicator natural (2,2 - 3,6 detik) sebelum membalas + kirim foto produk HD.
+ *   - Human Takeover otomatis: jika PIC ikut membalas manual di grup, bot diam 10 menit.
+ *   - Typing indicator natural (2,2 - 3,6 detik) + kirim Foto Produk HD resmi!
  * =============================================================================
  */
 
+import fs from "node:fs";
+import path from "node:path";
 import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
@@ -32,21 +32,28 @@ const API_SECRET = (
   process.env.WEBHOOK_SECRET ||
   "B4mb4ng123!Aman"
 ).trim();
-const ADMIN_PHONE = (process.env.WA_ADMIN_PHONE || "6281296393972")
+const DEFAULT_ADMIN_PHONE = (process.env.WA_ADMIN_PHONE || "6281296393972")
   .replace(/[^0-9]/g, "")
   .replace(/^0/, "62");
-const USE_PAIRING_CODE =
+const CLI_PAIR_MODE =
   process.argv.includes("--pair") || process.env.WA_USE_PAIRING === "1";
 
+const AUTH_DIR = path.resolve("./auth_info");
 const logger = pino({ level: "silent" });
 const startUnixSec = Math.floor(Date.now() / 1000);
 
-// Lacak ID pesan yang dikirim bot sendiri agar tidak dianggap human takeover / loop
 const botSentIds = new Set();
-// Peta jeda human takeover: groupId -> timestamp ms sampai kapan bot minggir
 const humanTakeoverUntil = new Map();
-// Cache nama grup: groupId -> { name, fetchedAt }
 const groupNameCache = new Map();
+
+let currentSock = null;
+let isConnected = false;
+let currentPhone = DEFAULT_ADMIN_PHONE;
+let currentHumanTakeoverMins = 10;
+let lastHandledPairingReq = 0;
+let lastHandledLogoutReq = 0;
+let pendingWebPairingPhone = "";
+let isRestarting = false;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -54,6 +61,22 @@ function sleep(ms) {
 
 function randomHumanDelayMs() {
   return 2200 + Math.floor(Math.random() * 1400);
+}
+
+function normalizePhone(raw) {
+  const digits = String(raw || "").split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("0")) return "62" + digits.slice(1);
+  if (digits.startsWith("8")) return "62" + digits;
+  return digits;
+}
+
+function clearAuthDir() {
+  try {
+    if (fs.existsSync(AUTH_DIR)) {
+      fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+    }
+  } catch {}
 }
 
 function extractMessageText(msg) {
@@ -119,7 +142,7 @@ async function fetchImageBuffer(imageUrl) {
   }
 }
 
-async function callPythonWaCs(payload) {
+async function callPythonWaCs(payload, timeoutMs = 22000) {
   const res = await fetch(API_URL, {
     method: "POST",
     headers: {
@@ -128,7 +151,7 @@ async function callPythonWaCs(payload) {
       "X-WA-CS-Secret": API_SECRET,
     },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(22000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const text = await res.text();
   try {
@@ -138,16 +161,65 @@ async function callPythonWaCs(payload) {
   }
 }
 
-async function startBridge() {
-  const { state, saveCreds } = await useMultiFileAuthState("./auth_info");
+async function syncBridgeState(extra = {}) {
+  try {
+    const res = await callPythonWaCs(
+      {
+        action: "bridge-sync",
+        connected: isConnected,
+        phone: currentPhone,
+        ...extra,
+      },
+      8000
+    );
+    if (!res?.success) return null;
+    if (res.adminPhone) currentPhone = normalizePhone(res.adminPhone) || currentPhone;
+    if (typeof res.humanTakeoverMinutes === "number") {
+      currentHumanTakeoverMins = res.humanTakeoverMinutes;
+    }
+    return res.bridge || null;
+  } catch {
+    return null;
+  }
+}
+
+async function restartSocket(cleanAuth = false, requestPairingForPhone = "") {
+  if (isRestarting) return;
+  isRestarting = true;
+  try {
+    if (currentSock) {
+      try {
+        currentSock.ev.removeAllListeners("connection.update");
+        currentSock.ev.removeAllListeners("messages.upsert");
+        currentSock.end(undefined);
+      } catch {}
+      currentSock = null;
+    }
+    isConnected = false;
+    if (cleanAuth) {
+      clearAuthDir();
+    }
+    pendingWebPairingPhone = requestPairingForPhone;
+    await sleep(600);
+  } finally {
+    isRestarting = false;
+  }
+  startSocket();
+}
+
+async function startSocket() {
+  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
+
+  const wantsPairNow = Boolean(pendingWebPairingPhone || CLI_PAIR_MODE);
+  const targetPhone = normalizePhone(pendingWebPairingPhone || currentPhone || DEFAULT_ADMIN_PHONE);
+  pendingWebPairingPhone = "";
 
   console.log("==============================================================");
   console.log("  AUTO CS WHATSAPP BRIDGE (SUKO & Mu+Ku — Halo BCA AI Engine)");
-  console.log(`  Nomor Admin : +${ADMIN_PHONE} (0${ADMIN_PHONE.slice(2)})`);
+  console.log(`  Nomor Admin : +${targetPhone} (0${targetPhone.slice(2)})`);
   console.log(`  Server AI   : ${API_URL}`);
   console.log(`  WA Proto    : v${version.join(".")}`);
-  console.log(`  Mode Tautan : ${USE_PAIRING_CODE ? "KODE PAIRING 8 DIGIT (TANPA SCAN QR)" : "QR CODE TERMINAL"}`);
   console.log("==============================================================\n");
 
   const sock = makeWASocket({
@@ -158,51 +230,90 @@ async function startBridge() {
     browser: ["Ubuntu", "Chrome", "124.0.0"],
     syncFullHistory: false,
   });
+  currentSock = sock;
 
-  // Mode Pairing Code 8-Digit langsung ke nomor 081296393972 (jika belum login & pakai `npm run pair`)
-  if (USE_PAIRING_CODE && !state.creds.registered) {
+  // Jika diminta pairing 8 digit (dari tombol web atau `npm run pair`)
+  if (wantsPairNow && !state.creds.registered) {
     setTimeout(async () => {
+      if (currentSock !== sock || isConnected) return;
       try {
-        const code = await sock.requestPairingCode(ADMIN_PHONE);
+        const code = await sock.requestPairingCode(targetPhone);
         const formatted = code?.match(/.{1,4}/g)?.join("-") || code;
         console.log("\n==============================================================");
-        console.log(`  🔑 KODE PAIRING WA UNTUK 0${ADMIN_PHONE.slice(2)}:  ${formatted}`);
-        console.log("  Cara masukkan di HP:");
-        console.log("  WA -> Perangkat Tertaut -> Tautkan Perangkat ->");
-        console.log("  Pilih 'Tautkan dengan nomor telepon saja' -> ketik kode di atas!");
+        console.log(`  🔑 KODE PAIRING WA UNTUK 0${targetPhone.slice(2)}:  ${formatted}`);
+        console.log("  (Kode juga sudah dikirim otomatis ke layar Web /super-admin/wa-cs!)");
         console.log("==============================================================\n");
+        await syncBridgeState({
+          connected: false,
+          phone: targetPhone,
+          pairingCode: formatted,
+          statusMessage: `Kode pairing siap untuk 0${targetPhone.slice(2)}`,
+        });
       } catch (err) {
         console.error("⚠️ Gagal meminta kode pairing:", err?.message || err);
-        console.log("   Gunakan `npm start` untuk scan QR Code sebagai alternatif.");
+        await syncBridgeState({
+          connected: false,
+          clearPairingCode: true,
+          statusMessage: `Gagal minta kode pairing: ${err?.message || "coba klik ulang"}`,
+        });
       }
-    }, 3000);
+    }, 2800);
   }
 
   sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("connection.update", (update) => {
+  sock.ev.on("connection.update", async (update) => {
+    if (currentSock !== sock) return;
     const { connection, lastDisconnect, qr } = update;
 
-    if (qr && !USE_PAIRING_CODE) {
-      console.log("\n📱 SCAN QR CODE INI DI WHATSAPP HP KAKAK (0" + ADMIN_PHONE.slice(2) + "):");
-      console.log("   (Buka WA -> Titik 3 / Pengaturan -> Perangkat Tertaut -> Tautkan Perangkat)\n");
+    if (qr && !wantsPairNow) {
+      console.log(`\n📱 QR CODE siap (atau klik tombol "BUILD KODE PAIRING 8 DIGIT" di Web /super-admin/wa-cs):\n`);
       qrcode.generate(qr, { small: true });
+      await syncBridgeState({
+        connected: false,
+        statusMessage: "Bridge online — klik tombol Build Kode Pairing 8 Digit di atas!",
+      });
     }
 
     if (connection === "open") {
-      console.log("\n✅ WHATSAPP BERHASIL TERSAMBUNG!");
-      console.log("   • Chat pribadi teman 100% aman (diblokir otomatis oleh server).");
+      isConnected = true;
+      const mePhone = normalizePhone(sock.user?.id) || targetPhone;
+      currentPhone = mePhone;
+      console.log(`\n✅ WHATSAPP +${mePhone} BERHASIL TERSAMBUNG!`);
+      console.log("   • Chat pribadi teman 100% aman (diblokir otomatis).");
       console.log("   • Kirim 1 chat di Grup Dummy -> buka /super-admin/wa-cs -> klik 'Aktifkan Grup Ini'.");
       console.log("   • Perintah darurat dari WA Kakak: !csoff | !cson | !csstatus\n");
+      await syncBridgeState({
+        connected: true,
+        phone: mePhone,
+        clearPairingCode: true,
+        statusMessage: `WhatsApp +${mePhone} aktif tersambung!`,
+      });
     }
 
     if (connection === "close") {
+      isConnected = false;
       const statusCode = lastDisconnect?.error?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      console.log(`⚠️ Koneksi terputus (code ${statusCode || "?"}). ${shouldReconnect ? "Menyambung ulang dalam 4 detik..." : "Akun logout. Hapus folder auth_info lalu jalankan ulang npm start."}`);
-      if (shouldReconnect) {
-        setTimeout(() => startBridge(), 4000);
+      const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+      console.log(
+        `⚠️ Koneksi terputus (code ${statusCode || "?"}). ${
+          isLoggedOut
+            ? "Akun logout — menghapus sesi lama dan siap pairing ulang dari web."
+            : "Menyambung ulang dalam 4 detik..."
+        }`
+      );
+      await syncBridgeState({
+        connected: false,
+        statusMessage: isLoggedOut
+          ? "Sesi WhatsApp terputus. Klik Build Kode Pairing untuk tautkan ulang."
+          : "Menyambung ulang ke WhatsApp...",
+      });
+      if (isLoggedOut) {
+        clearAuthDir();
       }
+      setTimeout(() => {
+        if (currentSock === sock) startSocket();
+      }, 4000);
     }
   });
 
@@ -215,10 +326,8 @@ async function startBridge() {
         if (!jid || jid === "status@broadcast" || jid.endsWith("@broadcast")) continue;
 
         const msgId = msg.key?.id || "";
-        // Skip pesan yang baru saja dikirim oleh bot sendiri
         if (msgId && botSentIds.has(msgId)) continue;
 
-        // Skip pesan lama sebelum bridge nyala
         const msgTs = Number(msg.messageTimestamp || 0);
         if (msgTs && msgTs < startUnixSec - 15) continue;
 
@@ -231,7 +340,6 @@ async function startBridge() {
         const senderName = msg.pushName || "Kak";
         const groupName = isGroup ? await resolveGroupName(sock, jid) : "Chat Pribadi";
 
-        // 1. Jika pesan dari PIC sendiri (fromMe)
         if (fromMe) {
           if (isEmergencyCommand(text)) {
             console.log(`⚡ [PERINTAH PIC] ${text}`);
@@ -253,27 +361,22 @@ async function startBridge() {
             continue;
           }
 
-          // Jika PIC membalas manual di grup -> aktifkan Human Takeover Pause!
-          if (isGroup) {
-            const pauseMins = 10;
-            humanTakeoverUntil.set(jid, Date.now() + pauseMins * 60 * 1000);
-            console.log(`🤝 [HUMAN TAKEOVER] PIC membalas manual di "${groupName}". Bot diam sementara ${pauseMins} menit.`);
+          if (isGroup && currentHumanTakeoverMins > 0) {
+            humanTakeoverUntil.set(jid, Date.now() + currentHumanTakeoverMins * 60 * 1000);
+            console.log(`🤝 [HUMAN TAKEOVER] PIC membalas manual di "${groupName}". Bot diam sementara ${currentHumanTakeoverMins} menit.`);
           }
           continue;
         }
 
-        // 2. Cek apakah grup sedang dalam jeda Human Takeover
         if (isGroup) {
           const until = humanTakeoverUntil.get(jid) || 0;
           if (Date.now() < until) {
             const sisaMnt = Math.ceil((until - Date.now()) / 60000);
-            console.log(`⏸️ [JEDA PIC] "${groupName}" (${senderName}): "${text.slice(0, 45)}" -> dilewati (sisa jeda ${sisaMnt} mnt)`);
+            console.log(`⏸️ [JEDA PIC] "${groupName}" (${senderName}) -> dilewati (sisa jeda ${sisaMnt} mnt)`);
             continue;
           }
         }
 
-        // 3. Jika bukan grup (chat pribadi), tetap lempar hanya kalau bukan private?
-        // Untuk keamanan ekstra & hemat request, langsung skip chat pribadi di sini juga jika bukan grup!
         if (!isGroup) {
           continue;
         }
@@ -297,7 +400,6 @@ async function startBridge() {
           continue;
         }
 
-        // Update durasi human takeover sesuai setting server bila berubah
         const delayMs = randomHumanDelayMs();
         console.log(`   ↳ Mengetik ${(delayMs / 1000).toFixed(1)} dtk... (${aiRes.reason}${aiRes.imageUrl ? " + FOTO HD" : ""})`);
 
@@ -338,7 +440,45 @@ async function startBridge() {
   });
 }
 
-startBridge().catch((err) => {
+// Loop heartbeat & penerima perintah tombol "BUILD KODE PAIRING" dari Web Super Admin
+async function startControlPoller() {
+  // Baca state awal agar tidak memicu request lama sebelum bridge dinyalakan
+  const initState = await syncBridgeState({
+    statusMessage: "Bridge aktif di PC — siap menerima klik Build Kode Pairing dari Web!",
+  });
+  if (initState) {
+    lastHandledPairingReq = Number(initState.pairingRequestedAt || 0);
+    lastHandledLogoutReq = Number(initState.logoutRequestedAt || 0);
+  }
+
+  setInterval(async () => {
+    const st = await syncBridgeState();
+    if (!st) return;
+
+    const reqLogout = Number(st.logoutRequestedAt || 0);
+    if (reqLogout > lastHandledLogoutReq) {
+      lastHandledLogoutReq = reqLogout;
+      console.log("🔌 [WEB CMD] Permintaan putuskan tautan WA diterima dari Super Admin!");
+      try {
+        if (currentSock && isConnected) {
+          await currentSock.logout().catch(() => {});
+        }
+      } catch {}
+      await restartSocket(true, "");
+      return;
+    }
+
+    const reqPair = Number(st.pairingRequestedAt || 0);
+    if (reqPair > lastHandledPairingReq) {
+      lastHandledPairingReq = reqPair;
+      const target = normalizePhone(st.phone || currentPhone || DEFAULT_ADMIN_PHONE);
+      console.log(`🔑 [WEB CMD] Tombol BUILD KODE PAIRING ditekan di Web untuk +${target}!`);
+      await restartSocket(true, target);
+    }
+  }, 3000);
+}
+
+startSocket().then(() => startControlPoller()).catch((err) => {
   console.error("Fatal error:", err);
   process.exit(1);
 });

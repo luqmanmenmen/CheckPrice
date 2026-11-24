@@ -25,7 +25,25 @@ import {
   AlertTriangle,
   Lock,
   Loader2,
+  KeyRound,
+  Smartphone,
+  Wifi,
+  WifiOff,
+  Unlink,
 } from "lucide-react";
+
+type BridgeState = {
+  connected: boolean;
+  bridgeOnline: boolean;
+  phone: string;
+  pairingCode: string;
+  pairingCodeAt: number;
+  pairingCodeFresh: boolean;
+  pairingRequestedAt: number;
+  statusMessage: string;
+  lastHeartbeatAt: number;
+  serverNowMs?: number;
+};
 
 type AllowedGroup = {
   id: string;
@@ -144,10 +162,13 @@ function decisionBadge(decision: string, reason: string) {
 
 export default function WaCsSuperAdminPage() {
   const [config, setConfig] = useState<WaCsConfig | null>(null);
+  const [bridge, setBridge] = useState<BridgeState | null>(null);
   const [logs, setLogs] = useState<WaCsLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toggling, setToggling] = useState(false);
+  const [pairingBusy, setPairingBusy] = useState(false);
+  const [pairPhoneInput, setPairPhoneInput] = useState("081296393972");
   const [toast, setToast] = useState<{ type: "ok" | "err"; msg: string } | null>(null);
 
   // Manual add group form
@@ -177,7 +198,12 @@ export default function WaCsSuperAdminPage() {
       const data = await res.json();
       if (data?.success && data?.config) {
         setConfig(data.config);
+        if (data.bridge) setBridge(data.bridge);
         setLogs(Array.isArray(data.logs) ? data.logs : []);
+        if (!silent && data.config.adminPhone) {
+          const p = String(data.config.adminPhone);
+          setPairPhoneInput(p.startsWith("62") ? "0" + p.slice(2) : p);
+        }
       } else {
         showToast("err", data?.error || "Gagal memuat konfigurasi Auto CS");
       }
@@ -191,6 +217,69 @@ export default function WaCsSuperAdminPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Auto-polling status pairing setiap 2.5 detik saat sedang menunggu kode 8 digit / koneksi WA
+  useEffect(() => {
+    if (!pairingBusy && !(bridge?.pairingCodeFresh && !bridge?.connected)) return;
+    const timer = setInterval(() => {
+      fetchData(true);
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [pairingBusy, bridge?.pairingCodeFresh, bridge?.connected, fetchData]);
+
+  useEffect(() => {
+    if (bridge?.pairingCodeFresh || bridge?.connected) {
+      setPairingBusy(false);
+    }
+  }, [bridge?.pairingCodeFresh, bridge?.connected]);
+
+  const handleRequestPairingCode = async () => {
+    const cleanPhone = pairPhoneInput.trim();
+    if (!cleanPhone) {
+      showToast("err", "Masukkan nomor WA dulu (contoh: 081296393972)");
+      return;
+    }
+    setPairingBusy(true);
+    try {
+      const res = await fetch("/api/admin/wa-cs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "request-pairing", phone: cleanPhone }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        if (data.config) setConfig(data.config);
+        if (data.bridge) setBridge(data.bridge);
+        showToast("ok", "Permintaan kode pairing dikirim! Tunggu 3-5 detik sampai 8 digit muncul di layar...");
+      } else {
+        setPairingBusy(false);
+        showToast("err", data?.error || "Gagal meminta kode pairing");
+      }
+    } catch {
+      setPairingBusy(false);
+      showToast("err", "Gagal menghubungi server");
+    }
+  };
+
+  const handleDisconnectWa = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/admin/wa-cs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "request-logout" }),
+      });
+      const data = await res.json();
+      if (data?.success && data.bridge) {
+        setBridge(data.bridge);
+        showToast("ok", "Perintah putuskan tautan WA dikirim.");
+      }
+    } catch {
+      showToast("err", "Gagal memutuskan tautan WA");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const handleMasterToggle = async () => {
     if (!config || toggling) return;
@@ -520,6 +609,143 @@ export default function WaCsSuperAdminPage() {
               )}
               {config.enabled ? "MATIKAN AUTO CS" : "AKTIFKAN AUTO CS"}
             </button>
+          </div>
+        </section>
+
+        {/* CARD 1B: KONEKSI & TOMBOL BUILD KODE PAIRING 8 DIGIT LANGSUNG DI WEB */}
+        <section className="bg-white rounded-2xl border-2 border-indigo-200 shadow-xs overflow-hidden">
+          <div className="bg-slate-900 text-white px-5 py-3.5 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <Smartphone className="w-5 h-5 text-emerald-400 shrink-0" />
+              <div>
+                <h2 className="font-extrabold text-base">Tautkan Nomor WhatsApp (Kode Pairing 8 Digit)</h2>
+                <p className="text-xs text-slate-300">
+                  Klik tombol di bawah untuk mem-build kode 8 digit, lalu masukkan kodenya di WhatsApp HP Kakak
+                </p>
+              </div>
+            </div>
+            <span
+              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold ${
+                bridge?.connected
+                  ? "bg-emerald-500/20 text-emerald-300 border border-emerald-400/40"
+                  : bridge?.bridgeOnline
+                  ? "bg-amber-500/20 text-amber-200 border border-amber-400/40"
+                  : "bg-rose-500/20 text-rose-200 border border-rose-400/40"
+              }`}
+            >
+              {bridge?.connected ? (
+                <Wifi className="w-3.5 h-3.5" />
+              ) : (
+                <WifiOff className="w-3.5 h-3.5" />
+              )}
+              {bridge?.connected
+                ? "WA TERSAMBUNG"
+                : bridge?.bridgeOnline
+                ? "BRIDGE ONLINE (SIAP PAIRING)"
+                : "BRIDGE PC OFFLINE"}
+            </span>
+          </div>
+
+          <div className="p-5 space-y-4">
+            {bridge?.connected ? (
+              <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <p className="text-sm font-extrabold text-emerald-900 flex items-center gap-1.5">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                    WhatsApp +{bridge.phone || config.adminPhone || "6281296393972"} Aktif Tersambung!
+                  </p>
+                  <p className="text-xs text-emerald-800">
+                    Sekarang kirim 1 chat tes di <strong>Grup Dummy</strong>, lalu klik <strong>Segarkan</strong> agar grupnya muncul di Whitelist di bawah.
+                  </p>
+                </div>
+                <button
+                  onClick={handleDisconnectWa}
+                  disabled={saving}
+                  className="px-4 py-2.5 rounded-xl bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 text-xs font-bold flex items-center justify-center gap-1.5 shrink-0"
+                >
+                  <Unlink className="w-4 h-4" />
+                  Putuskan / Ganti WA
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-end">
+                  <div className="flex-1">
+                    <label className="block text-xs font-bold text-slate-600 mb-1">
+                      Nomor WhatsApp Admin CS
+                    </label>
+                    <input
+                      type="tel"
+                      value={pairPhoneInput}
+                      onChange={(e) => setPairPhoneInput(e.target.value)}
+                      placeholder="081296393972"
+                      className="w-full px-3.5 py-3 rounded-xl border border-slate-300 bg-white text-base font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <button
+                    onClick={handleRequestPairingCode}
+                    disabled={pairingBusy}
+                    className="px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-sm disabled:opacity-60 shrink-0"
+                  >
+                    {pairingBusy ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <KeyRound className="w-4 h-4" />
+                    )}
+                    {pairingBusy ? "Membuat Kode 8 Digit..." : "BUILD KODE PAIRING 8 DIGIT"}
+                  </button>
+                </div>
+
+                {/* Kotak Hasil Kode Pairing 8 Digit Besar */}
+                {bridge?.pairingCodeFresh && bridge.pairingCode ? (
+                  <div className="rounded-2xl bg-emerald-50 border-2 border-emerald-400 p-5 text-center space-y-3">
+                    <p className="text-xs font-extrabold uppercase tracking-wider text-emerald-800">
+                      Masukkan Kode Ini di 8 Kotak WhatsApp HP Kakak Sekarang:
+                    </p>
+                    <div className="flex items-center justify-center gap-3 flex-wrap">
+                      <span className="text-3xl sm:text-4xl font-mono font-black tracking-[0.2em] text-slate-900 bg-white px-6 py-3 rounded-2xl border-2 border-emerald-300 shadow-xs select-all">
+                        {bridge.pairingCode}
+                      </span>
+                      <button
+                        onClick={() => copyText("paircode", bridge.pairingCode.replace(/-/g, ""))}
+                        className="px-4 py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center gap-1.5"
+                      >
+                        {copiedKey === "paircode" ? (
+                          <Check className="w-4 h-4 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-4 h-4" />
+                        )}
+                        {copiedKey === "paircode" ? "Disalin!" : "Salin Kode"}
+                      </button>
+                    </div>
+                    <p className="text-xs text-emerald-800">
+                      Di WA HP: <strong>Perangkat Tertaut → Tautkan Perangkat → Tautkan dengan nomor telepon saja</strong> → ketik 8 digit di atas. Halaman ini otomatis berubah hijau begitu tersambung!
+                    </p>
+                  </div>
+                ) : pairingBusy ? (
+                  <div className="rounded-xl bg-indigo-50 border border-indigo-200 p-4 flex items-center gap-3 text-xs font-semibold text-indigo-900">
+                    <Loader2 className="w-5 h-5 animate-spin text-indigo-600 shrink-0" />
+                    <div>
+                      <p className="font-extrabold">Sedang meminta kode 8 digit resmi dari WhatsApp...</p>
+                      <p className="text-indigo-700 mt-0.5">
+                        {bridge?.bridgeOnline
+                          ? "Bridge PC aktif! Tunggu 3–6 detik kode akan langsung muncul di kotak ini."
+                          : "Pastikan wa-cs-bridge sudah jalan di PC (`cd wa-cs-bridge && npm start`), begitu aktif kode otomatis muncul di sini."}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-500">
+                    Status bridge: <strong>{bridge?.statusMessage || "Siap digunakan"}</strong>.{" "}
+                    {!bridge?.bridgeOnline && (
+                      <span className="text-rose-600 font-semibold">
+                        (Jalankan `npm start` di folder `wa-cs-bridge` PC agar tombol Build Kode aktif!)
+                      </span>
+                    )}
+                  </p>
+                )}
+              </>
+            )}
           </div>
         </section>
 

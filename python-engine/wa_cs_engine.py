@@ -46,6 +46,7 @@ from storehub_live_engine import (
 
 CONFIG_STORAGE_PATH = "config/wa-cs-config.json"
 LOGS_STORAGE_PATH = "logs/wa-cs-logs.json"
+BRIDGE_STATE_PATH = "config/wa-cs-bridge-state.json"
 MAX_LOGS = 40
 MAX_DETECTED_GROUPS = 30
 
@@ -334,6 +335,54 @@ def clear_logs() -> None:
         storage_write_bytes(LOGS_STORAGE_PATH, b"[]", content_type="application/json", timeout=3.5)
     except Exception:
         pass
+
+
+def load_bridge_state() -> Dict[str, Any]:
+    default_state: Dict[str, Any] = {
+        "connected": False,
+        "phone": "",
+        "pairingCode": "",
+        "pairingCodeAt": 0,
+        "pairingRequestedAt": 0,
+        "logoutRequestedAt": 0,
+        "statusMessage": "Menunggu bridge WA aktif...",
+        "lastHeartbeatAt": 0,
+    }
+    try:
+        txt = storage_read_text(BRIDGE_STATE_PATH, timeout=2.5)
+        if txt:
+            parsed = json.loads(txt)
+            if isinstance(parsed, dict):
+                default_state.update(parsed)
+    except Exception:
+        pass
+    now_ms = int(time.time() * 1000)
+    hb = int(default_state.get("lastHeartbeatAt") or 0)
+    code_at = int(default_state.get("pairingCodeAt") or 0)
+    default_state["bridgeOnline"] = (now_ms - hb) < 25_000
+    default_state["pairingCodeFresh"] = bool(default_state.get("pairingCode")) and ((now_ms - code_at) < 110_000)
+    default_state["serverNowMs"] = now_ms
+    return default_state
+
+
+def save_bridge_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    clean = {
+        "connected": bool(state.get("connected", False)),
+        "phone": str(state.get("phone") or ""),
+        "pairingCode": str(state.get("pairingCode") or ""),
+        "pairingCodeAt": int(state.get("pairingCodeAt") or 0),
+        "pairingRequestedAt": int(state.get("pairingRequestedAt") or 0),
+        "logoutRequestedAt": int(state.get("logoutRequestedAt") or 0),
+        "statusMessage": str(state.get("statusMessage") or "")[:160],
+        "lastHeartbeatAt": int(state.get("lastHeartbeatAt") or 0),
+    }
+    payload = json.dumps(clean, ensure_ascii=False).encode("utf-8")
+    storage_write_bytes(BRIDGE_STATE_PATH, payload, content_type="application/json", timeout=3.5)
+    now_ms = int(time.time() * 1000)
+    clean["bridgeOnline"] = (now_ms - clean["lastHeartbeatAt"]) < 25_000
+    clean["pairingCodeFresh"] = bool(clean["pairingCode"]) and ((now_ms - clean["pairingCodeAt"]) < 110_000)
+    clean["serverNowMs"] = now_ms
+    return clean
 
 
 def is_within_store_hours(cfg: Dict[str, Any], now_wib: Optional[datetime] = None) -> bool:
@@ -1500,12 +1549,66 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
         out: Dict[str, Any] = {
             "success": True,
             "config": mask_config_for_ui(cfg),
+            "bridge": load_bridge_state(),
         }
         if payload.get("includeFonnteToken"):
             out["fonnteToken"] = cfg.get("fonnteToken") or ""
         if payload.get("includeLogs", True):
             out["logs"] = load_logs()
         return out
+
+    if action == "request-pairing":
+        cfg = load_config()
+        raw_phone = str(payload.get("phone") or cfg.get("adminPhone") or "6281296393972").strip()
+        norm_phone = normalize_wa_phone(raw_phone) or "6281296393972"
+        if norm_phone != cfg.get("adminPhone"):
+            cfg["adminPhone"] = norm_phone
+            save_config(cfg)
+        st = load_bridge_state()
+        now_ms = int(time.time() * 1000)
+        st["pairingRequestedAt"] = now_ms
+        st["pairingCode"] = ""
+        st["pairingCodeAt"] = 0
+        st["phone"] = norm_phone
+        st["statusMessage"] = f"Meminta kode pairing 8 digit ke WhatsApp untuk +{norm_phone}..."
+        saved_st = save_bridge_state(st)
+        return {"success": True, "config": mask_config_for_ui(cfg), "bridge": saved_st}
+
+    if action == "request-logout":
+        st = load_bridge_state()
+        now_ms = int(time.time() * 1000)
+        st["logoutRequestedAt"] = now_ms
+        st["connected"] = False
+        st["pairingCode"] = ""
+        st["pairingCodeAt"] = 0
+        st["statusMessage"] = "Memutuskan tautan WhatsApp..."
+        saved_st = save_bridge_state(st)
+        return {"success": True, "bridge": saved_st}
+
+    if action == "bridge-sync":
+        cfg = load_config()
+        st = load_bridge_state()
+        now_ms = int(time.time() * 1000)
+        st["lastHeartbeatAt"] = now_ms
+        if "connected" in payload:
+            st["connected"] = bool(payload["connected"])
+        if payload.get("phone"):
+            st["phone"] = normalize_wa_phone(payload["phone"]) or st.get("phone", "")
+        if payload.get("statusMessage"):
+            st["statusMessage"] = str(payload["statusMessage"])[:160]
+        if payload.get("pairingCode"):
+            st["pairingCode"] = str(payload["pairingCode"]).strip()
+            st["pairingCodeAt"] = now_ms
+        elif payload.get("clearPairingCode"):
+            st["pairingCode"] = ""
+            st["pairingCodeAt"] = 0
+        saved_st = save_bridge_state(st)
+        return {
+            "success": True,
+            "bridge": saved_st,
+            "adminPhone": cfg.get("adminPhone") or "6281296393972",
+            "humanTakeoverMinutes": cfg.get("humanTakeoverMinutes", 10),
+        }
 
     if action == "save-config":
         current = load_config()

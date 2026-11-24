@@ -107,6 +107,8 @@ export async function POST(req: NextRequest) {
       "remove-group",
       "clear-logs",
       "simulate",
+      "request-pairing",
+      "request-logout",
     ]);
     const action = String(body?.action || "").trim().toLowerCase();
     if (!allowedActions.has(action)) {
