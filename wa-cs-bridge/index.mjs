@@ -134,6 +134,24 @@ function extractMessageText(msg) {
   return "";
 }
 
+/**
+ * Ekstrak teks/caption dari pesan promo atau foto yang di-REPLY (di-quote) oleh customer!
+ * Krusial di lapangan: customer sering reply postingan promo lalu cuma ketik "Mau navy S kak" / "foto warna lainnya?".
+ */
+function extractQuotedText(msg) {
+  const m = msg?.message;
+  if (!m) return "";
+  const ctx =
+    m.extendedTextMessage?.contextInfo ||
+    m.imageMessage?.contextInfo ||
+    m.videoMessage?.contextInfo ||
+    m.ephemeralMessage?.message?.extendedTextMessage?.contextInfo ||
+    null;
+  const qm = ctx?.quotedMessage;
+  if (!qm) return "";
+  return extractMessageText({ message: qm }).trim().slice(0, 600);
+}
+
 function isEmergencyCommand(text) {
   const low = String(text || "").trim().toLowerCase();
   return [
@@ -497,6 +515,7 @@ async function startSocket() {
         if (msgTs && msgTs < startUnixSec - 15) continue;
 
         const text = extractMessageText(msg).trim();
+        const quotedText = extractQuotedText(msg);
         if (!text) continue;
 
         const fromMe = Boolean(msg.key?.fromMe);
@@ -556,6 +575,7 @@ async function startSocket() {
             action: "incoming",
             source: "WA_BRIDGE_PC",
             message: text,
+            quotedMessage: quotedText,
             sender: altRemote || jid,
             senderName,
             groupId: "",
@@ -596,6 +616,7 @@ async function startSocket() {
           action: "incoming",
           source: "WA_BRIDGE",
           message: text,
+          quotedMessage: quotedText,
           sender: dmJid || msg.key?.participant || jid,
           senderName,
           groupId: jid,

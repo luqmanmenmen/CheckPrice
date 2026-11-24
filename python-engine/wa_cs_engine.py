@@ -81,11 +81,15 @@ _DAILY_USAGE_MEM: Dict[str, Any] = {
 }
 
 DEFAULT_SOP_TEXT = (
-    "- Toko resmi: SUKO Official (khusus produk SUKO, bukan merek lain).\n"
+    "- Toko resmi: SUKO Official Store (PTC Surabaya) — KHUSUS produk SUKO saja.\n"
     "- Jam operasional layanan: 09:00 - 21:30 WIB.\n"
-    "- Pemesanan / Keep barang: Customer cukup info pilihan model/nomor, warna, ukuran, dan nama; "
-    "tim PIC kami (Kak Luqman) akan segera bantu proses pembayaran & keep.\n"
-    "- Jangan pernah mengarang harga, promo, stok, atau ongkir di luar data sistem."
+    "- Pembayaran: Via QRIS kasir (penting: QRIS memiliki tenggat waktu 5 menit setelah dikirim!).\n"
+    "- Wajib tanya Nomor Member Matahari sebelum cetak QRIS (untuk pengumpulan poin member) & konfirmasi nama member.\n"
+    "- Pilihan Pengambilan setelah lunas (barang di-keep atas nama customer):\n"
+    "  1) Ambil langsung di Store SUKO (PTC), ATAU\n"
+    "  2) Customer pesan GoSend sendiri (nanti berikan nomor WA PIC ke driver GoSend untuk koordinasi ambil di toko).\n"
+    "- Aturan jawaban profesional: Dilarang menjawab ambigu 'Iya kak' pada pertanyaan pilihan A atau B (misal putih bersih vs putih tulang / reg fit vs slim fit) — jawab spesifik sesuai data artikel (1 artikel = 1 potongan). Jika butuh foto asli di hanger / cek fisik (kancing/resleting/lingkar dada), koordinasikan langsung ke PIC.\n"
+    "- Dilarang membocorkan angka qty stok maupun angka penjualan toko."
 )
 
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -788,9 +792,74 @@ def _detect_gender_deterministic(low: str) -> str:
     return ""
 
 
-def _extract_deterministic_plan(message: str, session: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _extract_price_and_exclusions(low: str) -> Tuple[Optional[int], Optional[int], List[str]]:
+    """
+    Deteksi batas harga (under 100 / di bawah 100rb / 80-90an / 59rb) & kata yang dihindari ('jangan v-neck').
+    """
+    max_price: Optional[int] = None
+    min_price: Optional[int] = None
+    excludes: List[str] = []
+
+    # Under 100 / dibawah 100rb / maks 150k / < 100000
+    m_under = re.search(
+        r"\b(?:under|dibawah|di\s*bawah|maks(?:imal)?|max|kurang\s+dari|<)\s*(?:rp\.?\s*)?(\d{2,6})(?:\s*(rb|ribu|k|an))?\b",
+        low,
+    )
+    if m_under:
+        num = int(m_under.group(1))
+        unit = (m_under.group(2) or "").lower()
+        if num < 1000:
+            max_price = num * 1000
+        elif unit in ("rb", "ribu", "k"):
+            max_price = num * 1000
+        else:
+            max_price = num
+    else:
+        # "harganya 90an" / "80an" / "59rb" / "79k"
+        m_approx = re.search(r"\b(\d{2,3})\s*(?:rb|ribu|k|an)\b", low)
+        if m_approx:
+            n = int(m_approx.group(1))
+            if 20 <= n <= 500:
+                max_price = (n + 15) * 1000
+
+    # Filter negatif: "jangan vneck", "tanpa kantong", "ga mau polo"
+    if re.search(r"\b(?:jangan|gak?\s*mau|tidak\s*mau|tanpa|no|bukan)\s+v[\-\s]?neck\b", low):
+        excludes.extend(["V-NECK", "VNECK", "V NECK"])
+    if re.search(r"\b(?:jangan|tanpa|no)\s+(?:kantong|saku|pocket)\b", low):
+        excludes.extend(["POCKET", "SAKU", "KANTONG"])
+    if re.search(r"\b(?:jangan|bukan)\s+polo\b", low):
+        excludes.append("POLO")
+
+    return min_price, max_price, excludes
+
+
+def _detect_fitting_label(desc: str) -> str:
+    """1 artikel = 1 konsep potongan. Ekstrak otomatis dari deskripsi artikel di DB!"""
+    up = str(desc or "").upper()
+    if any(k in up for k in ("OVERSIZED", "OVERSIZE")):
+        return "Oversized"
+    if "RELAXED" in up:
+        return "Relaxed Fit"
+    if "SLIM FIT" in up or "SLIM" in up:
+        return "Slim Fit"
+    if "LOOSE" in up:
+        return "Loose Fit"
+    if "CROP" in up:
+        return "Crop Fit"
+    if "REGULAR" in up or "REGULER" in up:
+        return "Regular Fit"
+    return ""
+
+
+def _extract_deterministic_plan(
+    message: str,
+    session: Optional[Dict[str, Any]] = None,
+    quoted_message: str = "",
+) -> Dict[str, Any]:
     clean = re.sub(r"\s+", " ", str(message or "").strip())
     low = clean.lower()
+    quoted_clean = re.sub(r"\s+", " ", str(quoted_message or "").strip())
+    combined_low = f"{low} {quoted_clean.lower()}".strip()
 
     if not clean or len(clean) < 2 or CASUAL_SHORT_RE.match(clean):
         return {
@@ -800,9 +869,13 @@ def _extract_deterministic_plan(message: str, session: Optional[Dict[str, Any]] 
             "genderHint": "",
             "referencedNumber": 0,
             "wantsMoreLikeRef": False,
+            "wantsColorPhotos": False,
             "wantsPromo": False,
             "wantsNewArrival": False,
             "wantsBestSeller": False,
+            "maxPrice": None,
+            "minPrice": None,
+            "excludeKeywords": [],
             "multiQueries": [],
             "skuOrArticle": "",
             "directAnswer": "",
@@ -818,7 +891,7 @@ def _extract_deterministic_plan(message: str, session: Optional[Dict[str, Any]] 
             low,
         )
     )
-    if is_pure_greeting:
+    if is_pure_greeting and not quoted_clean:
         return {
             "intent": "GREETING",
             "shouldReply": True,
@@ -826,17 +899,50 @@ def _extract_deterministic_plan(message: str, session: Optional[Dict[str, Any]] 
             "genderHint": str((session or {}).get("preferredGender") or ""),
             "referencedNumber": 0,
             "wantsMoreLikeRef": False,
+            "wantsColorPhotos": False,
             "wantsPromo": False,
             "wantsNewArrival": False,
             "wantsBestSeller": False,
+            "maxPrice": None,
+            "minPrice": None,
+            "excludeKeywords": [],
             "multiQueries": [],
             "skuOrArticle": "",
             "directAnswer": "",
             "engine": "deterministic",
         }
 
-    # Deteksi niat Order / Keep / Bayar
-    if re.search(r"\b(mau\s+keep|fix\s+(?:beli|order|ambil|keep)|jadi\s+beli|mau\s+transfer|kirim\s+rekening|gimana\s+cara\s+bayar|mau\s+order|pesan\s+(?:no|nomor|yang))\b", low):
+    # Deteksi permintaan cek fisik / foto real di hanger toko -> auto eskalasi sopan ke PIC!
+    if re.search(r"\b(foto(?:kan|in)?\s+asli|real\s*pic|pakai\s+resleting|pake\s+resleting|ada\s+kancing|nerawang|menerawang|putih\s+tulang|broken\s+white\s+atau|lingkar\s+dada|size\s*chart)\b", low):
+        return {
+            "intent": "PHYSICAL_CHECK",
+            "shouldReply": True,
+            "complexity": "HEAVY",
+            "genderHint": str((session or {}).get("preferredGender") or ""),
+            "referencedNumber": 0,
+            "wantsMoreLikeRef": False,
+            "wantsColorPhotos": False,
+            "wantsPromo": False,
+            "wantsNewArrival": False,
+            "wantsBestSeller": False,
+            "maxPrice": None,
+            "minPrice": None,
+            "excludeKeywords": [],
+            "multiQueries": [],
+            "skuOrArticle": "",
+            "directAnswer": "",
+            "engine": "deterministic",
+        }
+
+    # Deteksi niat Order / Keep / Bayar / QRIS / GoSend / Reply promo "Mau navy S kak"
+    is_direct_buy_quote = bool(
+        quoted_clean and re.search(r"\b(mau|ambil|keep|pesan|order|fix|beli)\b", low)
+    )
+    if is_direct_buy_quote or re.search(
+        r"\b(mau\s+keep|fix\s+(?:beli|order|ambil|keep)|jadi\s+beli|mau\s+transfer|kirim\s+rekening|"
+        r"gimana\s+cara\s+bayar|mau\s+order|qris|tak\s+tf|tak\s+gosend|pesan\s+(?:no|nomor|yang)|ambil\s+store)\b",
+        low,
+    ):
         ref_m = re.search(r"\b(?:no|nomor|nomer)\s*\.?\s*([123])\b", low)
         return {
             "intent": "ORDER_INTENT",
@@ -845,32 +951,44 @@ def _extract_deterministic_plan(message: str, session: Optional[Dict[str, Any]] 
             "genderHint": str((session or {}).get("preferredGender") or ""),
             "referencedNumber": int(ref_m.group(1)) if ref_m else 0,
             "wantsMoreLikeRef": False,
+            "wantsColorPhotos": False,
             "wantsPromo": False,
             "wantsNewArrival": False,
             "wantsBestSeller": False,
+            "maxPrice": None,
+            "minPrice": None,
+            "excludeKeywords": [],
             "multiQueries": [],
             "skuOrArticle": "",
             "directAnswer": "",
             "engine": "deterministic",
         }
 
-    # Deteksi brand luar SUKO
+    min_price, max_price, exclude_kws = _extract_price_and_exclusions(low)
+
+    # Deteksi permintaan "foto tiap warna / foto yang putih / warna lainnya" (dari chat real #3 & #4!)
+    wants_color_photos = bool(
+        re.search(
+            r"\b(foto\s+tiap\s+warna|lihat\s+warna\s+lain|warna\s+lain(?:nya)?|contoh\s+foto|foto\s+(?:yang|yg)\s+\w+|fotoin\s+warna)\b",
+            low,
+        )
+    )
+
     asked_other_brand = next((b for b in OTHER_BRAND_WORDS if re.search(rf"\b{re.escape(b)}\b", low)), "")
 
-    sku_match = re.search(r"\b(\d{7,13})\b", clean)
-    art_match = re.search(r"\b([A-Z]{1,4}\d[A-Z0-9\-]{3,12})\b", clean.upper())
+    sku_match = re.search(r"\b(\d{7,13})\b", f"{clean} {quoted_clean}")
+    art_match = re.search(r"\b([A-Z]{1,4}\d[A-Z0-9\-]{3,12})\b", f"{clean} {quoted_clean}".upper())
     sku_or_article = ""
     if sku_match:
         sku_or_article = sku_match.group(1)
-    elif art_match and not re.match(r"^(?:RP|IDR|WA|HP|COD)\d", art_match.group(1)):
+    elif art_match and not re.match(r"^(?:RP|IDR|WA|HP|COD|08)\d", art_match.group(1)):
         sku_or_article = art_match.group(1)
 
-    gender_hint = _detect_gender_deterministic(low) or str((session or {}).get("preferredGender") or "")
+    gender_hint = _detect_gender_deterministic(combined_low) or str((session or {}).get("preferredGender") or "")
     wants_promo = any(w in low for w in ("promo", "diskon", "sale", "potongan", "spesial", "special price", "murah"))
     wants_new = any(w in low for w in ("terbaru", "baru masuk", "model baru", "koleksi baru", "new arrival", "barang baru"))
     wants_best = any(w in low for w in ("best seller", "bestseller", "terlaris", "paling laku", "favorit", "paling laris"))
 
-    # Deteksi referensi nomor ("koleksi lainnya nomor 3", "yang nomor 2")
     ref_m = re.search(r"\b(?:no|nomor|nomer)\s*\.?\s*([123])\b", low)
     ref_num = int(ref_m.group(1)) if ref_m else 0
     wants_more_like_ref = bool(ref_num and any(w in low for w in ("lain", "lainnya", "mirip", "koleksi", "model lain", "alternatif")))
@@ -890,19 +1008,20 @@ def _extract_deterministic_plan(message: str, session: Optional[Dict[str, Any]] 
         if sz_m2:
             size_hint = sz_m2.group(1).upper()
 
-    # Deteksi Multi-Kategori (misal "jaket winter atau celana pendek atau rok")
+    # Gunakan teks gabungan jika pesan customer pendek dan me-reply postingan promo
+    search_source_low = combined_low if (quoted_clean and len(clean) < 45) else low
     matched_cats: List[Tuple[str, List[str]]] = []
     for cat_key, cat_words in CATEGORY_SYNONYMS.items():
-        hits = [w for w in cat_words if re.search(rf"\b{re.escape(w)}\b", low)]
+        hits = [w for w in cat_words if re.search(rf"\b{re.escape(w)}\b", search_source_low)]
         if hits:
             matched_cats.append((cat_key, hits))
 
-    raw_tokens = re.findall(r"[a-zA-Z0-9\+\-]+", low)
+    raw_tokens = re.findall(r"[a-zA-Z0-9\+\-]+", search_source_low)
     keywords: List[str] = []
-    if "kaos kaki" in low:
+    if "kaos kaki" in search_source_low:
         keywords.append("kaoskaki")
     for tok in raw_tokens:
-        if len(tok) < 2 or tok in STOPWORDS_ID:
+        if len(tok) < 2 or tok in STOPWORDS_ID or tok.isdigit():
             continue
         if color_hint and any(tok == s.lower() for s in COLOR_SYNONYMS.get(color_hint, [])):
             continue
@@ -912,7 +1031,7 @@ def _extract_deterministic_plan(message: str, session: Optional[Dict[str, Any]] 
             keywords.append(tok)
 
     multi_queries: List[Dict[str, Any]] = []
-    if len(matched_cats) >= 2:
+    if len(matched_cats) >= 2 and not quoted_clean:
         for cat_key, hits in matched_cats[:3]:
             q_kws = list(hits[:2])
             if cat_key == "CELANA" and "pendek" in low and "pendek" not in q_kws:
@@ -937,7 +1056,7 @@ def _extract_deterministic_plan(message: str, session: Optional[Dict[str, Any]] 
                 "colorHint": color_hint,
                 "sizeHint": size_hint,
             })
-    elif keywords or matched_cats or wants_promo or wants_new or wants_best or sku_or_article:
+    elif keywords or matched_cats or wants_promo or wants_new or wants_best or sku_or_article or max_price or wants_color_photos:
         multi_queries.append({
             "label": " ".join(keywords[:3]) or (matched_cats[0][1][0] if matched_cats else "produk SUKO"),
             "keywords": keywords[:5],
@@ -947,16 +1066,19 @@ def _extract_deterministic_plan(message: str, session: Optional[Dict[str, Any]] 
         })
 
     has_trigger = bool(
-        sku_or_article or multi_queries or wants_promo or wants_new or wants_best or wants_more_like_ref or asked_other_brand
+        sku_or_article or multi_queries or wants_promo or wants_new or wants_best or wants_more_like_ref
+        or asked_other_brand or max_price or wants_color_photos or quoted_clean
         or any(re.search(rf"\b{re.escape(w)}\b", low) for w in INQUIRY_TRIGGER_WORDS)
     )
     is_complex = bool(
         len(matched_cats) >= 2 or wants_more_like_ref or ref_num > 0 or len(clean) > 55 or asked_other_brand
-        or (session and len(session.get("history") or []) > 0)
+        or quoted_clean or max_price or wants_color_photos or (session and len(session.get("history") or []) > 0)
     )
 
     if asked_other_brand and not multi_queries:
         intent = "OTHER_BRAND"
+    elif wants_color_photos:
+        intent = "COLOR_PHOTOS_INQUIRY"
     elif wants_more_like_ref:
         intent = "MORE_LIKE_NUMBER"
     elif wants_new:
@@ -977,9 +1099,13 @@ def _extract_deterministic_plan(message: str, session: Optional[Dict[str, Any]] 
         "genderHint": gender_hint,
         "referencedNumber": ref_num,
         "wantsMoreLikeRef": wants_more_like_ref,
+        "wantsColorPhotos": wants_color_photos,
         "wantsPromo": wants_promo,
         "wantsNewArrival": wants_new,
         "wantsBestSeller": wants_best,
+        "maxPrice": max_price,
+        "minPrice": min_price,
+        "excludeKeywords": exclude_kws,
         "askedOtherBrand": asked_other_brand,
         "multiQueries": multi_queries,
         "skuOrArticle": sku_or_article,
@@ -993,18 +1119,19 @@ def run_ai_agent_planner(
     is_group: bool,
     session: Optional[Dict[str, Any]],
     cfg: Dict[str, Any],
+    quoted_message: str = "",
 ) -> Dict[str, Any]:
     """
     TAHAP 1 AGENT AI:
     Menyaring & merencanakan aksi (memilih model RINGAN Flash vs BERAT Orchestrator).
     """
-    det = _extract_deterministic_plan(message, session=session)
+    det = _extract_deterministic_plan(message, session=session, quoted_message=quoted_message)
     clean = str(message or "").strip()
 
     # Fast-path 0ms untuk obrolan sangat pendek, sapaan murni, atau exact SKU
     if not clean or len(clean) < 2 or CASUAL_SHORT_RE.match(clean):
         return det
-    if det["intent"] == "GREETING" or det.get("skuOrArticle"):
+    if det["intent"] in ("GREETING", "PHYSICAL_CHECK") or det.get("skuOrArticle"):
         return det
 
     mem_ctx = {
@@ -1013,36 +1140,40 @@ def run_ai_agent_planner(
         "recentHistory": ((session or {}).get("history") or [])[-3:],
     }
     tier = "HEAVY" if det.get("complexity") == "HEAVY" else "LIGHT"
+    quoted_ctx = f"\nPesan/Postingan Promo yang Di-Reply Customer: {json.dumps(quoted_message[:400], ensure_ascii=False)}" if quoted_message else ""
 
     prompt = (
         f"Kamu adalah AI Orchestrator & Filter Customer Service resmi *{cfg.get('storeName', 'SUKO Official')}* (KHUSUS produk SUKO saja!).\n"
         f"Konteks: {'Pesan masuk di GRUP WA member' if is_group else 'Lanjutan obrolan di PRIVATE CHAT VIP'}.\n"
         f"SOP Toko SUKO:\n{cfg.get('storeSop', DEFAULT_SOP_TEXT)}\n\n"
-        f"Memori Sesi Customer: {json.dumps(mem_ctx, ensure_ascii=False)}\n"
+        f"Memori Sesi Customer: {json.dumps(mem_ctx, ensure_ascii=False)}{quoted_ctx}\n"
         f"Pesan Customer Terbaru: {json.dumps(clean, ensure_ascii=False)}\n\n"
-        "Tugasmu: analisis pesan + memori, lalu balas HANYA JSON murni dengan skema ini:\n"
+        "Tugasmu: analisis pesan + pesan yang di-reply + memori, lalu balas HANYA JSON murni:\n"
         "{\n"
-        '  "intent": "PRODUCT_INQUIRY"|"PROMO_INQUIRY"|"NEW_ARRIVAL"|"BEST_SELLER"|"MORE_LIKE_NUMBER"|"ORDER_INTENT"|"FAQ_SOP"|"COMPLAINT"|"OTHER_BRAND"|"GREETING"|"CASUAL_CHAT",\n'
+        '  "intent": "PRODUCT_INQUIRY"|"PROMO_INQUIRY"|"NEW_ARRIVAL"|"BEST_SELLER"|"MORE_LIKE_NUMBER"|"COLOR_PHOTOS_INQUIRY"|"ORDER_INTENT"|"PHYSICAL_CHECK"|"FAQ_SOP"|"COMPLAINT"|"OTHER_BRAND"|"GREETING"|"CASUAL_CHAT",\n'
         '  "shouldReply": true/false,\n'
         '  "genderHint": "LADIES"|"MEN"|"KIDS"|"",\n'
-        '  "referencedNumber": 0 atau 1/2/3 jika merujuk produk nomor sebelumnya,\n'
-        '  "wantsMoreLikeRef": true/false (true jika minta koleksi lain / mirip produk nomor sebelumnya),\n'
+        '  "referencedNumber": 0 atau 1/2/3,\n'
+        '  "wantsMoreLikeRef": true/false,\n'
+        '  "wantsColorPhotos": true/false (true jika minta foto tiap warna / warna lain / foto warna tertentu),\n'
         '  "wantsPromo": true/false,\n'
         '  "wantsNewArrival": true/false,\n'
         '  "wantsBestSeller": true/false,\n'
+        '  "maxPrice": angka rupiah atau null (misal "under 100" -> 100000),\n'
+        '  "excludeKeywords": ["VNECK", dll jika customer bilang jangan v-neck],\n'
         '  "multiQueries": [\n'
-        '    {"label": "frasa produk yg dicari", "keywords": ["kata", "inti"], "categoryHint": "ATASAN|JAKET|CELANA|DRESS_ROK|SEPATU_SANDAL|TAS_AKSESORIS|TIDUR_DALAM|", "colorHint": "BLACK|WHITE|NAVY|BLUE|GREY|RED|GREEN|BEIGE|BROWN|PINK|YELLOW|ORANGE|PURPLE|", "sizeHint": "XS|S|M|L|XL|XXL|"}\n'
+        '    {"label": "frasa produk", "keywords": ["kata"], "categoryHint": "ATASAN|JAKET|CELANA|DRESS_ROK|SEPATU_SANDAL|TAS_AKSESORIS|TIDUR_DALAM|", "colorHint": "", "sizeHint": ""}\n'
         '  ],\n'
         '  "skuOrArticle": "",\n'
-        '  "directAnswer": "isi jawaban sopan Halo BCA HANYA jika intent adalah FAQ_SOP/ORDER_INTENT/COMPLAINT/OTHER_BRAND yang tidak butuh cari produk baru"\n'
+        '  "directAnswer": "jawaban Halo BCA HANYA jika FAQ_SOP/ORDER_INTENT/PHYSICAL_CHECK/COMPLAINT/OTHER_BRAND"\n'
         "}\n\n"
         "ATURAN KETAT:\n"
         "1. Obrolan santai non-belanja ('bro nongkrong yuk', 'wkwk', 'otw') -> intent='CASUAL_CHAT', shouldReply=false.\n"
-        "2. Sapaan ('halo', 'hai', 'permisi', 'pagi') -> intent='GREETING', shouldReply=true.\n"
-        "3. Jika customer tanya beberapa jenis sekaligus (misal 'jaket winter atau celana pendek atau rok'), pecah ke array `multiQueries` (maks 3 item terpisah!).\n"
-        "4. Jika customer bilang 'koleksi lainnya nomor 3' -> lihat `lastProducts` di Memori, set `wantsMoreLikeRef=true`, `referencedNumber=3`, dan isi `multiQueries` sesuai kategori produk nomor 3!\n"
-        "5. Warisi `preferredGender` dari memori jika customer tidak menyebut gender baru.\n"
-        "6. Jika customer bilang fix beli / mau keep / minta transfer -> intent='ORDER_INTENT', shouldReply=true.\n"
+        "2. Jika customer bertanya pilihan A atau B (misal 'reg fit atau slim fit', 'putih bersih atau putih tulang'), JANGAN pernah jawab 'Iya kak'!\n"
+        "3. Jika customer minta foto asli di hanger / tanya kancing-resleting / lingkar dada fisik -> intent='PHYSICAL_CHECK'.\n"
+        "4. Jika customer reply postingan promo lalu ketik 'Mau navy S kak' / 'QRIS' / 'keep' -> intent='ORDER_INTENT'.\n"
+        "5. Jika customer tanya beberapa jenis sekaligus -> pecah ke `multiQueries` (maks 3 item!).\n"
+        "6. Jika customer bilang 'under 100' / 'dibawah 100rb' -> isi `maxPrice: 100000`!\n"
     )
 
     raw_txt, used_model = _invoke_smart_ai(
@@ -1050,7 +1181,7 @@ def run_ai_agent_planner(
         tier=tier,
         cfg=cfg,
         expect_json=True,
-        timeout=5.5,
+        timeout=4.8,
         temperature=0.1,
         max_tokens=550,
     )
@@ -1086,6 +1217,18 @@ def run_ai_agent_planner(
     if gender_hint not in ("LADIES", "MEN", "KIDS"):
         gender_hint = str((session or {}).get("preferredGender") or "")
 
+    max_p = ai_res.get("maxPrice")
+    try:
+        max_p_int = int(max_p) if max_p is not None else det.get("maxPrice")
+    except Exception:
+        max_p_int = det.get("maxPrice")
+
+    excl_raw = ai_res.get("excludeKeywords")
+    excl_kws = [str(x).strip().upper() for x in (excl_raw if isinstance(excl_raw, list) else []) if str(x or "").strip()]
+    for ek in det.get("excludeKeywords") or []:
+        if ek not in excl_kws:
+            excl_kws.append(ek)
+
     return {
         "intent": intent,
         "shouldReply": should_reply,
@@ -1093,9 +1236,13 @@ def run_ai_agent_planner(
         "genderHint": gender_hint,
         "referencedNumber": int(ai_res.get("referencedNumber") or det.get("referencedNumber") or 0),
         "wantsMoreLikeRef": bool(ai_res.get("wantsMoreLikeRef", det.get("wantsMoreLikeRef", False))),
+        "wantsColorPhotos": bool(ai_res.get("wantsColorPhotos", det.get("wantsColorPhotos", False))),
         "wantsPromo": bool(ai_res.get("wantsPromo", det.get("wantsPromo", False))),
         "wantsNewArrival": bool(ai_res.get("wantsNewArrival", det.get("wantsNewArrival", False))),
         "wantsBestSeller": bool(ai_res.get("wantsBestSeller", det.get("wantsBestSeller", False))),
+        "maxPrice": max_p_int,
+        "minPrice": det.get("minPrice"),
+        "excludeKeywords": excl_kws,
         "askedOtherBrand": det.get("askedOtherBrand") or "",
         "multiQueries": multi_queries,
         "skuOrArticle": str(ai_res.get("skuOrArticle") or det.get("skuOrArticle") or "").strip().upper(),
@@ -1228,6 +1375,8 @@ def _query_single_subsearch(
     best_seller_ranks: Dict[str, int],
     sku_or_art: str = "",
     max_candidates: int = 6,
+    max_price: Optional[int] = None,
+    exclude_keywords: Optional[List[str]] = None,
 ) -> Tuple[List[Dict[str, Any]], bool]:
     """
     Kembalikan (list kandidat artikel CatalogArticle, exact_matched_flag).
@@ -1269,6 +1418,10 @@ def _query_single_subsearch(
         params.append(store_scope)
     if wants_promo:
         where_clauses.append('"articleHasPromo" = 1')
+    if max_price and max_price > 0:
+        # Filter ketat harga efektif (hargaPromo jika ada, selain itu hargaNormal) <= max_price!
+        where_clauses.append('COALESCE(NULLIF("hargaPromo", 0), "hargaNormal") <= ?')
+        params.append(int(max_price))
 
     or_parts: List[str] = []
     or_params: List[Any] = []
@@ -1339,6 +1492,15 @@ def _query_single_subsearch(
             continue
 
         desc_only = str(c.get("description") or "").upper()
+        # Filter negatif (misal 'jangan v-neck', 'tanpa kantong')
+        if exclude_keywords and any(ek in desc_only for ek in exclude_keywords):
+            continue
+        # Verifikasi harga efektif <= max_price setelah sanitasi harga
+        if max_price and max_price > 0:
+            eff_p = parse_retail_price(c.get("hargaPromo")) or parse_retail_price(c.get("hargaNormal")) or 0
+            if eff_p <= 0 or eff_p > max_price:
+                continue
+
         desc_up = f"{desc_only} {c.get('dept') or ''} {c.get('article') or ''}".upper()
         score = 100 + gender_bonus
 
@@ -1399,6 +1561,8 @@ def execute_python_catalog_search(
     wants_promo = bool(plan.get("wantsPromo", False))
     wants_new = bool(plan.get("wantsNewArrival", False))
     wants_best = bool(plan.get("wantsBestSeller", False))
+    max_price = plan.get("maxPrice")
+    exclude_kws = list(plan.get("excludeKeywords") or [])
     sku_or_art = str(plan.get("skuOrArticle") or "").strip()
     multi_queries = list(plan.get("multiQueries") or [])
     if not multi_queries:
@@ -1413,7 +1577,8 @@ def execute_python_catalog_search(
         # Multi-Kategori: ambil maks 1-2 kandidat terbaik per kategori (total 3 produk seimbang!)
         for mq in multi_queries[:3]:
             cands, exact_ok = _query_single_subsearch(
-                mq, store_scope, gender_hint, wants_promo, wants_new, wants_best, used_articles, best_ranks, max_candidates=2
+                mq, store_scope, gender_hint, wants_promo, wants_new, wants_best, used_articles, best_ranks,
+                max_candidates=2, max_price=max_price, exclude_keywords=exclude_kws,
             )
             if not exact_ok and mq.get("label"):
                 unavailable_labels.append(str(mq["label"]))
@@ -1431,7 +1596,7 @@ def execute_python_catalog_search(
         mq0 = multi_queries[0]
         cands, exact_ok = _query_single_subsearch(
             mq0, store_scope, gender_hint, wants_promo, wants_new, wants_best, used_articles, best_ranks,
-            sku_or_art=sku_or_art, max_candidates=max(limit + 2, 5),
+            sku_or_art=sku_or_art, max_candidates=max(limit + 2, 5), max_price=max_price, exclude_keywords=exclude_kws,
         )
         if not exact_ok and mq0.get("label") and not sku_or_art:
             unavailable_labels.append(str(mq0["label"]))
@@ -1498,6 +1663,7 @@ def execute_python_catalog_search(
         size_hint = str(r.get("_sizeHint") or "")
 
         ready_by_color: Dict[str, set] = {}
+        color_image_map: Dict[str, str] = {}
         ready_colors_set = set()
         ready_sizes_set = set()
         all_clean_images: List[str] = []
@@ -1547,6 +1713,8 @@ def execute_python_catalog_search(
                     if is_clean_product_image(extra_img) and extra_img not in cand_imgs:
                         cand_imgs.append(extra_img)
                 for ci in cand_imgs:
+                    if v_stok > 0 and col_valid and v_col not in color_image_map:
+                        color_image_map[v_col] = ci
                     if v_stok > 0 and color_hint and col_ok and not matching_color_image:
                         matching_color_image = ci
                     if ci not in all_clean_images:
@@ -1596,6 +1764,7 @@ def execute_python_catalog_search(
             "sku": str(r.get("sku") or ""),
             "article": art,
             "name": clean_name or art,
+            "fitting": _detect_fitting_label(raw_desc),
             "brand": str(r.get("subBrand") or r.get("brand") or "SUKO").strip(),
             "storeGroup": str(r.get("brandGroup") or "SUKO").strip(),
             "category": str(r.get("categoryKey") or "").strip(),
@@ -1606,6 +1775,7 @@ def execute_python_catalog_search(
             "readyColors": sorted(ready_colors_set)[:8],
             "readySizes": sorted(ready_sizes_set, key=_size_sort_key)[:10],
             "readyColorSizes": ready_color_sizes,
+            "colorImages": color_image_map,
             "hargaNormal": harga_normal,
             "hargaNormalText": format_idr(harga_normal),
             "hargaPromo": harga_promo,
@@ -1643,6 +1813,8 @@ def _format_single_product_block(idx: int, total: int, p: Dict[str, Any]) -> str
     badge_tag = f" — _{p['badge']}_" if p.get("badge") else ""
     brand_tag = f" ({p['brand']})" if p.get("brand") else ""
     lines: List[str] = [f"{prefix}{brand_tag}{badge_tag}"]
+    if p.get("fitting"):
+        lines.append(f"✂️ Potongan: *{p['fitting']}*")
 
     if p.get("hargaPromoText"):
         promo_extra = f" — _{p['promoLabel']}_" if p.get("promoLabel") else ""
@@ -1776,14 +1948,21 @@ def build_final_cards_and_text(
 
     if intent == "ORDER_INTENT" and not products:
         direct = plan.get("directAnswer") or (
-            f"Baik {sapaan}, dengan senang hati saya bantu proses ya! 😊\n"
-            f"Boleh konfirmasi sekali lagi:\n"
-            f"• *Model / Nomor produk:*\n"
-            f"• *Warna & Ukuran:*\n"
-            f"• *Pengambilan di toko / kirim alamat:*\n\n"
-            f"Begitu lengkap, tim PIC kami (*Kak {cs_name}*) segera meneruskan detail pembayaran & proses *keep*-nya untuk Kakak 🙏"
+            f"Baik {sapaan}, dengan senang hati saya bantu proses transaksinya ya! 😊\n\n"
+            f"Boleh info data singkat berikut agar langsung kami siapkan:\n"
+            f"• *Model / Warna & Size:*\n"
+            f"• *Nomor Member Matahari:* _(jika ada, untuk poin member)_\n"
+            f"• *Pengambilan:* Ambil di Store SUKO (PTC) / pesan GoSend sendiri\n\n"
+            f"💳 Pembayaran via *QRIS* memiliki tenggat waktu *5 menit* ya Kak — sebentar PIC kami (*Kak {cs_name}*) segera kirimkan QRIS-nya setelah data di atas lengkap 🙏"
         )
         direct = _sanitize_outgoing_reply(direct)
+        return direct, [{"text": direct, "imageUrl": None, "fallbackImages": []}], plan.get("engine") or "deterministic"
+
+    if intent == "PHYSICAL_CHECK" and not products:
+        direct = (
+            f"Baik {sapaan}, untuk detail fisik / foto asli produknya langsung dari toko, "
+            f"sebentar saya bantu cekkan dulu ke tim kami (*Kak {cs_name}*) ya agar 100% akurat untuk Kakak 🙏 Mohon ditunggu sebentar ya 😊"
+        )
         return direct, [{"text": direct, "imageUrl": None, "fallbackImages": []}], plan.get("engine") or "deterministic"
 
     if intent in ("FAQ_SOP", "COMPLAINT", "OTHER_BRAND") and not products:
@@ -1812,6 +1991,40 @@ def build_final_cards_and_text(
             f"Boleh info alternatif model, warna, atau ukuran yang Kakak cari agar saya bantu cekkan koleksi *SUKO* lain yang sedang *ready* ya Kak? 😊"
         )
         return txt, [{"text": txt, "imageUrl": None, "fallbackImages": []}], plan.get("engine") or "deterministic"
+
+    # Mode KHUSUS: Customer minta "foto tiap warna / warna lainnya" -> kirim 1 kartu Foto HD per warna READY!
+    if plan.get("wantsColorPhotos") and products:
+        p0 = products[0]
+        c_imgs: Dict[str, str] = p0.get("colorImages") or {}
+        if len(c_imgs) >= 2:
+            opening, closing, copy_model = _generate_ai_framing(
+                sender_name, message, plan, [p0], unavailable_labels, session, from_group_name, cfg
+            )
+            color_cards: List[Dict[str, Any]] = []
+            color_items = list(c_imgs.items())[:4]
+            price_line = (
+                f"🏷️ Harga: ~{p0['hargaNormalText']}~ ➡️ *{p0['hargaPromoText']}*"
+                if p0.get("hargaPromoText")
+                else f"🏷️ Harga: *{p0['hargaNormalText']}*"
+            )
+            for idx, (col_name, col_url) in enumerate(color_items, start=1):
+                sz_match = next((cs for cs in (p0.get("readyColorSizes") or []) if cs.upper().startswith(col_name.upper())), col_name)
+                parts = []
+                if idx == 1:
+                    parts.append(opening + "\n")
+                parts.append(f"*{p0['name']}* — Warna *{col_name}*")
+                if p0.get("fitting"):
+                    parts.append(f"✂️ Potongan: *{p0['fitting']}*")
+                parts.append(price_line)
+                parts.append(f"📦 Ready: {sz_match}")
+                if idx == len(color_items):
+                    parts.append("\n" + closing)
+                color_cards.append({
+                    "text": _sanitize_outgoing_reply("\n".join(parts).strip()),
+                    "imageUrl": col_url,
+                    "fallbackImages": p0.get("fallbackImages") or [],
+                })
+            return _sanitize_outgoing_reply("\n\n".join(c["text"] for c in color_cards)), color_cards, copy_model
 
     # Ada produk READY -> Bungkus dengan pembuka & penutup AI Halo BCA + 1 Foto HD per Produk!
     opening, closing, copy_model = _generate_ai_framing(
@@ -1910,6 +2123,7 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
     cfg = load_config()
 
     message = str(payload.get("message") or "").strip()
+    quoted_message = str(payload.get("quotedMessage") or "").strip()
     sender = str(payload.get("sender") or "").strip()
     sender_name = str(payload.get("senderName") or "Kak").strip()
     group_id = str(payload.get("groupId") or "").strip()
@@ -1977,8 +2191,8 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
         if cfg.get("autoSchedule", True) and not is_within_store_hours(cfg):
             return {"success": True, "shouldReply": False, "reason": "OUTSIDE_STORE_HOURS", "elapsedMs": int((time.monotonic() - t0) * 1000)}
 
-    # 6. TAHAP 1: AGENT AI PLANNER (Smart Orchestrator vs Executor Flash + Memori!)
-    plan = run_ai_agent_planner(message, is_group=is_group, session=customer_session, cfg=cfg)
+    # 6. TAHAP 1: AGENT AI PLANNER (Smart Orchestrator vs Executor Flash + Memori + Quoted Promo!)
+    plan = run_ai_agent_planner(message, is_group=is_group, session=customer_session, cfg=cfg, quoted_message=quoted_message)
     if not plan.get("shouldReply", False):
         elapsed = int((time.monotonic() - t0) * 1000)
         append_log({
@@ -1989,11 +2203,17 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
         })
         return {"success": True, "shouldReply": False, "reason": "CASUAL_CHAT_IGNORED", "intent": plan.get("intent"), "intentDetail": plan, "elapsedMs": elapsed}
 
-    # 7. TAHAP 2: EKSEKUTOR PROGRAM PYTHON (100% SUKO, Gender, Multi-Query, Live Stock, Foto HD!)
+    # 7. TAHAP 2: EKSEKUTOR PROGRAM PYTHON (100% SUKO, Gender, Multi-Query, maxPrice, Live Stock, Foto HD!)
     products: List[Dict[str, Any]] = []
     unavailable_labels: List[str] = []
-    skip_search_intents = {"GREETING", "ORDER_INTENT", "FAQ_SOP", "COMPLAINT"}
+    skip_search_intents = {"GREETING", "ORDER_INTENT", "PHYSICAL_CHECK", "FAQ_SOP", "COMPLAINT"}
     if plan.get("intent") not in skip_search_intents:
+        # Jika minta foto warna lain dari artikel yang barusan dibahas -> cari artikel terakhir di sesi!
+        if plan.get("wantsColorPhotos") and not plan.get("skuOrArticle") and customer_session:
+            lp = customer_session.get("lastProducts") or []
+            if lp:
+                ref_idx = max(0, min(len(lp) - 1, int(plan.get("referencedNumber") or 1) - 1))
+                plan["skuOrArticle"] = str(lp[ref_idx].get("article") or lp[ref_idx].get("sku") or "")
         exclude_arts = list((customer_session or {}).get("shownArticles") or []) if (plan.get("wantsMoreLikeRef") or plan.get("wantsNewArrival") or plan.get("wantsBestSeller")) else []
         products, unavailable_labels = execute_python_catalog_search(
             plan=plan,
@@ -2060,28 +2280,34 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
             bot_summary=reply_text[:160],
         )
 
-    # Notifikasi otomatis ke WA PIC (081296393972) saat customer siap ORDER/KEEP atau KOMPLAIN!
+    # Notifikasi otomatis ke WA PIC (081296393972) saat customer siap ORDER/KEEP, CEK FISIK, atau KOMPLAIN!
     notify_pic_phone = None
     notify_pic_message = None
     pause_after_reply = False
-    if plan.get("intent") in ("ORDER_INTENT", "COMPLAINT"):
+    if plan.get("intent") in ("ORDER_INTENT", "PHYSICAL_CHECK", "COMPLAINT"):
         notify_pic_phone = cfg.get("picAlertPhone") or "6281296393972"
         last_prods_str = ", ".join(
             f"No.{p.get('num')} {p.get('name')}" for p in ((customer_session or {}).get("lastProducts") or [])
-        ) or "-"
-        tag = "🛒 *[CLOSING / KEEP ORDER SUKO]*" if plan["intent"] == "ORDER_INTENT" else "⚠️ *[ESKALASI KOMPLAIN CUSTOMER]*"
+        ) or (quoted_message[:100] if quoted_message else "-")
+        tag = (
+            "🛒 *[CLOSING / SIAP QRIS SUKO]*" if plan["intent"] == "ORDER_INTENT"
+            else "📸 *[BUTUH CEK FISIK / FOTO ASLI]*" if plan["intent"] == "PHYSICAL_CHECK"
+            else "⚠️ *[ESKALASI KOMPLAIN CUSTOMER]*"
+        )
         notify_pic_message = (
             f"{tag}\n"
             f"• Customer: *{sender_name}* ({sender_digits or sender})\n"
             f"• Pesan: \"{message}\"\n"
-            f"• Produk terakhir dilihat: {last_prods_str}\n"
-            f"• Bot otomatis minggir sementara agar Kakak bisa langsung handle pembayaran/closing!"
+            f"• Konteks produk: {last_prods_str}\n"
+            f"• Bot otomatis minggir sementara agar Kakak bisa langsung handle!"
         )
         pause_after_reply = True
 
     reason = (
         "ORDER_ESCALATED_TO_PIC" if plan.get("intent") == "ORDER_INTENT"
+        else "PHYSICAL_CHECK_ESCALATED_TO_PIC" if plan.get("intent") == "PHYSICAL_CHECK"
         else "COMPLAINT_ESCALATED_TO_PIC" if plan.get("intent") == "COMPLAINT"
+        else "COLOR_PHOTOS_SENT" if (plan.get("wantsColorPhotos") and products)
         else "PRODUCT_FOUND_READY" if any(p.get("availability") == "READY" for p in products)
         else "PRODUCT_FOUND_SOLD_OUT" if products
         else "GREETING_REPLIED" if plan.get("intent") == "GREETING"
