@@ -1,0 +1,29 @@
+# Fly.io 24/7 Singapore Cloud Config (SUKO WhatsApp Auto CS Bridge)
+# Region `sin` (Singapore) = <20ms langsung ke Vercel sin1 & Turso Cloud Singapore!
+
+app = "suko-wa-cs-bridge"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "8080"
+  WA_AUTH_DIR = "/data/auth_info"
+  WA_CS_API_URL = "https://www.luqmanganteng.my.id/api/py_wa_cs"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[mounts]]
+  source = "wa_auth_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

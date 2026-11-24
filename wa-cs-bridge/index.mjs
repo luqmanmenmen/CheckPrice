@@ -21,6 +21,7 @@
  */
 
 import fs from "node:fs";
+import http from "node:http";
 import path from "node:path";
 import makeWASocket, {
   DisconnectReason,
@@ -44,7 +45,8 @@ const DEFAULT_ADMIN_PHONE = (process.env.WA_ADMIN_PHONE || "6281296393972")
 const CLI_PAIR_MODE =
   process.argv.includes("--pair") || process.env.WA_USE_PAIRING === "1";
 
-const AUTH_DIR = path.resolve("./auth_info");
+const AUTH_DIR = path.resolve(process.env.WA_AUTH_DIR || "./auth_info");
+const HEALTH_PORT = Number(process.env.PORT || process.env.WA_BRIDGE_HEALTH_PORT || 0);
 const logger = pino({ level: "silent" });
 const startUnixSec = Math.floor(Date.now() / 1000);
 
@@ -771,6 +773,23 @@ async function startControlPoller() {
     setTimeout(tick, nextMs);
   };
   setTimeout(tick, isConnected ? 60_000 : 4_000);
+}
+
+if (HEALTH_PORT > 0) {
+  const srv = http.createServer((req, res) => {
+    const body = JSON.stringify({
+      ok: true,
+      service: "suko-wa-cs-bridge",
+      connected: isConnected,
+      phone: currentPhone || null,
+      uptimeSec: Math.floor(Date.now() / 1000) - startUnixSec,
+    });
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(body);
+  });
+  srv.listen(HEALTH_PORT, "0.0.0.0", () => {
+    console.log(`🌐 Cloud Healthcheck HTTP aktif di port ${HEALTH_PORT} (/health)`);
+  });
 }
 
 startSocket().then(() => startControlPoller()).catch((err) => {

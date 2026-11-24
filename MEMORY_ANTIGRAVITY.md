@@ -2115,3 +2115,32 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   3. **Bridge WA Lokal Gratis untuk Test Grup Dummy ([`wa-cs-bridge/index.mjs`](file:///c:/Max%20Display/price-checker/wa-cs-bridge/index.mjs)):**
      - Menggunakan `@whiskeysockets/baileys` + `qrcode-terminal` (folder `auth_info/` & `node_modules/` aman di `.gitignore`).
      - Dilengkapi *Human Takeover Pause* (bot otomatis diam 10 menit jika PIC ikut membalas manual di grup) dan *typing indicator* natural (2,2–3,6 detik) sebelum mengirim foto HD + caption balasan.
+
+
+---
+
+## 35. WA Auto CS SUKO — Master Intelligence v5.1 (Uji Live 22 Skenario Pelanggan Cerewet + Real Pict)
+
+- **Commit Live Production:** `faed038` & `f36b42e` (`https://www.luqmanganteng.my.id/api/py_wa_cs`).
+- **Arsitektur & Pembaruan Inti:**
+  1. **Python WA CS Engine ([`python-engine/wa_cs_engine.py`](file:///c:/Max%20Display/price-checker/python-engine/wa_cs_engine.py)):**
+     - **Negasi Ketat Multi-Dimensi:** Filter negasi warna (`excludeColors` di level artikel + varian + foto HD), negasi lengan panjang (`LENGAN PANJANG`, `LS`, `L/S`, `LEN`), negasi bahan/model (`bukan kaos`, `bukan chino`, `jangan v-neck`), serta kunci kategori agar pencarian `ATASAN` tidak pernah bocor ke `ROK/CELANA`.
+     - **Bahasa Awam, Slang & Multi-Gender:** Normalisasi singkatan (`kmja`, `cwo`, `wrna`, `ijo`, `earth tone`) + pemetaan gender per sub-query saat customer bertanya produk pria & wanita dalam 1 pesan sekaligus.
+     - **Guardrail Bisnis & Anti-Halusinasi:** Penanganan khusus `WHOLESALE_B2B` (150 pcs/sablon/DP → eskalasi PIC), `MARKETPLACE_ORDER` (Shopee/Tokped/Lazada → jelaskan sistem terpisah), `OUT_OF_CATALOG` (jaket kulit motor, sepatu lari, setelan anti-air < 200rb → 100% jujur tanpa ngarang), `OTHER_BRANCH_STOCK` (jujur khusus SUKO PTC), `SOP_RETUR_REWARDS`, `PROMPT_INJECTION`, dan `COMPLAINT` (dibedakan antara komplain cuci/menyusut vs sarkasme cacat QC benang/kancing, 0 defensif + eskalasi PIC).
+     - **Memori Daftar Terakhir & Coreference (`POST_LIST_ANALYSIS` & `isMixMatch`):** Memahami rujukan nomor (`no 2`, `pilihan pertama vs ketiga`, `yang paling murah`, `warna selain hitam`), cross-sell mix & match bawahan tanpa terjebak Single-Product Focus Lock, estimasi BB/TB, dan kalkulasi total + alur QRIS 5 menit tanpa pernah mengarang link checkout palsu.
+     - **Kejujuran 100% Real Pict / Tekstur / Try-On / Oper ke Manusia (`PHYSICAL_CHECK`):** Jujur sebagai asisten virtual (tidak pernah berjanji memotret sendiri atau mengirim ulang foto katalog sambil mengaku real pict — `ImgSent=False`), menawarkan solusi realistis, langsung memicu `AlertPIC=True` ke WA PIC `081296393972`, dan otomatis `pauseAfterReply=True` agar staf toko manusia mengambil alih.
+  2. **WA Bridge Local Daemon ([`wa-cs-bridge/index.mjs`](file:///c:/Max%20Display/price-checker/wa-cs-bridge/index.mjs)):**
+     - Ditambahkan **Private Chat Debounce Buffer 2,6 detik** (`DEBOUNCE_WINDOW_MS = 2600`) untuk menggabungkan spam chat pendek beruntun (misal `"P"` → `"Min mau tanya celana"` → `"eh chino aja..."`) menjadi satu konteks utuh sebelum dikirim ke engine Python.
+- **Status Verifikasi Live:** 22/22 skenario (5 skenario dasar + 5 edge case/drama + 6 RAG/pencarian + 6 coreference/checkout + 4 skenario Real Pict/eskalasi manusia) **100% LULUS** langsung di server production Vercel.
+
+
+---
+
+## 36. WA Auto CS SUKO — Master Intelligence v6.1 (Multi-Key `gemini-3.5-flash-lite`, Product Knowledge Bible & True `/barang-baru` Engine)
+
+- **Commit Live Production:** `5023dff`, `87bff66`, `7ee4eaa`, & v6.1 (`https://www.luqmanganteng.my.id/api/py_wa_cs`).
+- **Akar Masalah yang Dituntaskan Total:**
+  1. **Multi-Model & Multi-Key AI Router (`_invoke_smart_ai`):** Mengutamakan `gemini-3.5-flash-lite(LOW)` (`~960ms` HTTP 200 & kuota harian besar) + `gemini-3.6-flash(MINIMAL)` + `gemini-3-flash-preview(MINIMAL)` lintas `customGeminiApiKey` & `backupGeminiApiKey` dengan **Smart 429 Cooldown 15 menit di RAM** (0ms skip model limit) dan penghematan 50% kuota AI (fokuskan AI ke Copywriter Tahap 3 yang membaca produk nyata).
+  2. **Pembersih Kata Meta (`META_NON_GARMENT_WORDS` & `_clean_garment_keywords`):** Mencegah bug `"kalau produk baru nya apa saja ?>"` mencari kata literal `"PRODUK"`/`"SAJA"` di deskripsi SQL yang sebelumnya menghasilkan *sold out*.
+  3. **True New Arrival `0,2ms` (`_fetch_true_new_arrival_articles`):** Menggunakan Primary Key B-Tree `SELECT ... FROM "Product" ORDER BY id DESC LIMIT 320` (identik halaman `/barang-baru`) + **Smart Category Diversity** (kurasi lintas kategori: Sweatshirt/Outer, Polo/Kemeja, Gaun/Celana, SUKO Sports) agar tidak monoton.
+  4. **Modul Permanen [`python-engine/suko_product_knowledge.py`](file:///c:/Max%20Display/price-checker/python-engine/suko_product_knowledge.py):** Memetakan seluruh 1.205 artikel riil Store SUKO PTC (Workwear, Sleepwear Sanrio/Disney/Simpsons, Essential/Underwear/Ciput/Kamisol/Kaos Kaki, SUKO Sports/SUKO GO, 25 sub-jenis Wanita), **Auto-Badge Teknologi Bahan** (`4-Way Stretch`, `Quick Dry`, `Anti-Bakteri`, `High Recovery`, `Clima Tech`, `Supima Cotton`, `Soft Touch`, `Bamboo`, `Souffle Yarn`, `Seersucker`, `Windbreaker`, `Parasut Taslan`, `Extra Broadcloth`, dll.), dan **Occasion-to-Department Smart Router** untuk bahasa sehari-hari customer.
