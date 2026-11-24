@@ -855,6 +855,28 @@ if (HEALTH_PORT > 0) {
   });
 }
 
+let isShuttingDown = false;
+async function handleGracefulShutdown(sig) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`🛑 [${sig}] Graceful shutdown: menyimpan sesi WA ke Turso Cloud & menutup socket...`);
+  try {
+    const credsPath = path.join(AUTH_DIR, "creds.json");
+    if (fs.existsSync(credsPath)) {
+      const raw = fs.readFileSync(credsPath, "utf-8");
+      if (raw && raw.includes('"registered":true')) {
+        await callPythonWaCs({ action: "bridge-auth-save", creds: raw }, 5000).catch(() => {});
+      }
+    }
+    if (currentSock) {
+      currentSock.end(undefined);
+    }
+  } catch {}
+  process.exit(0);
+}
+process.on("SIGTERM", () => handleGracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => handleGracefulShutdown("SIGINT"));
+
 startSocket().then(() => startControlPoller()).catch((err) => {
   console.error("Fatal error:", err);
   process.exit(1);
