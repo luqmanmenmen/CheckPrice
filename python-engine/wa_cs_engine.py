@@ -1288,12 +1288,16 @@ def build_reply_messages(
     reply_text: str,
     products: List[Dict[str, Any]],
     cfg: Dict[str, Any],
+    from_group_name: str = "",
 ) -> List[Dict[str, Optional[str]]]:
     """
     Bangun daftar pesan WhatsApp multi-foto agar SETIAP produk yang ditemukan
     tampil bersama foto HD miliknya sendiri (1 foto + caption rapi per model)!
     """
     send_img = bool(cfg.get("replyWithImage", True))
+    sapaan = _friendly_sapaan(sender_name)
+    group_ctx = f" di grup *{from_group_name}*" if from_group_name else ""
+
     if not products or len(products) <= 1 or not send_img:
         first_img = None
         if send_img and products:
@@ -1301,16 +1305,21 @@ def build_reply_messages(
                 if is_clean_product_image(p.get("imageUrl")):
                     first_img = p["imageUrl"]
                     break
-        return [{"text": reply_text, "imageUrl": first_img}]
+        final_txt = reply_text
+        if from_group_name and final_txt and from_group_name.lower() not in final_txt.lower():
+            final_txt = f"Halo {sapaan}, melanjutkan pertanyaan Kakak{group_ctx} ya 😊\n\n{final_txt}"
+        return [{"text": _sanitize_outgoing_reply(final_txt), "imageUrl": first_img}]
 
-    sapaan = _friendly_sapaan(sender_name)
     shown = products[:3]
     cards: List[Dict[str, Optional[str]]] = []
     for idx, p in enumerate(shown, start=1):
         img = p["imageUrl"] if is_clean_product_image(p.get("imageUrl")) else None
         parts: List[str] = []
         if idx == 1:
-            parts.append(f"Halo {sapaan}, terima kasih sudah bertanya! Dengan senang hati saya bantu cekkan pilihan yang *ready* ya 😊\n")
+            parts.append(
+                f"Halo {sapaan}, melanjutkan pertanyaan Kakak{group_ctx} ya 😊 "
+                f"Dengan senang hati saya bantu cekkan pilihan yang *ready*:\n"
+            )
         parts.append(_format_single_product_block(idx, len(shown), p))
         if idx == len(shown):
             parts.append(
@@ -1607,8 +1616,15 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
         products = search_sanitized_catalog(intent_info, store_scope=cfg.get("storeScope", "ALL"), limit=3)
 
     # 8. Susun Balasan Profesional ala Halo BCA + SOP Hand-Off Grup -> Private Chat
+    handoff_enabled = bool(cfg.get("handoffToPrivateChat", True))
     reply_text = generate_halo_bca_reply(sender_name, message, intent_info, products, cfg)
-    reply_messages = build_reply_messages(sender_name, reply_text, products, cfg)
+    reply_messages = build_reply_messages(
+        sender_name,
+        reply_text,
+        products,
+        cfg,
+        from_group_name=group_name if (is_group and handoff_enabled) else "",
+    )
     best_image_url: Optional[str] = None
     for rm in reply_messages:
         if rm.get("imageUrl"):
@@ -1616,8 +1632,9 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
             break
 
     sapaan = _friendly_sapaan(sender_name)
-    handoff_enabled = bool(cfg.get("handoffToPrivateChat", True))
     session_mins = int(cfg.get("privateSessionMinutes", 30) or 30)
+    cs_phone_digits = normalize_wa_phone(cfg.get("adminPhone") or "6285771123000") or "6285771123000"
+    cs_jump_link = f"https://wa.me/{cs_phone_digits}"
 
     delivery_mode = "GROUP_DIRECT"
     group_reply_text: Optional[str] = None
@@ -1628,14 +1645,18 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
         if products:
             group_reply_text = (
                 f"Halo {sapaan}, dengan senang hati akan saya bantu 😊\n"
-                f"Mohon izin saya teruskan informasi produk & fotonya melalui *private chat (japri)* ya Kak "
-                f"agar tidak mengganggu member lain di grup ini 🙏"
+                f"Mohon izin saya teruskan detail produk & fotonya melalui *private chat (japri)* ya Kak "
+                f"agar tidak mengganggu member lain di grup ini 🙏\n\n"
+                f"👉 *Klik di sini untuk langsung ke Private Chat CS:*\n"
+                f"{cs_jump_link}"
             )
         else:
             group_reply_text = (
                 f"Halo {sapaan}, terima kasih sudah menghubungi kami 😊\n"
                 f"Dengan senang hati akan saya bantu — mohon izin saya lanjutkan melalui *private chat (japri)* ya Kak "
-                f"agar tidak mengganggu member lain di grup ini 🙏"
+                f"agar tidak mengganggu member lain di grup ini 🙏\n\n"
+                f"👉 *Klik di sini untuk langsung ke Private Chat CS:*\n"
+                f"{cs_jump_link}"
             )
         private_messages = reply_messages
         if not is_simulation and sender:
