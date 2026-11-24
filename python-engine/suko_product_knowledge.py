@@ -45,17 +45,22 @@ SUKO_LINES_OVERVIEW: Dict[str, Dict[str, Any]] = {
         ],
     },
     "SUKO WORKWEAR": {
-        "label": "SUKO Workwear (Smart Casual Kantoran)",
+        "label": "SUKO Workwear (Smart Casual Kantoran — 16/16 Ready)",
         "focus": "Tampilan rapi tapi tetap santai & breathable untuk kerja di iklim tropis.",
-        "items": ["Kemeja Oxford & Fine Katun", "Blouse Rapi Wanita", "Celana Chino Kerja & Ankle Pants", "Outer/Cardigan Rapi untuk ruangan AC"],
+        "items": [
+            "Jaket Comfort 2 Kancing (Blazer/Jas smart-casual)",
+            "Kemeja Oxford Klasik & Oxford Stripe, Kemeja Fine Katun Extra Broadcloth & Print, Kemeja Polo Full Button",
+            "Celana Panjang Chinos Kerja / Slim Fit / Stretch Chinos, Celana Ankle Smart & Relax Smart Pants",
+        ],
     },
     "SUKO ESSENTIAL, UNDERWEAR & SLEEPWEAR": {
-        "label": "SUKO Essential, Innerwear & Sleepwear",
+        "label": "SUKO Essential, Underwear, Sleepwear & Kaos Kaki",
         "focus": "Kenyamanan dasar harian dari dalam hingga jam istirahat.",
         "items": [
-            "Pakaian Dalam Boxer (Pinggang Reguler & Elastis), Inner Tank Top Anti-Bakteri",
-            "Pajamas / Piyama Set Lengan Pendek & Loungewear",
-            "Kaos Kaki (Reguler Bertekstur, Semata Kaki/Ankle Socks, Potongan Rendah/Low-Cut)",
+            "SUKO Sleepwear (22 artikel Ready): Pajamas / Piyama Set Lengan Pendek & Panjang (Polos, Motif, lisensi resmi Sanrio, Disney, Simpsons), Celana Tidur Flannel & Rib Rajut, T-Shirt Set Disney",
+            "SUKO Underwear & Innerwear Wanita: Inner Hijab Ciput, Inner Tank Top Kamisol, Inner T-Shirt Anti-Bakteri / Turtleneck",
+            "SUKO Essential Pria: Celana Dalam Boxer (Pinggang Reguler, Elastis, & Tenun Woven Solid), Brief Reguler, Inner T-Shirt",
+            "Kaos Kaki SUKO Essential: Reguler Bertekstur, Semata Kaki (Ankle Socks), & Potongan Rendah (Low-Cut Socks)",
         ],
     },
     "SUKO KIDS": {
@@ -104,6 +109,7 @@ FABRIC_TECH_RULES: List[Tuple[str, str, str]] = [
     (r"\bWAFFLE\b", "Waffle Knit", "tekstur wafel breathable, empuk & kasual minimalis"),
     (r"\bBABY\s*TERRY\b", "Baby Terry", "lembut di dalam, menyerap keringat & hangat pas untuk iklim Indonesia"),
     (r"\bOXFORD\b", "Classic Oxford", "katun tenun rapi & kokoh, andalan gaya smart-casual / kerja"),
+    (r"\bEXTRA\s*BROADC(?:LOTH)?\b|\bBROADCLOTH\b", "Extra Broadcloth Cotton", "tenunan katun rapat, halus & rapi khas kemeja kantoran"),
     (r"\bFINE\s*KATUN\b", "Fine Cotton", "katun halus, ringan & adem dipakai kerja maupun santai"),
     (r"\bLINEN\b", "Linen Blend", "serat alami super breathable & sejuk untuk cuaca siang hari"),
     (r"\bCORDUROY\b", "Corduroy", "tekstur garis halus yang kokoh & berkarakter hangat"),
@@ -144,9 +150,9 @@ def get_compact_pk_prompt_block() -> str:
         "PRODUCT KNOWLEDGE RESMI SUKO BY MATAHARI (WAJIB DIKUASAI ALA VETERAN RITEL 20 TAHUN):\n"
         "- Identitas Brand: SUKO (dari kata 'Suka', konsep Japanese-inspired minimalist everyday wear: clean look, warna earth tone, nyaman untuk iklim tropis Indonesia, 1.200+ artikel lintas Pria, Wanita, Anak, & Lifestyle).\n"
         "- Lini & Jenis Produk Riil di Store SUKO PTC:\n"
-        "  1) SUKO Casual & Workwear: Kaos (Oversized, Supima, Soft Touch, Clima Tech, Waffle, Mini Rib, Interlock, Ripstop, Henley), Polo (Knit Rajut, Pique), Kemeja (Oxford, Fine Katun, Flannel, Linen Blend, Resort Seersucker kerah tegak/koko, Rayon), Blouse (Satin, Peplum), Celana (Chino Stretch/Slim/Relax, Jeans Straight/Slim/Wide/Pleated, Twill, Linen Lipit, Bamboo Relax, Corduroy, Barrel/Balon, Cargo, Ankle, Kulot Nilon), Rok & Dress (Midi Woven, Ultra Stretch, Satin, Skort), Outer (Cardigan Souffle Yarn, Sweater Baby Terry, Polar Fleece, Jaket Twill Pocketable, Parka Reversible, Light Hoodie Parasut Taslan, Jaket/Rompi Denim).\n"
-        "  2) SUKO Sports / SUKO GO (Activewear): Active Pants 4-Way Stretch, Celana Nilon Parasut Sports, Jogger Sports/Sweat, Celana Pendek Ultra Stretch, Legging & Crop Bra High Recovery, Rok Celana Anti-Bakteri Quick Dry & Gaun Polo Sports (padel/tenis/golf), Kaos & Polo Quick Dry, Jaket Parka Windbreaker.\n"
-        "  3) SUKO Kids (Boys & Girls), Essential/Underwear (Boxer, Inner Anti-Bakteri, Kaos Kaki), Sleepwear (Piyama), Footwear Santai (Casual Sneakers harian bukan sepatu lari performa, Slip-On, Ballerina, Mule, Flip Flops), Bags/Accs, & Home Living (Sport Towel 360GSM, Bath Towel 500GSM, Thermal Tumbler Scandic).\n"
+        "  1) SUKO Casual & Workwear (16/16 Ready): Blazer/Jaket Comfort 2 Kancing, Kemeja (Oxford Klasik/Stripe, Fine Katun Extra Broadcloth, Flannel, Linen Blend, Resort Seersucker kerah tegak/koko, Rayon), Kaos (Oversized, Supima, Soft Touch, Clima Tech, Waffle, Mini Rib, Interlock, Ripstop, Henley, Crop), Polo (Knit/Rib/Pique), Blouse (Satin, Peplum, Rayon, Linen), Celana (Chino Kerja/Slim/Stretch, Ankle Smart, Jeans Straight/Slim/Wide/Pleated/Bermuda, Twill, Linen Lipit, Bamboo Relax, Corduroy, Barrel/Balon, Cargo, Kulot Nilon), Rok & Dress Wanita (25 sub-jenis: Midi/Maxi/Satin/Balon/Nilon/Ultra Stretch, Skort Rok Celana, Knit/Denim/Flare Dress), Outer (Cardigan Souffle Yarn, Sweater Baby Terry, Polar Fleece, Jaket Twill Pocketable, Parka Reversible, Light Hoodie Parasut Taslan, Rompi Parasut/Denim).\n"
+        "  2) SUKO Sports / SUKO GO (Activewear): Active Pants 4-Way Stretch, 4-Way Stretch Jogger, Celana Nilon Parasut Sports, Jogger Sports/Sweat, Celana Pendek Ultra Stretch, Legging & Crop Bra High Recovery, Rok Celana Anti-Bakteri Quick Dry & Gaun Polo Sports (padel/tenis/golf), Kaos & Polo Quick Dry, Jaket Parka Windbreaker.\n"
+        "  3) SUKO Sleepwear (Pajamas Set polos/motif & lisensi resmi Sanrio, Disney, Simpsons, Celana Flannel & Rib), SUKO Essential & Underwear (Boxer Reguler/Woven, Inner Hijab Ciput, Inner Tank Top Kamisol, Inner T-Shirt Anti-Bakteri, Kaos Kaki Reguler/Ankle/Low-Cut), SUKO Kids (Boys & Girls), Footwear Santai (Casual Sneakers harian bukan sepatu lari performa, Slip-On, Ballerina, Mule, Flip Flops), Bags/Accs, & Home Living (Sport Towel 360GSM, Bath Towel 500GSM, Thermal Tumbler Scandic).\n"
         "- Teknologi Bahan Andalan SUKO: 4-Way Stretch & Ultra Stretch (bebas gerak), Quick Dry (cepat kering), Anti-Bakteri / Odor-Control (bebas bau), High Recovery (anti-melar), Clima Tech (adaptif tropis), Supima Cotton USA (ekstra halus & awet warna), Soft Touch, Bamboo Blend (ekstra sejuk), Souffle Yarn (rajut empuk ringan anti-gatal), Seersucker (adem minim setrika), Windbreaker / Parasut Taslan / Pocketable / Reversible.\n"
         "- Cara Bicara Veteran: Saat merekomendasikan produk, JELASKAN SINGKAT KENAPA bahan/teknologinya cocok untuk kebutuhan customer (misal celana sport -> sebutkan lini SUKO Sports & 4-Way Stretch/Parasut; kerja -> Oxford/Fine Katun; panas -> Linen/Seersucker/Quick Dry/Supima). Jangan pernah mengarang teknologi yang tidak dimiliki produk tersebut!"
     )

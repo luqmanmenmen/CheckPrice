@@ -154,8 +154,19 @@ SYNONYM_GROUPS: Dict[str, List[str]] = {
     "dompet": ["WALLET", "DOMPET", "CARD HOLDER"],
     "topi": ["CAP", "HAT", "TOPI", "BEANIE"],
     "kaoskaki": ["SOCK", "SOCKS", "KAOS KAKI"],
-    "boxer": ["BOXER", "BRIEF", "UNDERWEAR", "TRUNK"],
-    "piyama": ["PAJAMA", "PYJAMA", "SLEEP", "PIYAMA"],
+    "boxer": ["BOXER", "BRIEF", "UNDERWEAR", "PAKAIAN DALAM"],
+    "daleman": ["PAKAIAN DALAM", "INNER", "INNERWEAR", "BOXER", "KAMISOL", "CIPUT"],
+    "inner": ["INNER", "INNERWEAR", "KAMISOL", "TANK TOP", "CIPUT"],
+    "ciput": ["CIPUT", "INNER HIJAB"],
+    "kamisol": ["KAMISOL", "TANK TOP", "INNER"],
+    "piyama": ["PAJAMAS", "PAJAMA", "PYJAMA", "SLEEP", "PIYAMA", "FLANNEL"],
+    "sleepwear": ["PAJAMAS", "PAJAMA", "SLEEPWEAR", "FLANNEL", "PIYAMA"],
+    "workwear": ["WORKWEAR", "OXFORD", "FINE KATUN", "CHINOS", "ANKLE SMART", "COMFORT 2 KANCING"],
+    "blazer": ["COMFORT 2 KANCING", "BLAZER", "JAKET RILEKS"],
+    "peplum": ["PEPLUM", "BLOUSE"],
+    "sanrio": ["SANRIO", "PAJAMAS"],
+    "simpsons": ["SIMPSONS", "PAJAMAS"],
+    "disney": ["DISNEY", "PAJAMAS"],
     "baju": ["SHIRT", "T-SHIRT", "TEE", "BLOUSE", "TOP", "DRESS", "KAOS", "KEMEJA", "KNIT"],
     "formal": ["KEMEJA", "OXFORD", "BLOUSE", "BLAZER", "WOVEN", "CHINO", "TROUSER", "POLO"],
     "kerja": ["KEMEJA", "OXFORD", "BLOUSE", "BLAZER", "WOVEN", "CHINO", "TROUSER"],
@@ -207,6 +218,11 @@ SLANG_NORMALIZE_MAP: List[Tuple[re.Pattern, str]] = [
     (re.compile(r"\bhrg\b|\bhrga\b", re.I), "harga"),
     (re.compile(r"\bad\b", re.I), "ada"),
     (re.compile(r"\bnyari\b", re.I), "cari"),
+    (re.compile(r"\bwork\s*ware\b", re.I), "workwear"),
+    (re.compile(r"\bsleep\s*ware\b", re.I), "sleepwear"),
+    (re.compile(r"\bunder\s*ware\b", re.I), "underwear"),
+    (re.compile(r"\bessensial\b", re.I), "essential"),
+    (re.compile(r"\bbaju\s+tidur\b", re.I), "sleepwear piyama"),
     (re.compile(r"\bearth\s*tone\b", re.I), "coklat khaki olive"),
 ]
 
@@ -242,7 +258,7 @@ CATEGORY_SYNONYMS: Dict[str, List[str]] = {
     "SEPATU_SANDAL": ["sepatu", "sandal", "sendal", "sneaker", "loafer", "heels", "boots", "flats", "slipper", "mule", "ballerina"],
     "TAS_AKSESORIS": ["tas", "bag", "dompet", "wallet", "topi", "cap", "hat", "belt", "sabuk", "kaos kaki", "sock", "backpack", "pouch"],
     "BEAUTY": ["serum", "parfum", "perfume", "cream", "krim", "lotion", "lip", "masker", "toner", "cleanser", "skincare"],
-    "TIDUR_DALAM": ["boxer", "brief", "underwear", "dalam", "bra", "panty", "piyama", "pajama", "singlet", "tidur"],
+    "TIDUR_DALAM": ["boxer", "brief", "underwear", "essential", "inner", "innerwear", "daleman", "ciput", "kamisol", "camisole", "tank top", "dalam", "bra", "panty", "piyama", "pajama", "pajamas", "sleepwear", "singlet", "tidur", "sanrio", "simpsons", "disney"],
 }
 
 OTHER_BRAND_WORDS = ("muku", "mu+ku", "mu ku", "zes", "nevada", "cole", "connexion", "st yves", "fladeo", "nayoung", "byrch", "uniqlo", "zara", "h&m")
