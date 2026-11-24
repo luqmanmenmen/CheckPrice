@@ -94,6 +94,9 @@ export default function Login() {
 
       const isStale = () => geoReqEpochRef.current !== myEpoch;
 
+      const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+      const isIosSafari = /iPad|iPhone|iPod/i.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
       const handleSuccess = (pos: GeolocationPosition) => {
         if (isStale()) return finish(null);
         const coords = {
@@ -101,6 +104,12 @@ export default function Login() {
           lng: pos.coords.longitude,
           accuracy: Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy : null,
         };
+        try {
+          sessionStorage.setItem(
+            "suko_last_gps_fix",
+            JSON.stringify({ ...coords, ts: Date.now() })
+          );
+        } catch {}
         setGeoPermissionState("granted");
         setGeoCoords(coords);
         setGeoErrorDetail("");
@@ -128,23 +137,29 @@ export default function Login() {
           setGeoPermissionState("denied");
           setGeoStatus("denied");
           setGeoErrorDetail(
-            "Izin lokasi diblokir browser / HP. Buka ikon gembok di kiri alamat situs → Izin → Lokasi → Izinkan (dan pastikan izin Lokasi untuk aplikasi Browser di Setelan HP sudah aktif)."
+            isIosSafari
+              ? "Izin lokasi Safari iPhone diblokir. Buka Pengaturan iPhone → Privasi & Keamanan → Layanan Lokasi → Situs Web Safari → pilih 'Saat Menggunakan App' + nyalakan Lokasi Tepat, lalu ketuk 'aA' di kiri alamat Safari → Pengaturan Situs Web → Lokasi → Izinkan."
+              : "Izin lokasi Chrome diblokir. Ketuk ikon gembok/setelan di kiri alamat situs → Izin → Lokasi → Izinkan (dan pastikan GPS / Lokasi HP aktif di panel atas)."
           );
         } else if (code === 2) {
           setGeoStatus("timeout");
           setGeoErrorDetail(
-            "HP belum bisa mengambil koordinat GPS. Pastikan tombol Lokasi (GPS) & Google Location Accuracy di HP sudah aktif, lalu ketuk Cek Ulang."
+            isIosSafari
+              ? "GPS iPhone belum mendapat sinyal di dalam mall. Pastikan Layanan Lokasi & Wi-Fi menyala (tidak perlu tersambung Wi-Fi), buka Apple/Google Maps 2 detik, lalu kembali & ketuk Cek Ulang."
+              : "HP belum bisa mengambil koordinat GPS. Pastikan tombol Lokasi (GPS) & Google Location Accuracy di HP sudah aktif, lalu ketuk Cek Ulang."
           );
         } else {
           setGeoStatus("timeout");
           setGeoErrorDetail(
-            "Permintaan lokasi habis waktu (sinyal dalam ruangan lemah). Coba buka Google Maps 1 detik lalu kembali & ketuk Cek Ulang."
+            isIosSafari
+              ? "Permintaan lokasi Safari habis waktu (sinyal dalam ruangan mall lemah). Pastikan Wi-Fi aktif lalu ketuk tombol Deteksi Lokasi lagi."
+              : "Permintaan lokasi habis waktu (sinyal dalam ruangan lemah). Coba buka Google Maps 1 detik lalu kembali & ketuk Cek Ulang."
           );
         }
         finish(null);
       };
 
-      // Hard safety guard (maks 11 detik total, cegah bug browser Android yang hang tanpa callback!)
+      // Hard safety guard (maks 15 detik total — memberi waktu cukup untuk cold lock indoor iOS Safari & Chrome!)
       const hardGuardTimer = setTimeout(() => {
         if (!settled && !isStale()) {
           if (geoWatchIdRef.current !== null) {
@@ -155,7 +170,7 @@ export default function Login() {
           }
           handleFinalError(3, "Browser tidak merespons (timeout)");
         }
-      }, 11000);
+      }, 15000);
 
       const safeSuccess = (pos: GeolocationPosition) => {
         clearTimeout(hardGuardTimer);
@@ -168,7 +183,7 @@ export default function Login() {
         handleSuccess(pos);
       };
 
-      // Tahap 2 (Fallback cepat): watchPosition High/Network maks 5 detik
+      // Tahap 2 (Fallback cepat): watchPosition High/Network maks 8.5 detik (ramah indoor mall iOS Safari & Chrome)
       const tryFallbackHighAcc = () => {
         if (settled || isStale()) return;
         const wId = navigator.geolocation.watchPosition(
@@ -183,12 +198,12 @@ export default function Login() {
             }
             handleFinalError(err2.code, err2.message || "");
           },
-          { enableHighAccuracy: true, maximumAge: 120000, timeout: 5000 }
+          { enableHighAccuracy: true, maximumAge: 180000, timeout: 8500 }
         );
         geoWatchIdRef.current = wId;
       };
 
-      // Tahap 1: Instan via Wi-Fi/Jaringan (maks 4.5 detik, langsung munculkan dialog Izinkan di HP saat klik tombol)
+      // Tahap 1: Instan via Wi-Fi/Jaringan (terima cache OS <= 10 menit agar 0ms di Safari iPhone & Chrome Android!)
       navigator.geolocation.getCurrentPosition(
         safeSuccess,
         (err1) => {
@@ -200,14 +215,36 @@ export default function Login() {
             tryFallbackHighAcc();
           }
         },
-        { enableHighAccuracy: false, timeout: 4500, maximumAge: 300000 }
+        { enableHighAccuracy: false, timeout: 6000, maximumAge: 600000 }
       );
     });
   }, []);
 
-  // Cek status izin lokasi browser secara pasif
+  // Pulihkan cache koordinat GPS segar (<= 5 menit) di sessionStorage agar Safari/Chrome tidak perlu re-lock GPS berulang
   useEffect(() => {
-    if (typeof window === "undefined" || !("permissions" in navigator)) return;
+    if (typeof window === "undefined") return;
+    try {
+      const raw = sessionStorage.getItem("suko_last_gps_fix");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (
+          parsed &&
+          typeof parsed.lat === "number" &&
+          typeof parsed.lng === "number" &&
+          typeof parsed.ts === "number" &&
+          Date.now() - parsed.ts < 5 * 60 * 1000
+        ) {
+          setGeoCoords({ lat: parsed.lat, lng: parsed.lng, accuracy: parsed.accuracy ?? null });
+          setGeoPermissionState("granted");
+          setGeoDebugInfo(`GPS Tersimpan (±${Math.round(parsed.accuracy || 0)}m)`);
+        }
+      }
+    } catch {}
+  }, []);
+
+  // Cek status izin lokasi browser secara pasif (aman di iOS Safari lama yang belum mendukung permissions.query)
+  useEffect(() => {
+    if (typeof window === "undefined" || !("permissions" in navigator) || !navigator.permissions?.query) return;
     navigator.permissions
       .query({ name: "geolocation" as PermissionName })
       .then((perm) => {
@@ -505,7 +542,7 @@ export default function Login() {
   };
 
   return (
-    <div id="login-stage" className={`login-stage sky-${skyPhase} ${isNight ? "night" : ""} relative min-h-screen flex flex-col p-4`}>
+    <div id="login-stage" className={`login-stage sky-${skyPhase} ${isNight ? "night" : ""} relative min-h-[100dvh] flex flex-col p-4`}>
       {/* Background Langit Pagi (Matahari & Awan) vs Malam (Bulan & Bintang) — GPU-light agar keyboard HP instan 0ms */}
       <div className="absolute inset-0 pointer-events-none z-0 overflow-hidden" style={{ contain: "strict" }}>
         {!isNight && <div className="page-sun" aria-hidden="true" />}

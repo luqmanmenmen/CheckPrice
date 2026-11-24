@@ -115,10 +115,10 @@ export function verifyStoreGeofence(
     return null;
   }
 
-  // Buffer akurasi GPS indoor yang sehat (maksimal 180m agar tidak bisa diakali dari jauh)
+  // Buffer akurasi GPS indoor mall (Safari/Chrome Wi-Fi triangulation) maks 250m — tetap ketat blokir di luar mall
   const safeAccuracyBonus =
     typeof accuracyMeters === "number" && Number.isFinite(accuracyMeters) && accuracyMeters > 0
-      ? Math.min(accuracyMeters * 0.5, 180)
+      ? Math.min(accuracyMeters * 0.65, 250)
       : 0;
 
   const assignedZone = resolveAssignedStoreZone(assignedToko);

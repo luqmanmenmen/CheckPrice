@@ -3092,7 +3092,7 @@ export default function Home() {
                   spellCheck={false}
                   defaultValue={manualInput}
                   placeholder="Ketik Artikel, SKU, Barcode, atau Nama Produk..."
-                  className="w-full pl-9 pr-9 py-3 rounded-xl border border-slate-200 bg-white text-slate-900 caret-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-400 transition-all text-sm font-medium shadow-xs placeholder:text-slate-400"
+                  className="w-full pl-9 pr-9 py-3 rounded-xl border border-slate-200 bg-white text-slate-900 caret-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-400 transition-all text-[16px] sm:text-sm font-medium shadow-xs placeholder:text-slate-400"
                   onInput={(e) => {
                     const val = e.currentTarget.value;
                     manualInputRef.current = val;

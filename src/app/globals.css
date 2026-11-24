@@ -30,6 +30,15 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* Cegah iOS Safari auto-zoom saat mengetuk kotak ketik (< 16px) di seluruh aplikasi */
+@supports (-webkit-touch-callout: none) {
+  input,
+  textarea,
+  select {
+    font-size: max(16px, 1em);
+  }
+}
+
 /* iOS Safe Area Utilities */
 .pt-safe {
   padding-top: env(safe-area-inset-top, 0px);
