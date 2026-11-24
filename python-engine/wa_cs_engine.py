@@ -53,6 +53,7 @@ from storehub_live_engine import (
 from suko_product_knowledge import (
     build_product_knowledge_answer,
     detect_fabric_tech_badge,
+    detect_occasion_profile,
     get_compact_pk_prompt_block,
 )
 
@@ -1282,7 +1283,7 @@ def _extract_deterministic_plan(
         r"\b(foto(?:kan|in)?\s+(?:asli|langsung|dari\s+deket|dari\s+dekat|deket|dekat|di\s+kaca|tekstur|jahitan|pakai\s+kamera)|"
         r"real\s*pict?|kamera\s+hp|efek\s+lampu|foto\s+katalog\s+studio|tekstur\s+kain|jahitan\s+dalam|"
         r"pegangin|pakaiin|try[\-\s]?on|jepret|oper\s+ke\s+(?:admin|manusia|staf|cs)|admin\s+manusia|staf\s+toko|"
-        r"pakai\s+resleting|pake\s+resleting|ada\s+kancing|nerawang|menerawang|saringan\s+tahu|"
+        r"pakai\s+resleting|pake\s+resleting|ada\s+kancing|(?:itu\s+)?(?:nerawang|menerawang)\s+(?:gak|nggak|ga|enggak|tidak|sih)|saringan\s+tahu|"
         r"putih\s+tulang|broken\s+white\s+atau|lingkar\s+dada|size\s*chart)\b",
         low,
     ):
@@ -1599,8 +1600,23 @@ def _extract_deterministic_plan(
             "sizeHint": size_hint,
         })
 
+    occasion_profile = detect_occasion_profile(low)
+    has_occasion = bool(occasion_profile)
+
+    # Jika user mengetik bahasa kebutuhan sehari-hari ("baju tidur", "daleman hijab", "botol minum", "jaket motoran", "kemeja formal")
+    # tanpa tahu nama kategori SUKO -> pastikan multi_queries terisi keyword & departemen yang tepat!
+    if not multi_queries and has_occasion:
+        fb_kws = list(occasion_profile.get("fallbackKeywords") or [])
+        multi_queries.append({
+            "label": " ".join(fb_kws[:2]) or "pilihan SUKO",
+            "keywords": fb_kws[:4],
+            "categoryHint": "",
+            "colorHint": color_hint,
+            "sizeHint": size_hint,
+        })
+
     has_trigger = bool(
-        sku_or_article or multi_queries or wants_promo or wants_new or wants_best or wants_more_like_ref
+        sku_or_article or multi_queries or has_occasion or wants_promo or wants_new or wants_best or wants_more_like_ref
         or wants_next_page or explicit_gender or asked_other_brand or max_price or wants_color_photos or quoted_clean
         or any(re.search(rf"\b{re.escape(w)}\b", low) for w in INQUIRY_TRIGGER_WORDS)
     )
@@ -1623,11 +1639,12 @@ def _extract_deterministic_plan(
         and not wants_next_page
         and not wants_more_like_ref
         and not wants_color_photos
+        and occasion_profile.get("id") not in ("SLEEPWEAR_HOME", "INNER_ESSENTIAL", "SPORT_ACTIVE", "COLD_AC_WIND", "HOT_WEATHER_TRAVEL", "GIFT_HOME_LIVING")
         and (
             (wants_promo and not keywords and not matched_cats)
             or (wants_new and not keywords and not matched_cats)
             or (wants_best and not keywords and not matched_cats)
-            or (len(keywords) <= 1 and (not matched_cats or matched_cats[0][0] == "ATASAN") and any(w in low for w in ("baju", "formal", "kerja", "kantor", "koleksi", "produk", "barang")))
+            or (len(keywords) <= 1 and (not matched_cats or matched_cats[0][0] == "ATASAN") and not has_occasion and any(w in low for w in ("baju", "koleksi", "produk", "barang")))
         )
     )
 
@@ -1676,7 +1693,8 @@ def _extract_deterministic_plan(
         "askedOtherBrand": asked_other_brand,
         "isCompetitorConsult": is_competitor_or_material_consult,
         "isMixMatch": is_mix_match,
-        "shouldSearchProducts": bool(multi_queries and intent not in ("CONSULT_FIRST", "POST_LIST_ANALYSIS", "PROMPT_INJECTION", "COMPLAINT", "WHOLESALE_B2B", "MARKETPLACE_ORDER", "OUT_OF_CATALOG", "SOP_RETUR_REWARDS", "OTHER_BRANCH_STOCK", "OTHER_BRAND")),
+        "occasionProfile": occasion_profile,
+        "shouldSearchProducts": bool(multi_queries and intent not in ("CONSULT_FIRST", "POST_LIST_ANALYSIS", "PRODUCT_KNOWLEDGE_QA", "PROMPT_INJECTION", "COMPLAINT", "WHOLESALE_B2B", "MARKETPLACE_ORDER", "OUT_OF_CATALOG", "SOP_RETUR_REWARDS", "OTHER_BRANCH_STOCK", "OTHER_BRAND")),
         "handleMessage": "",
         "multiQueries": multi_queries,
         "skuOrArticle": sku_or_article,
@@ -1850,6 +1868,7 @@ def run_ai_agent_planner(
         "otherBranchName": det.get("otherBranchName") or "",
         "isCompetitorConsult": bool(det.get("isCompetitorConsult", False)),
         "isMixMatch": bool(det.get("isMixMatch", False)),
+        "occasionProfile": det.get("occasionProfile") or {},
         "multiQueries": multi_queries,
         "skuOrArticle": str(ai_res.get("skuOrArticle") or det.get("skuOrArticle") or "").strip().upper(),
         "handleMessage": handle_msg,
@@ -2018,6 +2037,7 @@ def _query_single_subsearch(
     exclude_keywords: Optional[List[str]] = None,
     exclude_colors: Optional[List[str]] = None,
     color_hints: Optional[List[str]] = None,
+    occasion_profile: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[Dict[str, Any]], bool]:
     """
     Kembalikan (list kandidat artikel CatalogArticle, exact_matched_flag).
@@ -2087,10 +2107,24 @@ def _query_single_subsearch(
     # PENTING (ANTI-NYASAR OVERSIZED T-SHIRT!):
     # Hanya tambahkan `OR categoryKey = ?` jika TIDAK ada kata kunci spesifik (misal kemeja/linen/rok/jaket)
     # agar mencari "kemeja linen" TIDAK menarik semua T-Shirt di kategori ATASAN!
-    has_specific_type_kw = any(k in kw_lower_set for k in ("kemeja", "linen", "oxford", "blouse", "polo", "hoodie", "parka", "cardigan", "jeans", "chino", "jogger", "rok", "dress", "gamis", "tunik"))
+    has_specific_type_kw = any(k in kw_lower_set for k in ("kemeja", "linen", "oxford", "blouse", "polo", "hoodie", "parka", "cardigan", "jeans", "chino", "jogger", "rok", "dress", "gamis", "tunik", "ciput", "kamisol", "kaoskaki", "tumbler", "handuk"))
     if category_hint and not has_specific_type_kw:
         or_parts.append('"categoryKey" = ?')
         or_params.append(category_hint)
+    # Jika Occasion Smart Router punya target departemen (misal WORKWEAR / SLEEPWEAR / ESSENTIAL / HOME LIVING),
+    # ikut tarik artikel dari departemen tersebut agar produk terbaik pasti masuk kandidat!
+    occ = occasion_profile or {}
+    occ_depts = [str(d).upper() for d in (occ.get("preferDepts") or []) if str(d).strip()]
+    occ_boosts = [str(t).upper() for t in (occ.get("boostTerms") or []) if str(t).strip()]
+    occ_penalties = [str(t).upper() for t in (occ.get("penalizeTerms") or []) if str(t).strip()]
+    if occ_depts and not has_specific_type_kw:
+        for od in occ_depts[:3]:
+            or_parts.append('UPPER(COALESCE(dept, \'\')) = ?')
+            or_params.append(od)
+    if occ_boosts and not has_specific_type_kw:
+        for ob in occ_boosts[:5]:
+            or_parts.append('UPPER(description) LIKE ?')
+            or_params.append(f"%{ob}%")
     if or_parts:
         where_clauses.append("(" + " OR ".join(or_parts) + ")")
         params.extend(or_params)
@@ -2245,6 +2279,21 @@ def _query_single_subsearch(
         if wants_best and art_key in best_seller_ranks:
             score += best_seller_ranks[art_key]
 
+        # Occasion Smart Router Scoring: angkat departemen & fabric DNA yang sesuai momen, tekan yang salah kamar!
+        if occ_depts and row_dept in occ_depts:
+            score += 220
+        if occ_boosts:
+            boost_hits = sum(1 for ob in occ_boosts if ob in desc_only)
+            score += min(240, boost_hits * 95)
+        if occ_penalties and any(op in desc_only for op in occ_penalties):
+            score -= 260
+        # Khusus WORKWEAR_FORMAL saat customer cari kemeja -> wajib kemeja/blouse, jangan nyasar ke celana/kaos!
+        if occ.get("id") == "WORKWEAR_FORMAL" and wants_kemeja:
+            if "KEMEJA" in desc_only or "BLOUSE" in desc_only:
+                score += 180
+            else:
+                continue
+
         if all_color_hints:
             if any(any(_color_matches(col, ch) for ch in all_color_hints) for col in colors_list):
                 score += 85
@@ -2282,6 +2331,7 @@ def execute_python_catalog_search(
     exclude_kws = list(plan.get("excludeKeywords") or [])
     exclude_colors = [str(c).strip().upper() for c in (plan.get("excludeColors") or []) if str(c or "").strip()]
     color_hints = [str(c).strip().upper() for c in (plan.get("colorHints") or []) if str(c or "").strip()]
+    occasion_profile = plan.get("occasionProfile") or {}
     sku_or_art = str(plan.get("skuOrArticle") or "").strip()
     multi_queries = list(plan.get("multiQueries") or [])
     if not multi_queries:
@@ -2298,7 +2348,7 @@ def execute_python_catalog_search(
             cands, exact_ok = _query_single_subsearch(
                 mq, store_scope, gender_hint, wants_promo, wants_new, wants_best, used_articles, best_ranks,
                 max_candidates=2, max_price=max_price, exclude_keywords=exclude_kws,
-                exclude_colors=exclude_colors, color_hints=color_hints,
+                exclude_colors=exclude_colors, color_hints=color_hints, occasion_profile=occasion_profile,
             )
             if not exact_ok and mq.get("label"):
                 unavailable_labels.append(str(mq["label"]))
@@ -2318,6 +2368,7 @@ def execute_python_catalog_search(
             mq0, store_scope, gender_hint, wants_promo, wants_new, wants_best, used_articles, best_ranks,
             sku_or_art=sku_or_art, max_candidates=max(limit + 3, 6), max_price=max_price,
             exclude_keywords=exclude_kws, exclude_colors=exclude_colors, color_hints=color_hints,
+            occasion_profile=occasion_profile,
         )
         if not exact_ok and mq0.get("label") and not sku_or_art:
             unavailable_labels.append(str(mq0["label"]))
@@ -2600,14 +2651,11 @@ def _generate_ai_framing(
     store_name = cfg.get("storeName") or "SUKO Official"
 
     # Fallback teks rapi bila AI tidak terpanggil
+    occ_open_tpl = str((plan.get("occasionProfile") or {}).get("veteranOpening") or "").strip()
     if from_group_name:
         fb_open = f"Halo {sapaan}, melanjutkan pertanyaan Kakak di grup *{from_group_name}* ya 😊 Dengan senang hati saya bantu cekkan pilihan *SUKO* yang *ready*:"
-    elif re.search(r"\b(sport|sports|olahraga|training|gym|lari|jogging|padel|tenis|yoga|activewear)\b", str(message or "").lower()):
-        fb_open = (
-            f"Ada banget {sapaan}! Di SUKO kami punya lini khusus *SUKO Sports (SUKO GO)* yang memang dirancang untuk aktivitas olahraga & gerak aktif "
-            f"(mulai dari teknologi *4-Way / Ultra Stretch* yang melar 4 arah, *Quick Dry* cepat kering, *High Recovery* anti-melar, sampai bahan *Nilon Parasut* yang super ringan) ✨\n"
-            f"Ini pilihan *SUKO Sports* yang sedang *ready* saat ini:"
-        )
+    elif occ_open_tpl:
+        fb_open = occ_open_tpl.format(sapaan=sapaan)
     elif is_followup:
         fb_open = f"Ada dong {sapaan}! Ini pilihan koleksi *SUKO* yang sedang *ready* saat ini ✨"
     else:

@@ -141,6 +141,160 @@ def detect_fabric_tech_badge(description: str, dept: str = "") -> str:
     return ""
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  3. OCCASION & NEED-TO-DEPARTMENT SMART ROUTER (BAHASA SEHARI-HARI CUSTOMER!)
+#     Customer tidak pernah mengetik "SUKO WORKWEAR" / "SLEEPWEAR" / "ESSENTIAL".
+#     Customer mengetik "ada kemeja formal?", "baju buat tidur", "daleman hijab",
+#     "jaket buat motoran", "baju ruangan AC", "males nyetrika", dll!
+# ─────────────────────────────────────────────────────────────────────────────
+
+def detect_occasion_profile(low: str) -> Dict[str, Any]:
+    """
+    Menerjemahkan bahasa kebutuhan/momen sehari-hari customer menjadi strategi query DB SUKO
+    (preferDepts, boostTerms, penalizeTerms, extraKeywords, & pembuka gaya SPV veteran!).
+    """
+    txt = str(low or "").lower()
+
+    # 1. FORMAL / KERJA / KANTOR / INTERVIEW / MEETING / ACARA RESMI -> SUKO WORKWEAR!
+    if re.search(
+        r"\b(formal|resmi|kantoran|kantor|ngantor|kerja|interview|wawancara|meeting|rapat|presentasi|"
+        r"semi[\-\s]?formal|workwear|jas|blazer|kondangan\s+rapi)\b",
+        txt,
+    ):
+        return {
+            "id": "WORKWEAR_FORMAL",
+            "preferDepts": ["SUKO WORKWEAR"],
+            "boostTerms": ["OXFORD", "FINE KATUN", "EXTRA BROADC", "CHINOS KERJA", "CHINOS SLIM", "ANKLE SMART", "COMFORT 2 KANCING", "BLOUSE", "SATIN", "PEPLUM", "WOVEN"],
+            "penalizeTerms": ["GRAPHIC", "OVERSIZED", "CROP", "SPORT", "PAJAMAS", "SANRIO", "DISNEY", "SIMPSONS", "BOXER", "SLEEP", "RESORT", "HOODIE"],
+            "fallbackKeywords": ["kemeja", "oxford", "chinos", "workwear"],
+            "veteranOpening": (
+                "Ada dong {sapaan}! Untuk kebutuhan formal/kerja, koleksi *SUKO Workwear* kami memang dirancang khusus dengan potongan rapi tapi tetap adem di iklim tropis "
+                "(mulai dari kemeja *Classic Oxford* & *Fine Katun Extra Broadcloth* yang halus, celana *Chino Kerja / Ankle Smart*, hingga blazer smart-casual) ✨\n"
+                "Ini pilihan yang sedang *ready* saat ini:"
+            ),
+        }
+
+    # 2. TIDUR / BAJU RUMAH / SANTAI MALAM -> SUKO SLEEPWEAR!
+    if re.search(
+        r"\b(buat\s+tidur|baju\s+tidur|pakaian\s+tidur|celana\s+tidur|piyama|pajama|pajamas|sleepwear|"
+        r"buat\s+di\s+rumah|baju\s+rumah|santai\s+malam|nginep|sanrio|simpsons|disney)\b",
+        txt,
+    ):
+        return {
+            "id": "SLEEPWEAR_HOME",
+            "preferDepts": ["SUKO SLEEPWEAR"],
+            "boostTerms": ["PAJAMAS", "FLANNEL", "RIB RAJUT", "SANRIO", "DISNEY", "SIMPSONS", "SLEEP"],
+            "penalizeTerms": ["WORKWEAR", "OXFORD", "JEANS", "CHINOS", "SPORT", "PARASUT", "WINDBREAKER", "PILLOW"],
+            "fallbackKeywords": ["pajamas", "flannel", "sleepwear"],
+            "veteranOpening": (
+                "Ada banget {sapaan}! Di lini *SUKO Sleepwear*, kami punya pilihan piyama set & celana tidur berbahan lembut adem "
+                "(termasuk motif polos elegan, bahan flannel/rib lembut, sampai koleksi karakter resmi *Disney, Sanrio, & Simpsons*) 🌙✨\n"
+                "Ini pilihan yang sedang *ready*:"
+            ),
+        }
+
+    # 3. DALEMAN / INNER HIJAB CIPUT / ANTI-NERAWANG / UNDERWEAR / KAOS KAKI -> SUKO ESSENTIAL & UNDERWEAR!
+    if re.search(
+        r"\b(daleman|dalaman|inner|innerwear|ciput|kerudung|hijab|kamisol|camisole|tank\s*top|"
+        r"celana\s+dalam|pakaian\s+dalam|underwear|boxer|singlet|kaos\s+kaki|kaus\s+kaki|biar\s+gak\s+nerawang)\b",
+        txt,
+    ):
+        is_hijab = bool(re.search(r"\b(ciput|kerudung|hijab)\b", txt))
+        is_socks = bool(re.search(r"\b(kaos\s+kaki|kaus\s+kaki|sock)\b", txt))
+        is_boxer = bool(re.search(r"\b(boxer|celana\s+dalam)\b", txt))
+        fb_kws = (
+            ["ciput", "hijab", "inner"] if is_hijab
+            else ["kaoskaki", "sock"] if is_socks
+            else ["boxer", "pakaian dalam"] if is_boxer
+            else ["inner", "kamisol", "innerwear", "tank top"]
+        )
+        return {
+            "id": "INNER_ESSENTIAL",
+            "preferDepts": ["SUKO ESSENTIAL", "SUKO UNDERWEAR"],
+            "boostTerms": ["CIPUT", "HIJAB"] if is_hijab else (["KAOS KAKI", "SOCK"] if is_socks else (["BOXER", "PAKAIAN DALAM"] if is_boxer else ["INNER", "KAMISOL", "INNERWEAR", "ANTI BAKTERI", "TANK TOP"])),
+            "penalizeTerms": ["JEANS", "PARKA", "WINDBREAKER", "TUMBLER", "TOWEL", "CUSHION"],
+            "fallbackKeywords": fb_kws,
+            "veteranOpening": (
+                "Ada dong {sapaan}! Di lini *SUKO Essential & Underwear* kami menyediakan kebutuhan dalaman harian yang super nyaman & breathable "
+                "(mulai dari *Inner Hijab Ciput*, *Kamisol/Tank Top*, *Inner T-Shirt Anti-Bakteri*, *Boxer* katun/tenun, hingga *Kaos Kaki* berbagai potongan) ✨\n"
+                "Ini pilihan yang sedang *ready*:"
+            ),
+        }
+
+    # 4. OLAHRAGA / KERINGATAN / GYM / LARI / PADEL / TENIS / ZUMBA / TRAINING -> SUKO SPORTS (SUKO GO)!
+    if re.search(
+        r"\b(sport|sports|olahraga|training|gym|fitness|lari|jogging|padel|tenis|badminton|yoga|zumba|"
+        r"sepedaan|gowes|activewear|keringatan|cepat\s+kering|anti\s+keringat)\b",
+        txt,
+    ):
+        return {
+            "id": "SPORT_ACTIVE",
+            "preferDepts": ["SUKO SPORTS MEN", "SUKO SPORTS LADIES"],
+            "boostTerms": ["ACTIVE", "4-WAY", "QUICK DRY", "ULTRA STR", "HIGH REC", "ANTI BAKTERI", "SPORTS", "JOGGER", "LEGGING", "NILON PARASUT", "WINDBREAKER"],
+            "penalizeTerms": ["KNIT SHORT", "JEANS", "CHINOS", "OXFORD", "FLANNEL", "PAJAMAS", "CORDUROY"],
+            "fallbackKeywords": ["sports", "active", "quick dry", "jogger"],
+            "veteranOpening": (
+                "Ada banget {sapaan}! Di *SUKO* kami punya lini khusus *SUKO Sports (SUKO GO)* yang memang dirancang untuk olahraga & gerak aktif "
+                "(teknologi *4-Way / Ultra Stretch* melar 4 arah, *Quick Dry* 2× lebih cepat kering, *Anti-Bakteri*, & *High Recovery*) ✨\n"
+                "Ini pilihan *SUKO Sports* yang sedang *ready*:"
+            ),
+        }
+
+    # 5. RUANGAN AC / DINGIN / MOTORAN / ANGIN MALAM / TRAVELING RINGAN -> OUTER HANGAT / WINDBREAKER / SOUFFLE!
+    if re.search(
+        r"\b(ruangan\s+ac|kantor\s+dingin|baju\s+hangat|biar\s+hangat|motoran|naik\s+motor|angin\s+malam|"
+        r"tahan\s+angin|gampang\s+dilipat|masuk\s+tas|musim\s+hujan|gerimis)\b",
+        txt,
+    ):
+        is_motor = bool(re.search(r"\b(motoran|naik\s+motor|angin|dilipat|hujan|gerimis)\b", txt))
+        return {
+            "id": "COLD_AC_WIND",
+            "preferDepts": ["SUKO CASUAL", "SUKO SPORTS MEN", "SUKO SPORTS LADIES"],
+            "boostTerms": ["WINDBREAKER", "PARASUT", "PARKA", "POCKETABLE", "REVERSIBLE", "TASLAN"] if is_motor else ["SOUFFLE", "CARDIGAN", "BABY TERRY", "FLEECE", "SWEATER", "WAFFLE", "KNIT", "JAKET"],
+            "penalizeTerms": ["SLEEVELESS", "TANK TOP", "SHORT", "PENDEK", "BOXER", "SANDAL"],
+            "fallbackKeywords": ["windbreaker", "parka", "parasut", "jaket"] if is_motor else ["cardigan", "souffle", "sweater", "jaket"],
+            "veteranOpening": (
+                "Pas banget {sapaan}! Untuk motoran/angin malam atau traveling, *SUKO* punya lini jaket *Windbreaker, Parasut Taslan, Parka Reversible,* dan *Pocketable* yang super ringan, tahan angin & praktis dibawa 🧥✨\nIni pilihan yang sedang *ready*:"
+                if is_motor
+                else "Pas banget {sapaan}! Untuk ruangan ber-AC / udara dingin tanpa bikin gerah, andalan *SUKO* ada di *Cardigan Souffle Yarn* (rajut empuk & gak gatal), *Sweater Baby Terry*, hingga *Polar Fleece* & *Waffle* 🧥✨\nIni pilihan yang sedang *ready*:"
+            ),
+        }
+
+    # 6. CUACA PANAS / SIANG TERIK / MALES NYETRIKA / PANTAI / LIBURAN -> SEERSUCKER / LINEN / RAYON / CLIMA / SUPIMA!
+    if re.search(
+        r"\b(siang\s+terik|cuaca\s+panas|super\s+adem|adem\s+banget|males\s+nyetrika|malas\s+setrika|"
+        r"anti\s+kusut|gak\s+gampang\s+kusut|ke\s+pantai|liburan|resort)\b",
+        txt,
+    ):
+        return {
+            "id": "HOT_WEATHER_TRAVEL",
+            "preferDepts": ["SUKO CASUAL"],
+            "boostTerms": ["SEERSUCKER", "LINEN", "RAYON", "BAMBOO", "QUICK DRY", "CLIMA", "SUPIMA", "SOFT TOUCH", "RESORT"],
+            "penalizeTerms": ["FLEECE", "FLANNEL", "CORDUROY", "WINTER", "PARKA", "SWEATER"],
+            "fallbackKeywords": ["seersucker", "linen", "rayon", "supima"],
+            "veteranOpening": (
+                "Pilihan tepat {sapaan}! Untuk cuaca panas / liburan atau cari yang minim setrika, andalan *SUKO* ada di bahan *Seersucker* (bertekstur adem, tidak nempel kulit & gak perlu setrika ketat), *Linen Blend*, *Rayon*, *Bamboo*, hingga *Supima & Clima Tech* ☀️✨\n"
+                "Ini rekomendasi yang sedang *ready*:"
+            ),
+        }
+
+    # 7. BOTOL MINUM / TUMBLER / HANDUK / KADO RUMAH -> SUKO HOME LIVING!
+    if re.search(r"\b(botol\s+minum|tumbler|thermos|termos|tahan\s+panas|handuk|towel|bantal\s+tidur|kado\s+lucu)\b", txt):
+        return {
+            "id": "GIFT_HOME_LIVING",
+            "preferDepts": ["SUKO HOME LIVING", "SUKO TOYS"],
+            "boostTerms": ["TUMBLER", "THERMAL", "VACUUM", "TOWEL", "500GSM", "360GSM", "CUSHION"],
+            "penalizeTerms": ["T-SHIRT", "CELANA", "KEMEJA", "JEANS"],
+            "fallbackKeywords": ["tumbler", "towel", "handuk"],
+            "veteranOpening": (
+                "Ada dong {sapaan}! Di lini *SUKO Home Living*, kami punya *Thermal Tumbler Scandic Vacuum* (tahan panas/dingin) serta *Handuk 360–500 GSM Dobby* bergaya minimalis ✨\n"
+                "Ini pilihan yang sedang *ready*:"
+            ),
+        }
+
+    return {}
+
+
 def get_compact_pk_prompt_block() -> str:
     """
     Blok pengetahuan ringkas padat (~220 kata) untuk disuntikkan ke AI Planner & Copywriter
