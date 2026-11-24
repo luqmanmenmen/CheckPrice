@@ -1192,23 +1192,37 @@ def _extract_deterministic_plan(
             "engine": "deterministic",
         }
 
-    # 0D. KOMPARASI KOMPETITOR / SIZING / BAHAN PANAS ("Uniqlo", "cutting-nya sama gak", "panas gak", "bagusan mana")
-    is_competitor_or_material_consult = bool(
-        re.search(
-            r"\b(uniqlo|zara|h&m|cutting(?:\-nya)?|kedodoran|kekecilan|panas\s+gak?|bagusan\s+mana|"
-            r"beda\s+tipis|siang[\-\s]siang|bahannya?\s+adem|bahannya?\s+panas|cocok\s+di\s+kulit)\b",
-            low,
-        )
+    # 0D. KOMPARASI KOMPETITOR (Uniqlo/Zara/H&M) — dipisah dari pertanyaan bahan/BB-TB biasa!
+    is_competitor_consult = bool(
+        re.search(r"\b(uniqlo|zara|h&m|bagusan\s+mana|beda\s+tipis|cutting(?:\-nya)?\s+sama)\b", low)
     )
+    is_competitor_or_material_consult = is_competitor_consult
 
-    # Deteksi permintaan cek fisik / foto real di hanger toko -> auto eskalasi sopan ke PIC!
-    if re.search(r"\b(foto(?:kan|in)?\s+asli|real\s*pic|pakai\s+resleting|pake\s+resleting|ada\s+kancing|nerawang|menerawang|putih\s+tulang|broken\s+white\s+atau|lingkar\s+dada|size\s*chart)\b", low):
+    # Deteksi permintaan REAL PICT / TEKSTUR / TRY-ON / OPER KE MANUSIA / CEK FISIK ->
+    # WAJIB JUJUR sebagai asisten virtual (TIDAK janji foto sendiri, TIDAK kirim ulang foto katalog) + ESKALASI NYATA ke staf toko!
+    if re.search(
+        r"\b(foto(?:kan|in)?\s+(?:asli|langsung|dari\s+deket|dari\s+dekat|deket|dekat|di\s+kaca|tekstur|jahitan|pakai\s+kamera)|"
+        r"real\s*pict?|kamera\s+hp|efek\s+lampu|foto\s+katalog\s+studio|tekstur\s+kain|jahitan\s+dalam|"
+        r"pegangin|pakaiin|try[\-\s]?on|jepret|oper\s+ke\s+(?:admin|manusia|staf|cs)|admin\s+manusia|staf\s+toko|"
+        r"pakai\s+resleting|pake\s+resleting|ada\s+kancing|nerawang|menerawang|saringan\s+tahu|"
+        r"putih\s+tulang|broken\s+white\s+atau|lingkar\s+dada|size\s*chart)\b",
+        low,
+    ):
+        phys_ref_m = re.search(r"\b(?:no|nomor|nomer)\s*\.?\s*([12345678])\b", low)
+        phys_sub = (
+            "HUMAN_ESCALATION" if re.search(r"\b(oper\s+ke|admin\s+manusia|staf\s+toko|bot|ribet|jepret)\b", low)
+            else "TRY_ON" if re.search(r"\b(pegangin|pakaiin|di\s+kaca|model\s+bule|try[\-\s]?on|panjang\s+baju)\b", low)
+            else "TEXTURE_SHEERNESS" if re.search(r"\b(nerawang|menerawang|tekstur|jahitan|tipis|saringan\s+tahu)\b", low)
+            else "COLOR_REAL_PICT" if re.search(r"\b(real\s*pict?|kamera\s+hp|warna\s+asli|efek\s+lampu|katalog\s+studio|foto(?:kan|in)?\s+(?:asli|langsung))\b", low)
+            else "GENERAL_PHYSICAL"
+        )
         return {
             "intent": "PHYSICAL_CHECK",
+            "physicalSubtype": phys_sub,
             "shouldReply": True,
             "complexity": "HEAVY",
             "genderHint": str((session or {}).get("preferredGender") or ""),
-            "referencedNumber": 0,
+            "referencedNumber": int(phys_ref_m.group(1)) if phys_ref_m else 0,
             "wantsMoreLikeRef": False,
             "wantsColorPhotos": False,
             "wantsPromo": False,
@@ -1217,8 +1231,11 @@ def _extract_deterministic_plan(
             "maxPrice": None,
             "minPrice": None,
             "excludeKeywords": [],
+            "excludeColors": [],
+            "colorHints": [],
             "multiQueries": [],
             "skuOrArticle": "",
+            "shouldSearchProducts": False,
             "directAnswer": "",
             "engine": "deterministic",
         }
@@ -1342,8 +1359,11 @@ def _extract_deterministic_plan(
                 color_hints.append(canon_color)
     color_hint = color_hints[0] if color_hints else ""
 
-    # "coba liat yg sand" / "lihat yang hitam" -> aktifkan wants_color_photos jika ada warna + kata lihat/liat!
-    if color_hint and re.search(r"\b(lihat|liat|foto|fotoin|coba\s+liat|coba\s+lihat)\b", low):
+    # "coba liat yg sand" / "lihat yang hitam" -> aktifkan wants_color_photos HANYA jika "lihat/foto" dekat dengan warna spesifik!
+    if color_hint and re.search(
+        r"\b(?:lihat|liat|foto|fotoin|coba\s+liat|coba\s+lihat)\s+(?:yang|yg|warna)?\s*(?:hitam|black|putih|white|navy|biru|blue|abu|grey|merah|red|hijau|ijo|green|olive|cream|krem|beige|khaki|sand|coklat|brown|pink|kuning|ungu)\b",
+        low,
+    ):
         wants_color_photos = True
 
     size_hint = ""
@@ -2080,6 +2100,13 @@ def _query_single_subsearch(
             if any(bad in desc_only for bad in ("T-SHIRT", "TSHIRT", "POCKET TEE", "KAOS", "POLO")):
                 score -= 260
 
+        # Jika mencari ATASAN (bukan rok/celana) -> cegah ROK/SKIRT/CELANA bocor hanya karena kata "WOVEN"!
+        row_cat = str(c.get("categoryKey") or "").upper()
+        if category_hint == "ATASAN" and row_cat in ("DRESS_ROK", "CELANA", "SEPATU_SANDAL", "TAS_AKSESORIS"):
+            continue
+        if category_hint == "CELANA" and row_cat in ("ATASAN", "JAKET", "SEPATU_SANDAL"):
+            continue
+
         if wants_winter and any(k in desc_only for k in ("WINTER", "PUFFER", "COAT")):
             exact_term_found = True
             score += 200
@@ -2566,11 +2593,49 @@ def build_final_cards_and_text(
         return direct, [{"text": direct, "imageUrl": None, "fallbackImages": []}], plan.get("engine") or "deterministic"
 
     if intent == "PHYSICAL_CHECK" and not products:
-        direct = (
-            f"Baik {sapaan}, untuk detail fisik / foto asli produknya langsung dari toko, "
-            f"sebentar saya bantu cekkan dulu ke tim kami (*Kak {cs_name}*) ya agar 100% akurat untuk Kakak 🙏 Mohon ditunggu sebentar ya 😊"
-        )
-        return direct, [{"text": direct, "imageUrl": None, "fallbackImages": []}], plan.get("engine") or "deterministic"
+        sub = str(plan.get("physicalSubtype") or "GENERAL_PHYSICAL")
+        lp = (session or {}).get("lastProducts") or []
+        ref_n = int(plan.get("referencedNumber") or 0)
+        ref_item = next((p for p in lp if int(p.get("num") or 0) == ref_n), None) if (lp and ref_n) else None
+        item_label = f"*{ref_item['name']}*" if ref_item else (f"pilihan *No. {ref_n}*" if ref_n else "produk tersebut")
+
+        if sub == "HUMAN_ESCALATION":
+            direct = (
+                f"Mohon maaf sekali bikin Kakak menunggu dan merasa ribet ya {sapaan} 🙏\n\n"
+                f"Saya jujur ya Kak, sebagai *asisten virtual SUKO Official*, saya memang tidak bisa memegang barang fisik di rak maupun memotret langsung pakai kamera HP. "
+                f"Oleh karena itu, *saat ini juga* saya langsung teruskan chat Kakak ke **admin manusia / staf toko kami di Store SUKO PTC Surabaya (Kak {cs_name})** dan saya minggir otomatis agar staf toko kami langsung membalas & membantu foto aslinya selama jam operasional toko 🙏\n\n"
+                f"Mohon ditunggu sebentar ya Kak, tim toko kami sudah mendapat notifikasi prioritas untuk handle chat Kakak secara langsung 😊"
+            )
+        elif sub == "COLOR_REAL_PICT":
+            direct = (
+                f"Paham banget kekhawatiran Kakak soal perbedaan warna antara foto studio dan warna aslinya di pencahayaan normal 😊\n\n"
+                f"Saya infokan dengan jujur ya {sapaan}: sebagai *asisten virtual SUKO Official*, saya belum bisa memotret langsung fisik {item_label} pakai kamera HP sendiri "
+                f"(dan saya tidak akan mengirim ulang foto katalog sambil mengklaim itu real pict 🙏).\n\n"
+                f"Sebagai solusinya:\n"
+                f"1️⃣ Saya langsung teruskan permintaan *real pict* {item_label} ini ke **staf toko manusia kami di Store SUKO PTC Surabaya (Kak {cs_name})** agar bisa dibantu fotokan langsung dari rak toko (selama jam operasional toko).\n"
+                f"2️⃣ Kakak juga bisa melihat referensi *foto/video ulasan pembeli* di halaman produk resmi *SUKO* sebagai gambaran warna di pencahayaan natural.\n\n"
+                f"Boleh info warna spesifik yang ingin difotokan staf kami agar langsung dicekkan ya Kak? 😊"
+            )
+        elif sub == "TEXTURE_SHEERNESS":
+            direct = (
+                f"Wajar banget Kakak teliti soal ketebalan bahan dan kerapian jahitan sebelum membeli 😊\n\n"
+                f"Saya jujur ya {sapaan}: sebagai *asisten virtual*, saya tidak bisa memotret jarak dekat tekstur kain maupun bagian jahitan dalam {item_label} secara langsung dengan kamera HP. "
+                f"Secara umum, koleksi *SUKO* menggunakan material katun/linen/woven standar ritel *everyday wear* yang dirancang nyaman & breathable untuk harian (khusus warna sangat terang seperti putih/ivory biasanya disarankan memakai dalaman warna netral).\n\n"
+                f"Supaya Kakak 100% yakin sebelum checkout, saya langsung teruskan permintaan *foto close-up tekstur & jahitan* {item_label} ke **staf toko kami di Store SUKO PTC Surabaya (Kak {cs_name})** agar dibantu fotokan langsung dari produk fisiknya ya Kak 🙏"
+            )
+        elif sub == "TRY_ON":
+            direct = (
+                f"Paham banget {sapaan}, proporsi badan model foto katalog memang sering bikin ragu soal panjang baju aslinya di badan kita 😊\n\n"
+                f"Saya jujur ya Kak: sebagai *asisten virtual SUKO Official*, saya tidak punya fisik untuk memegang atau melakukan *try-on* foto di kaca secara langsung. "
+                f"Namun saya sudah langsung teruskan permintaan Kakak ke **staf toko manusia kami di Store SUKO PTC Surabaya (Kak {cs_name})** agar bisa dibantu pengecekan fisik / estimasi jatuhnya baju saat dipegang sesuai tinggi & berat badan Kakak.\n\n"
+                f"Sambil menunggu respon staf kami, boleh info *tinggi badan & berat badan* Kakak serta nomor produk yang diincar agar tim kami langsung bantu ukur panjang bajunya secara akurat? 🙏"
+            )
+        else:
+            direct = (
+                f"Baik {sapaan}, saya jujur ya: sebagai *asisten virtual SUKO Official*, saya tidak memegang barang fisiknya secara langsung untuk memotret atau mengukur detail fisik di rak 🙏\n\n"
+                f"Namun saya langsung teruskan permintaan pengecekan fisik / *real pict* {item_label} ini ke **staf toko manusia kami di Store SUKO PTC Surabaya (Kak {cs_name})** agar segera dibantu langsung secara akurat ya Kak 😊"
+            )
+        return _sanitize_outgoing_reply(direct), [{"text": _sanitize_outgoing_reply(direct), "imageUrl": None, "fallbackImages": []}], plan.get("engine") or "deterministic"
 
     # Kasus CONSULT_FIRST (Komunikasi Interpersonal Eksklusif: Gali kebutuhan dulu sebelum lempar foto!)
     if intent == "CONSULT_FIRST" and not products:
@@ -2708,18 +2773,28 @@ def build_final_cards_and_text(
             lines = [f"Siap {sapaan}, saya bantu rangkumkan detail dari pilihan sebelumnya ya 😊\n"]
             if lp:
                 cheapest = min(lp, key=lambda x: int(x.get("effectivePrice") or 9_999_999))
-                if ref_n:
+                is_comparing_pair = bool(re.search(r"\b(banding|antara|pilihan\s+pertama.*ketiga|mending\s+ambil|bedanya)\b", str(message or "").lower()))
+                if ref_n and not is_comparing_pair:
                     target = next((p for p in lp if int(p.get("num") or 0) == ref_n), lp[0])
                     price_s = target.get("hargaPromoText") or target.get("hargaNormalText") or "-"
                     fit_s = target.get("fitting") or "Regular/Casual SUKO"
                     cols_s = ", ".join(target.get("readyColorSizes") or target.get("readyColors") or ["Ready di store"])
                     lines.append(f"• *Pilihan No. {target.get('num')} ({target.get('name')}):* Harga *{price_s}*, potongan *{fit_s}*.")
                     lines.append(f"  🎨 Warna & size ready: {cols_s}")
+                    if re.search(r"selain\s+hitam", str(message or "").lower()):
+                        non_black = [c for c in (target.get("readyColors") or []) if "BLACK" not in str(c).upper()]
+                        if non_black:
+                            lines.append(f"  ✨ Warna selain hitam yang ready: *{', '.join(non_black)}*.")
                 else:
                     for p in lp[:3]:
                         price_s = p.get("hargaPromoText") or p.get("hargaNormalText") or "-"
                         fit_s = p.get("fitting") or "Casual SUKO"
-                        lines.append(f"• *No. {p.get('num')} {p.get('name')}* — *{price_s}* ({fit_s})")
+                        cols_short = ", ".join((p.get("readyColors") or [])[:4]) or "Ready"
+                        lines.append(f"• *No. {p.get('num')} {p.get('name')}* — *{price_s}* ({fit_s}) | Warna: {cols_short}")
+                    if is_comparing_pair and len(lp) < 3 and re.search(r"ketiga|no\.?\s*3", str(message or "").lower()):
+                        lines.append(f"\nℹ️ _Catatan: dari daftar terakhir tadi tersedia *{len(lp)} pilihan* di atas ya Kak._")
+                    elif is_comparing_pair and len(lp) >= 2:
+                        lines.append("\n💡 *Saran singkat:* Pilih yang paling hemat jika untuk harian santai, atau pilih bahan woven/jaket jika ingin tampilan lebih rapi & tahan ruangan AC!")
                 if re.search(r"paling\s+murah", str(message or "").lower()):
                     ch_price = cheapest.get("hargaPromoText") or cheapest.get("hargaNormalText") or "-"
                     ch_fit = cheapest.get("fitting") or "Casual/Regular SUKO"
@@ -2733,11 +2808,22 @@ def build_final_cards_and_text(
             direct = _sanitize_outgoing_reply("\n".join(lines))
         return direct, [{"text": direct, "imageUrl": None, "fallbackImages": []}], plan.get("engine") or "deterministic"
 
-    # Kasus COMPLAINT (Komplain Pasca-Beli: Empati tulus dulu, TIDAK menyalahkan customer, 0 foto jualan, eskalasi PIC!)
+    # Kasus COMPLAINT (Komplain Pasca-Beli & Sarkasme Barang Cacat: Empati tulus dulu, 0 defensif, 0 foto jualan, eskalasi PIC!)
     if intent == "COMPLAINT":
-        direct = _sanitize_outgoing_reply(
-            plan.get("handleMessage")
-            or (
+        is_qc_defect = bool(re.search(r"\b(benang|kancing|reject|qc|sobek|cacat|rusak|jahit)\b", str(message or "").lower()))
+        if plan.get("handleMessage"):
+            direct = _sanitize_outgoing_reply(plan["handleMessage"])
+        elif is_qc_defect:
+            direct = _sanitize_outgoing_reply(
+                f"Mohon maaf sekali atas ketidaknyamanan yang Kakak alami ya {sapaan} 🙏 "
+                f"Kami sangat memahami kekecewaan Kakak saat menerima produk dengan kondisi benang ketarik atau kancing lepas — "
+                f"tentu itu bukan standar kualitas *SUKO* yang kami harapkan untuk Kakak, dan Kakak sama sekali tidak perlu repot menjahit sendiri.\n\n"
+                f"Saya langsung bantu teruskan laporan kendala kualitas ini secara prioritas ke **PIC & Tim Store SUKO kami (Kak {cs_name})** "
+                f"agar segera ditindaklanjuti untuk pengecekan dan solusi penukaran terbaiknya ya Kak 🙏\n\n"
+                f"Boleh bantu kirimkan *foto bagian yang bermasalah* beserta *bukti pembelian / lokasi belinya* supaya tim kami bisa segera proses tanpa berlama-lama ya Kak 😊"
+            )
+        else:
+            direct = _sanitize_outgoing_reply(
                 f"Mohon maaf sekali atas pengalaman kurang menyenangkan yang Kakak alami ya {sapaan} 🙏 "
                 f"Saya paham betul rasanya kecewa saat baju yang baru dibeli ternyata berubah setelah dicuci.\n\n"
                 f"Untuk prosedur penukaran/retur resmi memang mensyaratkan struk pembelian dan hangtag masih utuh — "
@@ -2746,7 +2832,6 @@ def build_final_cards_and_text(
                 f"*(Sebagai info tambahan untuk perawatan kain katun/linen ke depannya, biasanya lebih awet jika dicuci air dingin mode lembut/handwash tanpa pengering panas.)*\n\n"
                 f"Boleh info kapan & di cabang mana pembeliannya serta fotokan kondisi bajunya agar tim kami segera tindak lanjuti ya Kak 😊"
             )
-        )
         return direct, [{"text": direct, "imageUrl": None, "fallbackImages": []}], plan.get("engine") or "deterministic"
 
     if intent == "CONVERSATIONAL_ADVICE" and not products:
@@ -2924,6 +3009,19 @@ def build_final_cards_and_text(
             f"• *Nilai Lebih SUKO:* Sama-sama kuat di *everyday wear* warna *earth tone*, dengan harga yang sangat kompetitif apalagi saat promo member! ✨\n\n"
             f"Sekalian saya lampirkan referensi kemeja *SUKO* yang sedang *ready* ya Kak:"
         )
+    elif not pre_handle and re.search(r"\b(bb\s*\d{2,3}|tinggi\s*\d{3}|ld\s*(?:nya)?\s*(?:min\s*)?\d{2,3})\b", str(message or "").lower()):
+        if re.search(r"\bld\b|\b\d{2,3}\s*cm\b", str(message or "").lower()):
+            pre_handle = (
+                f"Siap {sapaan}, saya bantu cekkan pilihan koleksi *SUKO* yang paling mendekati ya 😊\n"
+                f"ℹ️ _Catatan ukuran cm (LD / panjang baju):_ Untuk kepastian ukuran meteran tepat (misal LD 112 cm / panjang 72 cm), "
+                f"biasanya berada di kisaran size *L – XL*, dan saya juga bisa bantu mintakan staf toko kami (*Kak {cs_name}*) ukur fisik langsung jika Kakak sudah naksir salah satu model di bawah:"
+            )
+        else:
+            pre_handle = (
+                f"Siap {sapaan}! Untuk estimasi postur tersebut biasanya nyaman di size *XL* (atau *L* jika pinggang berkaret/stretch dan suka lebih pas — "
+                f"agar 100% akurat tetap sesuaikan dengan lingkar pinggang yang biasa dipakai ya Kak 😊).\n"
+                f"Berikut pilihan celana *SUKO* yang adem & sedang *ready*:"
+            )
 
     if pre_handle and len(pre_handle) >= 25:
         opening = pre_handle
@@ -3130,6 +3228,7 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
         has_quoted_product = bool(quoted_message and re.search(r"(?:^|\n|\*)\s*[123]\.\s+[A-Z0-9]|Harga:|Status:", quoted_message))
         single_focus = bool(
             not plan.get("wantsMoreLikeRef")
+            and not plan.get("isMixMatch")
             and not plan.get("wantsNewArrival")
             and not plan.get("wantsBestSeller")
             and len(plan.get("multiQueries") or []) <= 1
