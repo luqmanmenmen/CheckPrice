@@ -205,19 +205,40 @@ async function resolveParticipantDmJid(sock, groupJid, msg) {
   return { dmJid: rawPart || altPart, allKeys: [rawPart, altPart] };
 }
 
-async function fetchImageBuffer(imageUrl) {
-  try {
-    const res = await fetch(imageUrl, {
-      headers: { "User-Agent": "Mozilla/5.0" },
-      signal: AbortSignal.timeout(9000),
-    });
-    if (!res.ok) return null;
-    const arr = await res.arrayBuffer();
-    if (arr.byteLength < 1024) return null;
-    return Buffer.from(arr);
-  } catch {
-    return null;
+const JUNK_IMG_SIZES = new Set([2238, 3163]);
+
+async function fetchImageBuffer(imageUrl, fallbackUrls = []) {
+  const candidates = [imageUrl, ...(Array.isArray(fallbackUrls) ? fallbackUrls : [])]
+    .map((u) => String(u || "").trim())
+    .filter((u) => u.startsWith("http://") || u.startsWith("https://"));
+
+  for (const url of candidates) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const res = await fetch(url, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+          },
+          signal: AbortSignal.timeout(12000),
+        });
+        if (!res.ok) continue;
+        const ctype = String(res.headers.get("content-type") || "").toLowerCase();
+        if (ctype && !ctype.includes("image") && !ctype.includes("octet-stream")) continue;
+        const arr = await res.arrayBuffer();
+        // Tolak file kosong & sidik jari logo Matahari abu-abu (2238 / 3163 bytes)
+        if (arr.byteLength < 3500 || JUNK_IMG_SIZES.has(arr.byteLength)) continue;
+        return Buffer.from(arr);
+      } catch (err) {
+        if (attempt === 2) {
+          console.log(`   ⚠️ Gagal unduh foto (${url.slice(-36)}): ${err?.message || err}`);
+        } else {
+          await sleep(450);
+        }
+      }
+    }
   }
+  return null;
 }
 
 async function callPythonWaCs(payload, timeoutMs = 22000) {
@@ -254,7 +275,9 @@ async function sendCardsToJid(sock, targetJid, cards, quoteMsg = null) {
   const [imgBuffers] = await Promise.all([
     Promise.all(
       cards.map((card) =>
-        card.imageUrl ? fetchImageBuffer(card.imageUrl) : Promise.resolve(null)
+        card.imageUrl
+          ? fetchImageBuffer(card.imageUrl, card.fallbackImages || [])
+          : Promise.resolve(null)
       )
     ),
     sleep(randomHumanDelayMs()),
@@ -276,6 +299,18 @@ async function sendCardsToJid(sock, targetJid, cards, quoteMsg = null) {
         { image: imgBuffer, caption: captionText },
         sendOpts
       );
+    } else if (card.imageUrl) {
+      // Fallback: biarkan Baileys mengunduh URL langsung jika fetch Node sempat hiccup
+      try {
+        sent = await sock.sendMessage(
+          targetJid,
+          { image: { url: card.imageUrl }, caption: captionText },
+          sendOpts
+        );
+        sentPhotos++;
+      } catch {
+        sent = await sock.sendMessage(targetJid, { text: captionText }, sendOpts);
+      }
     } else {
       sent = await sock.sendMessage(
         targetJid,

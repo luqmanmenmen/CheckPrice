@@ -24,6 +24,7 @@ Prinsip Utama:
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
 import re
@@ -38,11 +39,16 @@ from storehub_live_engine import (
     _STD_OPENER,
     _UUID_PLACEHOLDER_RE,
     parse_retail_price,
+    run_fast_stock,
     storage_read_text,
     storage_write_bytes,
     turso_query,
     utc_iso_now,
 )
+
+# Cache hasil live-stock di memori container (90 dtk) agar tidak boros tembak StoreHub/Turso berulang
+_LIVE_STOCK_MEM_CACHE: Dict[str, Tuple[float, Dict[str, int]]] = {}
+_LIVE_STOCK_CACHE_TTL_SEC = 90.0
 
 CONFIG_STORAGE_PATH = "config/wa-cs-config.json"
 LOGS_STORAGE_PATH = "logs/wa-cs-logs.json"
@@ -81,7 +87,7 @@ SYNONYM_GROUPS: Dict[str, List[str]] = {
     "kaos": ["KAOS", "T-SHIRT", "TSHIRT", "TEE", "CREW NECK", "POLO"],
     "tshirt": ["T-SHIRT", "TSHIRT", "TEE", "KAOS"],
     "tee": ["TEE", "T-SHIRT", "KAOS"],
-    "kemeja": ["KEMEJA", "SHIRT", "OXFORD", "FLANNEL"],
+    "kemeja": ["KEMEJA", "OXFORD", "FLANNEL", "WOVEN", "LS SHI", "SS SHI", "SHIRT"],
     "blouse": ["BLOUSE", "BLUS", "TOP", "ATASAN"],
     "atasan": ["TOP", "SHIRT", "T-SHIRT", "BLOUSE", "TEE", "KAOS", "KEMEJA"],
     "polo": ["POLO", "KAOS"],
@@ -877,10 +883,67 @@ def _size_matches(variant_size: str, size_hint: str) -> bool:
     return bool(re.search(rf"(?:^|[\s/\-])({re.escape(sh)})(?:$|[\s/\-])", vs))
 
 
-def search_sanitized_catalog(intent_info: Dict[str, Any], store_scope: str = "ALL", limit: int = 3) -> List[Dict[str, Any]]:
+def _verify_live_stock_for_article(
+    primary_sku: str,
+    article: str,
+    brand_group: str,
+    v_list: List[Dict[str, Any]],
+) -> Dict[str, int]:
     """
-    Cari produk di Turso DB (`CatalogArticle` + `Product`) dan kembalikan
-    ringkasan produk 100% TER-SANITASI TANPA ANGKA QTY STOK!
+    Cek stok LIVE real-time ke toko (via run_fast_stock) sebelum kirim ke customer.
+    Dilengkapi cache 90 detik di RAM agar super hemat kuota Turso & tidak boros request!
+    """
+    cache_key = (article or primary_sku).strip().upper()
+    now_mono = time.monotonic()
+    cached = _LIVE_STOCK_MEM_CACHE.get(cache_key)
+    if cached and (now_mono - cached[0]) < _LIVE_STOCK_CACHE_TTL_SEC:
+        return cached[1]
+
+    try:
+        fam = [
+            {
+                "sku": str(v.get("sku") or ""),
+                "color": v.get("color"),
+                "size": v.get("size"),
+                "stok": int(v.get("stok") or 0),
+            }
+            for v in v_list
+            if v.get("sku")
+        ]
+        res = run_fast_stock(
+            sku=primary_sku,
+            family_variants=fam,
+            article=article or None,
+            brand_group=brand_group or None,
+        )
+        if res.get("success") and isinstance(res.get("updatedVariants"), list):
+            # Bangun peta stok terbaru dari hasil live (gabungkan dengan stok existing untuk varian tak berubah)
+            live_map: Dict[str, int] = {str(v.get("sku") or ""): int(v.get("stok") or 0) for v in v_list if v.get("sku")}
+            for uv in res["updatedVariants"]:
+                if uv.get("sku") is not None and uv.get("stok") is not None:
+                    live_map[str(uv["sku"])] = int(uv["stok"])
+            if res.get("stok") is not None and primary_sku:
+                live_map[primary_sku] = int(res["stok"])
+            _LIVE_STOCK_MEM_CACHE[cache_key] = (now_mono, live_map)
+            return live_map
+    except Exception:
+        pass
+    return {}
+
+
+def search_sanitized_catalog(
+    intent_info: Dict[str, Any],
+    store_scope: str = "ALL",
+    limit: int = 3,
+    verify_live: bool = True,
+) -> List[Dict[str, Any]]:
+    """
+    Cari produk di Turso DB (`CatalogArticle` + `Product`):
+    1. WAJIB prioritaskan produk yang punya FOTO HD BERSIH + STOK > 0.
+    2. Verifikasi STOK LIVE REAL-TIME ke toko (paralel) sebelum kirim ke customer
+       agar produk yang baru habis terjual di kasir OTOMATIS DICORET!
+    3. Kembalikan HANYA warna & ukuran yang stoknya READY (> 0), dikelompokkan
+       akurat per warna -> ukuran ready-nya, 100% TANPA ANGKA QTY STOK!
     """
     sku_or_art = str(intent_info.get("skuOrArticle") or "").strip()
     keywords = list(intent_info.get("searchKeywords") or [])
@@ -889,6 +952,8 @@ def search_sanitized_catalog(intent_info: Dict[str, Any], store_scope: str = "AL
     color_hint = str(intent_info.get("colorHint") or "").strip().upper()
     size_hint = str(intent_info.get("sizeHint") or "").strip().upper()
     wants_promo = bool(intent_info.get("wantsPromo", False))
+    kw_lower_set = {str(k).lower().strip() for k in keywords}
+    wants_kemeja = "kemeja" in kw_lower_set or "oxford" in kw_lower_set or "flannel" in kw_lower_set
 
     scope_sql = ""
     scope_params: List[Any] = []
@@ -898,7 +963,7 @@ def search_sanitized_catalog(intent_info: Dict[str, Any], store_scope: str = "AL
 
     candidates: List[Dict[str, Any]] = []
 
-    # 1. Exact SKU / Barcode / Article match di tabel Product & CatalogArticle
+    # 1. Exact SKU / Barcode / Article match di tabel CatalogArticle & Product
     if sku_or_art:
         rows = turso_query(
             'SELECT key, sku, barcode, article, description, brand, dept, "brandGroup", "subBrand", '
@@ -907,20 +972,19 @@ def search_sanitized_catalog(intent_info: Dict[str, Any], store_scope: str = "AL
             'FROM "CatalogArticle" '
             'WHERE (UPPER(sku) = UPPER(?) OR UPPER(COALESCE(barcode, \'\')) = UPPER(?) OR UPPER(COALESCE(article, \'\')) LIKE UPPER(?))'
             + scope_sql +
-            ' ORDER BY ("articleTotalStok" > 0) DESC, ("imageUrl" IS NOT NULL AND "imageUrl" != \'\') DESC, "sortRank" ASC LIMIT 12',
+            ' ORDER BY ("articleTotalStok" > 0) DESC, ("imageUrl" IS NOT NULL AND "imageUrl" != \'\') DESC, "sortRank" ASC LIMIT 10',
             tuple([sku_or_art, sku_or_art, f"%{sku_or_art}%"] + scope_params),
             timeout=4.5,
         )
         candidates.extend(rows)
 
         if not candidates:
-            # Fallback langsung ke tabel Product (jika artikel baru belum masuk CatalogArticle)
             p_rows = turso_query(
                 'SELECT sku, barcode, article, description, brand, dept, color, size, stok, '
                 '"hargaNormal", "hargaPromo", diskon, "discountType", "toDate", "imageUrl", images '
                 'FROM "Product" '
                 'WHERE UPPER(sku) = UPPER(?) OR UPPER(COALESCE(barcode, \'\')) = UPPER(?) OR UPPER(COALESCE(article, \'\')) LIKE UPPER(?) '
-                'ORDER BY (stok > 0) DESC LIMIT 12',
+                'ORDER BY (stok > 0) DESC LIMIT 10',
                 (sku_or_art, sku_or_art, f"%{sku_or_art}%"),
                 timeout=4.5,
             )
@@ -949,10 +1013,13 @@ def search_sanitized_catalog(intent_info: Dict[str, Any], store_scope: str = "AL
                     "articlePromoLabel": pr.get("discountType") or pr.get("diskon") or "",
                 })
 
-    # 2. Pencarian berbasis kata kunci / kategori / brand / promo di CatalogArticle
+    # 2. Pencarian umum di CatalogArticle — HEMAT KUOTA (LIMIT 30) + KETAT STOK > 0 & ADA FOTO!
     if not candidates:
         expanded_terms = _expand_keyword_terms(keywords)
-        where_clauses: List[str] = ["1=1"]
+        where_clauses: List[str] = [
+            '"articleTotalStok" > 0',
+            '"imageUrl" IS NOT NULL AND "imageUrl" != \'\'',
+        ]
         params: List[Any] = []
 
         if store_scope in ("SUKO", "MUKU", "ZES"):
@@ -970,7 +1037,6 @@ def search_sanitized_catalog(intent_info: Dict[str, Any], store_scope: str = "AL
         if wants_promo and not expanded_terms and not category_hint:
             where_clauses.append('"articleHasPromo" = 1')
 
-        # Bangun filter OR yang mencakup sinonim + categoryKey
         or_parts: List[str] = []
         or_params: List[Any] = []
         for term in expanded_terms[:8]:
@@ -994,14 +1060,15 @@ def search_sanitized_catalog(intent_info: Dict[str, Any], store_scope: str = "AL
             '"imageUrl", "articleTotalStok", "articleColors", "articleSizes", "articleHasPromo", "articlePromoLabel" '
             'FROM "CatalogArticle" '
             f'WHERE {" AND ".join(where_clauses)} '
-            'ORDER BY ("articleTotalStok" > 0) DESC, ("imageUrl" IS NOT NULL AND "imageUrl" != \'\') DESC, '
-            '"articleHasPromo" DESC, "sortRank" ASC LIMIT 45'
+            'ORDER BY "articleHasPromo" DESC, "sortRank" ASC LIMIT 30'
         )
         candidates = turso_query(sql, tuple(params), timeout=4.5)
 
-        # Fallback jika terlalu ketat dengan brand_hint: cari ulang tanpa brand_hint
         if not candidates and brand_hint and (expanded_terms or category_hint):
-            fb_clauses = ["1=1"]
+            fb_clauses = [
+                '"articleTotalStok" > 0',
+                '"imageUrl" IS NOT NULL AND "imageUrl" != \'\'',
+            ]
             fb_params: List[Any] = []
             if store_scope in ("SUKO", "MUKU", "ZES"):
                 fb_clauses.append('"brandGroup" = ?')
@@ -1015,14 +1082,14 @@ def search_sanitized_catalog(intent_info: Dict[str, Any], store_scope: str = "AL
                 '"imageUrl", "articleTotalStok", "articleColors", "articleSizes", "articleHasPromo", "articlePromoLabel" '
                 'FROM "CatalogArticle" '
                 f'WHERE {" AND ".join(fb_clauses)} '
-                'ORDER BY ("articleTotalStok" > 0) DESC, ("imageUrl" IS NOT NULL AND "imageUrl" != \'\') DESC, "sortRank" ASC LIMIT 30'
+                'ORDER BY "articleHasPromo" DESC, "sortRank" ASC LIMIT 24'
             )
             candidates = turso_query(sql_fb, tuple(fb_params), timeout=4.5)
 
     if not candidates:
         return []
 
-    # 3. Skoring Relevansi (Ready + Foto Bersih + Keyword + Warna + Ukuran + Promo)
+    # 3. Skoring Relevansi Ketat (Anti-Nyasar Kemeja vs T-Shirt + Wajib Foto Bersih!)
     expanded_set = set(_expand_keyword_terms(keywords))
     scored: List[Tuple[int, Dict[str, Any]]] = []
     seen_articles = set()
@@ -1033,14 +1100,20 @@ def search_sanitized_catalog(intent_info: Dict[str, Any], store_scope: str = "AL
             continue
         seen_articles.add(art_key)
 
+        has_clean_img = is_clean_product_image(c.get("imageUrl"))
+        # Untuk pencarian umum (bukan exact SKU), TOLAK produk yang fotonya kosong / logo placeholder!
+        if not sku_or_art and not has_clean_img:
+            continue
+
         score = 0
-        desc_up = f"{c.get('description') or ''} {c.get('article') or ''} {c.get('subBrand') or ''} {c.get('dept') or ''}".upper()
+        desc_only = str(c.get("description") or "").upper()
+        desc_up = f"{desc_only} {c.get('article') or ''} {c.get('subBrand') or ''} {c.get('dept') or ''}".upper()
         total_stok = int(c.get("articleTotalStok") or 0)
 
         if total_stok > 0:
             score += 120
-        if is_clean_product_image(c.get("imageUrl")):
-            score += 75
+        if has_clean_img:
+            score += 100
         if sku_or_art and (
             sku_or_art.upper() == str(c.get("sku") or "").upper()
             or sku_or_art.upper() in str(c.get("article") or "").upper()
@@ -1054,7 +1127,17 @@ def search_sanitized_catalog(intent_info: Dict[str, Any], store_scope: str = "AL
             score += 80
         if category_hint and str(c.get("categoryKey") or "").upper() == category_hint:
             score += 65
+
+        # Anti-nyasar: cari "kemeja" JANGAN sampai masuk T-Shirt / Kaos / Polo!
+        if wants_kemeja:
+            if any(k in desc_only for k in ("KEMEJA", "OXFORD", "FLANNEL", "WOVEN")):
+                score += 140
+            if any(bad in desc_only for bad in ("T-SHIRT", "TSHIRT", "POCKET TEE", "KAOS", "POLO")):
+                score -= 220
+
         for term in expanded_set:
+            if term == "SHIRT" and "T-SHIRT" in desc_only and wants_kemeja:
+                continue
             if term in desc_up:
                 score += 45
         if wants_promo and bool(c.get("articleHasPromo")):
@@ -1070,46 +1153,75 @@ def search_sanitized_catalog(intent_info: Dict[str, Any], store_scope: str = "AL
         scored.append((score, c))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    top_rows = [row for _, row in scored[:limit]]
+    # Ambil pool cadangan (limit + 2) supaya jika ada 1 produk yg stok live-nya ternyata 0, otomatis diganti cadangan!
+    pool_rows = [row for _, row in scored[: max(limit + 2, 5)]]
 
-    # 4. Tarik detail varian asli dari tabel Product agar status warna & ukuran READY 100% akurat
-    top_articles = [str(r.get("article") or "").strip() for r in top_rows if str(r.get("article") or "").strip()]
+    # 4. Tarik detail varian asli dari tabel Product (1 query batch hemat kuota!)
+    pool_articles = [str(r.get("article") or "").strip() for r in pool_rows if str(r.get("article") or "").strip()]
     variants_by_article: Dict[str, List[Dict[str, Any]]] = {}
-    if top_articles:
-        placeholders = ",".join("?" for _ in top_articles)
+    if pool_articles:
+        placeholders = ",".join("?" for _ in pool_articles)
         v_rows = turso_query(
             'SELECT sku, article, description, brand, dept, color, size, stok, '
             '"hargaNormal", "hargaPromo", diskon, "discountType", "toDate", "imageUrl", images '
             f'FROM "Product" WHERE article IN ({placeholders})',
-            tuple(top_articles),
+            tuple(pool_articles),
             timeout=4.0,
         )
         for vr in v_rows:
             ak = str(vr.get("article") or "").strip().upper()
             variants_by_article.setdefault(ak, []).append(vr)
 
-    # 5. HARD PRIVACY SANITIZER: HAPUS TOTAL ANGKA STOK! HANYA READY / SOLD_OUT!
+    # 5. VERIFIKASI STOK LIVE REAL-TIME TOKO (PARALEL UNTUK KANDIDAT TERATAS!)
+    #    Memastikan 100% produk & warna/size yang dikirim ke customer benar-benar READY detik ini!
+    live_stock_by_article: Dict[str, Dict[str, int]] = {}
+    if verify_live and pool_rows:
+        targets = pool_rows[: min(len(pool_rows), limit + 1)]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(targets))) as ex:
+            fut_map = {}
+            for r in targets:
+                art = str(r.get("article") or "").strip()
+                ak = art.upper()
+                sku_main = str(r.get("sku") or "").strip()
+                bg = str(r.get("brandGroup") or "").strip()
+                v_list = variants_by_article.get(ak) or []
+                if sku_main:
+                    fut_map[ex.submit(_verify_live_stock_for_article, sku_main, art, bg, v_list)] = ak
+            done, _ = concurrent.futures.wait(fut_map.keys(), timeout=3.4)
+            for fut in done:
+                ak = fut_map[fut]
+                try:
+                    lmap = fut.result()
+                    if lmap:
+                        live_stock_by_article[ak] = lmap
+                except Exception:
+                    pass
+
+    # 6. HARD PRIVACY SANITIZER + FILTER READY-ONLY (WARNA & UKURAN READY SAJA + WAJIB ADA FOTO!)
     sanitized_products: List[Dict[str, Any]] = []
-    for r in top_rows:
+    for r in pool_rows:
+        if len(sanitized_products) >= limit:
+            break
+
         art = str(r.get("article") or "").strip()
         ak = art.upper()
         v_list = variants_by_article.get(ak) or []
+        live_map = live_stock_by_article.get(ak) or {}
 
+        # Peta warna READY -> set ukuran READY (100% akurat per warna!)
+        ready_by_color: Dict[str, set] = {}
         ready_colors_set = set()
         ready_sizes_set = set()
-        all_colors_set = set()
-        all_sizes_set = set()
-        best_image = ""
+        all_clean_images: List[str] = []
         matching_color_image = ""
 
-        # Pilih harga promo terbaik / harga normal ter-sanitasi
         harga_normal = parse_retail_price(r.get("hargaNormal")) or 0
         harga_promo = parse_retail_price(r.get("hargaPromo"))
         promo_label = str(r.get("articlePromoLabel") or r.get("discountType") or r.get("diskon") or "").strip()
         promo_until = str(r.get("toDate") or "").strip()
 
         if is_clean_product_image(r.get("imageUrl")):
-            best_image = str(r.get("imageUrl")).strip()
+            all_clean_images.append(str(r.get("imageUrl")).strip())
 
         any_ready = False
         requested_variant_matched = False
@@ -1117,22 +1229,25 @@ def search_sanitized_catalog(intent_info: Dict[str, Any], store_scope: str = "AL
 
         if v_list:
             for v in v_list:
-                v_stok = int(v.get("stok") or 0)
+                v_sku = str(v.get("sku") or "").strip()
+                # Pakai stok LIVE jika berhasil ditarik, kalau toko tutup fallback ke stok DB
+                v_stok = int(live_map[v_sku]) if v_sku in live_map else int(v.get("stok") or 0)
                 v_col = str(v.get("color") or "").strip()
                 v_sz = str(v.get("size") or "").strip()
-                if v_col and v_col.upper() not in ("NO COLOR", "NONE", "-"):
-                    all_colors_set.add(v_col)
-                if v_sz and v_sz.upper() not in ("NONE", "-"):
-                    all_sizes_set.add(v_sz)
+
+                col_valid = bool(v_col and v_col.upper() not in ("NO COLOR", "NONE", "-"))
+                sz_valid = bool(v_sz and v_sz.upper() not in ("NONE", "-"))
 
                 if v_stok > 0:
                     any_ready = True
-                    if v_col and v_col.upper() not in ("NO COLOR", "NONE", "-"):
+                    if col_valid:
                         ready_colors_set.add(v_col)
-                    if v_sz and v_sz.upper() not in ("NONE", "-"):
+                        ready_by_color.setdefault(v_col, set())
+                        if sz_valid:
+                            ready_by_color[v_col].add(v_sz)
+                    if sz_valid:
                         ready_sizes_set.add(v_sz)
 
-                # Cek varian spesifik yg diminta customer (warna &/atau ukuran)
                 col_ok = _color_matches(v_col, color_hint) if color_hint else True
                 sz_ok = _size_matches(v_sz, size_hint) if size_hint else True
                 if (color_hint or size_hint) and col_ok and sz_ok:
@@ -1140,31 +1255,39 @@ def search_sanitized_catalog(intent_info: Dict[str, Any], store_scope: str = "AL
                     if v_stok > 0:
                         requested_variant_ready = True
 
-                # Pilih gambar paling cocok dengan warna yang ditanya!
-                v_img = str(v.get("imageUrl") or "").strip()
-                if not is_clean_product_image(v_img):
-                    for extra_img in _parse_json_list(v.get("images")):
-                        if is_clean_product_image(extra_img):
-                            v_img = extra_img
-                            break
-                if is_clean_product_image(v_img):
-                    if color_hint and col_ok and not matching_color_image:
-                        matching_color_image = v_img
-                    if not best_image:
-                        best_image = v_img
+                # Kumpulkan foto bersih dari varian (utamakan warna yang ready & cocok dengan permintaan!)
+                cand_imgs: List[str] = []
+                if is_clean_product_image(v.get("imageUrl")):
+                    cand_imgs.append(str(v.get("imageUrl")).strip())
+                for extra_img in _parse_json_list(v.get("images")):
+                    if is_clean_product_image(extra_img) and extra_img not in cand_imgs:
+                        cand_imgs.append(extra_img)
+
+                for ci in cand_imgs:
+                    if v_stok > 0 and color_hint and col_ok and not matching_color_image:
+                        matching_color_image = ci
+                    if ci not in all_clean_images:
+                        all_clean_images.append(ci)
         else:
             any_ready = int(r.get("articleTotalStok") or 0) > 0
-            all_colors_set.update(_parse_json_list(r.get("articleColors")))
-            all_sizes_set.update(_parse_json_list(r.get("articleSizes")))
             if any_ready:
-                ready_colors_set.update(all_colors_set)
-                ready_sizes_set.update(all_sizes_set)
+                ready_colors_set.update(_parse_json_list(r.get("articleColors")))
+                ready_sizes_set.update(_parse_json_list(r.get("articleSizes")))
 
-        final_image = matching_color_image or best_image
+        # ATURAN KERAS USER:
+        # 1. Jika bukan pencarian exact SKU tertentu & stok LIVE ternyata HABIS (0) -> CORET, jangan kirim ke customer!
+        if not sku_or_art and not any_ready:
+            continue
+
+        # 2. WAJIB ADA FOTO BERSIH untuk rekomendasi produk!
+        final_image = matching_color_image or (all_clean_images[0] if all_clean_images else "")
+        fallback_images = [u for u in all_clean_images if u != final_image][:4]
+        if not sku_or_art and not final_image:
+            continue
+
         if harga_promo and harga_normal and harga_promo >= harga_normal:
             harga_promo = None
 
-        # Tentukan status ketersediaan (100% BOOLEAN TEXT — NOL ANGKA!)
         availability = "READY" if any_ready else "SOLD_OUT"
         requested_status = ""
         if color_hint or size_hint:
@@ -1175,7 +1298,15 @@ def search_sanitized_catalog(intent_info: Dict[str, Any], store_scope: str = "AL
             else:
                 requested_status = "REQUESTED_VARIANT_NOT_AVAILABLE"
 
-        # Bersihkan nama produk agar mudah dibaca customer
+        # Susun ringkasan akurat per warna READY -> ukuran READY (max 6 warna)
+        ready_color_sizes: List[str] = []
+        for col_name in sorted(ready_by_color.keys())[:6]:
+            szs = sorted(ready_by_color[col_name], key=_size_sort_key)
+            if szs:
+                ready_color_sizes.append(f"{col_name} ({', '.join(szs[:6])})")
+            else:
+                ready_color_sizes.append(col_name)
+
         raw_desc = str(r.get("description") or "").strip()
         clean_name = raw_desc.split(":")[0].strip() if ":" in raw_desc else raw_desc
 
@@ -1186,10 +1317,12 @@ def search_sanitized_catalog(intent_info: Dict[str, Any], store_scope: str = "AL
             "brand": str(r.get("subBrand") or r.get("brand") or r.get("brandGroup") or "").strip(),
             "storeGroup": str(r.get("brandGroup") or "").strip(),
             "category": str(r.get("categoryKey") or "").strip(),
-            "availability": availability,  # HANYA "READY" | "SOLD_OUT"
+            "availability": availability,  # HANYA "READY" | "SOLD_OUT" (NOL ANGKA STOK!)
+            "liveStockVerified": bool(live_map),
             "requestedVariantStatus": requested_status,
-            "readyColors": sorted(ready_colors_set)[:10],
-            "readySizes": sorted(ready_sizes_set, key=_size_sort_key)[:12],
+            "readyColors": sorted(ready_colors_set)[:8],
+            "readySizes": sorted(ready_sizes_set, key=_size_sort_key)[:10],
+            "readyColorSizes": ready_color_sizes,
             "hargaNormal": harga_normal,
             "hargaNormalText": format_idr(harga_normal),
             "hargaPromo": harga_promo,
@@ -1197,6 +1330,7 @@ def search_sanitized_catalog(intent_info: Dict[str, Any], store_scope: str = "AL
             "promoLabel": promo_label if (harga_promo or r.get("articleHasPromo")) else "",
             "promoUntil": promo_until if (harga_promo or r.get("articleHasPromo")) else "",
             "imageUrl": final_image,
+            "fallbackImages": fallback_images,
         })
 
     return sanitized_products
@@ -1239,10 +1373,16 @@ def _format_single_product_block(idx: int, total: int, p: Dict[str, Any]) -> str
             lines.append("📦 Status: Warna/ukuran yang ditanya sedang *sold out*, varian lain masih *Ready*:")
         else:
             lines.append("📦 Status: *Ready* Kak! ✨")
-        if p.get("readyColors"):
-            lines.append(f"🎨 Warna ready: {', '.join(p['readyColors'][:6])}")
-        if p.get("readySizes"):
-            lines.append(f"📏 Ukuran ready: {', '.join(p['readySizes'][:8])}")
+        # Tampilkan akurat per warna -> ukuran yang benar-benar READY saja!
+        if p.get("readyColorSizes"):
+            lines.append("🎨 Pilihan Warna & Size Ready:")
+            for cs in p["readyColorSizes"][:6]:
+                lines.append(f"   • {cs}")
+        else:
+            if p.get("readyColors"):
+                lines.append(f"🎨 Warna ready: {', '.join(p['readyColors'][:6])}")
+            if p.get("readySizes"):
+                lines.append(f"📏 Ukuran ready: {', '.join(p['readySizes'][:8])}")
     else:
         lines.append("📦 Status: Mohon maaf Kak, produk ini saat ini sedang *sold out* 🙏")
     return "\n".join(lines)
@@ -1329,6 +1469,7 @@ def build_reply_messages(
         cards.append({
             "text": _sanitize_outgoing_reply("\n".join(parts).strip()),
             "imageUrl": img,
+            "fallbackImages": p.get("fallbackImages") or [],
         })
     return cards
 
@@ -1783,20 +1924,36 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
         cfg = load_config()
         st = load_bridge_state()
         now_ms = int(time.time() * 1000)
-        st["lastHeartbeatAt"] = now_ms
-        if "connected" in payload:
+        prev_hb = int(st.get("lastHeartbeatAt") or 0)
+        changed = False
+
+        if "connected" in payload and bool(payload["connected"]) != bool(st.get("connected", False)):
             st["connected"] = bool(payload["connected"])
+            changed = True
         if payload.get("phone"):
-            st["phone"] = normalize_wa_phone(payload["phone"]) or st.get("phone", "")
-        if payload.get("statusMessage"):
+            np = normalize_wa_phone(payload["phone"]) or st.get("phone", "")
+            if np != st.get("phone", ""):
+                st["phone"] = np
+                changed = True
+        if payload.get("statusMessage") and str(payload["statusMessage"])[:160] != st.get("statusMessage", ""):
             st["statusMessage"] = str(payload["statusMessage"])[:160]
+            changed = True
         if payload.get("pairingCode"):
             st["pairingCode"] = str(payload["pairingCode"]).strip()
             st["pairingCodeAt"] = now_ms
-        elif payload.get("clearPairingCode"):
+            changed = True
+        elif payload.get("clearPairingCode") and st.get("pairingCode"):
             st["pairingCode"] = ""
             st["pairingCodeAt"] = 0
-        saved_st = save_bridge_state(st)
+            changed = True
+
+        # Hemat Write Turso: hanya tulis jika state berubah ATAU heartbeat sudah lewat > 55 detik!
+        if changed or (now_ms - prev_hb) >= 55_000:
+            st["lastHeartbeatAt"] = now_ms
+            saved_st = save_bridge_state(st)
+        else:
+            saved_st = st
+
         return {
             "success": True,
             "bridge": saved_st,
