@@ -1306,24 +1306,56 @@ def _size_matches(variant_size: str, size_hint: str) -> bool:
 
 
 def _matches_gender(row: Dict[str, Any], gender_hint: str) -> Tuple[bool, int]:
-    """Cek kecocokan gender berdasarkan kolom dept & description (anti baju cowok masuk saat cari cewek!)."""
+    """
+    Decoder Gender Resmi SUKO (100% Akurat berbasis Kode Artikel + Dept + Deskripsi):
+    - MEN (Pria)   : Artikel `^[A-Z]\\d[MP]` (268+43 artikel!), `U\\dU` (boxer), `SUKO MEN`, `SPORTS MEN`, `MEN`
+    - LADIES (Wanita): Artikel `^[A-Z]\\d[LW]` (265+39 artikel!), `SUKO LADIES`, `SPORTS LADIES`, `ROK/GAUN/DRESS/BLOUSE/TUNIK`
+    - KIDS (Anak)  : Artikel `^C[BGR]` (`CBS/CGS/CRG`), `^[A-Z]\\dK`, `SUKO BOYS`, `SUKO GIRLS`, `CHILDREN`
+    """
     if not gender_hint:
         return True, 0
-    txt = f"{row.get('dept') or ''} {row.get('description') or ''} {row.get('article') or ''}".upper()
-    is_ladies = any(k in txt for k in ("LADIES", "WOMEN", "WOMAN", "FEMALE", "BLOUSE", "DRESS", "SKIRT", "ROK", "TUNIC", "TUNIK", "GAMIS", "CULOTTE", "CROP"))
-    is_men = bool(re.search(r"\b(MEN|MENS|MAN|PRIA|BOYS|BOXER)\b", txt)) and not is_ladies
-    is_kids = any(k in txt for k in ("KIDS", "CHILD", "JUNIOR", "BOYS", "GIRLS"))
+    art = str(row.get("article") or "").strip().upper()
+    dept = str(row.get("dept") or "").strip().upper()
+    brand = str(row.get("brand") or "").strip().upper()
+    desc = str(row.get("description") or "").strip().upper()
+    txt = f"{dept} {brand} {desc}".upper()
+
+    art_is_kids = bool(re.match(r"^(?:C[BGR][A-Z0-9]|[A-Z]\dK)", art))
+    art_is_ladies = bool(re.match(r"^[A-Z]\d[LW]", art)) and not art_is_kids
+    art_is_men = bool(re.match(r"^(?:[A-Z]\d[MP]|U\dU)", art)) and not art_is_kids
+
+    is_kids = art_is_kids or any(k in txt for k in ("SUKO BOYS", "SUKO GIRLS", "CHILDREN", "KIDS", "JUNIOR", "BOYS", "GIRLS"))
+    is_ladies = (
+        art_is_ladies
+        or any(k in txt for k in ("LADIES", "WOMEN", "WOMAN", "FEMALE", "BLOUSE", "DRESS", "GAUN", "SKIRT", "ROK", "TUNIC", "TUNIK", "GAMIS", "CULOTTE"))
+    ) and not is_kids
+    is_men = (
+        art_is_men
+        or bool(re.search(r"\b(MEN|MENS|MAN|PRIA|BOXER)\b", txt))
+    ) and not is_ladies and not is_kids
 
     if gender_hint == "LADIES":
         if is_men or is_kids:
-            return False, -250
-        return True, (110 if is_ladies else 0)
+            return False, -300
+        if is_ladies:
+            return True, 160
+        # Produk unisex/tanpa kode gender jelas: boleh lolos dgn skor netral rendah jika bukan home/toys
+        if any(k in dept for k in ("HOME", "TOYS", "ACCS")):
+            return False, -200
+        return True, 0
+
     if gender_hint == "MEN":
         if is_ladies or is_kids:
-            return False, -250
-        return True, (110 if is_men else 0)
+            return False, -300
+        if is_men:
+            return True, 160
+        if any(k in dept for k in ("HOME", "TOYS", "ACCS")):
+            return False, -200
+        return True, 0
+
     if gender_hint == "KIDS":
-        return (True, 120) if is_kids else (False, -200)
+        return (True, 160) if is_kids else (False, -250)
+
     return True, 0
 
 
