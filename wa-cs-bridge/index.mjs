@@ -61,6 +61,7 @@ let currentSock = null;
 let isConnected = false;
 let currentPhone = DEFAULT_ADMIN_PHONE;
 let currentHumanTakeoverMins = 10;
+let currentIgnorePrivateChats = false;
 let lastHandledPairingReq = 0;
 let lastHandledLogoutReq = 0;
 let pendingWebPairingPhone = "";
@@ -362,6 +363,9 @@ async function syncBridgeState(extra = {}) {
     if (typeof res.humanTakeoverMinutes === "number") {
       currentHumanTakeoverMins = res.humanTakeoverMinutes;
     }
+    if (typeof res.ignorePrivateChats === "boolean") {
+      currentIgnorePrivateChats = res.ignorePrivateChats;
+    }
     return res.bridge || null;
   } catch {
     return null;
@@ -546,8 +550,8 @@ async function startSocket() {
             continue;
           }
 
-          // Human Takeover: jika PIC balas manual di grup ATAU di PC customer VIP -> bot diam sementara!
-          if (currentHumanTakeoverMins > 0 && (isGroup || isDmSessionActive(jid, msg.key?.remoteJidAlt))) {
+          // Human Takeover: jika PIC balas manual di grup ATAU di PC customer -> bot diam sementara!
+          if (currentHumanTakeoverMins > 0 && (isGroup || !currentIgnorePrivateChats || isDmSessionActive(jid, msg.key?.remoteJidAlt))) {
             humanTakeoverUntil.set(jid, Date.now() + currentHumanTakeoverMins * 60 * 1000);
             console.log(`🤝 [HUMAN TAKEOVER] PIC balas manual di "${groupName}". Bot diam sementara ${currentHumanTakeoverMins} menit.`);
           }
@@ -563,11 +567,11 @@ async function startSocket() {
         }
 
         // 3. Jika PRIVATE CHAT (DM):
-        //    HANYA layani jika customer sedang dalam sesi aktif hand-off dari grup!
-        //    Teman / keluarga biasa langsung di-skip di PC (0% pernah dikirim ke server)!
+        //    - Jika "Blokir Chat Pribadi" ON di Web -> hanya layani sesi aktif dari grup (aman untuk nomor pribadi).
+        //    - Jika "Blokir Chat Pribadi" OFF di Web -> LAYANI SEMUA NOMOR yang langsung japri ke nomor CS!
         if (!isGroup) {
           const altRemote = String(msg.key?.remoteJidAlt || "");
-          if (!isDmSessionActive(jid, altRemote)) {
+          if (currentIgnorePrivateChats && !isDmSessionActive(jid, altRemote)) {
             continue;
           }
           console.log(`💬 [PC VIP] ${senderName}: "${text.slice(0, 70)}"`);

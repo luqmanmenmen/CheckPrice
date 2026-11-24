@@ -2489,6 +2489,7 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
             "bridge": saved_st,
             "adminPhone": cfg.get("adminPhone") or "6285771123000",
             "humanTakeoverMinutes": cfg.get("humanTakeoverMinutes", 10),
+            "ignorePrivateChats": bool(cfg.get("ignorePrivateChats", True)),
         }
 
     if action == "save-config":
