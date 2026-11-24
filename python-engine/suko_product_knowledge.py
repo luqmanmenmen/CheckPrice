@@ -155,7 +155,27 @@ def detect_occasion_profile(low: str) -> Dict[str, Any]:
     """
     txt = str(low or "").lower()
 
-    # 1. FORMAL / KERJA / KANTOR / INTERVIEW / MEETING / ACARA RESMI -> SUKO WORKWEAR!
+    # 1. RUANGAN AC / DINGIN / MOTORAN / ANGIN MALAM -> cek DULUAN sebelum WORKWEAR agar "ruangan AC kantor dingin" masuk OUTER HANGAT!
+    if re.search(
+        r"\b(ruangan\s+ac|kantor\s+dingin|baju\s+hangat|biar\s+hangat|motoran|naik\s+motor|angin\s+malam|"
+        r"tahan\s+angin|gampang\s+dilipat|masuk\s+tas|musim\s+hujan|gerimis)\b",
+        txt,
+    ):
+        is_motor = bool(re.search(r"\b(motoran|naik\s+motor|angin|dilipat|hujan|gerimis)\b", txt))
+        return {
+            "id": "COLD_AC_WIND",
+            "preferDepts": ["SUKO CASUAL", "SUKO SPORTS MEN", "SUKO SPORTS LADIES"],
+            "boostTerms": ["WINDBREAKER", "PARASUT", "PARKA", "POCKETABLE", "REVERSIBLE", "TASLAN"] if is_motor else ["SOUFFLE", "CARDIGAN", "BABY TERRY", "FLEECE", "SWEATER", "WAFFLE", "KNIT", "JAKET"],
+            "penalizeTerms": ["SLEEVELESS", "TANK TOP", "SHORT", "PENDEK", "BOXER", "SANDAL", "KEMEJA"],
+            "fallbackKeywords": ["windbreaker", "parka", "parasut", "jaket"] if is_motor else ["cardigan", "souffle", "sweater", "jaket"],
+            "veteranOpening": (
+                "Pas banget {sapaan}! Untuk motoran/angin malam atau traveling, *SUKO* punya lini jaket *Windbreaker, Parasut Taslan, Parka Reversible,* dan *Pocketable* yang super ringan, tahan angin & praktis dibawa 🧥✨\nIni pilihan yang sedang *ready*:"
+                if is_motor
+                else "Pas banget {sapaan}! Untuk ruangan ber-AC / udara dingin tanpa bikin gerah, andalan *SUKO* ada di *Cardigan Souffle Yarn* (rajut empuk & gak gatal), *Sweater Baby Terry*, hingga *Polar Fleece* & *Waffle* 🧥✨\nIni pilihan yang sedang *ready*:"
+            ),
+        }
+
+    # 2. FORMAL / KERJA / KANTOR / INTERVIEW / MEETING / ACARA RESMI -> SUKO WORKWEAR!
     if re.search(
         r"\b(formal|resmi|kantoran|kantor|ngantor|kerja|interview|wawancara|meeting|rapat|presentasi|"
         r"semi[\-\s]?formal|workwear|jas|blazer|kondangan\s+rapi)\b",
@@ -174,7 +194,7 @@ def detect_occasion_profile(low: str) -> Dict[str, Any]:
             ),
         }
 
-    # 2. TIDUR / BAJU RUMAH / SANTAI MALAM -> SUKO SLEEPWEAR!
+    # 3. TIDUR / BAJU RUMAH / SANTAI MALAM -> SUKO SLEEPWEAR!
     if re.search(
         r"\b(buat\s+tidur|baju\s+tidur|pakaian\s+tidur|celana\s+tidur|piyama|pajama|pajamas|sleepwear|"
         r"buat\s+di\s+rumah|baju\s+rumah|santai\s+malam|nginep|sanrio|simpsons|disney)\b",
@@ -184,7 +204,7 @@ def detect_occasion_profile(low: str) -> Dict[str, Any]:
             "id": "SLEEPWEAR_HOME",
             "preferDepts": ["SUKO SLEEPWEAR"],
             "boostTerms": ["PAJAMAS", "FLANNEL", "RIB RAJUT", "SANRIO", "DISNEY", "SIMPSONS", "SLEEP"],
-            "penalizeTerms": ["WORKWEAR", "OXFORD", "JEANS", "CHINOS", "SPORT", "PARASUT", "WINDBREAKER", "PILLOW"],
+            "penalizeTerms": ["WORKWEAR", "OXFORD", "JEANS", "CHINOS", "SPORT", "PARASUT", "WINDBREAKER", "PILLOW", "POCKET TEE"],
             "fallbackKeywords": ["pajamas", "flannel", "sleepwear"],
             "veteranOpening": (
                 "Ada banget {sapaan}! Di lini *SUKO Sleepwear*, kami punya pilihan piyama set & celana tidur berbahan lembut adem "
@@ -193,7 +213,7 @@ def detect_occasion_profile(low: str) -> Dict[str, Any]:
             ),
         }
 
-    # 3. DALEMAN / INNER HIJAB CIPUT / ANTI-NERAWANG / UNDERWEAR / KAOS KAKI -> SUKO ESSENTIAL & UNDERWEAR!
+    # 4. DALEMAN / INNER HIJAB CIPUT / ANTI-NERAWANG / UNDERWEAR / KAOS KAKI -> SUKO ESSENTIAL & UNDERWEAR!
     if re.search(
         r"\b(daleman|dalaman|inner|innerwear|ciput|kerudung|hijab|kamisol|camisole|tank\s*top|"
         r"celana\s+dalam|pakaian\s+dalam|underwear|boxer|singlet|kaos\s+kaki|kaus\s+kaki|biar\s+gak\s+nerawang)\b",
@@ -210,9 +230,10 @@ def detect_occasion_profile(low: str) -> Dict[str, Any]:
         )
         return {
             "id": "INNER_ESSENTIAL",
-            "preferDepts": ["SUKO ESSENTIAL", "SUKO UNDERWEAR"],
-            "boostTerms": ["CIPUT", "HIJAB"] if is_hijab else (["KAOS KAKI", "SOCK"] if is_socks else (["BOXER", "PAKAIAN DALAM"] if is_boxer else ["INNER", "KAMISOL", "INNERWEAR", "ANTI BAKTERI", "TANK TOP"])),
-            "penalizeTerms": ["JEANS", "PARKA", "WINDBREAKER", "TUMBLER", "TOWEL", "CUSHION"],
+            "subType": "HIJAB" if is_hijab else ("SOCKS" if is_socks else ("BOXER" if is_boxer else "INNER_TOP")),
+            "preferDepts": ["SUKO UNDERWEAR"] if is_hijab else ["SUKO ESSENTIAL", "SUKO UNDERWEAR"],
+            "boostTerms": ["CIPUT", "HIJAB", "INNER", "KAMISOL"] if is_hijab else (["KAOS KAKI", "SOCK"] if is_socks else (["BOXER", "PAKAIAN DALAM"] if is_boxer else ["INNER", "KAMISOL", "INNERWEAR", "ANTI BAKTERI", "TANK TOP"])),
+            "penalizeTerms": ["BOXER", "JEANS", "PARKA", "WINDBREAKER", "TUMBLER", "TOWEL", "CUSHION"] if not is_boxer else ["JEANS", "PARKA", "WINDBREAKER", "TUMBLER", "TOWEL", "CUSHION"],
             "fallbackKeywords": fb_kws,
             "veteranOpening": (
                 "Ada dong {sapaan}! Di lini *SUKO Essential & Underwear* kami menyediakan kebutuhan dalaman harian yang super nyaman & breathable "
@@ -221,7 +242,7 @@ def detect_occasion_profile(low: str) -> Dict[str, Any]:
             ),
         }
 
-    # 4. OLAHRAGA / KERINGATAN / GYM / LARI / PADEL / TENIS / ZUMBA / TRAINING -> SUKO SPORTS (SUKO GO)!
+    # 5. OLAHRAGA / KERINGATAN / GYM / LARI / PADEL / TENIS / ZUMBA / TRAINING -> SUKO SPORTS (SUKO GO)!
     if re.search(
         r"\b(sport|sports|olahraga|training|gym|fitness|lari|jogging|padel|tenis|badminton|yoga|zumba|"
         r"sepedaan|gowes|activewear|keringatan|cepat\s+kering|anti\s+keringat)\b",
@@ -237,26 +258,6 @@ def detect_occasion_profile(low: str) -> Dict[str, Any]:
                 "Ada banget {sapaan}! Di *SUKO* kami punya lini khusus *SUKO Sports (SUKO GO)* yang memang dirancang untuk olahraga & gerak aktif "
                 "(teknologi *4-Way / Ultra Stretch* melar 4 arah, *Quick Dry* 2× lebih cepat kering, *Anti-Bakteri*, & *High Recovery*) ✨\n"
                 "Ini pilihan *SUKO Sports* yang sedang *ready*:"
-            ),
-        }
-
-    # 5. RUANGAN AC / DINGIN / MOTORAN / ANGIN MALAM / TRAVELING RINGAN -> OUTER HANGAT / WINDBREAKER / SOUFFLE!
-    if re.search(
-        r"\b(ruangan\s+ac|kantor\s+dingin|baju\s+hangat|biar\s+hangat|motoran|naik\s+motor|angin\s+malam|"
-        r"tahan\s+angin|gampang\s+dilipat|masuk\s+tas|musim\s+hujan|gerimis)\b",
-        txt,
-    ):
-        is_motor = bool(re.search(r"\b(motoran|naik\s+motor|angin|dilipat|hujan|gerimis)\b", txt))
-        return {
-            "id": "COLD_AC_WIND",
-            "preferDepts": ["SUKO CASUAL", "SUKO SPORTS MEN", "SUKO SPORTS LADIES"],
-            "boostTerms": ["WINDBREAKER", "PARASUT", "PARKA", "POCKETABLE", "REVERSIBLE", "TASLAN"] if is_motor else ["SOUFFLE", "CARDIGAN", "BABY TERRY", "FLEECE", "SWEATER", "WAFFLE", "KNIT", "JAKET"],
-            "penalizeTerms": ["SLEEVELESS", "TANK TOP", "SHORT", "PENDEK", "BOXER", "SANDAL"],
-            "fallbackKeywords": ["windbreaker", "parka", "parasut", "jaket"] if is_motor else ["cardigan", "souffle", "sweater", "jaket"],
-            "veteranOpening": (
-                "Pas banget {sapaan}! Untuk motoran/angin malam atau traveling, *SUKO* punya lini jaket *Windbreaker, Parasut Taslan, Parka Reversible,* dan *Pocketable* yang super ringan, tahan angin & praktis dibawa 🧥✨\nIni pilihan yang sedang *ready*:"
-                if is_motor
-                else "Pas banget {sapaan}! Untuk ruangan ber-AC / udara dingin tanpa bikin gerah, andalan *SUKO* ada di *Cardigan Souffle Yarn* (rajut empuk & gak gatal), *Sweater Baby Terry*, hingga *Polar Fleece* & *Waffle* 🧥✨\nIni pilihan yang sedang *ready*:"
             ),
         }
 

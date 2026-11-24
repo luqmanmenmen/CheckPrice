@@ -2293,6 +2293,20 @@ def _query_single_subsearch(
                 score += 180
             else:
                 continue
+        # Khusus SLEEPWEAR_HOME -> wajib dari SUKO SLEEPWEAR / PAJAMAS / FLANNEL (jangan bocor kaos pocket tee!)
+        if occ.get("id") == "SLEEPWEAR_HOME":
+            if row_dept != "SUKO SLEEPWEAR" and not any(k in desc_only for k in ("PAJAMAS", "PIYAMA", "FLANNEL", "SLEEP")):
+                continue
+        # Khusus INNER_ESSENTIAL (hijab/inner atas) -> jangan tampilkan BOXER pria!
+        if occ.get("id") == "INNER_ESSENTIAL" and occ.get("subType") in ("HIJAB", "INNER_TOP"):
+            if "BOXER" in desc_only or ("PAKAIAN DALAM" in desc_only and "INNER" not in desc_only):
+                continue
+        # Khusus COLD_AC_WIND -> prioritaskan outer/cardigan/sweater/jaket/hoodie/waffle, hindari kemeja tipis!
+        if occ.get("id") == "COLD_AC_WIND":
+            if any(k in desc_only for k in ("CARDIGAN", "SOUFFLE", "SWEATER", "SWEATSHIRT", "JAKET", "PARKA", "HOODIE", "WINDBREAKER", "FLEECE", "WAFFLE", "PARASUT")):
+                score += 190
+            else:
+                continue
 
         if all_color_hints:
             if any(any(_color_matches(col, ch) for ch in all_color_hints) for col in colors_list):
