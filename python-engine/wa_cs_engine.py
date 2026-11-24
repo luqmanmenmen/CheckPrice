@@ -648,7 +648,7 @@ def _call_gemini_model(
 
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{urllib.parse.quote(model)}:generateContent?key={urllib.parse.quote(api_key)}"
+        f"{urllib.parse.quote(model)}:generateContent"
     )
     gen_cfg: Dict[str, Any] = {
         "temperature": temperature,
@@ -666,7 +666,10 @@ def _call_gemini_model(
     req = urllib.request.Request(
         url,
         data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "X-goog-api-key": api_key,
+        },
         method="POST",
     )
     try:
