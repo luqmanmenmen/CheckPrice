@@ -908,8 +908,14 @@ export default function Home() {
         }
       }
     };
-    initialSyncIfEmpty();
-    return () => { isMounted = false; };
+    // Tunda warmup IndexedDB 450ms agar UI & keyboard HP langsung responsif 0ms begitu halaman terbuka
+    const warmupTimer = setTimeout(() => {
+      if (isMounted) initialSyncIfEmpty();
+    }, 450);
+    return () => {
+      isMounted = false;
+      clearTimeout(warmupTimer);
+    };
   }, []);
 
   const lastUpdateDate = updateData?.lastUpdate 

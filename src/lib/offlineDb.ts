@@ -631,9 +631,33 @@ export async function ensureModelsIndexReady(): Promise<CachedArticleModel[] | n
         const stored = await db.models.toArray();
         const hasLegacyOther = stored.some((m) => (m.brandGroup as string) === "OTHER");
         if (!hasLegacyOther) {
-          // IndexedDB `.toArray()` mengembalikan urutan Primary Key `key` (abjad: 3957, 3PCTSSPACE...).
-          // Urutkan segera dengan `compareBrowseItems` agar Page 1 SELALU menampilkan produk ADA STOK (> 0) & berfoto dulu!
-          memoryModelsCache = stored.map(sanitizeAndIndexModel).sort(compareBrowseItems);
+          // Proses per batch 6.000 baris + yield ke event loop agar main thread HP & keyboard TIDAK PERNAH freeze!
+          const indexed: CachedArticleModel[] = new Array(stored.length);
+          const CHUNK = 6000;
+          for (let i = 0; i < stored.length; i += CHUNK) {
+            const end = Math.min(i + CHUNK, stored.length);
+            for (let j = i; j < end; j++) {
+              indexed[j] = sanitizeAndIndexModel(stored[j]);
+            }
+            if (end < stored.length) {
+              await new Promise<void>((r) => setTimeout(r, 0));
+            }
+          }
+          // Sort numerik kilat (~30ms vs 2.500ms localeCompare): stok > 0 duluan -> berfoto -> stok terbanyak -> promo
+          indexed.sort((a, b) => {
+            const aStock = (a.articleTotalStok ?? a.stok ?? 0) > 0 ? 1 : 0;
+            const bStock = (b.articleTotalStok ?? b.stok ?? 0) > 0 ? 1 : 0;
+            if (bStock !== aStock) return bStock - aStock;
+            const aImg = a.imageUrl ? 1 : 0;
+            const bImg = b.imageUrl ? 1 : 0;
+            if (bImg !== aImg) return bImg - aImg;
+            const diffStok = (b.articleTotalStok ?? b.stok ?? 0) - (a.articleTotalStok ?? a.stok ?? 0);
+            if (diffStok !== 0) return diffStok;
+            const aPromo = a.articleHasPromo ? 1 : 0;
+            const bPromo = b.articleHasPromo ? 1 : 0;
+            return bPromo - aPromo;
+          });
+          memoryModelsCache = indexed;
           return memoryModelsCache;
         }
       }

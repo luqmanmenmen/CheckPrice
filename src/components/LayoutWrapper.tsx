@@ -92,8 +92,8 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
         className={`fixed inset-0 z-[999] bg-white transition-opacity duration-300 ease-in-out pointer-events-none ${entryFade ? 'opacity-100' : 'opacity-0'}`} 
       />
       
-      {/* Header Sticky dengan dukungan Notch iOS (pt-safe) */}
-      <header className="bg-white/95 backdrop-blur-md shadow-xs border-b border-slate-100 sticky top-0 z-50 pt-safe transition-all">
+      {/* Header Sticky dengan dukungan Notch iOS (pt-safe) — tanpa backdrop-blur agar scroll & keyboard HP 0ms */}
+      <header className="bg-white shadow-xs border-b border-slate-100 sticky top-0 z-50 pt-safe">
         <div className="max-w-7xl mx-auto px-3.5 sm:px-6 lg:px-8 h-14 sm:h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Sidebar user={data?.user} />

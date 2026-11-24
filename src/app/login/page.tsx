@@ -506,26 +506,29 @@ export default function Login() {
 
   return (
     <div id="login-stage" className={`login-stage sky-${skyPhase} ${isNight ? "night" : ""} relative min-h-screen flex flex-col p-4`}>
-      {/* Background Langit Pagi (Matahari & Awan) vs Malam (Bulan & Bintang) */}
-      <div className="absolute inset-0 pointer-events-none z-0 overflow-hidden">
-        <div className="page-sun" aria-hidden="true" />
-        <div className="page-clouds" aria-hidden="true">
-          <img src="/assets/cloud2.png" alt="" className="page-cloud page-cloud-1" draggable={false} />
-          <img src="/assets/cloud2.png" alt="" className="page-cloud page-cloud-2" draggable={false} />
-          <img src="/assets/cloud2.png" alt="" className="page-cloud page-cloud-3" draggable={false} />
-        </div>
-        <div className="page-moon-glow" aria-hidden="true" />
-        <div className="page-stars" id="pageStars">
-          {mounted && stars.map((s, i) => (
-            <span key={i} style={{ left: `${s.x}%`, top: `${s.y}%`, animationDelay: `${s.delay}s` }}></span>
-          ))}
-        </div>
+      {/* Background Langit Pagi (Matahari & Awan) vs Malam (Bulan & Bintang) — GPU-light agar keyboard HP instan 0ms */}
+      <div className="absolute inset-0 pointer-events-none z-0 overflow-hidden" style={{ contain: "strict" }}>
+        {!isNight && <div className="page-sun" aria-hidden="true" />}
+        {!isNight && (
+          <div className="page-clouds" aria-hidden="true">
+            <img src="/assets/cloud2.png" alt="" decoding="async" loading="lazy" className="page-cloud page-cloud-1" draggable={false} />
+            <img src="/assets/cloud2.png" alt="" decoding="async" loading="lazy" className="page-cloud page-cloud-2" draggable={false} />
+          </div>
+        )}
+        {isNight && <div className="page-moon-glow" aria-hidden="true" />}
+        {(isNight || skyPhase === "sore") && (
+          <div className="page-stars" id="pageStars">
+            {mounted && stars.slice(0, 24).map((s, i) => (
+              <span key={i} style={{ left: `${s.x}%`, top: `${s.y}%`, animationDelay: `${s.delay}s` }}></span>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="flex-grow shrink-0 min-h-[2rem]"></div>
 
       {showChangePin ? (
-        <div className="relative z-20 mx-auto bg-white/95 backdrop-blur-xl p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/40 shrink-0 animate-in zoom-in-95 duration-300">
+        <div className="relative z-20 mx-auto bg-white p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/60 shrink-0">
           <div className="text-center mb-6">
             <h2 className="text-xl font-black text-slate-800">Ubah PIN Default</h2>
             <p className="text-sm text-slate-500 mt-2">Demi keamanan, silakan ganti PIN Anda sebelum melanjutkan.</p>
@@ -574,7 +577,7 @@ export default function Login() {
           </form>
         </div>
       ) : (
-        <div className="relative z-20 mx-auto bg-white/95 backdrop-blur-xl p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/40 shrink-0">
+        <div className="relative z-20 mx-auto bg-white p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/60 shrink-0">
           <div className="text-center mb-8 flex flex-col items-center">
             <img src="/suko-logo.png" alt="SUKO Logo" className="h-20 mb-4 object-contain drop-shadow-md" />
             <p className="text-gray-500 text-sm font-medium">Masuk untuk memulai shift Anda</p>
@@ -609,11 +612,12 @@ export default function Login() {
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">NIK Karyawan</label>
             <input
-              type="text"
+              type="tel"
               inputMode="numeric"
-              pattern="[0-9]*"
+              autoComplete="off"
+              spellCheck={false}
               required
-              className="w-full border border-gray-300 rounded-lg p-3 text-lg bg-white text-gray-900"
+              className="w-full border border-gray-300 rounded-lg p-3 text-lg bg-white text-gray-900 caret-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="Contoh: 123456"
               value={nik}
               onChange={(e) => setNik(e.target.value.replace(/\D/g, ''))}
