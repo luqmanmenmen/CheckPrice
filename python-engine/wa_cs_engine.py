@@ -47,6 +47,7 @@ from storehub_live_engine import (
 CONFIG_STORAGE_PATH = "config/wa-cs-config.json"
 LOGS_STORAGE_PATH = "logs/wa-cs-logs.json"
 BRIDGE_STATE_PATH = "config/wa-cs-bridge-state.json"
+SESSIONS_STORAGE_PATH = "config/wa-cs-sessions.json"
 MAX_LOGS = 40
 MAX_DETECTED_GROUPS = 30
 
@@ -60,6 +61,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "closeHourWib": 21,
     "closeMinuteWib": 30,
     "ignorePrivateChats": True,
+    "handoffToPrivateChat": True,
+    "privateSessionMinutes": 30,
+    "replyGreetings": True,
     "storeScope": "ALL",  # ALL | SUKO | MUKU | ZES
     "csName": "Luqman",
     "adminPhone": "6281296393972",
@@ -246,6 +250,9 @@ def _merge_config(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     cfg["enabled"] = bool(cfg.get("enabled", False))
     cfg["autoSchedule"] = bool(cfg.get("autoSchedule", True))
     cfg["ignorePrivateChats"] = bool(cfg.get("ignorePrivateChats", True))
+    cfg["handoffToPrivateChat"] = bool(cfg.get("handoffToPrivateChat", True))
+    cfg["replyGreetings"] = bool(cfg.get("replyGreetings", True))
+    cfg["privateSessionMinutes"] = max(5, min(240, int(cfg.get("privateSessionMinutes", 30) or 30)))
     cfg["replyWithImage"] = bool(cfg.get("replyWithImage", True))
     cfg["openHourWib"] = max(0, min(23, int(cfg.get("openHourWib", 9) or 9)))
     cfg["openMinuteWib"] = max(0, min(59, int(cfg.get("openMinuteWib", 0) or 0)))
@@ -333,6 +340,60 @@ def append_log(entry: Dict[str, Any]) -> None:
 def clear_logs() -> None:
     try:
         storage_write_bytes(LOGS_STORAGE_PATH, b"[]", content_type="application/json", timeout=3.5)
+    except Exception:
+        pass
+
+
+def _session_key_variants(raw_sender: str) -> List[str]:
+    s = str(raw_sender or "").strip().lower()
+    keys: List[str] = []
+    if s:
+        keys.append(s)
+    digits = normalize_wa_phone(raw_sender)
+    if digits and digits not in keys:
+        keys.append(digits)
+    return keys
+
+
+def load_private_sessions() -> Dict[str, Any]:
+    now_ms = int(time.time() * 1000)
+    try:
+        txt = storage_read_text(SESSIONS_STORAGE_PATH, timeout=2.5)
+        if txt:
+            parsed = json.loads(txt)
+            if isinstance(parsed, dict):
+                return {
+                    k: v for k, v in parsed.items()
+                    if isinstance(v, dict) and int(v.get("expiresAtMs") or 0) > now_ms
+                }
+    except Exception:
+        pass
+    return {}
+
+
+def has_active_private_session(raw_sender: str) -> bool:
+    sessions = load_private_sessions()
+    if not sessions:
+        return False
+    for k in _session_key_variants(raw_sender):
+        if k in sessions:
+            return True
+    return False
+
+
+def register_private_session(raw_sender: str, sender_name: str, group_name: str, minutes: int = 30) -> None:
+    try:
+        sessions = load_private_sessions()
+        expires_ms = int(time.time() * 1000) + max(5, int(minutes or 30)) * 60 * 1000
+        entry = {
+            "senderName": str(sender_name or "Kak")[:40],
+            "groupName": str(group_name or "")[:60],
+            "expiresAtMs": expires_ms,
+        }
+        for k in _session_key_variants(raw_sender):
+            sessions[k] = entry
+        payload = json.dumps(sessions, ensure_ascii=False).encode("utf-8")
+        storage_write_bytes(SESSIONS_STORAGE_PATH, payload, content_type="application/json", timeout=3.0)
     except Exception:
         pass
 
@@ -660,10 +721,17 @@ def _extract_deterministic_intent(message: str) -> Dict[str, Any]:
     if not has_trigger:
         has_trigger = any(re.search(rf"\b{re.escape(w)}\b", low) for w in INQUIRY_TRIGGER_WORDS)
 
-    # Sapaan khusus ke admin/CS
+    # Sapaan ramah (SOP CS: sapaan seperti halo/hai/permisi/pagi/siang/sore/malam/assalamualaikum WAJIB dibalas!)
     is_direct_greeting = bool(
-        re.search(r"\b(halo|hai|hi|permisi|selamat\s+(?:pagi|siang|sore|malam))\b", low)
-        and re.search(r"\b(min|admin|kak|mas|mbak|cs|toko|suko|muku)\b", low)
+        re.search(
+            r"^\s*(?:halo+|hallo+|hello+|hai+|hi+|hey+|permisi|punten|assalamu['\s]?alaikum|salam|"
+            r"selamat\s+(?:pagi|siang|sore|malam)|pagi+|siang+|sore+|malam+)\b",
+            low,
+        )
+        or (
+            re.search(r"\b(halo|hallo|hai|hi|permisi|punten)\b", low)
+            and re.search(r"\b(min|admin|kak|mas|mbak|cs|toko|suko|muku)\b", low)
+        )
     )
 
     if sku_or_article or keywords or category_hint or brand_hint:
@@ -706,9 +774,13 @@ def analyze_message_intent(message: str, is_group: bool) -> Dict[str, Any]:
     if det.get("skuOrArticle"):
         return det
 
+    # Jika sapaan sopan ('halo', 'permisi', 'pagi kak') -> langsung proses GREETING tanpa menunggu Gemini!
+    if det.get("intent") == "GREETING" and det.get("shouldReply"):
+        return det
+
     prompt = (
         "Kamu adalah classifier pesan untuk Customer Service toko fashion ritel (SUKO, Mu+Ku, ZES, Nevada, Cole, dll) di grup WhatsApp member eksklusif.\n"
-        f"Konteks: {'Pesan masuk di GRUP WhatsApp member' if is_group else 'Pesan masuk via simulasi/chat langsung'}.\n"
+        f"Konteks: {'Pesan masuk di GRUP WhatsApp member' if is_group else 'Pesan masuk via private chat CS / simulasi'}.\n"
         f"Pesan customer: {json.dumps(clean, ensure_ascii=False)}\n\n"
         "Tugasmu HANYA membalas JSON murni dengan format:\n"
         "{\n"
@@ -723,9 +795,9 @@ def analyze_message_intent(message: str, is_group: bool) -> Dict[str, Any]:
         '  "wantsPromo": true atau false\n'
         "}\n\n"
         "ATURAN KETAT:\n"
-        "- Jika pesan HANYA obrolan santai antar member/teman (contoh: 'bro nongkrong yuk', 'lagi dimana', 'wkwkwk', 'mantap', 'info kopi', 'kapan gajian', 'otw'), WAJIB set intent='CASUAL_CHAT' dan shouldReply=false!\n"
-        "- Jika pesan menanyakan ketersediaan barang, harga, ukuran, warna, foto, promo/diskon, atau cara order -> shouldReply=true.\n"
-        "- Jika pesan hanya menyapa admin/toko dengan sopan ('halo min', 'permisi kak mau tanya') -> intent='GREETING', shouldReply=true.\n"
+        "- Jika pesan HANYA obrolan santai / candaan antar teman (contoh: 'bro nongkrong yuk', 'lagi dimana', 'wkwkwk', 'mantap', 'info kopi', 'kapan gajian', 'otw'), WAJIB set intent='CASUAL_CHAT' dan shouldReply=false!\n"
+        "- Jika pesan menyapa ('halo', 'hai', 'permisi', 'selamat pagi/siang/sore/malam', 'assalamualaikum') -> intent='GREETING', shouldReply=true!\n"
+        "- Jika pesan menanyakan ketersediaan barang, harga, ukuran, warna, foto, promo/diskon, atau cara order/keep -> shouldReply=true.\n"
     )
 
     ai_res = _call_gemini_json(prompt, timeout=3.8, temperature=0.1, max_tokens=260)
@@ -1405,17 +1477,20 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
     if is_group and group_id and not is_simulation:
         config_dirty = _record_detected_group(cfg, group_id, group_name, message)
 
-    # 3. Proteksi Chat Pribadi Teman / Keluarga
-    if not is_simulation and not is_group and cfg.get("ignorePrivateChats", True):
-        if config_dirty:
-            save_config(cfg)
-        elapsed = int((time.monotonic() - t0) * 1000)
-        return {
-            "success": True,
-            "shouldReply": False,
-            "reason": "PRIVATE_CHAT_BLOCKED",
-            "elapsedMs": elapsed,
-        }
+    # 3. Proteksi Chat Pribadi Teman / Keluarga (KECUALI customer yang sedang punya sesi aktif hand-off dari grup!)
+    in_active_dm_session = False
+    if not is_simulation and not is_group:
+        in_active_dm_session = has_active_private_session(sender)
+        if cfg.get("ignorePrivateChats", True) and not in_active_dm_session:
+            if config_dirty:
+                save_config(cfg)
+            elapsed = int((time.monotonic() - t0) * 1000)
+            return {
+                "success": True,
+                "shouldReply": False,
+                "reason": "PRIVATE_CHAT_BLOCKED",
+                "elapsedMs": elapsed,
+            }
 
     # 4. Proteksi Whitelist Grup Ketat
     if not is_simulation and is_group:
@@ -1531,7 +1606,7 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
     if intent_info.get("intent") != "GREETING":
         products = search_sanitized_catalog(intent_info, store_scope=cfg.get("storeScope", "ALL"), limit=3)
 
-    # 8. Susun Balasan Profesional ala Halo BCA + Kartu Multi-Foto HD per Produk
+    # 8. Susun Balasan Profesional ala Halo BCA + SOP Hand-Off Grup -> Private Chat
     reply_text = generate_halo_bca_reply(sender_name, message, intent_info, products, cfg)
     reply_messages = build_reply_messages(sender_name, reply_text, products, cfg)
     best_image_url: Optional[str] = None
@@ -1539,6 +1614,37 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
         if rm.get("imageUrl"):
             best_image_url = rm["imageUrl"]
             break
+
+    sapaan = _friendly_sapaan(sender_name)
+    handoff_enabled = bool(cfg.get("handoffToPrivateChat", True))
+    session_mins = int(cfg.get("privateSessionMinutes", 30) or 30)
+
+    delivery_mode = "GROUP_DIRECT"
+    group_reply_text: Optional[str] = None
+    private_messages: List[Dict[str, Optional[str]]] = []
+
+    if is_group and handoff_enabled:
+        delivery_mode = "GROUP_HANDOFF_TO_PRIVATE"
+        if products:
+            group_reply_text = (
+                f"Halo {sapaan}, dengan senang hati akan saya bantu 😊\n"
+                f"Mohon izin saya teruskan informasi produk & fotonya melalui *private chat (japri)* ya Kak "
+                f"agar tidak mengganggu member lain di grup ini 🙏"
+            )
+        else:
+            group_reply_text = (
+                f"Halo {sapaan}, terima kasih sudah menghubungi kami 😊\n"
+                f"Dengan senang hati akan saya bantu — mohon izin saya lanjutkan melalui *private chat (japri)* ya Kak "
+                f"agar tidak mengganggu member lain di grup ini 🙏"
+            )
+        private_messages = reply_messages
+        if not is_simulation and sender:
+            register_private_session(sender, sender_name, group_name, minutes=session_mins)
+    elif not is_group:
+        delivery_mode = "PRIVATE_SESSION_REPLY"
+        private_messages = reply_messages
+        if not is_simulation and sender:
+            register_private_session(sender, sender_name, group_name, minutes=session_mins)
 
     if products:
         any_ready = any(p.get("availability") == "READY" for p in products)
@@ -1555,9 +1661,17 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
         "groupName": group_name,
         "senderName": sender_name,
         "message": message[:140],
-        "decision": "REPLIED_WITH_IMAGE" if best_image_url else "REPLIED_TEXT",
+        "decision": (
+            "HANDOFF_PRIVATE_PHOTO"
+            if (delivery_mode == "GROUP_HANDOFF_TO_PRIVATE" and best_image_url)
+            else "HANDOFF_PRIVATE_TEXT"
+            if delivery_mode == "GROUP_HANDOFF_TO_PRIVATE"
+            else "REPLIED_WITH_IMAGE"
+            if best_image_url
+            else "REPLIED_TEXT"
+        ),
         "reason": reason,
-        "replyPreview": reply_text[:180],
+        "replyPreview": (group_reply_text or reply_text)[:180],
         "imageUrl": best_image_url,
         "matchedSku": products[0]["sku"] if products else None,
         "elapsedMs": elapsed,
@@ -1566,9 +1680,13 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
     return {
         "success": True,
         "shouldReply": True,
+        "deliveryMode": delivery_mode,
         "reason": reason,
         "intent": intent_info.get("intent"),
         "intentDetail": intent_info,
+        "groupReplyText": group_reply_text,
+        "privateMessages": private_messages,
+        "privateSessionMinutes": session_mins,
         "replyText": reply_text,
         "imageUrl": best_image_url,
         "replyMessages": reply_messages,
@@ -1676,6 +1794,9 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
             "closeHourWib",
             "closeMinuteWib",
             "ignorePrivateChats",
+            "handoffToPrivateChat",
+            "privateSessionMinutes",
+            "replyGreetings",
             "storeScope",
             "csName",
             "adminPhone",

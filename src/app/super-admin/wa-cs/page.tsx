@@ -67,6 +67,9 @@ type WaCsConfig = {
   closeHourWib: number;
   closeMinuteWib: number;
   ignorePrivateChats: boolean;
+  handoffToPrivateChat?: boolean;
+  privateSessionMinutes?: number;
+  replyGreetings?: boolean;
   storeScope: "ALL" | "SUKO" | "MUKU" | "ZES";
   csName: string;
   adminPhone?: string;
@@ -101,8 +104,14 @@ type WaCsLog = {
 
 type SimResult = {
   shouldReply: boolean;
+  deliveryMode?: string;
   reason: string;
   intent?: string;
+  groupReplyText?: string | null;
+  privateMessages?: Array<{
+    text: string;
+    imageUrl?: string | null;
+  }>;
   replyText?: string;
   imageUrl?: string | null;
   replyMessages?: Array<{
@@ -137,6 +146,12 @@ function pad2(n: number) {
 }
 
 function decisionBadge(decision: string, reason: string) {
+  if (decision === "HANDOFF_PRIVATE_PHOTO") {
+    return { label: "Grup → Japri + Foto HD", cls: "bg-emerald-100 text-emerald-800 border-emerald-200" };
+  }
+  if (decision === "HANDOFF_PRIVATE_TEXT") {
+    return { label: "Grup → Japri PC", cls: "bg-teal-100 text-teal-800 border-teal-200" };
+  }
   if (decision === "REPLIED_WITH_IMAGE") {
     return { label: "Dibalas + Foto HD", cls: "bg-emerald-100 text-emerald-800 border-emerald-200" };
   }
@@ -328,6 +343,9 @@ export default function WaCsSuperAdminPage() {
           closeHourWib: config.closeHourWib,
           closeMinuteWib: config.closeMinuteWib,
           ignorePrivateChats: config.ignorePrivateChats,
+          handoffToPrivateChat: config.handoffToPrivateChat ?? true,
+          privateSessionMinutes: config.privateSessionMinutes ?? 30,
+          replyGreetings: config.replyGreetings ?? true,
           storeScope: config.storeScope,
           csName: config.csName,
           adminPhone: config.adminPhone || "6281296393972",
@@ -848,34 +866,50 @@ export default function WaCsSuperAdminPage() {
                   </div>
                 </div>
 
-                {/* Bubble balasan CS + multi foto per produk */}
+                {/* Bubble balasan CS (SOP Hand-Off Grup -> Private Chat + Multi-Foto) */}
                 {simResult.shouldReply && simResult.replyText ? (
-                  <div className="space-y-2.5">
-                    {(simResult.replyMessages && simResult.replyMessages.length > 0
-                      ? simResult.replyMessages
-                      : [{ text: simResult.replyText, imageUrl: simResult.imageUrl }]
-                    ).map((card, idx) => (
-                      <div key={idx} className="flex justify-end">
-                        <div className="max-w-md bg-[#d9fdd3] rounded-2xl rounded-tr-sm p-3 shadow-xs border border-emerald-200 space-y-2.5">
+                  <div className="space-y-3">
+                    {simResult.groupReplyText && (
+                      <div className="flex justify-end">
+                        <div className="max-w-md bg-[#d9fdd3] rounded-2xl rounded-tr-sm p-3 shadow-xs border border-emerald-200 space-y-1">
                           <p className="text-[11px] font-bold text-emerald-800">
-                            {config.csName} (Auto CS){simResult.replyMessages && simResult.replyMessages.length > 1 ? ` • Foto ${idx + 1}/${simResult.replyMessages.length}` : ""}
+                            {config.csName} (Di Grup — Singkat Anti-Ganggu)
                           </p>
-                          {card.imageUrl && (
-                            <div className="rounded-xl overflow-hidden bg-white border border-emerald-200">
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img
-                                src={card.imageUrl}
-                                alt={`Foto Produk ${idx + 1}`}
-                                className="w-full max-h-72 object-contain bg-white"
-                              />
-                            </div>
-                          )}
                           <p className="text-sm text-slate-900 whitespace-pre-wrap leading-relaxed">
-                            {card.text}
+                            {simResult.groupReplyText}
                           </p>
                         </div>
                       </div>
-                    ))}
+                    )}
+                    <div className="space-y-2.5">
+                      {(simResult.privateMessages && simResult.privateMessages.length > 0
+                        ? simResult.privateMessages
+                        : simResult.replyMessages && simResult.replyMessages.length > 0
+                        ? simResult.replyMessages
+                        : [{ text: simResult.replyText, imageUrl: simResult.imageUrl }]
+                      ).map((card, idx, arr) => (
+                        <div key={idx} className="flex justify-end">
+                          <div className="max-w-md bg-[#d9fdd3] rounded-2xl rounded-tr-sm p-3 shadow-xs border border-indigo-300 space-y-2.5">
+                            <p className="text-[11px] font-bold text-indigo-800">
+                              {config.csName} ({simResult.groupReplyText ? "Private Chat VIP" : "Auto CS"}){arr.length > 1 ? ` • Foto ${idx + 1}/${arr.length}` : ""}
+                            </p>
+                            {card.imageUrl && (
+                              <div className="rounded-xl overflow-hidden bg-white border border-emerald-200">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={card.imageUrl}
+                                  alt={`Foto Produk ${idx + 1}`}
+                                  className="w-full max-h-72 object-contain bg-white"
+                                />
+                              </div>
+                            )}
+                            <p className="text-sm text-slate-900 whitespace-pre-wrap leading-relaxed">
+                              {card.text}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ) : (
                   <div className="rounded-xl bg-white/90 border border-slate-300 px-3.5 py-2.5 text-xs text-slate-700 font-semibold">
@@ -1032,12 +1066,28 @@ export default function WaCsSuperAdminPage() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Toggle SOP Hand-Off Grup -> Private Chat */}
+            <label className="flex items-start justify-between gap-3 p-3.5 rounded-xl border border-indigo-200 bg-indigo-50/70 cursor-pointer">
+              <div>
+                <p className="text-sm font-bold text-indigo-950">SOP Hand-Off: Grup → Private Chat (Anti-Ganggu)</p>
+                <p className="text-xs text-indigo-800 mt-0.5">
+                  Di grup cuma balas 1 pesan sopan, lalu semua foto HD & detail produk langsung dikirim via <strong>Private Chat (Japri)</strong> ke penanya!
+                </p>
+              </div>
+              <input
+                type="checkbox"
+                checked={config.handoffToPrivateChat ?? true}
+                onChange={(e) => setConfig({ ...config, handoffToPrivateChat: e.target.checked })}
+                className="w-5 h-5 mt-0.5 accent-indigo-600 shrink-0"
+              />
+            </label>
+
             {/* Toggle Blokir Chat Pribadi */}
             <label className="flex items-start justify-between gap-3 p-3.5 rounded-xl border border-slate-200 bg-slate-50 cursor-pointer">
               <div>
-                <p className="text-sm font-bold text-slate-900">Blokir 100% Chat Pribadi / Teman</p>
+                <p className="text-sm font-bold text-slate-900">Blokir Chat Pribadi Teman / Non-Customer</p>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  WAJIB NYALA agar chat teman/keluarga ke nomor pribadi tidak pernah dibalas bot.
+                  Teman/keluarga tetap 100% aman. Hanya customer yang baru di-japri dari grup yang dilayani lanjut di PC (30 menit).
                 </p>
               </div>
               <input

@@ -3,14 +3,20 @@
  * =============================================================================
  * Bridge WhatsApp Ringan (Baileys) -> Python AI CS Engine (www.luqmanganteng.my.id)
  *
- * Fitur Utama:
- *   - Sinkronisasi dua arah dengan tombol "BUILD KODE PAIRING 8 DIGIT" di Web
- *     (`/super-admin/wa-cs`) — cukup klik tombol di HP/browser, kode 8 digit
- *     langsung muncul di layar web!
- *   - Juga mendukung QR Code di terminal atau mode `npm run pair`.
- *   - 100% logic saklar ON/OFF, blokir chat pribadi, & whitelist grup ada di server Python.
- *   - Human Takeover otomatis: jika PIC ikut membalas manual di grup, bot diam 10 menit.
- *   - Typing indicator natural (2,2 - 3,6 detik) + kirim Foto Produk HD resmi!
+ * SOP Layanan VIP Halo BCA (Anti-Ganggu Grup!):
+ *   1. Customer menyapa ("halo", "permisi") atau tanya produk di GRUP:
+ *      - Di GRUP: bot langsung quote pesan customer dengan balasan singkat sopan
+ *        ("Akan saya bantu Kak, saya teruskan melalui private chat ya agar tidak
+ *         mengganggu member lain di grup ini 🙏").
+ *      - BERSAMAAN di PRIVATE CHAT customer tsb: bot kirim seluruh kartu Foto HD
+ *        + harga, promo, warna & ukuran yang ready (tanpa angka stok!).
+ *   2. Sesi Private Chat VIP (30 menit):
+ *      - Customer yang baru di-japri dari grup bisa langsung lanjut tanya-tanya di
+ *        Private Chat selama 30 menit!
+ *      - Chat pribadi teman/keluarga yang TIDAK berasal dari sesi grup tetap
+ *        100% DIBLOKIR DI PC (tidak pernah dibaca atau dikirim ke server!).
+ *   3. Human Takeover otomatis (10 menit): jika PIC balas manual di grup atau PC
+ *      customer, bot otomatis minggir diam 10 menit.
  * =============================================================================
  */
 
@@ -43,8 +49,13 @@ const logger = pino({ level: "silent" });
 const startUnixSec = Math.floor(Date.now() / 1000);
 
 const botSentIds = new Set();
+// Jeda Human Takeover per chat (groupJid atau dmJid) -> timestamp ms
 const humanTakeoverUntil = new Map();
-const groupNameCache = new Map();
+// Sesi Private Chat VIP aktif (hanya untuk customer yang baru di-handoff dari grup!)
+// key (jid / phone digits) -> expiresAtMs
+const activeDmSessions = new Map();
+// Cache metadata grup: groupId -> { name, participants, fetchedAt }
+const groupMetaCache = new Map();
 
 let currentSock = null;
 let isConnected = false;
@@ -60,7 +71,7 @@ function sleep(ms) {
 }
 
 function randomHumanDelayMs() {
-  return 2200 + Math.floor(Math.random() * 1400);
+  return 1800 + Math.floor(Math.random() * 1200);
 }
 
 function normalizePhone(raw) {
@@ -69,6 +80,34 @@ function normalizePhone(raw) {
   if (digits.startsWith("0")) return "62" + digits.slice(1);
   if (digits.startsWith("8")) return "62" + digits;
   return digits;
+}
+
+function markDmSessionActive(jidsOrPhones, minutes = 30) {
+  const expiresAt = Date.now() + Math.max(5, Number(minutes) || 30) * 60 * 1000;
+  for (const item of jidsOrPhones) {
+    const raw = String(item || "").trim();
+    if (!raw) continue;
+    activeDmSessions.set(raw.toLowerCase(), expiresAt);
+    const digits = normalizePhone(raw);
+    if (digits && digits.length >= 9) {
+      activeDmSessions.set(digits, expiresAt);
+    }
+  }
+}
+
+function isDmSessionActive(jid, altJid = "") {
+  const now = Date.now();
+  const candidates = [
+    String(jid || "").toLowerCase(),
+    String(altJid || "").toLowerCase(),
+    normalizePhone(jid),
+    normalizePhone(altJid),
+  ].filter(Boolean);
+  for (const key of candidates) {
+    const exp = activeDmSessions.get(key) || 0;
+    if (exp > now) return true;
+  }
+  return false;
 }
 
 function clearAuthDir() {
@@ -112,19 +151,58 @@ function isEmergencyCommand(text) {
   ].includes(low);
 }
 
-async function resolveGroupName(sock, jid) {
-  const cached = groupNameCache.get(jid);
+async function getGroupInfo(sock, groupJid) {
+  const cached = groupMetaCache.get(groupJid);
   if (cached && Date.now() - cached.fetchedAt < 10 * 60 * 1000) {
-    return cached.name;
+    return cached;
   }
   try {
-    const meta = await sock.groupMetadata(jid);
-    const name = meta?.subject || jid;
-    groupNameCache.set(jid, { name, fetchedAt: Date.now() });
-    return name;
+    const meta = await sock.groupMetadata(groupJid);
+    const info = {
+      name: meta?.subject || groupJid,
+      participants: Array.isArray(meta?.participants) ? meta.participants : [],
+      fetchedAt: Date.now(),
+    };
+    groupMetaCache.set(groupJid, info);
+    return info;
   } catch {
-    return jid;
+    return { name: groupJid, participants: [], fetchedAt: Date.now() };
   }
+}
+
+/**
+ * Resolve JID Private Chat terbaik untuk anggota grup (mendukung format @s.whatsapp.net maupun @lid baru!)
+ */
+async function resolveParticipantDmJid(sock, groupJid, msg) {
+  const rawPart = String(msg.key?.participant || "").trim();
+  const altPart = String(msg.key?.participantAlt || "").trim();
+
+  if (altPart && altPart.endsWith("@s.whatsapp.net")) {
+    return { dmJid: altPart, allKeys: [altPart, rawPart] };
+  }
+  if (rawPart && rawPart.endsWith("@s.whatsapp.net")) {
+    return { dmJid: rawPart, allKeys: [rawPart, altPart] };
+  }
+
+  // Jika participant berbentuk @lid, cari phoneNumber / jid asli di metadata grup
+  if (rawPart && groupJid.endsWith("@g.us")) {
+    const info = await getGroupInfo(sock, groupJid);
+    for (const p of info.participants) {
+      const pid = String(p?.id || "");
+      const plid = String(p?.lid || "");
+      const pphone = String(p?.phoneNumber || "");
+      if (pid === rawPart || plid === rawPart) {
+        if (pphone && pphone.endsWith("@s.whatsapp.net")) {
+          return { dmJid: pphone, allKeys: [pphone, rawPart, pid, plid] };
+        }
+        if (pid && pid.endsWith("@s.whatsapp.net")) {
+          return { dmJid: pid, allKeys: [pid, rawPart, plid] };
+        }
+      }
+    }
+  }
+
+  return { dmJid: rawPart || altPart, allKeys: [rawPart, altPart] };
 }
 
 async function fetchImageBuffer(imageUrl) {
@@ -159,6 +237,60 @@ async function callPythonWaCs(payload, timeoutMs = 22000) {
   } catch {
     return { success: false, shouldReply: false, reason: `HTTP_${res.status}` };
   }
+}
+
+function trackBotSent(sent) {
+  if (sent?.key?.id) {
+    botSentIds.add(sent.key.id);
+    if (botSentIds.size > 400) {
+      const first = botSentIds.values().next().value;
+      botSentIds.delete(first);
+    }
+  }
+}
+
+async function sendCardsToJid(sock, targetJid, cards, quoteMsg = null) {
+  await sock.sendPresenceUpdate("composing", targetJid).catch(() => {});
+  const [imgBuffers] = await Promise.all([
+    Promise.all(
+      cards.map((card) =>
+        card.imageUrl ? fetchImageBuffer(card.imageUrl) : Promise.resolve(null)
+      )
+    ),
+    sleep(randomHumanDelayMs()),
+  ]);
+
+  let sentPhotos = 0;
+  for (let i = 0; i < cards.length; i++) {
+    const card = cards[i];
+    const imgBuffer = imgBuffers[i];
+    const captionText = String(card.text || "").trim();
+    if (!captionText && !imgBuffer) continue;
+
+    const sendOpts = i === 0 && quoteMsg ? { quoted: quoteMsg } : {};
+    let sent;
+    if (imgBuffer) {
+      sentPhotos++;
+      sent = await sock.sendMessage(
+        targetJid,
+        { image: imgBuffer, caption: captionText },
+        sendOpts
+      );
+    } else {
+      sent = await sock.sendMessage(
+        targetJid,
+        { text: captionText },
+        sendOpts
+      );
+    }
+    trackBotSent(sent);
+
+    if (i < cards.length - 1) {
+      await sleep(1050);
+    }
+  }
+  await sock.sendPresenceUpdate("paused", targetJid).catch(() => {});
+  return sentPhotos;
 }
 
 async function syncBridgeState(extra = {}) {
@@ -216,7 +348,7 @@ async function startSocket() {
   pendingWebPairingPhone = "";
 
   console.log("==============================================================");
-  console.log("  AUTO CS WHATSAPP BRIDGE (SUKO & Mu+Ku — Halo BCA AI Engine)");
+  console.log("  AUTO CS WHATSAPP BRIDGE (SOP VIP: Grup -> Private Chat)");
   console.log(`  Nomor Admin : +${targetPhone} (0${targetPhone.slice(2)})`);
   console.log(`  Server AI   : ${API_URL}`);
   console.log(`  WA Proto    : v${version.join(".")}`);
@@ -232,7 +364,6 @@ async function startSocket() {
   });
   currentSock = sock;
 
-  // Jika diminta pairing 8 digit (dari tombol web atau `npm run pair`)
   if (wantsPairNow && !state.creds.registered) {
     setTimeout(async () => {
       if (currentSock !== sock || isConnected) return;
@@ -280,9 +411,8 @@ async function startSocket() {
       const mePhone = normalizePhone(sock.user?.id) || targetPhone;
       currentPhone = mePhone;
       console.log(`\n✅ WHATSAPP +${mePhone} BERHASIL TERSAMBUNG!`);
-      console.log("   • Chat pribadi teman 100% aman (diblokir otomatis).");
-      console.log("   • Kirim 1 chat di Grup Dummy -> buka /super-admin/wa-cs -> klik 'Aktifkan Grup Ini'.");
-      console.log("   • Perintah darurat dari WA Kakak: !csoff | !cson | !csstatus\n");
+      console.log("   • SOP Aktif: Pertanyaan di Grup -> dijawab singkat di Grup + detail & Foto HD dikirim via Private Chat!");
+      console.log("   • Chat pribadi teman yang bukan dari grup tetap 100% aman (diblokir di PC).\n");
       await syncBridgeState({
         connected: true,
         phone: mePhone,
@@ -336,10 +466,11 @@ async function startSocket() {
 
         const fromMe = Boolean(msg.key?.fromMe);
         const isGroup = jid.endsWith("@g.us");
-        const sender = msg.key?.participant || jid;
         const senderName = msg.pushName || "Kak";
-        const groupName = isGroup ? await resolveGroupName(sock, jid) : "Chat Pribadi";
+        const groupInfo = isGroup ? await getGroupInfo(sock, jid) : null;
+        const groupName = isGroup ? groupInfo.name : "Private Chat VIP";
 
+        // 1. Pesan dari PIC sendiri (fromMe)
         if (fromMe) {
           if (isEmergencyCommand(text)) {
             console.log(`⚡ [PERINTAH PIC] ${text}`);
@@ -347,7 +478,7 @@ async function startSocket() {
               action: "incoming",
               source: "WA_BRIDGE",
               message: text,
-              sender,
+              sender: jid,
               senderName: "PIC",
               groupId: isGroup ? jid : "",
               groupName,
@@ -356,38 +487,72 @@ async function startSocket() {
             });
             if (res?.shouldReply && res?.replyText) {
               const sent = await sock.sendMessage(jid, { text: res.replyText }, { quoted: msg });
-              if (sent?.key?.id) botSentIds.add(sent.key.id);
+              trackBotSent(sent);
             }
             continue;
           }
 
-          if (isGroup && currentHumanTakeoverMins > 0) {
+          // Human Takeover: jika PIC balas manual di grup ATAU di PC customer VIP -> bot diam sementara!
+          if (currentHumanTakeoverMins > 0 && (isGroup || isDmSessionActive(jid, msg.key?.remoteJidAlt))) {
             humanTakeoverUntil.set(jid, Date.now() + currentHumanTakeoverMins * 60 * 1000);
-            console.log(`🤝 [HUMAN TAKEOVER] PIC membalas manual di "${groupName}". Bot diam sementara ${currentHumanTakeoverMins} menit.`);
+            console.log(`🤝 [HUMAN TAKEOVER] PIC balas manual di "${groupName}". Bot diam sementara ${currentHumanTakeoverMins} menit.`);
           }
           continue;
         }
 
-        if (isGroup) {
-          const until = humanTakeoverUntil.get(jid) || 0;
-          if (Date.now() < until) {
-            const sisaMnt = Math.ceil((until - Date.now()) / 60000);
-            console.log(`⏸️ [JEDA PIC] "${groupName}" (${senderName}) -> dilewati (sisa jeda ${sisaMnt} mnt)`);
+        // 2. Cek Human Takeover aktif di chat ini
+        const takeoverUntil = humanTakeoverUntil.get(jid) || 0;
+        if (Date.now() < takeoverUntil) {
+          const sisaMnt = Math.ceil((takeoverUntil - Date.now()) / 60000);
+          console.log(`⏸️ [JEDA PIC] "${groupName}" (${senderName}) -> dilewati (sisa jeda ${sisaMnt} mnt)`);
+          continue;
+        }
+
+        // 3. Jika PRIVATE CHAT (DM):
+        //    HANYA layani jika customer sedang dalam sesi aktif hand-off dari grup!
+        //    Teman / keluarga biasa langsung di-skip di PC (0% pernah dikirim ke server)!
+        if (!isGroup) {
+          const altRemote = String(msg.key?.remoteJidAlt || "");
+          if (!isDmSessionActive(jid, altRemote)) {
             continue;
           }
-        }
-
-        if (!isGroup) {
+          console.log(`💬 [PC VIP] ${senderName}: "${text.slice(0, 70)}"`);
+          const aiRes = await callPythonWaCs({
+            action: "incoming",
+            source: "WA_BRIDGE_PC",
+            message: text,
+            sender: altRemote || jid,
+            senderName,
+            groupId: "",
+            groupName: "Private Chat VIP",
+            isGroup: false,
+            fromMe: false,
+          });
+          if (!aiRes?.shouldReply) {
+            console.log(`   ↳ Diam di PC (${aiRes?.reason || "IGNORED"}) [${aiRes?.elapsedMs || 0}ms]`);
+            continue;
+          }
+          markDmSessionActive([jid, altRemote], aiRes.privateSessionMinutes || 30);
+          const cards =
+            Array.isArray(aiRes.privateMessages) && aiRes.privateMessages.length > 0
+              ? aiRes.privateMessages
+              : Array.isArray(aiRes.replyMessages) && aiRes.replyMessages.length > 0
+              ? aiRes.replyMessages
+              : [{ text: aiRes.replyText, imageUrl: aiRes.imageUrl || null }];
+          const sentPhotos = await sendCardsToJid(sock, jid, cards, msg);
+          console.log(`   ✅ Balasan PC VIP terkirim (${cards.length} pesan, ${sentPhotos} foto HD)!\n`);
           continue;
         }
 
+        // 4. Pesan masuk dari GRUP WA
+        const { dmJid, allKeys } = await resolveParticipantDmJid(sock, jid, msg);
         console.log(`📩 [${groupName}] ${senderName}: "${text.slice(0, 70)}"`);
 
         const aiRes = await callPythonWaCs({
           action: "incoming",
           source: "WA_BRIDGE",
           message: text,
-          sender,
+          sender: dmJid || msg.key?.participant || jid,
           senderName,
           groupId: jid,
           groupName,
@@ -395,68 +560,49 @@ async function startSocket() {
           fromMe: false,
         });
 
-        if (!aiRes?.shouldReply || !aiRes?.replyText) {
+        if (!aiRes?.shouldReply) {
           console.log(`   ↳ Diam (${aiRes?.reason || "IGNORED"}) [${aiRes?.elapsedMs || 0}ms]`);
           continue;
         }
 
+        // MODE SOP VIP: Balas 1 pesan sopan singkat di GRUP + langsung kirim Foto HD & detail ke PRIVATE CHAT!
+        if (aiRes.deliveryMode === "GROUP_HANDOFF_TO_PRIVATE" && dmJid) {
+          const groupNotice =
+            aiRes.groupReplyText ||
+            "Halo Kak, dengan senang hati akan saya bantu 😊 Mohon izin saya teruskan melalui *private chat (japri)* ya Kak agar tidak mengganggu member lain di grup ini 🙏";
+          const pcCards =
+            Array.isArray(aiRes.privateMessages) && aiRes.privateMessages.length > 0
+              ? aiRes.privateMessages
+              : Array.isArray(aiRes.replyMessages) && aiRes.replyMessages.length > 0
+              ? aiRes.replyMessages
+              : [{ text: aiRes.replyText, imageUrl: aiRes.imageUrl || null }];
+
+          markDmSessionActive([dmJid, ...allKeys], aiRes.privateSessionMinutes || 30);
+          console.log(`   ↳ SOP Hand-Off: Balas singkat di [${groupName}] + kirim ${pcCards.length} kartu ke PC (${dmJid})...`);
+
+          // Jalankan BERSAMAAN: 1) Balas singkat di grup (quote customer), 2) Kirim kartu foto HD ke Private Chat!
+          await sock.sendPresenceUpdate("composing", jid).catch(() => {});
+          await sleep(1200);
+          const sentGroup = await sock.sendMessage(jid, { text: groupNotice }, { quoted: msg });
+          trackBotSent(sentGroup);
+          await sock.sendPresenceUpdate("paused", jid).catch(() => {});
+
+          try {
+            const sentPhotos = await sendCardsToJid(sock, dmJid, pcCards, null);
+            console.log(`   ✅ SOP Hand-Off SUKSES! Grup bersih + ${pcCards.length} pesan (${sentPhotos} foto HD) terkirim ke PC ${senderName}!\n`);
+          } catch (dmErr) {
+            console.error(`   ⚠️ Gagal kirim PC ke ${dmJid} (${dmErr?.message || dmErr}), fallback kirim ke grup...`);
+            await sendCardsToJid(sock, jid, pcCards, null);
+          }
+          continue;
+        }
+
+        // MODE LANGSUNG DI GRUP (jika handoffToPrivateChat dimatikan)
         const outgoingCards =
           Array.isArray(aiRes.replyMessages) && aiRes.replyMessages.length > 0
             ? aiRes.replyMessages
             : [{ text: aiRes.replyText, imageUrl: aiRes.imageUrl || null }];
-
-        const delayMs = randomHumanDelayMs();
-        console.log(`   ↳ Mengetik ${(delayMs / 1000).toFixed(1)} dtk... (${aiRes.reason} • ${outgoingCards.length} kartu produk)`);
-
-        await sock.sendPresenceUpdate("composing", jid).catch(() => {});
-        // Unduh semua foto produk secara paralel selama simulasi mengetik agar pengiriman cepat & mulus!
-        const [imgBuffers] = await Promise.all([
-          Promise.all(
-            outgoingCards.map((card) =>
-              card.imageUrl ? fetchImageBuffer(card.imageUrl) : Promise.resolve(null)
-            )
-          ),
-          sleep(delayMs),
-        ]);
-
-        let sentPhotos = 0;
-        for (let i = 0; i < outgoingCards.length; i++) {
-          const card = outgoingCards[i];
-          const imgBuffer = imgBuffers[i];
-          const captionText = String(card.text || "").trim();
-          if (!captionText && !imgBuffer) continue;
-
-          // Quote pesan customer pada kartu pertama saja agar tampilan rapi
-          const sendOpts = i === 0 ? { quoted: msg } : {};
-          let sent;
-          if (imgBuffer) {
-            sentPhotos++;
-            sent = await sock.sendMessage(
-              jid,
-              { image: imgBuffer, caption: captionText },
-              sendOpts
-            );
-          } else {
-            sent = await sock.sendMessage(
-              jid,
-              { text: captionText },
-              sendOpts
-            );
-          }
-
-          if (sent?.key?.id) {
-            botSentIds.add(sent.key.id);
-            if (botSentIds.size > 300) {
-              const first = botSentIds.values().next().value;
-              botSentIds.delete(first);
-            }
-          }
-
-          if (i < outgoingCards.length - 1) {
-            await sleep(1100);
-          }
-        }
-        await sock.sendPresenceUpdate("paused", jid).catch(() => {});
+        const sentPhotos = await sendCardsToJid(sock, jid, outgoingCards, msg);
         console.log(`   ✅ Terkirim ${outgoingCards.length} pesan ke [${groupName}] (${sentPhotos} foto produk HD)!\n`);
       } catch (err) {
         console.error("❌ Error memproses pesan:", err?.message || err);
@@ -465,11 +611,9 @@ async function startSocket() {
   });
 }
 
-// Loop heartbeat & penerima perintah tombol "BUILD KODE PAIRING" dari Web Super Admin
 async function startControlPoller() {
-  // Baca state awal agar tidak memicu request lama sebelum bridge dinyalakan
   const initState = await syncBridgeState({
-    statusMessage: "Bridge aktif di PC — siap menerima klik Build Kode Pairing dari Web!",
+    statusMessage: "Bridge aktif di PC — SOP Hand-Off Grup ke Private Chat siap!",
   });
   if (initState) {
     lastHandledPairingReq = Number(initState.pairingRequestedAt || 0);
