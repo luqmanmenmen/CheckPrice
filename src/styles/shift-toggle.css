@@ -470,6 +470,8 @@
     border-radius: 48px;
   
     overflow: hidden;
+
+    contain: strict;
   
     background:
       linear-gradient(
@@ -690,10 +692,14 @@
     position: absolute;
   
     top: 0;
+
+    left: 0;
   
     width: 16px;
   
     height: 9px;
+
+    will-change: transform;
   
     animation:
       fly 7s linear infinite;
@@ -757,11 +763,11 @@
   @keyframes fly {
   
     from {
-      left: 75%;
+      transform: translate3d(260px, 0, 0);
     }
   
     to {
-      left: -15%;
+      transform: translate3d(-48px, 0, 0);
     }
   
   }
@@ -881,14 +887,14 @@
     from {
   
       transform:
-        translateX(0);
+        translate3d(0, 0, 0);
   
     }
   
     to {
   
       transform:
-        translateX(-50%);
+        translate3d(-50%, 0, 0);
   
     }
   
