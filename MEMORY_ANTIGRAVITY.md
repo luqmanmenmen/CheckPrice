@@ -2144,3 +2144,15 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   2. **Pembersih Kata Meta (`META_NON_GARMENT_WORDS` & `_clean_garment_keywords`):** Mencegah bug `"kalau produk baru nya apa saja ?>"` mencari kata literal `"PRODUK"`/`"SAJA"` di deskripsi SQL yang sebelumnya menghasilkan *sold out*.
   3. **True New Arrival `0,2ms` (`_fetch_true_new_arrival_articles`):** Menggunakan Primary Key B-Tree `SELECT ... FROM "Product" ORDER BY id DESC LIMIT 320` (identik halaman `/barang-baru`) + **Smart Category Diversity** (kurasi lintas kategori: Sweatshirt/Outer, Polo/Kemeja, Gaun/Celana, SUKO Sports) agar tidak monoton.
   4. **Modul Permanen [`python-engine/suko_product_knowledge.py`](file:///c:/Max%20Display/price-checker/python-engine/suko_product_knowledge.py):** Memetakan seluruh 1.205 artikel riil Store SUKO PTC (Workwear, Sleepwear Sanrio/Disney/Simpsons, Essential/Underwear/Ciput/Kamisol/Kaos Kaki, SUKO Sports/SUKO GO, 25 sub-jenis Wanita), **Auto-Badge Teknologi Bahan** (`4-Way Stretch`, `Quick Dry`, `Anti-Bakteri`, `High Recovery`, `Clima Tech`, `Supima Cotton`, `Soft Touch`, `Bamboo`, `Souffle Yarn`, `Seersucker`, `Windbreaker`, `Parasut Taslan`, `Extra Broadcloth`, dll.), dan **Occasion-to-Department Smart Router** untuk bahasa sehari-hari customer.
+
+
+---
+
+## 37. Deployment 24/7 Cloud WA CS Bridge via Vercel Daemons (`sin1`) + Turso Cloud Auto-Auth Sync
+
+- **Commit Live Production:** `9fe69b4` & `acd6cf1` (`https://www.luqmanganteng.my.id`).
+- **Arsitektur Cloud 100% Tanpa Laptop (`0` local background task):**
+  1. **Vercel Daemons (`sin1` Singapore, `1 GiB`):** Dideklarasikan di [`vercel.json`](file:///c:/Max%20Display/price-checker/vercel.json) dengan `root: "wa-cs-bridge/"`, `entrypoint: "Dockerfile"`, `instances: { "sin1": 1 }`, `terminationGracePeriodSeconds: 30`, dan `livenessProbe` HTTP `/health` di port `7860`.
+  2. **Turso Cloud Auth Session Sync (`secrets/wa-bridge-auth.json`):** Endpoint secret-protected `bridge-auth-get` & `bridge-auth-save` di [`python-engine/wa_cs_engine.py`](file:///c:/Max%20Display/price-checker/python-engine/wa_cs_engine.py) dan auto-restore/auto-backup + graceful `SIGTERM` di [`wa-cs-bridge/index.mjs`](file:///c:/Max%20Display/price-checker/wa-cs-bridge/index.mjs). Saat container cloud boot ulang, sesi `+6285771123000` otomatis pulih dari Turso tanpa perlu pairing ulang.
+  3. **Verifikasi Live:** `bridgeOnline: true`, `connected: true` (`+6285771123000`), `0` local background tasks, seluruh repo tersimpan bersih di GitHub (`luqmanmenmen/CheckPrice`).
+  4. **Catatan Kuota:** Vercel Hobby Daemons = 420 GB-jam/bulan (reset tgl 1 tiap bulan); `wa-cs-bridge/Dockerfile` & `fly.toml` juga siap dipindah ke Oracle Cloud Always Free / VPS kapan pun dibutuhkan untuk 720 jam nonstop/bulan.
