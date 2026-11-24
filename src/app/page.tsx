@@ -351,6 +351,7 @@ export default function Home() {
     ready: boolean;
   } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const activeSearchAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -1679,7 +1680,16 @@ export default function Home() {
     const onlyPromo = activeResultFilter === "PROMO";
     const hasTaxonomyFilter = activeBrand !== "ALL" || activeCategory !== "ALL" || Boolean(activeSubBrand) || activeGender !== "ALL";
 
-    if (!trimmed && !hasTaxonomyFilter) return;
+    if (!trimmed && !hasTaxonomyFilter) {
+      activeSearchAbortRef.current?.abort();
+      activeSearchAbortRef.current = null;
+      setLoading(false);
+      return;
+    }
+
+    // Batalkan pencarian jaringan sebelumnya agar tidak pernah balapan atau mengunci tombol Cari
+    activeSearchAbortRef.current?.abort();
+    activeSearchAbortRef.current = null;
 
     const currentSearch = ++searchCounterRef.current;
     setError("");
@@ -2053,6 +2063,7 @@ export default function Home() {
       setNotFoundCode("");
 
       const fastCtrl = new AbortController();
+      activeSearchAbortRef.current = fastCtrl;
       const fastTimer = setTimeout(() => fastCtrl.abort(), 14000);
       const fastUrl = endpointUrl + (endpointUrl.includes("?") ? "&fast=1&live=1" : "?fast=1&live=1");
       let foundOnServer = false;
@@ -2080,7 +2091,7 @@ export default function Home() {
               applySelectedProductFamily(fastJson.data, srvSibs);
               preloadProductImages([fastJson.data?.imageUrl, ...srvSibs.map((s: ProductData) => s.imageUrl)], 400);
               syncServerProductToLocal(fastJson.data, srvSibs, fastJson.aliases);
-              if (fastJson.source === "MDS_BISA_LIVE") {
+              if (fastJson.source === "MDS_BISA_LIVE" || fastJson.source === "PYTHON_LIVE_ENGINE") {
                 const storeBadge = fastJson.ownerAccount === "muku" ? "Mu+Ku" : fastJson.ownerAccount === "suko" ? "SUKO" : "luqman org";
                 showToast(`Produk baru ditemukan & disimpan otomatis (${storeBadge}) — kini bisa di-scan semua crew!`, "success");
               }
@@ -2092,6 +2103,7 @@ export default function Home() {
         // Aborted or network error, fallback to showBarcodeNotFoundNotice below
       } finally {
         clearTimeout(fastTimer);
+        if (activeSearchAbortRef.current === fastCtrl) activeSearchAbortRef.current = null;
       }
 
       if (searchCounterRef.current !== currentSearch) return;
@@ -2110,6 +2122,7 @@ export default function Home() {
     setLoading(true);
 
     let netTimer: ReturnType<typeof setTimeout> | null = null;
+    let activeNetCtrl: AbortController | null = null;
     try {
       // 1. Auto-Scan Hybrid Dual-Account (SUKO + Mu+Ku): selalu sertakan `&fast=1&live=1` untuk kode scan agar 100% otomatis tanpa tombol manual!
       const timeoutMs = isCodeSearch ? 14500 : (localDbReady ? 6500 : 10000);
@@ -2117,6 +2130,8 @@ export default function Home() {
         ? `${endpointUrl}${endpointUrl.includes("?") ? "&fast=1&live=1" : "?fast=1&live=1"}`
         : endpointUrl;
       const netCtrl = new AbortController();
+      activeNetCtrl = netCtrl;
+      activeSearchAbortRef.current = netCtrl;
       netTimer = setTimeout(() => netCtrl.abort(), timeoutMs);
       const res = await fetch(requestUrl, {
         cache: 'no-store',
@@ -2237,7 +2252,7 @@ export default function Home() {
           setProductsList([]);
           preloadProductImages([data.data?.imageUrl, ...serverSiblings.map((s: ProductData) => s.imageUrl)], 400);
           syncServerProductToLocal(data.data, serverSiblings, (data as any).aliases);
-          if ((data as any).source === "MDS_BISA_LIVE") {
+          if ((data as any).source === "MDS_BISA_LIVE" || (data as any).source === "PYTHON_LIVE_ENGINE") {
             const storeBadge = (data as any).ownerAccount === "muku" ? "Mu+Ku" : (data as any).ownerAccount === "suko" ? "SUKO" : "luqman org";
             showToast(`Produk baru ditemukan & disimpan otomatis (${storeBadge}) — kini bisa di-scan semua crew!`, "success");
           }
@@ -2319,6 +2334,9 @@ export default function Home() {
       }
     } finally {
       if (netTimer) clearTimeout(netTimer);
+      if (activeNetCtrl && activeSearchAbortRef.current === activeNetCtrl) {
+        activeSearchAbortRef.current = null;
+      }
       if (searchCounterRef.current === currentSearch) {
         setLoading(false);
       }
@@ -2528,16 +2546,50 @@ export default function Home() {
     }
   };
 
+  const handleManualSearchSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const rawQuery = (inputRef.current?.value ?? manualInput).trim();
+    if (!rawQuery) {
+      if (selectedBrandGroup === "ALL" && selectedCategory === "ALL" && !selectedSubBrand && selectedGender === "ALL") {
+        setLoading(false);
+        return;
+      }
+    }
+
+    // Jika sedang melihat detail produk (bar filter sedang tersembunyi) atau mengetik kode baru,
+    // reset filter tersembunyi ke ALL agar ketikan kedua TIDAK PERNAH terblokir filter produk pertama!
+    const looksLikeCode = Boolean(rawQuery && (/\d/.test(rawQuery) || /[\-._/]/.test(rawQuery)) && !/\s/.test(rawQuery));
+    const shouldResetStaleFilters = Boolean(product) || looksLikeCode;
+
+    if (shouldResetStaleFilters) {
+      if (selectedBrandGroup !== "ALL") setSelectedBrandGroup("ALL");
+      if (selectedCategory !== "ALL") setSelectedCategory("ALL");
+      if (selectedSubBrand) setSelectedSubBrand("");
+      if (selectedGender !== "ALL") setSelectedGender("ALL");
+      if (resultFilter !== "ALL") setResultFilter("ALL");
+      searchProduct(rawQuery, 1, false, "ALL", "ALL", "", undefined, "ALL", "ALL");
+    } else {
+      searchProduct(rawQuery, 1, false, selectedBrandGroup, selectedCategory, selectedSubBrand, groupByCategory, resultFilter, selectedGender);
+    }
+  };
+
   const handleClear = () => {
+    activeSearchAbortRef.current?.abort();
+    activeSearchAbortRef.current = null;
+    searchCounterRef.current += 1;
+    setLoading(false);
+    setError("");
+    setNotFoundCode("");
     setManualInput("");
     setResultFilter("ALL");
     setSelectedBrandGroup("ALL");
     setSelectedSubBrand("");
     setSelectedCategory("ALL");
+    setSelectedGender("ALL");
     clearListToIdle();
     setMultiVariantQty({});
     setQty(0);
-    inputRef.current?.focus();
+    setTimeout(() => inputRef.current?.focus(), 0);
   };
 
   // Cek apakah promo sudah habis berdasarkan toDate (standar tanggal WIB)
@@ -2995,17 +3047,29 @@ export default function Home() {
               </span>
             </div>
 
-            <div className="flex gap-2 items-center">
+            <form onSubmit={handleManualSearchSubmit} className="flex gap-2 items-center">
               <div className="relative flex-1 min-w-0">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
                 <input
                   ref={inputRef}
                   type="text"
+                  enterKeyHint="search"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  spellCheck={false}
                   placeholder="Ketik Artikel, SKU, Barcode, atau Nama Produk..."
                   className="w-full pl-9 pr-9 py-3 rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-400 transition-all text-sm font-medium shadow-xs placeholder:text-slate-400"
                   value={manualInput}
-                  onChange={(e) => setManualInput(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && searchProduct(manualInput)}
+                  onChange={(e) => {
+                    setManualInput(e.target.value);
+                    if (loading) setLoading(false);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleManualSearchSubmit();
+                    }
+                  }}
                   autoFocus
                 />
                 {manualInput && (
@@ -3034,14 +3098,13 @@ export default function Home() {
               </button>
 
               <button
-                type="button"
-                onClick={() => searchProduct(manualInput)}
-                disabled={loading}
-                className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white px-4 sm:px-5 py-3 rounded-xl transition-all font-bold shadow-sm text-sm shrink-0 cursor-pointer disabled:opacity-60"
+                type="submit"
+                className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white px-4 sm:px-5 py-3 rounded-xl transition-all font-bold shadow-sm text-sm shrink-0 cursor-pointer flex items-center gap-1.5"
               >
-                Cari
+                {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>Cari</span>
               </button>
-            </div>
+            </form>
 
             {/* Bar Filter Pemisah Toko Berlogo (SUKO, Mu+Ku, ZES) & Kategori Modern */}
             {!product && (

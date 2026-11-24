@@ -20,18 +20,29 @@ export default function PullToRefresh({ onRefresh, children }: PullToRefreshProp
   const THRESHOLD = 60; // px required to trigger refresh
 
   useEffect(() => {
+    const isInteractiveInput = (target: EventTarget | null): boolean => {
+      if (!(target instanceof HTMLElement)) return false;
+      const tag = target.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+    };
+
     const handleTouchStart = (e: TouchEvent) => {
+      if (isInteractiveInput(e.target)) {
+        setStartY(0);
+        return;
+      }
       if (window.scrollY === 0) {
         setStartY(e.touches[0].clientY);
       }
     };
 
     const handleTouchMove = (e: TouchEvent) => {
+      if (isInteractiveInput(e.target)) return;
       if (window.scrollY === 0 && startY > 0 && !isRefreshing) {
         const currentY = e.touches[0].clientY;
         const diff = currentY - startY;
 
-        if (diff > 0) {
+        if (diff > 10) {
           // Check if the scroll container is at the top. If yes, prevent default and pull down
           if (document.documentElement.scrollTop === 0) {
             if (e.cancelable) e.preventDefault();
