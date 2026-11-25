@@ -1979,7 +1979,13 @@ export default function Home() {
 
     // 0D. INSTAN DATA LOKAL HP (~0-10ms SEBELUM spinner muncul):
     const isCodeSearch = Boolean(trimmed && !hasTaxonomyFilter && (/\d/.test(trimmed) || /[\-._/]/.test(trimmed)) && !/\s/.test(trimmed));
-    const isPureLongDigitCode = Boolean(trimmed && !hasTaxonomyFilter && /^\d{8,20}$/.test(trimmed));
+    // Barcode EAN/UPC (8-20 digit) ATAU kode QR/hangtag vendor alfanumerik (misal "2663005FS" = 5+ digit diikuti huruf/size)
+    // WAJIB langsung tembak /api/product (Turso + Live StoreHub Auto-Scan) jika belum ada exact match lokal — JANGAN jatuh ke fuzzy 82 artikel!
+    const isPureLongDigitCode = Boolean(
+      trimmed &&
+      !hasTaxonomyFilter &&
+      (/^\d{8,20}$/.test(trimmed) || /^\d{5,14}[A-Z0-9\-]{1,6}$/i.test(trimmed))
+    );
     if (isCodeSearch && page === 1) {
       try {
         const { ensureDbOpenSafe, findOfflineProductByCode } = await import('@/lib/offlineDb');
