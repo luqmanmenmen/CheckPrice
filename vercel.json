@@ -8,7 +8,7 @@
     },
     "api/py_wa_cs.py": {
       "maxDuration": 30,
-      "includeFiles": "python-engine/{wa_cs_engine.py,storehub_live_engine.py,suko_product_knowledge.py}"
+      "includeFiles": "python-engine/{wa_cs_engine.py,storehub_live_engine.py,suko_product_knowledge.py,suko_auto_share.py}"
     }
   },
   "daemons": {

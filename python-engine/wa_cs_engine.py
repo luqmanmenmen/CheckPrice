@@ -122,6 +122,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "replyWithImage": True,
     "allowedGroups": [],
     "detectedGroups": [],
+    "autoShareEnabled": True,
+    "autoShareTargetGroupId": "120363430044579859@g.us",
+    "autoShareTargetGroupName": "Grup wa test cs suko",
+    "autoShareIntervalMinutes": 10,
+    "autoShareStartHourWib": 10,
+    "autoShareEndHourWib": 20,
     "fonnteToken": "",
     "customGeminiApiKey": "",
     "updatedAt": "",
@@ -421,6 +427,12 @@ def _merge_config(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         cfg["allowedGroups"] = []
     if not isinstance(cfg.get("detectedGroups"), list):
         cfg["detectedGroups"] = []
+    cfg["autoShareEnabled"] = bool(cfg.get("autoShareEnabled", True))
+    cfg["autoShareTargetGroupId"] = str(cfg.get("autoShareTargetGroupId") or "120363430044579859@g.us").strip()
+    cfg["autoShareTargetGroupName"] = str(cfg.get("autoShareTargetGroupName") or "Grup wa test cs suko").strip()[:80]
+    cfg["autoShareIntervalMinutes"] = max(3, min(180, int(cfg.get("autoShareIntervalMinutes", 10) or 10)))
+    cfg["autoShareStartHourWib"] = max(0, min(23, int(cfg.get("autoShareStartHourWib", 10) or 10)))
+    cfg["autoShareEndHourWib"] = max(0, min(23, int(cfg.get("autoShareEndHourWib", 20) or 20)))
     cfg["fonnteToken"] = str(cfg.get("fonnteToken") or "").strip()
     cfg["customGeminiApiKey"] = str(cfg.get("customGeminiApiKey") or "").strip()
     return cfg
@@ -3890,10 +3902,12 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
 
     if action == "get-config":
         cfg = load_config()
+        from suko_auto_share import get_auto_share_ui_summary
         out: Dict[str, Any] = {
             "success": True,
             "config": mask_config_for_ui(cfg),
             "bridge": load_bridge_state(),
+            "autoShare": get_auto_share_ui_summary(cfg, storage_read_text),
         }
         if payload.get("includeFonnteToken"):
             out["fonnteToken"] = cfg.get("fonnteToken") or ""
@@ -3963,11 +3977,43 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
             except Exception:
                 pass
 
+        # Simpan daftar grup yang diikuti nomor bot (dari groupFetchAllParticipating) agar 1 klik muncul di UI!
+        discovered_groups = payload.get("discoveredGroups")
+        if isinstance(discovered_groups, list) and discovered_groups:
+            existing_det = list(cfg.get("detectedGroups") or [])
+            det_map = {str(g.get("id") or "").strip(): g for g in existing_det if g.get("id")}
+            cfg_changed = False
+            for dg in discovered_groups[:30]:
+                if not isinstance(dg, dict):
+                    continue
+                dg_id = str(dg.get("id") or "").strip()
+                dg_name = str(dg.get("name") or dg_id).strip()[:80]
+                if not dg_id or not dg_id.endswith("@g.us"):
+                    continue
+                if dg_id not in det_map:
+                    det_map[dg_id] = {
+                        "id": dg_id,
+                        "name": dg_name,
+                        "lastSeenAt": utc_iso_now(),
+                        "lastMessage": "(Terdeteksi otomatis dari daftar grup WA)",
+                    }
+                    cfg_changed = True
+                elif dg_name and det_map[dg_id].get("name") != dg_name:
+                    det_map[dg_id]["name"] = dg_name
+                    cfg_changed = True
+            if cfg_changed:
+                cfg["detectedGroups"] = list(det_map.values())[:MAX_DETECTED_GROUPS]
+                save_config(cfg)
+
         if changed or (now_ms - prev_hb) >= 55_000:
             st["lastHeartbeatAt"] = now_ms
             saved_st = save_bridge_state(st)
         else:
             saved_st = st
+
+        from suko_auto_share import load_auto_share_state
+        as_state = load_auto_share_state(storage_read_text)
+        manual_pending = int(as_state.get("manualTriggerAt") or 0) > int(as_state.get("lastSharedAtMs") or 0)
 
         return {
             "success": True,
@@ -3975,7 +4021,50 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
             "adminPhone": cfg.get("adminPhone") or "6285771123000",
             "humanTakeoverMinutes": cfg.get("humanTakeoverMinutes", 10),
             "ignorePrivateChats": bool(cfg.get("ignorePrivateChats", True)),
+            "autoShareEnabled": bool(cfg.get("autoShareEnabled", True)),
+            "autoShareIntervalMinutes": int(cfg.get("autoShareIntervalMinutes", 10)),
+            "autoSharePendingManual": manual_pending,
         }
+
+    if action == "auto-share-trigger-now":
+        cfg = load_config()
+        from suko_auto_share import load_auto_share_state, save_auto_share_state, get_auto_share_ui_summary
+        as_st = load_auto_share_state(storage_read_text)
+        as_st["manualTriggerAt"] = int(time.time() * 1000)
+        save_auto_share_state(as_st, storage_write_bytes)
+        return {
+            "success": True,
+            "queued": True,
+            "message": "Perintah Tes Share 1 Produk dikirim ke Cloud Daemon — foto & caption akan masuk ke grup dalam ±10-20 detik!",
+            "autoShare": get_auto_share_ui_summary(cfg, storage_read_text),
+        }
+
+    if action in ("auto-share-next", "auto-share-preview"):
+        cfg = load_config()
+        from suko_auto_share import pick_and_build_auto_share
+        is_preview = action == "auto-share-preview"
+        force_now = bool(payload.get("force")) or is_preview
+
+        def _gemini_copy_adapter(system_prompt: str, user_prompt: str, cfg: Dict[str, Any], max_tokens: int = 140, temperature: float = 0.65):
+            return _invoke_smart_ai(
+                f"{system_prompt}\n\n{user_prompt}",
+                tier="LIGHT",
+                cfg=cfg,
+                expect_json=False,
+                timeout=6.0,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+
+        return pick_and_build_auto_share(
+            cfg=cfg,
+            turso_query=turso_query,
+            storage_read_text=storage_read_text,
+            storage_write_bytes=storage_write_bytes,
+            gemini_caller=_gemini_copy_adapter,
+            force_now=force_now,
+            dry_run=is_preview,
+        )
 
     if action == "save-config":
         current = load_config()
@@ -3985,6 +4074,8 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
             "ignorePrivateChats", "handoffToPrivateChat", "privateSessionMinutes", "replyGreetings",
             "storeScope", "csName", "adminPhone", "picAlertPhone", "storeName", "storeSop",
             "heavyDailyBudget", "maxProductsPerReply", "humanTakeoverMinutes", "replyWithImage", "allowedGroups",
+            "autoShareEnabled", "autoShareTargetGroupId", "autoShareTargetGroupName",
+            "autoShareIntervalMinutes", "autoShareStartHourWib", "autoShareEndHourWib",
         ):
             if field in patch and patch[field] is not None:
                 current[field] = patch[field]

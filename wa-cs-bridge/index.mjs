@@ -56,7 +56,7 @@ const CLI_PAIR_MODE =
 
 const AUTH_DIR = path.resolve(process.env.WA_AUTH_DIR || "./auth_info");
 const HEALTH_PORT = Number(process.env.PORT || process.env.WA_BRIDGE_HEALTH_PORT || 0);
-const BRIDGE_VERSION = "v2.3-promo719-thursday-auto";
+const BRIDGE_VERSION = "v2.4-promo719-autoshare10";
 const logger = pino({ level: "silent" });
 const startUnixSec = Math.floor(Date.now() / 1000);
 
@@ -104,6 +104,10 @@ let isConnected = false;
 let currentPhone = DEFAULT_ADMIN_PHONE;
 let currentHumanTakeoverMins = 10;
 let currentIgnorePrivateChats = false;
+let currentAutoShareEnabled = true;
+let currentAutoShareIntervalMins = 10;
+let isAutoShareRunning = false;
+let lastAutoShareCheckMs = 0;
 let lastHandledPairingReq = 0;
 let lastHandledLogoutReq = 0;
 let pendingWebPairingPhone = "";
@@ -788,6 +792,15 @@ async function syncBridgeState(extra = {}) {
     if (typeof res.ignorePrivateChats === "boolean") {
       currentIgnorePrivateChats = res.ignorePrivateChats;
     }
+    if (typeof res.autoShareEnabled === "boolean") {
+      currentAutoShareEnabled = res.autoShareEnabled;
+    }
+    if (typeof res.autoShareIntervalMinutes === "number" && res.autoShareIntervalMinutes >= 3) {
+      currentAutoShareIntervalMins = res.autoShareIntervalMinutes;
+    }
+    if (res.autoSharePendingManual && isConnected && currentSock && !isAutoShareRunning) {
+      setTimeout(() => runAutoProductShare(true), 250);
+    }
     return res.bridge || null;
   } catch {
     return null;
@@ -1023,6 +1036,27 @@ async function startSocket() {
         statusMessage: `WhatsApp +${mePhone} aktif tersambung (${BRIDGE_VERSION})!`,
       });
       scheduleAuthCloudBackup(true);
+
+      // Auto-discover seluruh grup WA yang diikuti nomor bot (termasuk SUKO EXCLUSIVE MEMBER!) agar muncul di dropdown Web UI!
+      setTimeout(async () => {
+        if (currentSock !== sock || !isConnected) return;
+        try {
+          const allGroupsObj = await sock.groupFetchAllParticipating();
+          const discoveredGroups = Object.values(allGroupsObj || {})
+            .map((g) => ({
+              id: String(g?.id || "").trim(),
+              name: String(g?.subject || g?.id || "").trim(),
+            }))
+            .filter((g) => g.id.endsWith("@g.us"))
+            .slice(0, 30);
+          if (discoveredGroups.length > 0) {
+            console.log(`📋 [GROUP DISCOVERY] Terdeteksi ${discoveredGroups.length} grup WA (siap dipilih di Web /super-admin/wa-cs)!`);
+            await syncBridgeState({ discoveredGroups });
+          }
+        } catch (e) {
+          console.log("⚠️ [GROUP DISCOVERY] Lewati:", e?.message || e);
+        }
+      }, 4500);
     }
 
     if (connection === "close") {
@@ -1305,10 +1339,76 @@ async function startControlPoller() {
         }
       }
     } catch {}
-    const nextMs = isConnected ? 60_000 : 4_000;
+    const nextMs = isConnected ? 20_000 : 4_000;
     setTimeout(tick, nextMs);
   };
-  setTimeout(tick, isConnected ? 60_000 : 4_000);
+  setTimeout(tick, isConnected ? 20_000 : 4_000);
+}
+
+// ─── AUTO-SHARE KATALOG PRODUK SUKO (10 KATEGORI PER 10 MENIT!) ──────────────
+async function runAutoProductShare(forceNow = false) {
+  if (isAutoShareRunning || !currentSock || !isConnected) return;
+  isAutoShareRunning = true;
+  lastAutoShareCheckMs = Date.now();
+  try {
+    const res = await callPythonWaCs(
+      { action: "auto-share-next", force: Boolean(forceNow) },
+      25000
+    );
+    if (!res?.shouldSend || !res?.targetGroupId || !res?.caption) {
+      if (forceNow) {
+        console.log(`ℹ️ [AUTO-SHARE MANUAL] Tidak mengirim: ${res?.reason || "EMPTY"}`);
+      }
+      return;
+    }
+
+    const imgBuf = res.imageUrl
+      ? await fetchImageBuffer(res.imageUrl, res.fallbackImages || [])
+      : null;
+
+    let sent;
+    if (imgBuf) {
+      sent = await currentSock.sendMessage(res.targetGroupId, {
+        image: imgBuf,
+        caption: res.caption,
+      });
+    } else if (res.imageUrl) {
+      try {
+        sent = await currentSock.sendMessage(res.targetGroupId, {
+          image: { url: res.imageUrl },
+          caption: res.caption,
+        });
+      } catch {
+        sent = await currentSock.sendMessage(res.targetGroupId, { text: res.caption });
+      }
+    } else {
+      sent = await currentSock.sendMessage(res.targetGroupId, { text: res.caption });
+    }
+    trackBotSent(sent);
+    scheduleAuthCloudBackup(false);
+    console.log(
+      `📢 [AUTO-SHARE SUKO] Terkirim ke [${res.targetGroupName}] | ${res.meta?.categoryLabel || "-"} (${res.meta?.shareType || "-"}) — ${res.meta?.title || "-"}`
+    );
+  } catch (err) {
+    console.error("⚠️ [AUTO-SHARE SUKO] Error:", err?.message || err);
+  } finally {
+    isAutoShareRunning = false;
+  }
+}
+
+function startAutoProductShareLoop() {
+  const step = async () => {
+    try {
+      if (isConnected && currentSock && currentAutoShareEnabled && !isAutoShareRunning) {
+        const minGapMs = Math.max(3, currentAutoShareIntervalMins) * 60 * 1000;
+        if (Date.now() - lastAutoShareCheckMs >= Math.min(minGapMs, 5 * 60 * 1000)) {
+          await runAutoProductShare(false);
+        }
+      }
+    } catch {}
+    setTimeout(step, 45_000);
+  };
+  setTimeout(step, 35_000);
 }
 
 // ─── AUTO-LAUNCHER PROMO KAMIS 00:00 WIB (24/7 CLOUD DAEMON SCHEDULER) ───────
@@ -1440,6 +1540,7 @@ process.on("SIGINT", () => handleGracefulShutdown("SIGINT"));
 startSocket().then(() => {
   startControlPoller();
   startUpcomingPromoAutoLauncher();
+  startAutoProductShareLoop();
 }).catch((err) => {
   console.error("Fatal error:", err);
   process.exit(1);

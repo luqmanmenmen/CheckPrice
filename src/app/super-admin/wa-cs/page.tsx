@@ -82,6 +82,12 @@ type WaCsConfig = {
   replyWithImage: boolean;
   allowedGroups: AllowedGroup[];
   detectedGroups: DetectedGroup[];
+  autoShareEnabled?: boolean;
+  autoShareTargetGroupId?: string;
+  autoShareTargetGroupName?: string;
+  autoShareIntervalMinutes?: number;
+  autoShareStartHourWib?: number;
+  autoShareEndHourWib?: number;
   fonnteTokenConfigured?: boolean;
   fonnteTokenPreview?: string;
   customGeminiKeyConfigured?: boolean;
@@ -117,6 +123,35 @@ type WaCsLog = {
   imageUrl?: string | null;
   matchedSku?: string | null;
   elapsedMs?: number;
+};
+
+type AutoShareHistoryItem = {
+  id: string;
+  wibTime: string;
+  article: string;
+  sku?: string;
+  title: string;
+  categoryLabel: string;
+  shareType: string;
+  priceText: string;
+  imageUrl?: string;
+  targetGroupName?: string;
+};
+
+type AutoShareSummary = {
+  enabled: boolean;
+  targetGroupId: string;
+  targetGroupName: string;
+  intervalMinutes: number;
+  startHourWib: number;
+  endHourWib: number;
+  todayCount: number;
+  lastSharedAtMs: number;
+  recentCount: number;
+  nextCategory?: { id: string; label: string; short: string };
+  nextMode?: string;
+  categories?: Array<{ id: string; label: string; short: string }>;
+  history: AutoShareHistoryItem[];
 };
 
 type SimResult = {
@@ -199,6 +234,8 @@ function decisionBadge(decision: string, reason: string) {
 export default function WaCsSuperAdminPage() {
   const [config, setConfig] = useState<WaCsConfig | null>(null);
   const [bridge, setBridge] = useState<BridgeState | null>(null);
+  const [autoShare, setAutoShare] = useState<AutoShareSummary | null>(null);
+  const [triggeringShare, setTriggeringShare] = useState(false);
   const [logs, setLogs] = useState<WaCsLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -236,6 +273,7 @@ export default function WaCsSuperAdminPage() {
       if (data?.success && data?.config) {
         setConfig(data.config);
         if (data.bridge) setBridge(data.bridge);
+        if (data.autoShare) setAutoShare(data.autoShare);
         setLogs(Array.isArray(data.logs) ? data.logs : []);
         if (!silent && data.config.adminPhone) {
           const p = String(data.config.adminPhone);
@@ -375,6 +413,12 @@ export default function WaCsSuperAdminPage() {
           humanTakeoverMinutes: config.humanTakeoverMinutes,
           replyWithImage: config.replyWithImage,
           allowedGroups: config.allowedGroups,
+          autoShareEnabled: config.autoShareEnabled ?? true,
+          autoShareTargetGroupId: config.autoShareTargetGroupId || "120363430044579859@g.us",
+          autoShareTargetGroupName: config.autoShareTargetGroupName || "Grup wa test cs suko",
+          autoShareIntervalMinutes: config.autoShareIntervalMinutes ?? 10,
+          autoShareStartHourWib: config.autoShareStartHourWib ?? 10,
+          autoShareEndHourWib: config.autoShareEndHourWib ?? 20,
           ...(fonnteTokenInput.trim() ? { fonnteToken: fonnteTokenInput.trim() } : {}),
           ...(geminiKeyInput.trim() ? { customGeminiApiKey: geminiKeyInput.trim() } : {}),
           ...(extraPatch || {}),
@@ -943,6 +987,213 @@ export default function WaCsSuperAdminPage() {
               </div>
             )}
           </div>
+        </section>
+
+        {/* CARD 2.5: AUTO-SHARE KATALOG PRODUK SUKO (10 KATEGORI ROTASI OTOMATIS) */}
+        <section className="bg-white rounded-2xl border border-indigo-200 shadow-xs p-5 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-indigo-600" />
+                <h2 className="text-base font-extrabold text-slate-900">
+                  Auto-Share Katalog Produk SUKO (10 Kategori Paling Menjual)
+                </h2>
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                Otomatis membagikan 1 produk terbaik bergilir lintas <strong>Men, Ladies, Boys, Girls, SUKO GO (Sport), Dress/Rok, Outer, Workwear, Sleepwear &amp; Essential</strong> + rotasi <strong>Promo → New Arrival → Harga Normal</strong> (anti-dobel 140 artikel!).
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => {
+                  const nextVal = !(config.autoShareEnabled ?? true);
+                  setConfig({ ...config, autoShareEnabled: nextVal });
+                  handleSaveSettings({ autoShareEnabled: nextVal });
+                }}
+                className={`px-3.5 py-2 rounded-xl text-xs font-extrabold border transition cursor-pointer ${
+                  (config.autoShareEnabled ?? true)
+                    ? "bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700"
+                    : "bg-slate-100 text-slate-600 border-slate-300 hover:bg-slate-200"
+                }`}
+              >
+                {(config.autoShareEnabled ?? true) ? "● AUTO-SHARE AKTIF" : "○ AUTO-SHARE NON-AKTIF"}
+              </button>
+              <button
+                type="button"
+                disabled={triggeringShare}
+                onClick={async () => {
+                  setTriggeringShare(true);
+                  try {
+                    const res = await fetch("/api/admin/wa-cs", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ action: "auto-share-trigger-now" }),
+                    });
+                    const d = await res.json();
+                    if (d?.success) {
+                      if (d.autoShare) setAutoShare(d.autoShare);
+                      showToast("ok", d.message || "Tes share 1 produk dikirim ke grup target (±15 detik)!");
+                      setTimeout(() => fetchData(true), 16000);
+                    } else {
+                      showToast("err", d?.error || "Gagal memicu tes share");
+                    }
+                  } catch {
+                    showToast("err", "Gagal menghubungi server");
+                  } finally {
+                    setTriggeringShare(false);
+                  }
+                }}
+                className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-xs cursor-pointer"
+              >
+                {triggeringShare ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                <span>Tes Kirim 1 Produk Sekarang</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Konfigurasi Grup Target, Interval & Jam Aktif */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 bg-indigo-50/50 border border-indigo-100 rounded-xl p-3.5">
+            <div className="md:col-span-2 space-y-1">
+              <label className="text-[11px] font-extrabold text-indigo-900 uppercase tracking-wider">
+                Grup Tujuan Auto-Share
+              </label>
+              <select
+                value={config.autoShareTargetGroupId || "120363430044579859@g.us"}
+                onChange={(e) => {
+                  const chosenId = e.target.value;
+                  const allGroups = [...(config.allowedGroups || []), ...(config.detectedGroups || [])];
+                  const found = allGroups.find((g) => g.id === chosenId);
+                  setConfig({
+                    ...config,
+                    autoShareTargetGroupId: chosenId,
+                    autoShareTargetGroupName: found?.name || chosenId,
+                  });
+                }}
+                className="w-full px-3 py-2 rounded-xl border border-indigo-200 bg-white text-xs font-bold text-slate-800"
+              >
+                {Array.from(
+                  new Map(
+                    [
+                      { id: "120363430044579859@g.us", name: "Grup wa test cs suko (Grup Test Aman)" },
+                      ...(config.allowedGroups || []).map((g) => ({ id: g.id, name: g.name || g.id })),
+                      ...(config.detectedGroups || []).map((g) => ({ id: g.id, name: g.name || g.id })),
+                    ].map((g) => [g.id, g])
+                  ).values()
+                ).map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[11px] font-extrabold text-indigo-900 uppercase tracking-wider">
+                Interval (Menit)
+              </label>
+              <input
+                type="number"
+                min={3}
+                max={180}
+                value={config.autoShareIntervalMinutes ?? 10}
+                onChange={(e) =>
+                  setConfig({
+                    ...config,
+                    autoShareIntervalMinutes: Math.max(3, Math.min(180, Number(e.target.value) || 10)),
+                  })
+                }
+                className="w-full px-3 py-2 rounded-xl border border-indigo-200 bg-white text-xs font-bold text-slate-800"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[11px] font-extrabold text-indigo-900 uppercase tracking-wider">
+                Jam Aktif WIB
+              </label>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="number"
+                  min={0}
+                  max={23}
+                  value={config.autoShareStartHourWib ?? 10}
+                  onChange={(e) =>
+                    setConfig({ ...config, autoShareStartHourWib: Math.max(0, Math.min(23, Number(e.target.value) || 0)) })
+                  }
+                  className="w-16 px-2 py-2 rounded-xl border border-indigo-200 bg-white text-xs font-bold text-slate-800 text-center"
+                />
+                <span className="text-xs font-bold text-slate-500">s/d</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={23}
+                  value={config.autoShareEndHourWib ?? 20}
+                  onChange={(e) =>
+                    setConfig({ ...config, autoShareEndHourWib: Math.max(0, Math.min(23, Number(e.target.value) || 20)) })
+                  }
+                  className="w-16 px-2 py-2 rounded-xl border border-indigo-200 bg-white text-xs font-bold text-slate-800 text-center"
+                />
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => handleSaveSettings()}
+                  className="ml-auto px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer"
+                >
+                  Simpan
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Status Giliran & Riwayat Terakhir */}
+          {autoShare && (
+            <div className="space-y-2.5">
+              <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
+                <span className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200">
+                  Terkirim Hari Ini: {autoShare.todayCount} produk
+                </span>
+                <span className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-800 border border-indigo-200">
+                  Giliran Berikutnya: {autoShare.nextCategory?.label || "-"} ({autoShare.nextMode || "PROMO"})
+                </span>
+                <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200">
+                  Anti-Dobel Aktif: {autoShare.recentCount} artikel tersimpan
+                </span>
+              </div>
+
+              {autoShare.history && autoShare.history.length > 0 && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {autoShare.history.slice(0, 6).map((h) => (
+                    <div
+                      key={h.id}
+                      className="flex items-center gap-2.5 p-2 rounded-xl border border-slate-200 bg-slate-50/70"
+                    >
+                      {h.imageUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={h.imageUrl}
+                          alt={h.title}
+                          className="w-11 h-14 rounded-lg object-cover object-top border border-slate-200 bg-white shrink-0"
+                        />
+                      ) : null}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1 flex-wrap">
+                          <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800">
+                            {h.shareType}
+                          </span>
+                          <span className="text-[10px] font-semibold text-slate-500">{h.wibTime}</span>
+                        </div>
+                        <p className="text-xs font-extrabold text-slate-900 truncate mt-0.5">{h.title}</p>
+                        <p className="text-[10px] text-slate-600 truncate">
+                          {h.categoryLabel} • <strong>{h.priceText}</strong>
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
         {/* CARD 3: WHITELIST GRUP WHATSAPP (GRUP DUMMY & MEMBER EKSKLUSIF) */}

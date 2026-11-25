@@ -109,6 +109,8 @@ export async function POST(req: NextRequest) {
       "simulate",
       "request-pairing",
       "request-logout",
+      "auto-share-trigger-now",
+      "auto-share-preview",
     ]);
     const action = String(body?.action || "").trim().toLowerCase();
     if (!allowedActions.has(action)) {
