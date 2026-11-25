@@ -1641,6 +1641,9 @@ export async function queryLocalModelsInstant({
 
   if (trimmed) {
     const isPureLongDigitCode = /^\d{8,20}$/.test(trimmed);
+    const isStrictAlnumCode =
+      !/\s/.test(trimmed) &&
+      /^(?=(?:.*\d){4,})[A-Z0-9\-._/]{6,24}$/i.test(trimmed);
 
     // 1. Cek exact article / sku / barcode match jika tidak sedang memfilter taxonomy
     if (brandGroup === "ALL" && category === "ALL" && !subBrandUpper && gender === "ALL" && page === 1 && !/\s/.test(upper)) {
@@ -1686,14 +1689,16 @@ export async function queryLocalModelsInstant({
       }
     }
 
-    if (isPureLongDigitCode) {
-      // Barcode 8-20 digit tidak boleh jatuh ke pencocokan substring/fuzzy (misal "234")
+    if (isPureLongDigitCode || isStrictAlnumCode) {
+      // Barcode EAN/UPC (8-20 digit) & kode QR/hangtag alfanumerik (misal 2663005FS, S2L1536G1)
+      // TIDAK BOLEH jatuh ke fuzzy 3 huruf ("266")! Jika belum ada exact match lokal -> biarkan kosong
+      // supaya app langsung tembak /api/product -> Live StoreHub SUKO & Mu+Ku Auto-Scan!
       baseMatched = [];
     } else {
       const expanded = expandRetailQuery(trimmed);
       const terms = expanded.allExpandedTerms.filter((t) => t.length >= 2);
       const sub3 =
-        expanded.spaceless.length >= 3 && !/^\d+$/.test(expanded.spaceless)
+        expanded.spaceless.length >= 3 && !/\d/.test(expanded.spaceless)
           ? expanded.spaceless.slice(0, 3)
           : "";
 

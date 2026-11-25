@@ -1984,7 +1984,7 @@ export default function Home() {
     const isPureLongDigitCode = Boolean(
       trimmed &&
       !hasTaxonomyFilter &&
-      (/^\d{8,20}$/.test(trimmed) || /^\d{5,14}[A-Z0-9\-]{1,6}$/i.test(trimmed))
+      (/^\d{8,20}$/.test(trimmed) || (!/\s/.test(trimmed) && /^(?=(?:.*\d){4,})[A-Z0-9\-._/]{6,24}$/i.test(trimmed)))
     );
     if (isCodeSearch && page === 1) {
       try {
