@@ -1325,6 +1325,45 @@ def _sync_catalog_article_for_family(article: str, siblings: List[Dict[str, Any]
 #  7. PUBLIC ACTIONS: SCAN | FAST-STOCK | HEAL-IMAGE | REFRESH-COOKIE
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _build_blurry_hangtag_fallbacks(code: str) -> List[Tuple[str, str]]:
+    """
+    Problem-Solver Anti-Hangtag Buram (hanya jalan jika kode persis tidak ketemu!):
+    Menangani salah baca huruf/angka yang paling sering terjadi di hangtag cetak buram:
+    - Di bagian angka awal: O->0, I/L->1, S->5, B->8
+    - Di akhiran size (FS/XS/S/M/L/XL): 5->S, 0->O, 1->L (contoh: 2663005F5 -> 2663005FS, 266300SFS -> 2663005FS!)
+    """
+    up = str(code or "").strip().upper()
+    if len(up) < 6 or len(up) > 18 or up.isdigit():
+        return []
+    alts: List[str] = []
+    # 1. Akhiran F5 -> FS, X5 -> XS, 5 -> S (size suffix)
+    if up.endswith("F5"):
+        alts.append(up[:-2] + "FS")
+    elif up.endswith("X5"):
+        alts.append(up[:-2] + "XS")
+    elif re.search(r"[A-Z]5$", up):
+        alts.append(up[:-1] + "S")
+    # 2. Karakter buram di prefix angka sebelum 2-3 huruf akhiran (misal 266300SFS -> 2663005FS, 2663O05FS -> 2663005FS)
+    m_split = re.match(r"^([A-Z0-9]{5,12})([A-Z]{2,3})$", up)
+    if m_split:
+        prefix, suffix = m_split.group(1), m_split.group(2)
+        fixed_prefix = prefix.replace("O", "0").replace("I", "1").replace("S", "5").replace("B", "8")
+        if fixed_prefix != prefix:
+            alts.append(fixed_prefix + suffix)
+    # 3. Koreksi O->0 global jika mayoritas angka
+    if sum(ch.isdigit() for ch in up) >= 4 and "O" in up:
+        alts.append(up.replace("O", "0"))
+
+    out: List[Tuple[str, str]] = []
+    seen = {up}
+    for a in alts:
+        if a and a not in seen:
+            seen.add(a)
+            out.append(("upc", a))
+            out.append(("sku", a))
+    return out[:4]
+
+
 def run_live_scan(
     code: str,
     preferred_account: Optional[str] = None,
@@ -1356,6 +1395,20 @@ def run_live_scan(
         alt = _probe_account_with_deadline(second_acc, candidates, deadline)
         if alt.get("items") or alt.get("offline"):
             outcome = alt
+
+    # Langkah 1B: Self-Heal Hangtag Buram (jika kode persis 0 hasil, otomatis coba koreksi O/0, S/5, F5->FS!)
+    was_healed = False
+    if not outcome.get("items") and not outcome.get("offline") and (deadline - time.time()) > 0.7:
+        blurry_cands = _build_blurry_hangtag_fallbacks(clean_code)
+        if blurry_cands:
+            healed = _probe_account_with_deadline(first_acc, blurry_cands, deadline)
+            if not healed.get("items") and not healed.get("offline") and (deadline - time.time()) > 0.7:
+                healed2 = _probe_account_with_deadline(second_acc, blurry_cands, deadline)
+                if healed2.get("items") or healed2.get("offline"):
+                    healed = healed2
+            if healed.get("items"):
+                outcome = healed
+                was_healed = True
 
     if outcome.get("offline"):
         return {
@@ -1432,12 +1485,14 @@ def run_live_scan(
                 found_images = []
 
     # Langkah 5: Simpan ke Turso (`Product` + `BarcodeAlias`)
+    # Gunakan active_code (kode terverifikasi StoreHub) agar kode typo hangtag buram tidak mencemari BarcodeAlias!
+    canonical_code = active_code if was_healed else clean_code
     now_iso = utc_iso_now()
-    saved_meta = _upsert_item_and_aliases(primary_raw, clean_code, owner_acc, live_promo, found_images, now_iso)
+    saved_meta = _upsert_item_and_aliases(primary_raw, canonical_code, owner_acc, live_promo, found_images, now_iso)
     # Upsert item tambahan bila StoreHub mengembalikan > 1 SKU dalam 1 response
     for extra in items[1:12]:
         try:
-            _upsert_item_and_aliases(extra, clean_code, owner_acc, live_promo, found_images, now_iso)
+            _upsert_item_and_aliases(extra, canonical_code, owner_acc, live_promo, found_images, now_iso)
         except Exception:
             pass
 
@@ -1482,7 +1537,7 @@ def run_live_scan(
         pool.submit(
             record_hot_scan_seed,
             saved_meta["sku"],
-            saved_meta["barcode"] or (clean_code if clean_code != saved_meta["sku"] else None),
+            saved_meta["barcode"] or (canonical_code if canonical_code != saved_meta["sku"] else None),
             saved_meta["article"],
             saved_meta["brand"],
             owner_acc,
@@ -1500,6 +1555,8 @@ def run_live_scan(
         "aliases": aliases,
         "updatedVariants": updated_variants,
         "imagesMatched": len(found_images),
+        "healedFrom": clean_code if was_healed else None,
+        "resolvedCode": active_code,
         "source": "PYTHON_LIVE_ENGINE",
         "elapsedMs": int((time.time() - t0) * 1000),
     }
