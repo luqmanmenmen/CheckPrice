@@ -183,8 +183,12 @@ jobs:
         if: ${{ github.event.inputs.action == 'promo' || github.event.inputs.action == 'all' || github.event.action == 'trigger-promo' || github.event.action == 'trigger-sync-engine' }}
         run: |
           PROMO_URL="${{ github.event.inputs.promo_url }}"
+          FORCE_FLAG=""
+          if [[ "$PROMO_URL" == *"WA_DIRECT_"* ]]; then
+            FORCE_FLAG="--force-apply"
+          fi
           if [ -n "$PROMO_URL" ]; then
-            python -u python-engine/runner_guardian.py --step "KATEGORI 3: Update Promo Email Engine" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 -- python python-engine/run_promo_sync.py "--file=$PROMO_URL"
+            python -u python-engine/runner_guardian.py --step "KATEGORI 3: Update Promo Email Engine" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 -- python python-engine/run_promo_sync.py $FORCE_FLAG "--file=$PROMO_URL"
           else
             python -u python-engine/runner_guardian.py --step "KATEGORI 3: Update Promo Email Engine" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 -- python python-engine/run_promo_sync.py
           fi

@@ -25,6 +25,7 @@ import http from "node:http";
 import path from "node:path";
 import makeWASocket, {
   DisconnectReason,
+  downloadMediaMessage,
   fetchLatestBaileysVersion,
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
@@ -33,6 +34,10 @@ import qrcode from "qrcode-terminal";
 
 const API_URL = (
   process.env.WA_CS_API_URL || "https://www.luqmanganteng.my.id/api/py_wa_cs"
+).trim();
+const PROMO_WEBHOOK_URL = (
+  process.env.WA_PROMO_WEBHOOK_URL ||
+  API_URL.replace(/\/api\/py_wa_cs\/?$/, "/api/webhook/wa-promo")
 ).trim();
 const API_SECRET = (
   process.env.WA_CS_SECRET ||
@@ -76,6 +81,18 @@ const DEBOUNCE_WINDOW_MS = 2600;
 const activeDmSessions = new Map();
 // Cache metadata grup: groupId -> { name, participants, fetchedAt }
 const groupMetaCache = new Map();
+
+// ─── ANTREAN AUTO-UPDATE PROMO EXCEL VIA KODE RAHASIA WHATSAPP ───────────────
+// Kode rahasia:
+//   - "update promo 719"    -> DIRECT langsung update promo hari itu juga ke harga kasir
+//   - "update promo 719 h-" -> AFTER PROMO / H- (Persiapan POP /promo-mendatang, read-only DB kasir)
+const pendingPromoDocs = new Map();    // jid -> Array<{ msg, docInfo, receivedAt }>
+const recentDocByMsgId = new Map();    // msgId -> { msg, docInfo, jid, receivedAt }
+const armedPromoSessions = new Map();  // jid -> { cmd, expiresAt, timer, files, lastMsg }
+const PROMO_DOC_TTL_MS = 15 * 60 * 1000;
+const PROMO_ARMED_TTL_MS = 5 * 60 * 1000;
+const PROMO_BATCH_DEBOUNCE_MS = 3500;
+const EXCEL_EXT_RE = /\.(xlsx|xls|csv|xlsm|xlsb)$/i;
 
 let currentSock = null;
 let isConnected = false;
@@ -139,20 +156,390 @@ function clearAuthDir() {
   } catch {}
 }
 
+function unwrapMessageContent(m) {
+  let cur = m;
+  for (let i = 0; i < 4 && cur; i++) {
+    if (cur.ephemeralMessage?.message) {
+      cur = cur.ephemeralMessage.message;
+    } else if (cur.viewOnceMessage?.message) {
+      cur = cur.viewOnceMessage.message;
+    } else if (cur.viewOnceMessageV2?.message) {
+      cur = cur.viewOnceMessageV2.message;
+    } else if (cur.viewOnceMessageV2Extension?.message) {
+      cur = cur.viewOnceMessageV2Extension.message;
+    } else if (cur.documentWithCaptionMessage?.message) {
+      cur = cur.documentWithCaptionMessage.message;
+    } else {
+      break;
+    }
+  }
+  return cur;
+}
+
 function extractMessageText(msg) {
-  const m = msg?.message;
+  const m = unwrapMessageContent(msg?.message);
   if (!m) return "";
   if (m.conversation) return m.conversation;
   if (m.extendedTextMessage?.text) return m.extendedTextMessage.text;
   if (m.imageMessage?.caption) return m.imageMessage.caption;
   if (m.videoMessage?.caption) return m.videoMessage.caption;
-  if (m.ephemeralMessage?.message) {
-    return extractMessageText({ message: m.ephemeralMessage.message });
-  }
-  if (m.viewOnceMessage?.message) {
-    return extractMessageText({ message: m.viewOnceMessage.message });
-  }
+  if (m.documentMessage?.caption) return m.documentMessage.caption;
   return "";
+}
+
+function extractExcelDocument(msg) {
+  const m = unwrapMessageContent(msg?.message);
+  const doc = m?.documentMessage;
+  if (!doc) return null;
+  const fileName = String(doc.fileName || doc.title || "").trim();
+  const mimetype = String(doc.mimetype || "").toLowerCase();
+  const isExcelExt = EXCEL_EXT_RE.test(fileName);
+  const isExcelMime =
+    mimetype.includes("spreadsheetml") ||
+    mimetype.includes("ms-excel") ||
+    mimetype.includes("excel") ||
+    mimetype.includes("text/csv") ||
+    mimetype.includes("comma-separated-values");
+  if (!isExcelExt && !isExcelMime) return null;
+  const fallbackName = fileName || `promo_wa_${Date.now()}.${mimetype.includes("csv") ? "csv" : "xlsx"}`;
+  return {
+    docMsg: doc,
+    fileName: fallbackName,
+    mimetype: mimetype || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    fileLength: Number(doc.fileLength || 0),
+    caption: String(doc.caption || "").trim(),
+  };
+}
+
+function extractQuotedStanzaId(msg) {
+  const m = unwrapMessageContent(msg?.message);
+  if (!m) return "";
+  const ctx =
+    m.extendedTextMessage?.contextInfo ||
+    m.imageMessage?.contextInfo ||
+    m.videoMessage?.contextInfo ||
+    m.documentMessage?.contextInfo ||
+    null;
+  return String(ctx?.stanzaId || "").trim();
+}
+
+function parsePromoSecretCommand(rawText) {
+  const normalized = String(rawText || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return null;
+  if (!/\bupdate\s+promo\s+719\b/i.test(normalized)) return null;
+  const hasHMinus = /\bupdate\s+promo\s+719\s+h\s*-/i.test(normalized);
+  return {
+    mode: hasHMinus ? "upcoming" : "direct",
+    modeLabel: hasHMinus
+      ? "🏷️ AFTER PROMO / H- (Persiapan POP — Promo kasir hari ini tetap aman)"
+      : "🔥 DIRECT LANGSUNG (Update Promo Hari Ini ke Harga Kasir)",
+    raw: String(rawText || "").trim(),
+  };
+}
+
+function formatWibFolderStamp() {
+  const wib = new Date(Date.now() + 7 * 3600 * 1000);
+  const iso = wib.toISOString();
+  const datePart = iso.slice(0, 10);
+  const timePart = iso.slice(11, 19).replace(/:/g, "");
+  return `${datePart}_${timePart}`;
+}
+
+function queuePendingPromoDoc(jid, msg, docInfo) {
+  const now = Date.now();
+  const existing = (pendingPromoDocs.get(jid) || []).filter(
+    (item) => now - item.receivedAt < PROMO_DOC_TTL_MS
+  );
+  const msgId = msg?.key?.id || "";
+  if (!msgId || !existing.some((x) => x.msg?.key?.id === msgId)) {
+    existing.push({ msg, docInfo, receivedAt: now });
+  }
+  pendingPromoDocs.set(jid, existing.slice(-12));
+
+  if (msgId) {
+    recentDocByMsgId.set(msgId, { msg, docInfo, jid, receivedAt: now });
+    if (recentDocByMsgId.size > 60) {
+      const oldestKey = recentDocByMsgId.keys().next().value;
+      recentDocByMsgId.delete(oldestKey);
+    }
+  }
+  return existing.length;
+}
+
+async function executeWaPromoBatch(sock, jid, cmd, docEntries, quoteMsg = null) {
+  const validEntries = (docEntries || []).filter((e) => e?.msg && e?.docInfo);
+  if (validEntries.length === 0) return;
+
+  const stamp = formatWibFolderStamp();
+  const folder = cmd.mode === "upcoming" ? `UPCOMING_WA_${stamp}` : `WA_DIRECT_${stamp}`;
+  const fileNamesPreview = validEntries.map((e, idx) => `${idx + 1}. ${e.docInfo.fileName}`).join("\n");
+
+  console.log(
+    `🏷️ [WA PROMO AUTO-UPDATE] Mode=${cmd.mode.toUpperCase()} | Folder=${folder} | Files=${validEntries.length}`
+  );
+
+  const startReply = await sock
+    .sendMessage(
+      jid,
+      {
+        text:
+          `⏳ *Kode rahasia terverifikasi!*\n` +
+          `• Mode: *${cmd.modeLabel}*\n` +
+          `• Jumlah File: *${validEntries.length} file Excel*\n` +
+          `${fileNamesPreview}\n\n` +
+          `Sedang mengunduh & mengunggah ke server Turso + menyalakan mesin Python...`,
+      },
+      quoteMsg ? { quoted: quoteMsg } : {}
+    )
+    .catch(() => null);
+  trackBotSent(startReply);
+
+  const uploaded = [];
+  const failed = [];
+
+  for (const entry of validEntries) {
+    const fname = entry.docInfo.fileName;
+    try {
+      const buf = await downloadMediaMessage(
+        entry.msg,
+        "buffer",
+        {},
+        { logger, reuploadRequest: sock.updateMediaMessage }
+      );
+      if (!buf || buf.length === 0) {
+        failed.push(`${fname} (file kosong)`);
+        continue;
+      }
+
+      const form = new FormData();
+      form.append(
+        "file",
+        new Blob([buf], { type: entry.docInfo.mimetype }),
+        fname
+      );
+      form.append("folder", folder);
+      form.append("fileName", fname);
+
+      const upRes = await fetch(PROMO_WEBHOOK_URL, {
+        method: "POST",
+        headers: {
+          "X-WA-CS-Secret": API_SECRET,
+        },
+        body: form,
+        signal: AbortSignal.timeout(45000),
+      });
+      const upJson = await upRes.json().catch(() => ({}));
+      if (!upRes.ok || !upJson?.success) {
+        failed.push(`${fname} (${upJson?.error || `HTTP ${upRes.status}`})`);
+        continue;
+      }
+      uploaded.push({
+        fileName: upJson.fileName || fname,
+        sizeKb: Math.max(1, Math.round((upJson.sizeBytes || buf.length) / 1024)),
+      });
+    } catch (err) {
+      failed.push(`${fname} (${err?.message || "gagal unduh/upload"})`);
+    }
+  }
+
+  if (uploaded.length === 0) {
+    const failSent = await sock
+      .sendMessage(
+        jid,
+        {
+          text:
+            `❌ *Gagal mengunggah file promo ke server!*\n` +
+            `Detail:\n${failed.map((f) => `• ${f}`).join("\n")}\n\n` +
+            `Coba teruskan ulang file Excel-nya ya.`,
+        },
+        quoteMsg ? { quoted: quoteMsg } : {}
+      )
+      .catch(() => null);
+    trackBotSent(failSent);
+    return;
+  }
+
+  // Trigger 1x GitHub Actions Python Runner untuk seluruh batch folder ini!
+  let dispatchOk = false;
+  let dispatchErr = "";
+  try {
+    const dRes = await fetch(PROMO_WEBHOOK_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-WA-CS-Secret": API_SECRET,
+      },
+      body: JSON.stringify({
+        promoMode: cmd.mode,
+        folder,
+        fileCount: uploaded.length,
+      }),
+      signal: AbortSignal.timeout(25000),
+    });
+    const dJson = await dRes.json().catch(() => ({}));
+    if (dRes.ok && dJson?.success) {
+      dispatchOk = true;
+    } else {
+      dispatchErr = dJson?.error || `HTTP ${dRes.status}`;
+    }
+  } catch (err) {
+    dispatchErr = err?.message || "timeout dispatch";
+  }
+
+  const targetPageUrl =
+    cmd.mode === "upcoming"
+      ? "https://www.luqmanganteng.my.id/promo-mendatang"
+      : "https://www.luqmanganteng.my.id/super-admin/sinkronisasi-harian";
+
+  const fileSummary = uploaded
+    .map((u, idx) => `${idx + 1}. ${u.fileName} (${u.sizeKb} KB)`)
+    .join("\n");
+  const warnPart = failed.length > 0 ? `\n⚠️ Gagal upload:\n${failed.map((f) => `• ${f}`).join("\n")}\n` : "";
+
+  const finalText = dispatchOk
+    ? `✅ *UPDATE PROMO OTOMATIS BERHASIL DINYALAKAN!*\n\n` +
+      `• Mode: *${cmd.modeLabel}*\n` +
+      `• Folder Cloud: \`PROMO/${folder}\`\n` +
+      `• File Terunggah (${uploaded.length}):\n${fileSummary}\n` +
+      `${warnPart}\n` +
+      `🚀 Mesin Python GitHub Actions sedang memproses promo otomatis (±30–60 detik).\n` +
+      `🔗 Pantau hasil: ${targetPageUrl}`
+    : `⚠️ *File sudah masuk Turso Storage, tapi trigger mesin gagal.*\n` +
+      `• Folder: \`PROMO/${folder}\`\n` +
+      `• File (${uploaded.length}):\n${fileSummary}\n` +
+      `• Error: ${dispatchErr}\n` +
+      `Bisa klik manual di ${targetPageUrl}`;
+
+  const doneSent = await sock
+    .sendMessage(jid, { text: finalText }, quoteMsg ? { quoted: quoteMsg } : {})
+    .catch(() => null);
+  trackBotSent(doneSent);
+  console.log(
+    `   ${dispatchOk ? "✅" : "⚠️"} [WA PROMO] Selesai (${uploaded.length} file, dispatch=${dispatchOk ? "OK" : dispatchErr})`
+  );
+}
+
+/**
+ * Handler khusus Auto-Update Promo Excel di Private Chat nomor 085771123000.
+ * Mendukung 4 skenario alami WA:
+ *   1. Kirim file Excel dengan caption "update promo 719" / "update promo 719 h-"
+ *   2. Forward 1 atau banyak file Excel dulu -> lalu ketik "update promo 719" / "update promo 719 h-"
+ *   3. Ketik "update promo 719" / "update promo 719 h-" dulu -> lalu forward 1 atau banyak file Excel
+ *   4. Reply pesan file Excel sebelumnya dengan "update promo 719" / "update promo 719 h-"
+ * Mengembalikan `true` jika pesan sudah ditangani (tidak boleh masuk AI CS!).
+ */
+async function handleWaPromoExcelFlow(sock, msg, jid, text, isGroup) {
+  if (isGroup) return false;
+
+  const fromMe = Boolean(msg?.key?.fromMe);
+  const altRemote = String(msg?.key?.remoteJidAlt || "");
+  const jidPhone = normalizePhone(altRemote || jid);
+  const isSelfChat = Boolean(jidPhone && currentPhone && jidPhone === currentPhone);
+  const sessionKey = jidPhone || jid.toLowerCase();
+
+  const docInfo = extractExcelDocument(msg);
+  const cmd = parsePromoSecretCommand(text);
+
+  // A. PESAN MEMBAWA FILE EXCEL (.xlsx / .xls / .csv)
+  if (docInfo) {
+    // Jika 085771123000 mengirim Excel ke nomor orang lain tanpa kode rahasia, abaikan agar tidak ikut antre
+    if (fromMe && !isSelfChat && !cmd) return false;
+
+    const now = Date.now();
+    const armed = armedPromoSessions.get(sessionKey);
+    const activeCmd = cmd || (armed && armed.expiresAt > now ? armed.cmd : null);
+
+    // Jika ada kode rahasia di caption ATAU sesi armed sedang aktif -> kumpulkan batch (debounce 3,5 dtk) lalu proses!
+    if (activeCmd) {
+      if (armed?.timer) clearTimeout(armed.timer);
+      const files = armed && armed.expiresAt > now ? armed.files : [];
+      files.push({ msg, docInfo, receivedAt: now });
+      const entry = {
+        cmd: activeCmd,
+        expiresAt: now + PROMO_ARMED_TTL_MS,
+        files,
+        lastMsg: msg,
+        timer: null,
+      };
+      entry.timer = setTimeout(async () => {
+        armedPromoSessions.delete(sessionKey);
+        pendingPromoDocs.delete(sessionKey);
+        await executeWaPromoBatch(sock, jid, entry.cmd, entry.files, entry.lastMsg);
+      }, PROMO_BATCH_DEBOUNCE_MS);
+      armedPromoSessions.set(sessionKey, entry);
+      console.log(
+        `📥 [WA PROMO] File Excel "${docInfo.fileName}" masuk (${files.length} file dalam batch ${activeCmd.mode.toUpperCase()})...`
+      );
+      return true;
+    }
+
+    // Tidak ada kode rahasia -> simpan diam-diam di antrean (TTL 15 menit), JANGAN update DB & JANGAN masuk AI CS!
+    const count = queuePendingPromoDoc(sessionKey, msg, docInfo);
+    console.log(
+      `📎 [WA PROMO QUEUE] File Excel "${docInfo.fileName}" ditampung (${count} file antre dari ${sessionKey} — menunggu kode rahasia).`
+    );
+    return true;
+  }
+
+  // B. PESAN TEKS BERISI KODE RAHASIA ("update promo 719" atau "update promo 719 h-")
+  if (cmd) {
+    const now = Date.now();
+    const quotedId = extractQuotedStanzaId(msg);
+    const queued = (pendingPromoDocs.get(sessionKey) || []).filter(
+      (item) => now - item.receivedAt < PROMO_DOC_TTL_MS
+    );
+
+    // Prioritas 1: jika user me-reply file Excel spesifik & antrean baru kosong, proses file yang di-reply!
+    let targetEntries = queued;
+    if (quotedId && recentDocByMsgId.has(quotedId)) {
+      const quotedDoc = recentDocByMsgId.get(quotedId);
+      if (targetEntries.length === 0) {
+        targetEntries = [quotedDoc];
+      } else if (!targetEntries.some((x) => x.msg?.key?.id === quotedId)) {
+        targetEntries = [quotedDoc, ...targetEntries];
+      }
+    }
+
+    if (targetEntries.length > 0) {
+      pendingPromoDocs.delete(sessionKey);
+      const existingArmed = armedPromoSessions.get(sessionKey);
+      if (existingArmed?.timer) clearTimeout(existingArmed.timer);
+      armedPromoSessions.delete(sessionKey);
+      await executeWaPromoBatch(sock, jid, cmd, targetEntries, msg);
+      return true;
+    }
+
+    // Belum ada file Excel yang antre -> aktifkan sesi armed 5 menit & minta user teruskan file Excel-nya!
+    const prevArmed = armedPromoSessions.get(sessionKey);
+    if (prevArmed?.timer) clearTimeout(prevArmed.timer);
+    armedPromoSessions.set(sessionKey, {
+      cmd,
+      expiresAt: now + PROMO_ARMED_TTL_MS,
+      files: [],
+      lastMsg: msg,
+      timer: null,
+    });
+    const armedSent = await sock
+      .sendMessage(
+        jid,
+        {
+          text:
+            `🔐 *Kode rahasia aktif (berlaku 5 menit)!*\n` +
+            `• Mode: *${cmd.modeLabel}*\n\n` +
+            `Silakan teruskan/kirim file Excel promonya sekarang (bisa 1 atau beberapa file sekaligus), nanti saya proses otomatis begitu masuk 🚀`,
+        },
+        { quoted: msg }
+      )
+      .catch(() => null);
+    trackBotSent(armedSent);
+    console.log(`🔐 [WA PROMO ARMED] Menunggu file Excel dari ${sessionKey} (Mode: ${cmd.mode.toUpperCase()})`);
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -604,10 +991,16 @@ async function startSocket() {
 
         const text = extractMessageText(msg).trim();
         const quotedText = extractQuotedText(msg);
-        if (!text) continue;
-
         const fromMe = Boolean(msg.key?.fromMe);
         const isGroup = jid.endsWith("@g.us");
+
+        // 0. JALUR KHUSUS AUTO-UPDATE PROMO EXCEL VIA KODE RAHASIA ("update promo 719" / "update promo 719 h-")
+        //    Berjalan di Private Chat 085771123000 (baik dari nomor lain maupun fromMe) SEBELUM blokir PC & AI CS!
+        const handledPromo = await handleWaPromoExcelFlow(sock, msg, jid, text, isGroup);
+        if (handledPromo) continue;
+
+        if (!text) continue;
+
         const senderName = msg.pushName || "Kak";
         const groupInfo = isGroup ? await getGroupInfo(sock, jid) : null;
         const groupName = isGroup ? groupInfo.name : "Private Chat VIP";

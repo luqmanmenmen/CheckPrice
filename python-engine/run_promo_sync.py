@@ -213,7 +213,7 @@ def parse_folder_date_score(folder_name: str) -> int:
 
 
 def _extract_storage_folder_from_url(url: str) -> tuple[str | None, str]:
-    """Mengambil (folder_name, file_name) bila URL berasal dari Storage PROMO/<folder>/<file>."""
+    """Mengambil (folder_name, file_name) bila URL berasal dari Storage PROMO/<folder>/<file> atau folder batch PROMO/<folder>."""
     if not url:
         return None, ""
     decoded = unquote(str(url)).split("?", 1)[0].strip()
@@ -224,6 +224,8 @@ def _extract_storage_folder_from_url(url: str) -> tuple[str | None, str]:
         if "/" in rel:
             folder_part, file_part = rel.split("/", 1)
             return folder_part, os.path.basename(file_part)
+        if rel and not rel.lower().endswith((".xlsx", ".csv", ".xls", ".xlsm", ".xlsb")):
+            return rel, ""
         return None, os.path.basename(rel)
     return None, os.path.basename(decoded)
 
@@ -237,7 +239,7 @@ def _list_files_in_promo_folder(folder_name: str) -> list[dict]:
         sub_res = storage_list(f"PROMO/{folder_name}")
         for item in (sub_res or []):
             name = item.get("name", "")
-            if name.lower().endswith((".xlsx", ".csv", ".xls")):
+            if name.lower().endswith((".xlsx", ".csv", ".xls", ".xlsm", ".xlsb")):
                 path = f"PROMO/{folder_name}/{name}"
                 files.append({"name": name, "url": f"turso://{path}"})
     except Exception as e:
@@ -995,11 +997,71 @@ def run_promo_sync(
 
     today_wib = datetime.now(timezone(timedelta(hours=7))).strftime("%Y-%m-%d")
 
-    # 1. JALUR SINGLE-FILE (Dipanggil Gmail GAS Webhook / --file=<url>)
+    # 1. JALUR SINGLE-FILE / FOLDER BATCH EKSPLISIT (Dipanggil Gmail GAS Webhook / WA Promo / --file=<url>)
     if target_file_or_url:
         folder_name, inferred_name = _extract_storage_folder_from_url(target_file_or_url)
-        fname = explicit_name or inferred_name or os.path.basename(unquote(target_file_or_url))
         normalized_url = _safe_encode_url(target_file_or_url)
+
+        # 1A. JALUR FOLDER BATCH EKSPLISIT (contoh: turso://PROMO/WA_DIRECT_... atau turso://PROMO/UPCOMING_WA_...)
+        if folder_name and not inferred_name and not explicit_name:
+            batch_files = _list_files_in_promo_folder(folder_name)
+            if not batch_files:
+                print(f"⚠️ Folder batch PROMO/{folder_name} kosong — tidak ada file Excel untuk diproses.")
+                return
+            print(f"📁 [BATCH FOLDER EKSPLISIT] PROMO/{folder_name} ({len(batch_files)} file) | upcoming={upcoming_only} | force={force_apply}")
+            _, fld_start, fld_end = extract_folder_date_info(folder_name)
+
+            if upcoming_only:
+                build_upcoming_promo_preview(
+                    batch_files,
+                    folder_name,
+                    start_date=fld_start,
+                    end_date=fld_end,
+                )
+                return
+
+            preloaded, agg_rows = _preload_files_for_guard(batch_files)
+            if not force_apply:
+                guard = detect_promo_launch_window(
+                    agg_rows,
+                    file_name=batch_files[0]["name"],
+                    folder_name=folder_name,
+                    today_wib=today_wib,
+                    all_file_names=[f["name"] for f in batch_files],
+                )
+                if guard["is_future"]:
+                    print(
+                        f"🛡️ Auto-Guard 3-Lapis ({guard['reason']}): Batch '{folder_name}' mulai {guard['start_date']} "
+                        f"(> {today_wib}). Dialihkan ke Draf POP (/promo-mendatang)!"
+                    )
+                    build_upcoming_promo_preview(
+                        batch_files,
+                        folder_name,
+                        start_date=guard.get("start_date"),
+                        end_date=guard.get("end_date"),
+                        preloaded_rows=preloaded,
+                    )
+                    return
+
+            grand_total = 0
+            for f in batch_files:
+                grand_total += process_single_promo_file(
+                    f["url"],
+                    f["name"],
+                    parsed_data=preloaded.get(f["name"]),
+                    force_apply=force_apply,
+                    today_wib=today_wib,
+                )
+            print("=" * 60)
+            print(f"🎉 [SUKSES BATCH EKSPLISIT] Total {grand_total} produk diperbarui dari {len(batch_files)} file ({folder_name})!")
+            print("=" * 60)
+            if grand_total > 0:
+                log_sync_history(f"WA Promo Direct ({len(batch_files)} file • {folder_name})", grand_total, normalized_url)
+            else:
+                print("ℹ️ 0 produk promo berubah — lewati pencatatan SyncHistory.")
+            return
+
+        fname = explicit_name or inferred_name or os.path.basename(unquote(target_file_or_url))
 
         if upcoming_only:
             files_for_preview = _list_files_in_promo_folder(folder_name) if folder_name else []
