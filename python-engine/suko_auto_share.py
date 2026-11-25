@@ -566,9 +566,7 @@ def pick_and_build_auto_share(
     enabled = bool(cfg.get("autoShareEnabled", True))
     target_gid = str(cfg.get("autoShareTargetGroupId") or "").strip()
     target_gname = str(cfg.get("autoShareTargetGroupName") or target_gid or "Grup Test").strip()
-    interval_mins = max(3, min(180, int(cfg.get("autoShareIntervalMinutes") or 10)))
-    start_h = max(0, min(23, int(cfg.get("autoShareStartHourWib", 10))))
-    end_h = max(0, min(23, int(cfg.get("autoShareEndHourWib", 20))))
+    interval_mins = max(5, min(180, int(cfg.get("autoShareIntervalMinutes") or 20)))
 
     if not target_gid:
         # Fallback aman ke grup whitelist pertama yang aktif (Grup wa test cs suko)
@@ -587,16 +585,8 @@ def pick_and_build_auto_share(
     if not is_manual:
         if not enabled:
             return {"success": True, "shouldSend": False, "reason": "AUTO_SHARE_DISABLED", "state": st}
-        cur_min = now_wib.hour * 60 + now_wib.minute
-        if not (start_h * 60 <= cur_min <= (end_h * 60 + 30)):
-            return {
-                "success": True,
-                "shouldSend": False,
-                "reason": f"OUTSIDE_SHARE_HOURS ({now_wib.strftime('%H:%M')} WIB; aktif {start_h:02d}:00-{end_h:02d}:30 WIB)",
-                "state": st,
-            }
         elapsed_ms = now_ms - int(st.get("lastSharedAtMs") or 0)
-        if elapsed_ms < (interval_mins * 60 * 1000 - 15_000):
+        if elapsed_ms < (interval_mins * 60 * 1000 - 10_000):
             rem_sec = int(((interval_mins * 60 * 1000) - elapsed_ms) / 1000)
             return {
                 "success": True,

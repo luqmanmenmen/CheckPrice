@@ -4082,12 +4082,21 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
             if field in patch and patch[field] is not None:
                 current[field] = patch[field]
         # Jika saklar Auto-Share baru saja dinyalakan (MERAH -> HIJAU), langsung gas share 6 produk inti!
+        # Jika dimatikan (HIJAU -> MERAH), bersihkan manualTriggerAt agar 0% antrean menumpuk / nyangkut!
         if bool(current.get("autoShareEnabled")) and not prev_auto_share:
             try:
                 from suko_auto_share import load_auto_share_state, save_auto_share_state
                 as_st = load_auto_share_state(storage_read_text)
                 as_st["manualTriggerAt"] = int(time.time() * 1000)
                 as_st["manualTriggerCount"] = 6
+                save_auto_share_state(as_st, storage_write_bytes)
+            except Exception:
+                pass
+        elif not bool(current.get("autoShareEnabled")) and prev_auto_share:
+            try:
+                from suko_auto_share import load_auto_share_state, save_auto_share_state
+                as_st = load_auto_share_state(storage_read_text)
+                as_st["manualTriggerAt"] = 0
                 save_auto_share_state(as_st, storage_write_bytes)
             except Exception:
                 pass

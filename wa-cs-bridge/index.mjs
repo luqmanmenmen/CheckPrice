@@ -56,7 +56,7 @@ const CLI_PAIR_MODE =
 
 const AUTH_DIR = path.resolve(process.env.WA_AUTH_DIR || "./auth_info");
 const HEALTH_PORT = Number(process.env.PORT || process.env.WA_BRIDGE_HEALTH_PORT || 0);
-const BRIDGE_VERSION = "v2.5-autoshare-6pack";
+const BRIDGE_VERSION = "v2.6-autoshare-onoff-clean";
 const logger = pino({ level: "silent" });
 const startUnixSec = Math.floor(Date.now() / 1000);
 
@@ -1376,6 +1376,10 @@ async function runAutoProductShare(forceNow = false) {
         ? await fetchImageBuffer(item.imageUrl, item.fallbackImages || [])
         : null;
 
+      // Simulasi ritme manusia (composing + jeda acak 6-12 dtk) agar 100% aman dari deteksi spam bot WhatsApp!
+      await currentSock.sendPresenceUpdate("composing", res.targetGroupId).catch(() => {});
+      await sleep(1500 + Math.floor(Math.random() * 1400));
+
       let sent;
       if (imgBuf) {
         sent = await currentSock.sendMessage(res.targetGroupId, {
@@ -1394,12 +1398,14 @@ async function runAutoProductShare(forceNow = false) {
       } else {
         sent = await currentSock.sendMessage(res.targetGroupId, { text: item.caption });
       }
+      await currentSock.sendPresenceUpdate("paused", res.targetGroupId).catch(() => {});
       trackBotSent(sent);
       console.log(
         `   ✅ [${i + 1}/${items.length}] ${item.meta?.categoryLabel || "-"} (${item.meta?.shareType || "-"}) — ${item.meta?.title || "-"}`
       );
       if (i < items.length - 1) {
-        await sleep(3800);
+        const humanGapMs = 6000 + Math.floor(Math.random() * 6000);
+        await sleep(humanGapMs);
       }
     }
     scheduleAuthCloudBackup(false);
@@ -1412,18 +1418,20 @@ async function runAutoProductShare(forceNow = false) {
 }
 
 function startAutoProductShareLoop() {
+  let nextJitterMs = Math.floor(Math.random() * 45_000);
   const step = async () => {
     try {
       if (isConnected && currentSock && currentAutoShareEnabled && !isAutoShareRunning) {
-        const minGapMs = Math.max(3, currentAutoShareIntervalMins) * 60 * 1000;
-        if (Date.now() - lastAutoShareCheckMs >= Math.min(minGapMs, 5 * 60 * 1000)) {
+        const minGapMs = Math.max(5, currentAutoShareIntervalMins) * 60 * 1000;
+        if (Date.now() - lastAutoShareCheckMs >= minGapMs + nextJitterMs) {
+          nextJitterMs = 15_000 + Math.floor(Math.random() * 65_000);
           await runAutoProductShare(false);
         }
       }
     } catch {}
-    setTimeout(step, 45_000);
+    setTimeout(step, 20_000);
   };
-  setTimeout(step, 35_000);
+  setTimeout(step, 25_000);
 }
 
 // ─── AUTO-LAUNCHER PROMO KAMIS 00:00 WIB (24/7 CLOUD DAEMON SCHEDULER) ───────

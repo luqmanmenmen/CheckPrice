@@ -1062,8 +1062,8 @@ export default function WaCsSuperAdminPage() {
             </div>
           </div>
 
-          {/* Konfigurasi Grup Target, Interval & Jam Aktif */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 bg-indigo-50/50 border border-indigo-100 rounded-xl p-3.5">
+          {/* Konfigurasi Grup Target & Interval Menit (Pure ON/OFF tanpa jam aktif agar anti-bug & anti-numpuk) */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 bg-indigo-50/50 border border-indigo-100 rounded-xl p-3.5 items-end">
             <div className="md:col-span-2 space-y-1">
               <label className="text-[11px] font-extrabold text-indigo-900 uppercase tracking-wider">
                 Grup Tujuan Auto-Share
@@ -1100,58 +1100,34 @@ export default function WaCsSuperAdminPage() {
 
             <div className="space-y-1">
               <label className="text-[11px] font-extrabold text-indigo-900 uppercase tracking-wider">
-                Interval (Menit)
+                Jeda Interval (Menit)
               </label>
-              <input
-                type="number"
-                min={3}
-                max={180}
-                value={config.autoShareIntervalMinutes ?? 10}
-                onChange={(e) =>
-                  setConfig({
-                    ...config,
-                    autoShareIntervalMinutes: Math.max(3, Math.min(180, Number(e.target.value) || 10)),
-                  })
-                }
-                className="w-full px-3 py-2 rounded-xl border border-indigo-200 bg-white text-xs font-bold text-slate-800"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[11px] font-extrabold text-indigo-900 uppercase tracking-wider">
-                Jam Aktif WIB
-              </label>
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-2">
                 <input
                   type="number"
-                  min={0}
-                  max={23}
-                  value={config.autoShareStartHourWib ?? 10}
+                  min={5}
+                  max={180}
+                  value={config.autoShareIntervalMinutes ?? 20}
                   onChange={(e) =>
-                    setConfig({ ...config, autoShareStartHourWib: Math.max(0, Math.min(23, Number(e.target.value) || 0)) })
+                    setConfig({
+                      ...config,
+                      autoShareIntervalMinutes: Math.max(5, Math.min(180, Number(e.target.value) || 20)),
+                    })
                   }
-                  className="w-16 px-2 py-2 rounded-xl border border-indigo-200 bg-white text-xs font-bold text-slate-800 text-center"
-                />
-                <span className="text-xs font-bold text-slate-500">s/d</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={23}
-                  value={config.autoShareEndHourWib ?? 20}
-                  onChange={(e) =>
-                    setConfig({ ...config, autoShareEndHourWib: Math.max(0, Math.min(23, Number(e.target.value) || 20)) })
-                  }
-                  className="w-16 px-2 py-2 rounded-xl border border-indigo-200 bg-white text-xs font-bold text-slate-800 text-center"
+                  className="w-full px-3 py-2 rounded-xl border border-indigo-200 bg-white text-xs font-bold text-slate-800"
                 />
                 <button
                   type="button"
                   disabled={saving}
                   onClick={() => handleSaveSettings()}
-                  className="ml-auto px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer shrink-0"
                 >
                   Simpan
                 </button>
               </div>
+              <p className="text-[10px] font-semibold text-emerald-700">
+                🛡️ Aman anti-ban WA: <strong>15–30 menit</strong> (+ jeda acak manusia otomatis). Hindari &lt; 10 menit nonstop!
+              </p>
             </div>
           </div>
 
