@@ -774,11 +774,21 @@ def query_promotion(kind: str, code: str, cookie: str, account: str, normal_pric
 
     best: Optional[Dict[str, Any]] = None
     for pr in promos:
+        brid = str(pr.get("BusinessRuleId") or pr.get("BRID") or "").strip()
         dtype = str(pr.get("DiscountType") or "").strip()
         msg = str(pr.get("Message") or "").strip()
         br_name = str(pr.get("BusinessRuleName") or "").strip()
         ev_desc = str(pr.get("EventDesc") or "").strip()
-        acara = (ev_desc or br_name or msg or "Promo Live luqman org")[:120]
+        action_id = str(pr.get("ActionId") or pr.get("ActionID") or "").strip()
+
+        # Prioritaskan BR-NAME (nama program promo asli, misal "MUKU SBY 30%") + MESSAGE,
+        # JANGAN pakai EventDesc ("Scan Item") sebagai nama acara promo!
+        clean_ev = "" if ev_desc.lower() in ("scan item", "scan", "item") else ev_desc
+        if br_name and msg and br_name.lower() not in msg.lower():
+            acara = f"{br_name} — {msg}"[:120]
+        else:
+            acara = (br_name or msg or clean_ev or "Promo Live Store")[:120]
+
         try:
             pct = float(pr.get("DiscountPercentage") or 0)
         except Exception:
@@ -788,16 +798,52 @@ def query_promotion(kind: str, code: str, cookie: str, account: str, normal_pric
         except Exception:
             amt = 0.0
 
+        # Deteksi apakah promo ini diskon satuan langsung (Line Discount) atau promo bersyarat/bundling (Buy 2, B1G1, Min. Belanja)
+        rule_text = f"{br_name} {msg} {action_id} {dtype}".lower()
+        is_line_discount = ("line" in action_id.lower()) or (not action_id)
+        is_conditional_bundle = bool(
+            re.search(
+                r"\b(buy\s*[2-9]|beli\s*[2-9]|buy\s*1\s*get\s*1|b1g1|b2g1|get\s*\d|gratis\s*\d|"
+                r"min(?:imal)?\.?\s*(?:belanja|pembelian|trx|transaksi|\d+\s*pcs)|bundle|bundling|paket)\b",
+                rule_text,
+            )
+            or ("transaction" in action_id.lower())
+        )
+
         is_pct = ("percent" in dtype.lower() and pct > 0) or (pct > 0 and amt <= 0)
         is_amt = (any(k in dtype.lower() for k in ("amount", "price", "rupiah")) and amt > 0) or (amt > 0 and not is_pct)
 
+        promo_meta = {
+            "brid": brid,
+            "brName": br_name,
+            "message": msg,
+            "discType": dtype,
+            "actionId": action_id,
+            "eventDesc": ev_desc,
+        }
+
         cand: Optional[Dict[str, Any]] = None
-        if is_pct and normal_price > 0 and 1 <= pct <= 95:
+        if is_conditional_bundle:
+            # Promo bersyarat / bundling (misal Buy 1 Get 1 / Beli 2 Disc 30%): JANGAN potong harga satuan 1 pcs!
+            cand = {
+                "hargaPromo": None,
+                "diskon": (br_name or msg)[:40],
+                "discountType": "BUNDLING",
+                "acara": acara,
+                "promoDetail": promo_meta,
+            }
+        elif is_pct and is_line_discount and normal_price > 0 and 1 <= pct <= 95:
             hp = int(round((normal_price * (100 - pct)) / 100))
             if 0 < hp < normal_price:
                 pct_str = f"{int(pct)}%" if pct == int(pct) else f"{pct:g}%"
-                cand = {"hargaPromo": hp, "diskon": pct_str, "discountType": "PERCENT", "acara": acara}
-        elif is_amt and amt > 0:
+                cand = {
+                    "hargaPromo": hp,
+                    "diskon": pct_str,
+                    "discountType": "PERCENT",
+                    "acara": acara,
+                    "promoDetail": promo_meta,
+                }
+        elif is_amt and is_line_discount and amt > 0:
             is_sp = any(k in dtype.lower() for k in ("special", "fixed", "nett", "price")) or bool(
                 re.search(r"\b(sp|special\s*price|harga\s*spesial)\b", f"{msg} {br_name}", re.IGNORECASE)
             )
@@ -808,9 +854,16 @@ def query_promotion(kind: str, code: str, cookie: str, account: str, normal_pric
                     "diskon": "SP" if is_sp else f"POT Rp {int(round(amt)):,}".replace(",", "."),
                     "discountType": "SPECIAL_PRICE",
                     "acara": acara,
+                    "promoDetail": promo_meta,
                 }
-        elif msg and re.search(r"(buy|beli|get|gratis|disc|diskon|promo|off|%)", f"{msg} {br_name}", re.IGNORECASE):
-            cand = {"hargaPromo": None, "diskon": (msg or br_name)[:40], "discountType": "BUNDLING", "acara": acara}
+        elif (msg or br_name) and re.search(r"(buy|beli|get|gratis|disc|diskon|promo|off|%)", f"{msg} {br_name}", re.IGNORECASE):
+            cand = {
+                "hargaPromo": None,
+                "diskon": (br_name or msg)[:40],
+                "discountType": "BUNDLING",
+                "acara": acara,
+                "promoDetail": promo_meta,
+            }
 
         if cand:
             if not best:
