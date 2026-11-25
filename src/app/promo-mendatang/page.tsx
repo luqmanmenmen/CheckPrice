@@ -193,23 +193,27 @@ export default function PromoMendatangPage() {
   const filteredArticles = useMemo(() => {
     const list = data?.articles || [];
     const q = search.trim().toUpperCase();
+    const isSearching = q.length > 0;
     return list.filter((art) => {
-      if (onlyStock && art.totalStok <= 0) return false;
+      // Saat user mengetik pencarian (SKU / Barcode / Artikel / Nama), tampilkan lintas semua status & stok agar tidak pernah "hilang" tersembunyi oleh filter!
+      if (!isSearching) {
+        if (onlyStock && art.totalStok <= 0) return false;
+        if (statusFilter === "ACTION" && art.statusChange === "CONTINUED") return false;
+        if (
+          statusFilter !== "ALL" &&
+          statusFilter !== "ACTION" &&
+          art.statusChange !== statusFilter
+        ) {
+          return false;
+        }
+      }
       if (brandFilter !== "ALL") {
         const b = (art.brand || "").toUpperCase();
         if (brandFilter === "SUKO" && !b.includes("SUKO")) return false;
         if (brandFilter === "ZES" && b !== "ZES") return false;
         if (brandFilter === "MUKU" && (b.includes("SUKO") || b === "ZES")) return false;
       }
-      if (statusFilter === "ACTION" && art.statusChange === "CONTINUED") return false;
-      if (
-        statusFilter !== "ALL" &&
-        statusFilter !== "ACTION" &&
-        art.statusChange !== statusFilter
-      ) {
-        return false;
-      }
-      if (q) {
+      if (isSearching) {
         const hitHeader =
           art.article.toUpperCase().includes(q) ||
           art.description.toUpperCase().includes(q) ||
@@ -469,9 +473,14 @@ export default function PromoMendatangPage() {
           </div>
         ) : (
           <div className="space-y-2.5">
-            <div className="flex items-center justify-between text-xs text-slate-500 px-1">
+            <div className="flex items-center justify-between text-xs text-slate-500 px-1 flex-wrap gap-1.5">
               <span className="font-bold">
                 Menampilkan <strong className="text-slate-900">{filteredArticles.length}</strong> Artikel siap cek POP
+                {search.trim() ? (
+                  <span className="ml-1.5 text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-full">
+                    🔍 Pencarian lintas semua status &amp; stok
+                  </span>
+                ) : null}
               </span>
               {data.generatedAt && (
                 <span>
@@ -489,7 +498,31 @@ export default function PromoMendatangPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {filteredArticles.slice(0, 150).map((art) => {
                 const badge = STATUS_BADGE[art.statusChange] || STATUS_BADGE.CONTINUED;
-                const isOpen = Boolean(expandedArt[art.article]);
+                const qUpper = search.trim().toUpperCase();
+                const matchedVariant = qUpper
+                  ? art.variants.find(
+                      (v) =>
+                        v.sku.toUpperCase() === qUpper ||
+                        (v.barcode || "").toUpperCase() === qUpper ||
+                        v.sku.toUpperCase().includes(qUpper) ||
+                        (v.barcode || "").toUpperCase().includes(qUpper)
+                    ) || null
+                  : null;
+                const isOpen = Boolean(expandedArt[art.article]) || Boolean(matchedVariant);
+                const promoPrices = Array.from(
+                  new Set(
+                    art.variants
+                      .map((v) => v.nextHargaPromo)
+                      .filter((p): p is number => typeof p === "number" && p > 0)
+                  )
+                ).sort((a, b) => a - b);
+                const hasMultiPrice = promoPrices.length > 1;
+                const displayCurrentPromo = matchedVariant ? matchedVariant.currentPromo : art.currentPromo;
+                const displayCurrentDiskon = matchedVariant ? matchedVariant.currentDiskon : art.currentDiskon;
+                const displayNextPromo = matchedVariant ? matchedVariant.nextHargaPromo : art.nextHargaPromo;
+                const displayNextDiskon = matchedVariant ? matchedVariant.nextDiskon : art.nextDiskon;
+                const displayNextType = matchedVariant ? matchedVariant.nextDiscountType : art.nextDiscountType;
+                const displayNextAcara = matchedVariant ? matchedVariant.nextAcara : art.nextAcara;
                 return (
                   <div
                     key={art.article}
@@ -526,6 +559,11 @@ export default function PromoMendatangPage() {
                           <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200">
                             Stok {art.totalStok} pcs ({art.variantCount} var)
                           </span>
+                          {hasMultiPrice && (
+                            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 border border-amber-300">
+                              Beda Warna Beda Harga
+                            </span>
+                          )}
                         </div>
 
                         <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 leading-snug whitespace-normal break-words">
@@ -533,6 +571,11 @@ export default function PromoMendatangPage() {
                         </h3>
                         <p className="text-[11px] text-slate-500 mt-0.5">
                           {art.brand} • {art.dept}
+                          {matchedVariant ? (
+                            <span className="ml-1.5 font-extrabold text-orange-700">
+                              • Fokus SKU {matchedVariant.sku} ({matchedVariant.color || "-"} {matchedVariant.size || "-"})
+                            </span>
+                          ) : null}
                         </p>
 
                         {/* Perbandingan Harga Berjalan vs Harga POP Mendatang */}
@@ -540,20 +583,24 @@ export default function PromoMendatangPage() {
                           <div>
                             <div className="text-[10px] font-bold text-slate-400 uppercase">Sekarang (Berjalan)</div>
                             <div className="text-xs font-extrabold text-slate-700">
-                              {art.currentPromo
-                                ? formatRupiah(art.currentPromo)
-                                : art.currentDiskon || `${formatRupiah(art.hargaNormal)} (Normal)`}
+                              {displayCurrentPromo
+                                ? formatRupiah(displayCurrentPromo)
+                                : displayCurrentDiskon || `${formatRupiah(art.hargaNormal)} (Normal)`}
                             </div>
                           </div>
                           <div>
-                            <div className="text-[10px] font-bold text-orange-600 uppercase">POP Baru (H-2 Draft)</div>
+                            <div className="text-[10px] font-bold text-orange-600 uppercase">
+                              {matchedVariant ? `POP Baru (${matchedVariant.color || "SKU"})` : "POP Baru (H-2 Draft)"}
+                            </div>
                             <div className="text-xs sm:text-sm font-black text-rose-600">
-                              {art.nextHargaPromo
-                                ? formatRupiah(art.nextHargaPromo)
-                                : art.nextDiskon || art.nextDiscountType || art.nextAcara || "-"}
-                              {art.nextHargaPromo && (art.nextDiskon || art.nextDiscountType) ? (
+                              {!matchedVariant && hasMultiPrice
+                                ? `${formatRupiah(promoPrices[0])} – ${formatRupiah(promoPrices[promoPrices.length - 1])}`
+                                : displayNextPromo
+                                  ? formatRupiah(displayNextPromo)
+                                  : displayNextDiskon || displayNextType || displayNextAcara || "-"}
+                              {(matchedVariant || !hasMultiPrice) && displayNextPromo && (displayNextDiskon || displayNextType) ? (
                                 <span className="ml-1 text-[10px] font-bold text-orange-700">
-                                  ({art.nextDiskon || art.nextDiscountType})
+                                  ({displayNextDiskon || displayNextType})
                                 </span>
                               ) : null}
                             </div>
@@ -569,24 +616,34 @@ export default function PromoMendatangPage() {
                     {isOpen && (
                       <div className="pt-2 border-t border-slate-100 space-y-1.5 text-xs">
                         <div className="flex items-center justify-between text-[11px] text-slate-500">
-                          <span>Acara: <strong>{art.nextAcara || "-"}</strong></span>
+                          <span>Acara: <strong>{displayNextAcara || art.nextAcara || "-"}</strong></span>
                           <span>Sumber: <span className="font-mono">{art.sourceFile || "-"}</span></span>
                         </div>
                         <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 max-h-56 overflow-y-auto">
-                          {art.variants.map((v) => (
-                            <div key={v.sku} className="p-2 rounded-xl bg-slate-50 border border-slate-200/80 text-[11px]">
-                              <div className="font-black text-slate-800">{v.color || "-"} • {v.size || "-"}</div>
-                              <div className="font-mono text-[10px] text-slate-500">SKU {v.sku}</div>
-                              <div className="flex items-center justify-between mt-1">
-                                <span className="font-bold text-rose-600">
-                                  {v.nextHargaPromo
-                                    ? formatRupiah(v.nextHargaPromo)
-                                    : v.nextDiskon || v.nextDiscountType || v.nextAcara || "-"}
-                                </span>
-                                <span className="text-[10px] font-bold text-emerald-700">Stok {v.stok}</span>
+                          {art.variants.map((v) => {
+                            const isMatchedV = Boolean(matchedVariant && v.sku === matchedVariant.sku);
+                            return (
+                              <div
+                                key={v.sku}
+                                className={`p-2 rounded-xl border text-[11px] ${
+                                  isMatchedV
+                                    ? "bg-orange-50 border-orange-400 ring-2 ring-orange-200"
+                                    : "bg-slate-50 border-slate-200/80"
+                                }`}
+                              >
+                                <div className="font-black text-slate-800">{v.color || "-"} • {v.size || "-"}</div>
+                                <div className="font-mono text-[10px] text-slate-500">SKU {v.sku}</div>
+                                <div className="flex items-center justify-between mt-1">
+                                  <span className="font-bold text-rose-600">
+                                    {v.nextHargaPromo
+                                      ? formatRupiah(v.nextHargaPromo)
+                                      : v.nextDiskon || v.nextDiscountType || v.nextAcara || "-"}
+                                  </span>
+                                  <span className="text-[10px] font-bold text-emerald-700">Stok {v.stok}</span>
+                                </div>
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     )}
