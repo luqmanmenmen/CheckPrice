@@ -339,7 +339,8 @@ FORBIDDEN_INTERNAL_TERMS = [
 ]
 
 STOCK_QTY_LEAK_RE = re.compile(
-    r"(?:stok(?:nya)?|sisa(?:\s+stok)?|tersisa|tinggal|qty|terjual|laku)\s*[:=]?\s*\d+\s*(?:pcs|unit|buah|biji|pasang)?",
+    r"\b(?:stok(?:nya)?|sisa(?:\s+stok)?|tersisa|qty|terjual)\s*[:=]?\s*\d+\s*(?:pcs|unit|buah|biji|pasang)?\b"
+    r"|\b(?:tinggal|laku)\s+\d+(?!\s*(?:menit|jam|hari|minggu|bulan|tahun|detik|%|persen|rb|ribu|k)\b)\s*(?:pcs|unit|buah|biji|pasang)?\b",
     re.IGNORECASE,
 )
 
@@ -1394,11 +1395,19 @@ def _extract_deterministic_plan(
         and not is_asking_or_viewing
         and re.search(r"\b(mau|ambil|keep|pesan|order|fix|beli)\b", low)
     )
+    member_phone_m = re.search(r"\b((?:08|628)\d{7,11})\b", clean)
+    has_member_order_signal = bool(
+        member_phone_m
+        and re.search(r"\b(member(?:nya)?|pilih|ambil|mau|beli|keep|order|pesan|qris|bayar)\b", low)
+    )
     is_explicit_checkout = bool(
-        re.search(
+        has_member_order_signal
+        or re.search(
             r"\b(mau\s+keep|fix\s+(?:aku\s+)?(?:mau\s+)?(?:beli|order|ambil|keep)|jadi\s+beli|mau\s+transfer|mau\s+bayar|"
             r"kirim\s+rekening|gimana\s+cara\s+bayar|mau\s+order|qris|tak\s+tf|tak\s+gosend|ambil\s+store|"
-            r"ganti\s+jadi\s+yang\s+(?:no|nomor)|ambil\s+\d+\s*pcs|link\s+(?:buat\s+)?beli)\b",
+            r"ganti\s+jadi\s+yang\s+(?:no|nomor)|ambil\s+\d+\s*pcs|link\s+(?:buat\s+)?beli|"
+            r"aku\s+pilih\s+ini|pilih\s+yang\s+ini|yang\s+(?:ini|itu)\s+aja\s+deh|"
+            r"(?:ukuran(?:nya)?|size(?:nya)?)\s+(?:xxs|xs|s|m|l|xl|xxl|2xl|3xl)\s+(?:aja|saja|ya|kak|dong))\b",
             low,
         )
     )
@@ -1414,6 +1423,7 @@ def _extract_deterministic_plan(
             "complexity": "HEAVY",
             "genderHint": str((session or {}).get("preferredGender") or ""),
             "referencedNumber": final_ref,
+            "memberPhone": member_phone_m.group(1) if member_phone_m else "",
             "wantsMoreLikeRef": False,
             "wantsColorPhotos": False,
             "wantsPromo": False,
@@ -1453,11 +1463,11 @@ def _extract_deterministic_plan(
 
     asked_other_brand = next((b for b in OTHER_BRAND_WORDS if re.search(rf"\b{re.escape(b)}\b", low)), "")
 
-    sku_match = re.search(r"\b(\d{7,13})\b", f"{clean} {quoted_clean}")
+    sku_candidates = [m for m in re.findall(r"\b(\d{7,13})\b", f"{clean} {quoted_clean}") if not re.match(r"^(?:08|628)", m)]
     art_match = re.search(r"\b([A-Z]{1,4}\d[A-Z0-9\-]{3,12})\b", f"{clean} {quoted_clean}".upper())
     sku_or_article = ""
-    if sku_match:
-        sku_or_article = sku_match.group(1)
+    if sku_candidates:
+        sku_or_article = sku_candidates[0]
     elif art_match and not re.match(r"^(?:RP|IDR|WA|HP|COD|08)\d", art_match.group(1)):
         sku_or_article = art_match.group(1)
 
@@ -3730,28 +3740,63 @@ def _process_incoming_or_simulate(payload: Dict[str, Any], is_simulation: bool =
             last_query_meta=lq_meta,
         )
 
-    # Notifikasi otomatis ke WA PIC (081296393972) saat customer siap ORDER/KEEP, CEK FISIK, KOMPLAIN, atau GROSIR/B2B!
+    # Notifikasi rapi ke WA PIC/Staf Toko (081296393972) saat data pesanan siap diproses, butuh cek fisik, komplain, atau B2B!
+    # PENTING: Pada ORDER_INTENT, hanya jeda & kirim ringkasan ke staf jika customer sudah menyebut minimal
+    # ukuran / no. member / konfirmasi bayar/ambil — agar saat customer baru sebut warna ("Yang black aja deh")
+    # lalu lanjut sebut ukuran ("Ukurannya m aja ya"), bot TETAP bisa membalas & melengkapi datanya dulu!
     notify_pic_phone = None
     notify_pic_message = None
     pause_after_reply = False
-    if plan.get("intent") in ("ORDER_INTENT", "PHYSICAL_CHECK", "COMPLAINT", "WHOLESALE_B2B"):
+    order_msg_low = str(message or "").lower()
+    has_order_size_or_ready = bool(
+        plan.get("memberPhone")
+        or re.search(r"\b(?:08|628)\d{7,11}\b", message)
+        or re.search(r"\b(?:size|ukuran|sz)\s*[:=]?\s*(?:xxs|xs|s|m|l|xl|xxl|2xl|3xl|\d{2})\b", order_msg_low)
+        or re.search(r"\b(xxs|xs|xxl|2xl|3xl|xl)\b", order_msg_low)
+        or re.search(r"\b(fix\s+(?:beli|order|ambil|keep)|qris|transfer|tf|bayar|gosend|ambil\s+(?:di\s+)?store|ambil\s+\d+\s*pcs)\b", order_msg_low)
+    )
+    should_notify_pic = (
+        plan.get("intent") in ("PHYSICAL_CHECK", "COMPLAINT", "WHOLESALE_B2B")
+        or (plan.get("intent") == "ORDER_INTENT" and has_order_size_or_ready)
+    )
+    if should_notify_pic:
         notify_pic_phone = cfg.get("picAlertPhone") or "6281296393972"
-        last_prods_str = ", ".join(
-            f"No.{p.get('num')} {p.get('name')}" for p in ((customer_session or {}).get("lastProducts") or [])
-        ) or (quoted_message[:100] if quoted_message else "-")
-        tag = (
-            "🛒 *[CLOSING / SIAP QRIS SUKO]*" if plan["intent"] == "ORDER_INTENT"
-            else "📸 *[BUTUH CEK FISIK / FOTO ASLI]*" if plan["intent"] == "PHYSICAL_CHECK"
-            else "🏢 *[PERMINTAAN GROSIR / B2B SUKO]*" if plan["intent"] == "WHOLESALE_B2B"
-            else "⚠️ *[ESKALASI KOMPLAIN CUSTOMER]*"
-        )
-        notify_pic_message = (
-            f"{tag}\n"
-            f"• Customer: *{sender_name}* ({sender_digits or sender})\n"
-            f"• Pesan: \"{message}\"\n"
-            f"• Konteks produk: {last_prods_str}\n"
-            f"• Bot otomatis minggir sementara agar Kakak bisa langsung handle!"
-        )
+        lp_list = (customer_session or {}).get("lastProducts") or []
+        ref_n = int(plan.get("referencedNumber") or 0)
+        picked_prod = next((p for p in lp_list if int(p.get("num") or 0) == ref_n), None) if (lp_list and ref_n) else None
+        if picked_prod:
+            prod_str = f"No.{picked_prod.get('num')} {picked_prod.get('name')} ({picked_prod.get('hargaPromoText') or picked_prod.get('hargaNormalText') or '-'})"
+        elif lp_list:
+            prod_str = ", ".join(f"No.{p.get('num')} {p.get('name')}" for p in lp_list[:3])
+        else:
+            prod_str = quoted_message[:100] if quoted_message else "-"
+
+        mem_m = plan.get("memberPhone") or (re.search(r"\b((?:08|628)\d{7,11})\b", message).group(1) if re.search(r"\b((?:08|628)\d{7,11})\b", message) else "")
+        cust_contact = sender_digits or sender
+        if plan["intent"] == "ORDER_INTENT":
+            header = "📋 *RINGKASAN PESANAN PELANGGAN — SUKO PTC*"
+            footer = "_Layanan otomatis dijeda sementara agar staf toko dapat melanjutkan konfirmasi & proses QRIS._"
+        elif plan["intent"] == "PHYSICAL_CHECK":
+            header = "📸 *PERMINTAAN CEK FISIK / REAL PICT — SUKO PTC*"
+            footer = "_Layanan otomatis dijeda sementara agar staf toko dapat membantu pengecekan fisik langsung._"
+        elif plan["intent"] == "WHOLESALE_B2B":
+            header = "🏢 *PENGAJUAN PEMBELIAN JUMLAH BESAR — SUKO PTC*"
+            footer = "_Layanan otomatis dijeda sementara agar PIC toko dapat menindaklanjuti pengajuan ini._"
+        else:
+            header = "⚠️ *ESKALASI LAYANAN PELANGGAN — SUKO PTC*"
+            footer = "_Layanan otomatis dijeda sementara agar PIC toko dapat membantu penyelesaian secara langsung._"
+
+        info_lines = [
+            header,
+            "────────────────────",
+            f"• *Pelanggan:* {sender_name} ({cust_contact})",
+            f"• *Produk:* {prod_str}",
+            f"• *Catatan:* \"{message}\"",
+        ]
+        if mem_m:
+            info_lines.append(f"• *No. Member:* {mem_m}")
+        info_lines.extend(["────────────────────", footer])
+        notify_pic_message = "\n".join(info_lines)
         pause_after_reply = True
 
     reason = (
