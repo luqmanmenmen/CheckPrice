@@ -39,6 +39,10 @@ const PROMO_WEBHOOK_URL = (
   process.env.WA_PROMO_WEBHOOK_URL ||
   API_URL.replace(/\/api\/py_wa_cs\/?$/, "/api/webhook/wa-promo")
 ).trim();
+const PROMO_UPCOMING_URL = (
+  process.env.WA_PROMO_UPCOMING_URL ||
+  API_URL.replace(/\/api\/py_wa_cs\/?$/, "/api/promo-upcoming")
+).trim();
 const API_SECRET = (
   process.env.WA_CS_SECRET ||
   process.env.WEBHOOK_SECRET ||
@@ -52,7 +56,7 @@ const CLI_PAIR_MODE =
 
 const AUTH_DIR = path.resolve(process.env.WA_AUTH_DIR || "./auth_info");
 const HEALTH_PORT = Number(process.env.PORT || process.env.WA_BRIDGE_HEALTH_PORT || 0);
-const BRIDGE_VERSION = "v2.2-promo719-fullauth";
+const BRIDGE_VERSION = "v2.3-promo719-thursday-auto";
 const logger = pino({ level: "silent" });
 const startUnixSec = Math.floor(Date.now() / 1000);
 
@@ -406,7 +410,9 @@ async function executeWaPromoBatch(sock, jid, cmd, docEntries, quoteMsg = null) 
       `• Folder Cloud: \`PROMO/${folder}\`\n` +
       `• File Terunggah (${uploaded.length}):\n${fileSummary}\n` +
       `${warnPart}\n` +
-      `🚀 Mesin Python GitHub Actions sedang memproses promo otomatis (±30–60 detik).\n` +
+      (cmd.mode === "upcoming"
+        ? `⏰ *Auto-Aktif Hari Kamis (00:00 WIB):* Sistem otomatis membaca periode tanggal & bulan dari nama file Excel, menyimpan aman di H- tanpa mengganggu promo berjalan, lalu otomatis mengaktifkannya tepat hari Kamis pukul 00:00 WIB!\n`
+        : `🚀 Mesin Python GitHub Actions sedang menerapkan promo langsung ke harga kasir (±30–60 detik).\n`) +
       `🔗 Pantau hasil: ${targetPageUrl}`
     : `⚠️ *File sudah masuk Turso Storage, tapi trigger mesin gagal.*\n` +
       `• Folder: \`PROMO/${folder}\`\n` +
@@ -1305,6 +1311,100 @@ async function startControlPoller() {
   setTimeout(tick, isConnected ? 60_000 : 4_000);
 }
 
+// ─── AUTO-LAUNCHER PROMO KAMIS 00:00 WIB (24/7 CLOUD DAEMON SCHEDULER) ───────
+// Memantau draf promo H- (`/api/promo-upcoming`). Begitu hari-H launching (Kamis 00:00 WIB)
+// tiba sesuai tanggal & bulan yang dianalisis dari nama file Excel, otomatis memicu update
+// promo ke harga kasir + mengirim laporan konfirmasi ke WhatsApp PIC!
+const notifiedAutoLaunchFolders = new Set();
+
+function getWibNowInfo() {
+  const wib = new Date(Date.now() + 7 * 3600 * 1000);
+  const iso = wib.toISOString();
+  return {
+    dateStr: iso.slice(0, 10), // YYYY-MM-DD WIB
+    hour: Number(iso.slice(11, 13)),
+    minute: Number(iso.slice(14, 16)),
+    timeStr: iso.slice(11, 16), // HH:MM WIB
+  };
+}
+
+function startUpcomingPromoAutoLauncher() {
+  const checkAndLaunch = async () => {
+    try {
+      const wib = getWibNowInfo();
+      const res = await fetch(`${PROMO_UPCOMING_URL}?t=${Date.now()}`, {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(12000),
+      });
+      if (res.ok) {
+        const draft = await res.json().catch(() => null);
+        const folder = String(draft?.sourceFolder || draft?.folderName || "").trim();
+        const launchDate = String(draft?.effectiveLaunchDate || draft?.fromDate || "").trim().slice(0, 10);
+        const alreadyPromoted = Boolean(draft?.autoPromoted || draft?.autoActivatedAt);
+
+        if (
+          draft?.available &&
+          folder &&
+          launchDate &&
+          !alreadyPromoted &&
+          !notifiedAutoLaunchFolders.has(folder) &&
+          wib.dateStr >= launchDate
+        ) {
+          console.log(
+            `⏰ [AUTO-LAUNCH KAMIS ${wib.timeStr} WIB] Hari-H tiba (${wib.dateStr} >= ${launchDate})! Mengaktifkan ${folder}...`
+          );
+          const actRes = await fetch(PROMO_WEBHOOK_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-WA-CS-Secret": API_SECRET,
+            },
+            body: JSON.stringify({
+              promoMode: "activate-upcoming",
+              folder,
+              launchDate,
+            }),
+            signal: AbortSignal.timeout(25000),
+          });
+          const actJson = await actRes.json().catch(() => ({}));
+          if (actRes.ok && actJson?.success && !actJson?.skipped) {
+            notifiedAutoLaunchFolders.add(folder);
+            console.log(`🎉 [AUTO-LAUNCH KAMIS] Berhasil menyalakan mesin Python untuk ${folder}!`);
+            if (currentSock && isConnected) {
+              const picJid = `${DEFAULT_ADMIN_PHONE}@s.whatsapp.net`;
+              const totalFiles = Array.isArray(draft.sourceFiles) ? draft.sourceFiles.length : 0;
+              const notifMsg =
+                `🎉 *AUTO-LAUNCH PROMO BARU KAMIS AKTIF (${wib.timeStr} WIB)!*\n\n` +
+                `• Periode Promo: *${draft.fromDate || launchDate} s/d ${draft.toDate || "?"}*\n` +
+                `• Sumber Draf H-: \`PROMO/${folder}\` (${totalFiles} file • ${draft.totalArticles || 0} artikel)\n\n` +
+                `🚀 Mesin Python otomatis memperbarui harga kasir hari ini & membersihkan promo minggu kemarin (±30–60 detik).\n` +
+                `🔗 Cek live: https://www.luqmanganteng.my.id/super-admin/sinkronisasi-harian`;
+              await currentSock
+                .sendMessage(picJid, { text: notifMsg })
+                .then(trackBotSent)
+                .catch(() => {});
+            }
+          } else if (actJson?.alreadyTriggered) {
+            notifiedAutoLaunchFolders.add(folder);
+          }
+        }
+      }
+    } catch (err) {
+      console.log("⚠️ [AUTO-LAUNCH WATCHER] Cek gagal sementara:", err?.message || err);
+    }
+
+    // Presisi tinggi tiap 60 detik di sekitar pergantian hari (23:55 - 00:30 WIB), hemat tiap 10 menit di jam lain!
+    const nowWib = getWibNowInfo();
+    const nearMidnight =
+      (nowWib.hour === 23 && nowWib.minute >= 55) || (nowWib.hour === 0 && nowWib.minute <= 30);
+    const nextCheckMs = nearMidnight ? 60_000 : 10 * 60_000;
+    setTimeout(checkAndLaunch, nextCheckMs);
+  };
+
+  // Cek perdana 20 detik setelah daemon online (aman bila container baru start pas jam 00:00 WIB!)
+  setTimeout(checkAndLaunch, 20_000);
+}
+
 if (HEALTH_PORT > 0) {
   const srv = http.createServer((req, res) => {
     const body = JSON.stringify({
@@ -1337,7 +1437,10 @@ async function handleGracefulShutdown(sig) {
 process.on("SIGTERM", () => handleGracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => handleGracefulShutdown("SIGINT"));
 
-startSocket().then(() => startControlPoller()).catch((err) => {
+startSocket().then(() => {
+  startControlPoller();
+  startUpcomingPromoAutoLauncher();
+}).catch((err) => {
   console.error("Fatal error:", err);
   process.exit(1);
 });

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchStorageAnalyticsJson } from "@/lib/productQueryHelpers";
-import { writeTursoStorage } from "@/lib/tursoStorage";
+import { writeTursoStorage, readTursoStorageJson } from "@/lib/tursoStorage";
 import { dispatchToGitHubRunner } from "@/lib/githubDispatcher";
 import { verifyToken } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -9,12 +9,15 @@ export const dynamic = "force-dynamic";
 
 /**
  * GET /api/promo-upcoming
- * Membaca draft promo H-2 / H-1 dari Supabase Storage CDN (`analytics/upcoming-promo.json`)
- * tanpa menyentuh tabel Product (promo berjalan di kasir aman 100%).
+ * Membaca draft promo H-2 / H-1 dari Turso Storage (`analytics/upcoming-promo.json`)
+ * beserta status auto-aktivasi Kamis 00:00 WIB tanpa menyentuh tabel Product.
  */
 export async function GET() {
   try {
-    const draft = await fetchStorageAnalyticsJson("upcoming-promo.json");
+    const [draft, promoLock] = await Promise.all([
+      fetchStorageAnalyticsJson("upcoming-promo.json"),
+      readTursoStorageJson<any>("logs/upcoming-auto-promoted.json").catch(() => null),
+    ]);
     if (!draft) {
       return NextResponse.json({
         success: true,
@@ -22,11 +25,22 @@ export async function GET() {
         message: "Belum ada draf promo H-2 / H-1 yang diproses.",
       });
     }
+    const folder = String(draft.sourceFolder || draft.folderName || "").trim();
+    const lockMatched = Boolean(promoLock && folder && promoLock.folder === folder);
+    const autoActivatedAt =
+      draft.autoActivatedAt || (lockMatched ? promoLock.completedAt || promoLock.triggeredAt || null : null);
     return NextResponse.json(
-      { ...draft, available: true },
+      {
+        ...draft,
+        sourceFolder: folder,
+        effectiveLaunchDate: draft.effectiveLaunchDate || draft.fromDate || null,
+        autoActivatedAt,
+        autoPromoted: Boolean(autoActivatedAt),
+        available: true,
+      },
       {
         headers: {
-          "Cache-Control": "public, max-age=30, s-maxage=120, stale-while-revalidate=300",
+          "Cache-Control": "public, max-age=15, s-maxage=30, stale-while-revalidate=60",
         },
       }
     );

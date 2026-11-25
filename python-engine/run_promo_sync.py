@@ -718,6 +718,102 @@ def _lookup_existing_products(candidate_skus: set, candidate_barcodes: set):
     return ex_map, ex_barcode_map
 
 
+def _next_thursday_promo_window(today_wib: str) -> tuple[str, str]:
+    """
+    Siklus promo ritel standar: KAMIS -> RABU minggu depannya (+6 hari).
+    Jika hari ini sudah Kamis atau hari lain (Jum-Rab) saat upload H-, hitung Kamis terdekat berikutnya.
+    """
+    base = datetime.strptime(today_wib[:10], "%Y-%m-%d").date()
+    # weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
+    days_ahead = (3 - base.weekday()) % 7
+    if days_ahead == 0:
+        days_ahead = 7
+    start_d = base + timedelta(days=days_ahead)
+    end_d = start_d + timedelta(days=6)
+    return start_d.strftime("%Y-%m-%d"), end_d.strftime("%Y-%m-%d")
+
+
+def _resolve_upcoming_period(
+    source_names: list[str],
+    row_froms: list[str],
+    row_tos: list[str],
+    folder_name: str,
+    today_wib: str,
+    explicit_start: str | None = None,
+    explicit_end: str | None = None,
+) -> tuple[str, str, str, str]:
+    """
+    Menentukan periode promo H- paling akurat (start_iso, end_iso, effective_launch_iso, source_label):
+      1. Prioritas 1: Analisis tanggal & bulan dari NAMA FILE EXCEL (misal '26NOV-02DEC2026', '26 NOV-02 DEC 2026').
+      2. Prioritas 2: Kolom tgl_mulai / tgl_akhir di dalam baris isi Excel.
+      3. Prioritas 3: Nama folder (ABAIKAN timestamp upload pada folder 'UPCOMING_WA_*' / 'WA_DIRECT_*'!).
+      4. Fallback: Siklus ritel standar Kamis terdekat berikutnya -> Rabu minggu depannya (+6 hari).
+    """
+    fn_starts: list[str] = []
+    fn_ends: list[str] = []
+    for fname in (source_names or []):
+        _, fs, fe = extract_folder_date_info(fname)
+        if fs:
+            fn_starts.append(fs)
+        if fe:
+            fn_ends.append(fe)
+
+    valid_row_froms = [d for d in (row_froms or []) if d]
+    valid_row_tos = [d for d in (row_tos or []) if d]
+
+    is_wa_timestamp_folder = bool(re.match(r"^(?:UPCOMING_WA|WA_DIRECT)_", (folder_name or "").upper()))
+    fld_start, fld_end = (None, None)
+    if not is_wa_timestamp_folder:
+        if explicit_start:
+            fld_start = explicit_start
+        if explicit_end:
+            fld_end = explicit_end
+        if not fld_start or not fld_end:
+            _, s_f, e_f = extract_folder_date_info(folder_name or "")
+            fld_start = fld_start or s_f
+            fld_end = fld_end or e_f
+
+    period_source = "NEXT_THURSDAY_FALLBACK"
+    start_iso: str | None = None
+    end_iso: str | None = None
+
+    if fn_starts:
+        future_fn = [d for d in fn_starts if d > today_wib]
+        start_iso = min(future_fn) if future_fn else min(fn_starts)
+        end_iso = max(fn_ends) if fn_ends else None
+        period_source = "FILENAME"
+    elif valid_row_froms:
+        future_rf = [d for d in valid_row_froms if d > today_wib]
+        start_iso = min(future_rf) if future_rf else min(valid_row_froms)
+        end_iso = max(valid_row_tos) if valid_row_tos else None
+        period_source = "EXCEL_ROWS"
+    elif fld_start:
+        start_iso = fld_start
+        end_iso = fld_end
+        period_source = "FOLDER_NAME"
+    else:
+        start_iso, end_iso = _next_thursday_promo_window(today_wib)
+        period_source = "NEXT_THURSDAY_FALLBACK"
+
+    if start_iso and not end_iso:
+        try:
+            d0 = datetime.strptime(start_iso[:10], "%Y-%m-%d").date()
+            end_iso = (d0 + timedelta(days=6)).strftime("%Y-%m-%d")
+        except Exception:
+            end_iso = start_iso
+
+    # Pastikan effectiveLaunchDate untuk mode H- tidak jatuh mundur sebelum hari Kamis target jika nama file pakai tgl lampau
+    effective_launch = start_iso
+    if effective_launch and effective_launch <= today_wib:
+        # Jika hari ini bukan Kamis dan tanggal dari file <= hari ini, geser jadwal auto-launch ke Kamis berikutnya
+        today_dt = datetime.strptime(today_wib[:10], "%Y-%m-%d").date()
+        if today_dt.weekday() != 3:
+            next_thu, _ = _next_thursday_promo_window(today_wib)
+            effective_launch = next_thu
+
+    return start_iso, end_iso, effective_launch, period_source
+
+
 def build_upcoming_promo_preview(
     files_to_process: list,
     folder_name: str,
@@ -728,7 +824,7 @@ def build_upcoming_promo_preview(
     """
     MODE PERSIAPAN POP (H-2 / H-1 — 100% READ-ONLY TERHADAP DB KASIR):
     Mem-parsing seluruh file promo mendatang dan membandingkannya dengan promo berjalan,
-    lalu mengunggah JSON siap tampil ke `analytics/upcoming-promo.json` di Supabase CDN.
+    lalu mengunggah JSON siap tampil ke `analytics/upcoming-promo.json` di Turso Storage.
     """
     print("=" * 60)
     print(f"🏷️ [PERSIAPAN POP H-2/H-1] Menyusun pratinjau promo '{folder_name}' tanpa mengubah DB berjalan...")
@@ -773,9 +869,23 @@ def build_upcoming_promo_preview(
     ex_map, ex_barcode_map = _lookup_existing_products(cand_skus, cand_bcs)
     today_wib = datetime.now(timezone(timedelta(hours=7))).strftime("%Y-%m-%d")
 
+    # Tentukan periode promo sejati dari NAMA FILE EXCEL & baris Excel (bukan timestamp upload folder WA!)
+    raw_row_froms = [_normalize_iso_date(r.get("tgl_mulai")) for r in all_parsed if r.get("tgl_mulai")]
+    raw_row_tos = [_normalize_iso_date(r.get("tgl_akhir")) for r in all_parsed if r.get("tgl_akhir")]
+    resolved_from, resolved_to, effective_launch, period_source = _resolve_upcoming_period(
+        source_names=source_names,
+        row_froms=[d for d in raw_row_froms if d],
+        row_tos=[d for d in raw_row_tos if d],
+        folder_name=folder_name,
+        today_wib=today_wib,
+        explicit_start=start_date,
+        explicit_end=end_date,
+    )
+    print(f"📅 Periode promo terdeteksi ({period_source}): {resolved_from} s/d {resolved_to} | Auto-Aktif: {effective_launch} 00:00 WIB")
+
     variant_by_sku = {}
-    min_from_date = start_date
-    max_to_date = end_date
+    min_from_date = resolved_from
+    max_to_date = resolved_to
 
     for item in all_parsed:
         sku_str = str(item.get("sku") or "").strip()
@@ -815,12 +925,8 @@ def build_upcoming_promo_preview(
         else:
             status_change = "CONTINUED"
 
-        f_dt = item.get("tgl_mulai") or start_date
-        t_dt = item.get("tgl_akhir") or end_date
-        if f_dt and (not min_from_date or str(f_dt)[:10] < str(min_from_date)):
-            min_from_date = str(f_dt)[:10]
-        if t_dt and (not max_to_date or str(t_dt)[:10] > str(max_to_date)):
-            max_to_date = str(t_dt)[:10]
+        f_dt = item.get("tgl_mulai") or resolved_from
+        t_dt = item.get("tgl_akhir") or resolved_to
 
         desc = (ex.get("description") or item.get("description") or f"Produk {sku_str}").strip()
         art = (ex.get("article") or item.get("article") or desc.split(":")[0].strip() or sku_str).strip()
@@ -928,8 +1034,13 @@ def build_upcoming_promo_preview(
         "success": True,
         "mode": "UPCOMING_POP_DRAFT",
         "folderName": folder_name,
+        "sourceFolder": folder_name,
         "fromDate": min_from_date,
         "toDate": max_to_date,
+        "effectiveLaunchDate": effective_launch,
+        "autoLaunchAtWib": f"{effective_launch} 00:00 WIB" if effective_launch else None,
+        "periodSource": period_source,
+        "autoActivatedAt": None,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "sourceFiles": source_names,
         "totalSkus": len(variant_by_sku),
@@ -941,8 +1052,118 @@ def build_upcoming_promo_preview(
     raw_bytes = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     supa_url, supa_key = _supabase_credentials()
     _storage_upload(supa_url, supa_key, "analytics/upcoming-promo.json", raw_bytes, "application/json", "120")
-    print(f"✅ Draf POP tersimpan aman di CDN `analytics/upcoming-promo.json` ({len(raw_bytes)/1024:.1f} KB, {len(articles):,} Artikel, {len(variant_by_sku):,} SKU). Promo berjalan 100% aman!")
+    print(
+        f"✅ Draf POP tersimpan aman di Turso Storage `analytics/upcoming-promo.json` "
+        f"({len(raw_bytes)/1024:.1f} KB, {len(articles):,} Artikel, {len(variant_by_sku):,} SKU, "
+        f"Periode {min_from_date} s/d {max_to_date}, Auto-Aktif {effective_launch} 00:00 WIB). Promo berjalan 100% aman!"
+    )
     return len(articles)
+
+
+def auto_activate_upcoming_if_due():
+    """
+    AUTO-LAUNCH PROMO KAMIS (00:00 WIB):
+    Membaca draf H- di `analytics/upcoming-promo.json`. Jika hari ini WIB >= effectiveLaunchDate
+    dan folder tersebut belum pernah dipromosikan, langsung menerapkan seluruh file Excel-nya ke DB kasir,
+    membersihkan promo periode lama yang sudah habis, dan menandai status aktif anti-dobel.
+    """
+    today_wib = datetime.now(timezone(timedelta(hours=7))).strftime("%Y-%m-%d")
+    print("=" * 60)
+    print(f"⏰ [AUTO-LAUNCH KAMIS] Memeriksa draf promo H- pada {today_wib} WIB...")
+    print("=" * 60)
+
+    raw_draft = storage_download("analytics/upcoming-promo.json")
+    if not raw_draft:
+        print("ℹ️ Tidak ada draf `analytics/upcoming-promo.json`. Selesai.")
+        return False
+
+    try:
+        draft = json.loads(raw_draft.decode("utf-8"))
+    except Exception as exc:
+        print(f"⚠️ Gagal membaca JSON draf upcoming: {exc}")
+        return False
+
+    folder = str(draft.get("sourceFolder") or draft.get("folderName") or "").strip()
+    launch_date = str(draft.get("effectiveLaunchDate") or draft.get("fromDate") or "").strip()[:10]
+    if not folder or not launch_date:
+        print("ℹ️ Draf tidak memiliki folder atau tanggal launching yang valid.")
+        return False
+
+    if draft.get("autoActivatedAt"):
+        print(f"✅ Draf '{folder}' sudah diaktifkan otomatis sebelumnya pada {draft.get('autoActivatedAt')}. Lewati.")
+        return False
+
+    # Cek lock di logs/upcoming-auto-promoted.json
+    raw_lock = storage_download("logs/upcoming-auto-promoted.json")
+    if raw_lock:
+        try:
+            lock_data = json.loads(raw_lock.decode("utf-8"))
+            if (
+                lock_data.get("folder") == folder
+                and lock_data.get("completedAt")
+            ):
+                print(f"✅ Lock mencatat '{folder}' sudah tuntas aktif ({lock_data.get('completedAt')}). Lewati.")
+                return False
+        except Exception:
+            pass
+
+    if today_wib < launch_date:
+        print(f"🛡️ Belum hari-H launching ({today_wib} < {launch_date}). Promo kasir hari ini tetap dipertahankan!")
+        return False
+
+    batch_files = _list_files_in_promo_folder(folder)
+    if not batch_files:
+        print(f"⚠️ Folder PROMO/{folder} tidak memiliki file Excel.")
+        return False
+
+    print(f"🚀 HARI-H TIBA ({today_wib} >= {launch_date})! Mengaktifkan otomatis {len(batch_files)} file dari PROMO/{folder}...")
+    _cleanup_expired_promos_wib(today_wib)
+
+    grand_total = 0
+    for f in batch_files:
+        grand_total += process_single_promo_file(
+            f["url"],
+            f["name"],
+            force_apply=True,
+            today_wib=today_wib,
+        )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    draft["autoActivatedAt"] = now_iso
+    try:
+        supa_url, supa_key = _supabase_credentials()
+        _storage_upload(
+            supa_url,
+            supa_key,
+            "analytics/upcoming-promo.json",
+            json.dumps(draft, separators=(",", ":"), ensure_ascii=False).encode("utf-8"),
+            "application/json",
+            "60",
+        )
+        lock_payload = {
+            "folder": folder,
+            "launchDate": launch_date,
+            "fromDate": draft.get("fromDate"),
+            "toDate": draft.get("toDate"),
+            "completedAt": now_iso,
+            "updatedProducts": grand_total,
+            "fileCount": len(batch_files),
+        }
+        storage_upload(
+            "logs/upcoming-auto-promoted.json",
+            json.dumps(lock_payload, ensure_ascii=False).encode("utf-8"),
+            "application/json",
+        )
+    except Exception as save_err:
+        print(f"⚠️ Gagal menulis lock auto-launch: {save_err}")
+
+    if grand_total > 0:
+        log_sync_history(f"Auto-Launch Promo Kamis ({len(batch_files)} file • {draft.get('fromDate')} s/d {draft.get('toDate')})", grand_total, f"turso://PROMO/{folder}")
+
+    print("=" * 60)
+    print(f"🎉 [AUTO-LAUNCH SUKSES] {grand_total:,} produk promo resmi aktif hari ini ({today_wib})!")
+    print("=" * 60)
+    return grand_total > 0
 
 
 def _preload_files_for_guard(files_list: list) -> tuple[dict, list]:
@@ -1056,7 +1277,41 @@ def run_promo_sync(
             print(f"🎉 [SUKSES BATCH EKSPLISIT] Total {grand_total} produk diperbarui dari {len(batch_files)} file ({folder_name})!")
             print("=" * 60)
             if grand_total > 0:
-                log_sync_history(f"WA Promo Direct ({len(batch_files)} file • {folder_name})", grand_total, normalized_url)
+                # Jika batch ini merupakan promosi dari folder UPCOMING_*, bersihkan promo kedaluwarsa & tandai auto-promoted selesai!
+                if folder_name.upper().startswith("UPCOMING_"):
+                    _cleanup_expired_promos_wib(today_wib)
+                    try:
+                        now_iso = datetime.now(timezone.utc).isoformat()
+                        raw_d = storage_download("analytics/upcoming-promo.json")
+                        if raw_d:
+                            d_obj = json.loads(raw_d.decode("utf-8"))
+                            if d_obj.get("sourceFolder") == folder_name or d_obj.get("folderName") == folder_name:
+                                d_obj["autoActivatedAt"] = now_iso
+                                supa_url, supa_key = _supabase_credentials()
+                                _storage_upload(
+                                    supa_url,
+                                    supa_key,
+                                    "analytics/upcoming-promo.json",
+                                    json.dumps(d_obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8"),
+                                    "application/json",
+                                    "60",
+                                )
+                        storage_upload(
+                            "logs/upcoming-auto-promoted.json",
+                            json.dumps(
+                                {
+                                    "folder": folder_name,
+                                    "completedAt": now_iso,
+                                    "updatedProducts": grand_total,
+                                    "fileCount": len(batch_files),
+                                },
+                                ensure_ascii=False,
+                            ).encode("utf-8"),
+                            "application/json",
+                        )
+                    except Exception:
+                        pass
+                log_sync_history(f"WA Promo ({len(batch_files)} file • {folder_name})", grand_total, normalized_url)
             else:
                 print("ℹ️ 0 produk promo berubah — lewati pencatatan SyncHistory.")
             return
@@ -1245,6 +1500,7 @@ if __name__ == "__main__":
     name_arg = None
     upcoming_flag = False
     force_flag = False
+    auto_activate_flag = False
 
     for arg in sys.argv[1:]:
         if arg.startswith("--file="):
@@ -1255,5 +1511,10 @@ if __name__ == "__main__":
             upcoming_flag = True
         elif arg == "--force-apply":
             force_flag = True
+        elif arg == "--auto-activate-if-due":
+            auto_activate_flag = True
 
-    run_promo_sync(file_arg, name_arg, upcoming_only=upcoming_flag, force_apply=force_flag)
+    if auto_activate_flag:
+        auto_activate_upcoming_if_due()
+    else:
+        run_promo_sync(file_arg, name_arg, upcoming_only=upcoming_flag, force_apply=force_flag)

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { writeTursoStorage, getTursoPublicUrl } from "@/lib/tursoStorage";
+import { writeTursoStorage, readTursoStorageJson, getTursoPublicUrl } from "@/lib/tursoStorage";
 import { dispatchToGitHubRunner } from "@/lib/githubDispatcher";
 
 export const dynamic = "force-dynamic";
@@ -121,6 +121,77 @@ export async function POST(req: NextRequest) {
     }
 
     const safeFolder = sanitizeSegment(rawFolder, "");
+
+    // ─── MODE 2B: AUTO-AKTIVASI PROMO H- TEPAT HARI KAMIS 00:00 WIB ─────────
+    if (promoMode === "activate-upcoming") {
+      const launchDate = String(body.launchDate || "").trim().slice(0, 10);
+      const todayWib = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+      if (launchDate && todayWib < launchDate) {
+        return NextResponse.json({
+          success: true,
+          skipped: true,
+          reason: "NOT_YET_DUE",
+          todayWib,
+          launchDate,
+        });
+      }
+
+      const existingLock = await readTursoStorageJson<any>("logs/upcoming-auto-promoted.json").catch(() => null);
+      if (
+        existingLock &&
+        existingLock.folder === safeFolder &&
+        (existingLock.completedAt ||
+          (existingLock.triggeredAt && Date.now() - new Date(existingLock.triggeredAt).getTime() < 20 * 60 * 1000))
+      ) {
+        return NextResponse.json({
+          success: true,
+          skipped: true,
+          alreadyTriggered: true,
+          folder: safeFolder,
+          lock: existingLock,
+        });
+      }
+
+      const nowIso = new Date().toISOString();
+      await writeTursoStorage(
+        "logs/upcoming-auto-promoted.json",
+        JSON.stringify({
+          folder: safeFolder,
+          launchDate: launchDate || todayWib,
+          triggeredAt: nowIso,
+          triggeredBy: "WA_BRIDGE_AUTO_THURSDAY_0000_WIB",
+          completedAt: null,
+        }),
+        "application/json"
+      );
+
+      const supervisor = await prisma.user
+        .findFirst({
+          where: { OR: [{ nik: "22054178" }, { role: "SUPERVISOR" }] },
+          select: { id: true },
+        })
+        .catch(() => null);
+
+      const promoUrl = `turso://PROMO/${safeFolder}`;
+      const dispatched = await dispatchToGitHubRunner({
+        action: "promo",
+        force: true,
+        promoUrl,
+        userId: supervisor?.id || null,
+      });
+
+      return NextResponse.json(
+        {
+          ...dispatched.payload,
+          promoMode: "activate-upcoming",
+          folder: safeFolder,
+          launchDate: launchDate || todayWib,
+          promoUrl,
+        },
+        { status: dispatched.status }
+      );
+    }
+
     const isUpcoming = promoMode === "upcoming";
     const action = isUpcoming ? "upcoming-promo" : "promo";
     const promoUrl = `turso://PROMO/${safeFolder}`;

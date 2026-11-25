@@ -69,8 +69,14 @@ interface UpcomingArticle {
 interface UpcomingResponse {
   available: boolean;
   folderName?: string;
+  sourceFolder?: string;
   fromDate?: string | null;
   toDate?: string | null;
+  effectiveLaunchDate?: string | null;
+  autoLaunchAtWib?: string | null;
+  autoActivatedAt?: string | null;
+  autoPromoted?: boolean;
+  periodSource?: string | null;
   generatedAt?: string;
   sourceFiles?: string[];
   totalSkus?: number;
@@ -278,8 +284,21 @@ export default function PromoMendatangPage() {
             </div>
           </div>
           {data?.available && (
-            <div className="text-[11px] font-mono font-bold bg-white/80 border border-amber-200 text-amber-900 px-3 py-1 rounded-xl shrink-0">
-              {data.folderName} • {data.fromDate || "?"} s/d {data.toDate || "?"}
+            <div className="flex flex-col sm:items-end gap-1 shrink-0">
+              <div className="text-[11px] font-mono font-bold bg-white/90 border border-amber-300 text-amber-950 px-3 py-1 rounded-xl">
+                Periode: {data.fromDate || "?"} s/d {data.toDate || "?"}
+              </div>
+              <div
+                className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full border ${
+                  data.autoPromoted
+                    ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+                    : "bg-indigo-100 text-indigo-800 border-indigo-300"
+                }`}
+              >
+                {data.autoPromoted
+                  ? "✅ Sudah Otomatis Aktif di Harga Kasir"
+                  : `🤖 Auto-Aktif Otomatis: ${data.effectiveLaunchDate || data.fromDate || "Hari Kamis"} pukul 00:00 WIB`}
+              </div>
             </div>
           )}
         </div>
@@ -529,9 +548,13 @@ export default function PromoMendatangPage() {
                           <div>
                             <div className="text-[10px] font-bold text-orange-600 uppercase">POP Baru (H-2 Draft)</div>
                             <div className="text-xs sm:text-sm font-black text-rose-600">
-                              {art.nextHargaPromo ? formatRupiah(art.nextHargaPromo) : art.nextDiskon || "-"}
-                              {art.nextDiskon && art.nextHargaPromo ? (
-                                <span className="ml-1 text-[10px] font-bold text-orange-700">({art.nextDiskon})</span>
+                              {art.nextHargaPromo
+                                ? formatRupiah(art.nextHargaPromo)
+                                : art.nextDiskon || art.nextDiscountType || art.nextAcara || "-"}
+                              {art.nextHargaPromo && (art.nextDiskon || art.nextDiscountType) ? (
+                                <span className="ml-1 text-[10px] font-bold text-orange-700">
+                                  ({art.nextDiskon || art.nextDiscountType})
+                                </span>
                               ) : null}
                             </div>
                           </div>
@@ -556,7 +579,9 @@ export default function PromoMendatangPage() {
                               <div className="font-mono text-[10px] text-slate-500">SKU {v.sku}</div>
                               <div className="flex items-center justify-between mt-1">
                                 <span className="font-bold text-rose-600">
-                                  {v.nextHargaPromo ? formatRupiah(v.nextHargaPromo) : v.nextDiskon || "-"}
+                                  {v.nextHargaPromo
+                                    ? formatRupiah(v.nextHargaPromo)
+                                    : v.nextDiskon || v.nextDiscountType || v.nextAcara || "-"}
                                 </span>
                                 <span className="text-[10px] font-bold text-emerald-700">Stok {v.stok}</span>
                               </div>

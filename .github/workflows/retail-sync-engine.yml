@@ -5,6 +5,10 @@ name: Retail Sync Engine (4 Kategori Python Turbo Matrix Engine — 100% Turso C
 # Seluruh eksekusi dipicu instan dari Frontend UI (/super-admin/sinkronisasi-harian) atau Webhook Email Promo.
 
 on:
+  # Cadangan otomatis tepat Kamis 00:05 WIB (Rabu 17:05 UTC) untuk aktivasi promo H- bila daemon sedang restart (~4x/bln, ultra-hemat kuota!)
+  schedule:
+    - cron: '5 17 * * 3'
+
   workflow_dispatch:
     inputs:
       action:
@@ -179,12 +183,23 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
+      - name: ⏰ [AUTO-LAUNCH KAMIS 00:05 WIB] Aktivasi Otomatis Draf Promo H- (Cadangan Anti-Gagal)
+        if: ${{ github.event_name == 'schedule' }}
+        run: |
+          python -u python-engine/runner_guardian.py --step "AUTO-LAUNCH KAMIS: Aktivasi Promo H-" --action "promo" --max-retries 2 -- python python-engine/run_promo_sync.py --auto-activate-if-due
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+
       - name: 🏷️ [KATEGORI 3 - UPDATE PROMO EMAIL] Python Promo Parser Engine (Turso Storage PROMO/ + Gemini AI)
         if: ${{ github.event.inputs.action == 'promo' || github.event.inputs.action == 'all' || github.event.action == 'trigger-promo' || github.event.action == 'trigger-sync-engine' }}
         run: |
           PROMO_URL="${{ github.event.inputs.promo_url }}"
           FORCE_FLAG=""
-          if [[ "$PROMO_URL" == *"WA_DIRECT_"* ]]; then
+          if [[ "$PROMO_URL" == *"WA_DIRECT_"* ]] || [[ "$PROMO_URL" == *"UPCOMING_"* ]]; then
             FORCE_FLAG="--force-apply"
           fi
           if [ -n "$PROMO_URL" ]; then
@@ -234,7 +249,7 @@ jobs:
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
       - name: 📊 [KATEGORI 5 - ADMIN ANALYTICS, PIVOT AUDIT & CLEANUP] Clean Promo, Generate PO, & Precompute JSON Turso
-        if: ${{ github.event.inputs.action == 'analytics' || github.event.inputs.action == 'scrab' || github.event.inputs.action == 'mds-bisa' || github.event.inputs.action == 'muku-scrab' || github.event.inputs.action == 'photos' || github.event.inputs.action == 'promo' || github.event.inputs.action == 'stock-only' || github.event.inputs.action == 'suko-stock' || github.event.inputs.action == 'muku-stock' || github.event.inputs.action == 'catalog' || github.event.inputs.action == 'all' || github.event.action == 'trigger-analytics' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-mds-bisa' || github.event.action == 'trigger-muku-scrab' || github.event.action == 'trigger-photos' || github.event.action == 'trigger-promo' || github.event.action == 'trigger-stock-only' || github.event.action == 'trigger-suko-stock' || github.event.action == 'trigger-muku-stock' || github.event.action == 'trigger-sync-engine' }}
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.action == 'analytics' || github.event.inputs.action == 'scrab' || github.event.inputs.action == 'mds-bisa' || github.event.inputs.action == 'muku-scrab' || github.event.inputs.action == 'photos' || github.event.inputs.action == 'promo' || github.event.inputs.action == 'stock-only' || github.event.inputs.action == 'suko-stock' || github.event.inputs.action == 'muku-stock' || github.event.inputs.action == 'catalog' || github.event.inputs.action == 'all' || github.event.action == 'trigger-analytics' || github.event.action == 'trigger-scrab' || github.event.action == 'trigger-mds-bisa' || github.event.action == 'trigger-muku-scrab' || github.event.action == 'trigger-photos' || github.event.action == 'trigger-promo' || github.event.action == 'trigger-stock-only' || github.event.action == 'trigger-suko-stock' || github.event.action == 'trigger-muku-stock' || github.event.action == 'trigger-sync-engine' }}
         run: |
           if [ -n "$TURSO_DATABASE_URL" ]; then
             python -u python-engine/runner_guardian.py --step "KATEGORI 5: Admin Analytics & Cleanup" --action "${{ github.event.inputs.action || github.event.action || 'all' }}" --max-retries 3 -- python python-engine/run_admin_analytics.py --clean-promo --generate-po --analytics
