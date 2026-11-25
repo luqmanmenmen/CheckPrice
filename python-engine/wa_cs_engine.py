@@ -3951,6 +3951,17 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
             st["pairingCode"] = ""
             st["pairingCodeAt"] = 0
             changed = True
+        if payload.get("bridgeVersion") and str(payload["bridgeVersion"])[:60] != st.get("bridgeVersion", ""):
+            st["bridgeVersion"] = str(payload["bridgeVersion"])[:60]
+            changed = True
+        if "authFileCount" in payload:
+            try:
+                afc = int(payload["authFileCount"])
+                if afc != int(st.get("authFileCount") or 0):
+                    st["authFileCount"] = afc
+                    changed = True
+            except Exception:
+                pass
 
         if changed or (now_ms - prev_hb) >= 55_000:
             st["lastHeartbeatAt"] = now_ms
@@ -4026,14 +4037,20 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
 
     if action == "bridge-auth-get":
         try:
-            raw_auth = storage_read_text(AUTH_BACKUP_STORAGE_PATH, timeout=4.0)
+            raw_auth = storage_read_text(AUTH_BACKUP_STORAGE_PATH, timeout=6.0)
             if raw_auth:
                 parsed_auth = json.loads(raw_auth)
-                if isinstance(parsed_auth, dict) and parsed_auth.get("creds"):
-                    return {"success": True, "creds": parsed_auth.get("creds"), "updatedAt": parsed_auth.get("updatedAt")}
+                if isinstance(parsed_auth, dict) and (parsed_auth.get("creds") or parsed_auth.get("files")):
+                    return {
+                        "success": True,
+                        "creds": parsed_auth.get("creds"),
+                        "files": parsed_auth.get("files") if isinstance(parsed_auth.get("files"), dict) else None,
+                        "bundleVersion": int(parsed_auth.get("bundleVersion") or 1),
+                        "updatedAt": parsed_auth.get("updatedAt"),
+                    }
         except Exception:
             pass
-        return {"success": True, "creds": None}
+        return {"success": True, "creds": None, "files": None}
 
     if action == "bridge-auth-save":
         try:
@@ -4041,11 +4058,33 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
                 storage_write_bytes(AUTH_BACKUP_STORAGE_PATH, b"{}", content_type="application/json", timeout=4.0)
                 return {"success": True, "cleared": True}
             creds_str = str(payload.get("creds") or "").strip()
+            raw_files = payload.get("files")
+            clean_files: Dict[str, str] = {}
+            if isinstance(raw_files, dict):
+                for k, v in list(raw_files.items())[:300]:
+                    fname = os.path.basename(str(k or "").strip())
+                    if not fname or not fname.endswith(".json") or ".." in fname:
+                        continue
+                    val_s = str(v or "")
+                    if len(val_s) > 120_000:
+                        continue
+                    clean_files[fname] = val_s
+            if not creds_str and "creds.json" in clean_files:
+                creds_str = clean_files["creds.json"]
             if not creds_str or len(creds_str) > 250_000:
                 return {"success": False, "error": "Invalid creds payload"}
-            blob = json.dumps({"creds": creds_str, "updatedAt": utc_iso_now()}, ensure_ascii=False).encode("utf-8")
-            storage_write_bytes(AUTH_BACKUP_STORAGE_PATH, blob, content_type="application/json", timeout=4.5)
-            return {"success": True, "saved": True}
+            blob_obj = {
+                "bundleVersion": 2 if clean_files else 1,
+                "creds": creds_str,
+                "files": clean_files or None,
+                "fileCount": len(clean_files) if clean_files else 1,
+                "updatedAt": utc_iso_now(),
+            }
+            blob = json.dumps(blob_obj, ensure_ascii=False).encode("utf-8")
+            if len(blob) > 1_400_000:
+                return {"success": False, "error": "Auth bundle too large"}
+            storage_write_bytes(AUTH_BACKUP_STORAGE_PATH, blob, content_type="application/json", timeout=6.0)
+            return {"success": True, "saved": True, "fileCount": blob_obj["fileCount"], "sizeBytes": len(blob)}
         except Exception as e:
             return {"success": False, "error": str(e)}
 

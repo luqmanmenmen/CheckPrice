@@ -52,6 +52,7 @@ const CLI_PAIR_MODE =
 
 const AUTH_DIR = path.resolve(process.env.WA_AUTH_DIR || "./auth_info");
 const HEALTH_PORT = Number(process.env.PORT || process.env.WA_BRIDGE_HEALTH_PORT || 0);
+const BRIDGE_VERSION = "v2.2-promo719-fullauth";
 const logger = pino({ level: "silent" });
 const startUnixSec = Math.floor(Date.now() / 1000);
 
@@ -756,11 +757,19 @@ async function sendCardsToJid(sock, targetJid, cards, quoteMsg = null) {
 
 async function syncBridgeState(extra = {}) {
   try {
+    let authFileCount = 0;
+    try {
+      if (fs.existsSync(AUTH_DIR)) {
+        authFileCount = fs.readdirSync(AUTH_DIR).filter((f) => f.endsWith(".json")).length;
+      }
+    } catch {}
     const res = await callPythonWaCs(
       {
         action: "bridge-sync",
         connected: isConnected,
         phone: currentPhone,
+        bridgeVersion: BRIDGE_VERSION,
+        authFileCount,
         ...extra,
       },
       8000
@@ -804,9 +813,35 @@ async function restartSocket(cleanAuth = false, requestPairingForPhone = "") {
   startSocket();
 }
 
-let lastCloudCredsSnapshot = "";
+let lastCloudAuthSignature = "";
 let cloudAuthBackupTimer = null;
 let skipNextCloudRestore = false;
+
+function readAuthFolderBundle() {
+  if (!fs.existsSync(AUTH_DIR)) return null;
+  const credsPath = path.join(AUTH_DIR, "creds.json");
+  if (!fs.existsSync(credsPath)) return null;
+  const creds = fs.readFileSync(credsPath, "utf-8");
+  if (!creds || !creds.includes('"registered":true')) return null;
+
+  const files = {};
+  let totalBytes = 0;
+  const entries = fs.readdirSync(AUTH_DIR).filter((f) => f.endsWith(".json")).sort();
+  for (const fname of entries) {
+    if (Object.keys(files).length >= 280) break;
+    try {
+      const full = path.join(AUTH_DIR, fname);
+      const stat = fs.statSync(full);
+      if (!stat.isFile() || stat.size > 110_000) continue;
+      if (totalBytes + stat.size > 1_100_000) continue;
+      const content = fs.readFileSync(full, "utf-8");
+      files[fname] = content;
+      totalBytes += stat.size;
+    } catch {}
+  }
+  const signature = JSON.stringify(files);
+  return { creds, files, fileCount: Object.keys(files).length, signature };
+}
 
 async function restoreAuthFromCloudIfMissing() {
   if (skipNextCloudRestore) {
@@ -816,13 +851,28 @@ async function restoreAuthFromCloudIfMissing() {
   const credsPath = path.join(AUTH_DIR, "creds.json");
   if (fs.existsSync(credsPath)) return false;
   try {
-    const res = await callPythonWaCs({ action: "bridge-auth-get" }, 10000);
-    if (res?.success && typeof res.creds === "string" && res.creds.trim().startsWith("{")) {
+    const res = await callPythonWaCs({ action: "bridge-auth-get" }, 12000);
+    const hasFiles = res?.files && typeof res.files === "object" && Object.keys(res.files).length > 0;
+    const hasCreds = typeof res?.creds === "string" && res.creds.trim().startsWith("{");
+    if (res?.success && (hasFiles || hasCreds)) {
       fs.mkdirSync(AUTH_DIR, { recursive: true });
-      fs.writeFileSync(credsPath, res.creds, "utf-8");
-      lastCloudCredsSnapshot = res.creds;
-      console.log("☁️ [CLOUD AUTH] Sesi WhatsApp berhasil dipulihkan otomatis dari Turso Cloud!");
-      return true;
+      let restoredCount = 0;
+      if (hasFiles) {
+        for (const [fname, content] of Object.entries(res.files)) {
+          const safe = path.basename(String(fname || ""));
+          if (!safe || !safe.endsWith(".json") || typeof content !== "string") continue;
+          fs.writeFileSync(path.join(AUTH_DIR, safe), content, "utf-8");
+          restoredCount++;
+        }
+      }
+      if (hasCreds && !fs.existsSync(credsPath)) {
+        fs.writeFileSync(credsPath, res.creds, "utf-8");
+        restoredCount++;
+      }
+      const bundle = readAuthFolderBundle();
+      if (bundle) lastCloudAuthSignature = bundle.signature;
+      console.log(`☁️ [CLOUD AUTH] Pulih otomatis ${restoredCount} file Signal/WA dari Turso Cloud!`);
+      return restoredCount > 0;
     }
   } catch (err) {
     console.log("⚠️ [CLOUD AUTH] Gagal pull sesi dari cloud:", err?.message || err);
@@ -830,31 +880,38 @@ async function restoreAuthFromCloudIfMissing() {
   return false;
 }
 
+async function backupAuthBundleNow(timeoutMs = 12000) {
+  try {
+    const bundle = readAuthFolderBundle();
+    if (!bundle || bundle.signature === lastCloudAuthSignature) return false;
+    const res = await callPythonWaCs(
+      { action: "bridge-auth-save", creds: bundle.creds, files: bundle.files },
+      timeoutMs
+    );
+    if (res?.success) {
+      lastCloudAuthSignature = bundle.signature;
+      console.log(`☁️ [CLOUD AUTH] Backup penuh (${bundle.fileCount} file Signal/WA) tersimpan ke Turso Cloud.`);
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
 function scheduleAuthCloudBackup(immediate = false) {
   const run = async () => {
     cloudAuthBackupTimer = null;
-    try {
-      const credsPath = path.join(AUTH_DIR, "creds.json");
-      if (!fs.existsSync(credsPath)) return;
-      const raw = fs.readFileSync(credsPath, "utf-8");
-      if (!raw || raw === lastCloudCredsSnapshot || !raw.includes('"registered":true')) return;
-      const res = await callPythonWaCs({ action: "bridge-auth-save", creds: raw }, 10000);
-      if (res?.success) {
-        lastCloudCredsSnapshot = raw;
-        console.log("☁️ [CLOUD AUTH] Backup creds.json tersimpan aman ke Turso Cloud.");
-      }
-    } catch {}
+    await backupAuthBundleNow(12000);
   };
   if (cloudAuthBackupTimer) clearTimeout(cloudAuthBackupTimer);
   if (immediate) {
     run();
   } else {
-    cloudAuthBackupTimer = setTimeout(run, 20000);
+    cloudAuthBackupTimer = setTimeout(run, 15000);
   }
 }
 
 async function clearCloudAuthBackup() {
-  lastCloudCredsSnapshot = "";
+  lastCloudAuthSignature = "";
   skipNextCloudRestore = true;
   try {
     await callPythonWaCs({ action: "bridge-auth-save", clear: true }, 8000);
@@ -936,14 +993,28 @@ async function startSocket() {
       isConnected = true;
       const mePhone = normalizePhone(sock.user?.id) || targetPhone;
       currentPhone = mePhone;
-      console.log(`\n✅ WHATSAPP +${mePhone} BERHASIL TERSAMBUNG!`);
+      console.log(`\n✅ WHATSAPP +${mePhone} BERHASIL TERSAMBUNG! (${BRIDGE_VERSION})`);
       console.log("   • SOP Aktif: Pertanyaan di Grup -> dijawab singkat di Grup + detail & Foto HD dikirim via Private Chat!");
-      console.log("   • Chat pribadi teman yang bukan dari grup tetap 100% aman (diblokir di PC).\n");
+      console.log("   • Auto-Update Promo Excel aktif di PC: kode 'update promo 719' (Direct) & 'update promo 719 h-' (After Promo).\n");
+
+      // Auto-Heal PreKeys Signal Protocol bila container baru lahir tanpa file pre-key-*.json
+      try {
+        const preKeyCount = fs.existsSync(AUTH_DIR)
+          ? fs.readdirSync(AUTH_DIR).filter((f) => f.startsWith("pre-key-") && f.endsWith(".json")).length
+          : 0;
+        if (preKeyCount < 5 && typeof sock.uploadPreKeys === "function") {
+          console.log(`🔧 [SIGNAL SELF-HEAL] Hanya ditemukan ${preKeyCount} PreKey di disk — mengunggah 30 PreKey segar ke WA...`);
+          await sock.uploadPreKeys(30).catch((e) => {
+            console.log("⚠️ [SIGNAL SELF-HEAL] uploadPreKeys warning:", e?.message || e);
+          });
+        }
+      } catch {}
+
       await syncBridgeState({
         connected: true,
         phone: mePhone,
         clearPairingCode: true,
-        statusMessage: `WhatsApp +${mePhone} aktif tersambung!`,
+        statusMessage: `WhatsApp +${mePhone} aktif tersambung (${BRIDGE_VERSION})!`,
       });
       scheduleAuthCloudBackup(true);
     }
@@ -979,6 +1050,8 @@ async function startSocket() {
     if (type !== "notify") return;
 
     for (const msg of messages) {
+      // Setiap pesan masuk/keluar bisa memperbarui session Signal Protocol -> jadwalkan backup ringan ke Turso Cloud
+      scheduleAuthCloudBackup(false);
       try {
         const jid = msg.key?.remoteJid || "";
         if (!jid || jid === "status@broadcast" || jid.endsWith("@broadcast")) continue;
@@ -1252,15 +1325,9 @@ let isShuttingDown = false;
 async function handleGracefulShutdown(sig) {
   if (isShuttingDown) return;
   isShuttingDown = true;
-  console.log(`🛑 [${sig}] Graceful shutdown: menyimpan sesi WA ke Turso Cloud & menutup socket...`);
+  console.log(`🛑 [${sig}] Graceful shutdown: menyimpan seluruh folder Signal/WA ke Turso Cloud & menutup socket...`);
   try {
-    const credsPath = path.join(AUTH_DIR, "creds.json");
-    if (fs.existsSync(credsPath)) {
-      const raw = fs.readFileSync(credsPath, "utf-8");
-      if (raw && raw.includes('"registered":true')) {
-        await callPythonWaCs({ action: "bridge-auth-save", creds: raw }, 5000).catch(() => {});
-      }
-    }
+    await backupAuthBundleNow(6000);
     if (currentSock) {
       currentSock.end(undefined);
     }
