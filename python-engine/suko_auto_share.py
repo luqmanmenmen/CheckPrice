@@ -26,6 +26,7 @@ Fitur Inti:
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import random
 import re
@@ -37,18 +38,29 @@ from suko_product_knowledge import detect_fabric_tech_badge
 
 AUTO_SHARE_STATE_PATH = "config/wa-auto-share-state.json"
 
-# 10 Kategori Rotasi Penuh (Men, Ladies, Boys, Girls, SUKO GO, Dress/Rok, Celana/Outer, Workwear/Sleepwear, Essential/Home)
+# 11 Kategori Rotasi Penuh (Men, Ladies, Essential, Workwear, Sleepwear, SUKO GO, Dress/Rok, Boys, Girls, Celana/Outer)
 AUTO_SHARE_CATEGORIES: List[Dict[str, Any]] = [
-    {"id": "LADIES_ATASAN", "label": "SUKO Ladies • Atasan & Blouse", "short": "Ladies Atasan"},
-    {"id": "MEN_ATASAN", "label": "SUKO Men • Kemeja, Kaos & Polo", "short": "Men Atasan"},
+    {"id": "MEN_ATASAN", "label": "SUKO Men • Kemeja, Kaos & Polo", "short": "SUKO Men"},
+    {"id": "LADIES_ATASAN", "label": "SUKO Ladies • Atasan & Blouse", "short": "SUKO Ladies"},
+    {"id": "ESSENTIAL_LIFESTYLE", "label": "SUKO Essential • Essential, Home Living & Alas Kaki", "short": "SUKO Essential"},
+    {"id": "WORKWEAR", "label": "SUKO Workwear • Koleksi Kerja Smart Casual", "short": "SUKO Workwear"},
+    {"id": "SLEEPWEAR", "label": "SUKO Sleepwear • Piyama & Baju Santai", "short": "SUKO Sleepwear"},
     {"id": "SUKO_GO_MEN", "label": "SUKO GO • Sports Men", "short": "SUKO GO Men"},
     {"id": "SUKO_GO_LADIES", "label": "SUKO GO • Sports Ladies", "short": "SUKO GO Ladies"},
     {"id": "LADIES_DRESS_ROK", "label": "SUKO Ladies • Dress & Rok", "short": "Ladies Dress & Rok"},
     {"id": "BOYS", "label": "SUKO Boys • Koleksi Anak Laki-laki", "short": "SUKO Boys"},
     {"id": "GIRLS", "label": "SUKO Girls • Koleksi Anak Perempuan", "short": "SUKO Girls"},
     {"id": "CELANA_OUTER", "label": "SUKO Casual • Celana & Jaket/Outer", "short": "Celana & Outer"},
-    {"id": "WORKWEAR_SLEEPWEAR", "label": "SUKO Workwear & Sleepwear", "short": "Workwear & Sleepwear"},
-    {"id": "ESSENTIAL_LIFESTYLE", "label": "SUKO Essential, Home Living, Tas & Alas Kaki", "short": "Essential & Lifestyle"},
+]
+
+# 6 Kategori Inti saat tombol Auto-Share / Gas Share diklik (minim 5 -> pas 6 kategori wajib!)
+GAS_NOW_CATEGORY_IDS: List[str] = [
+    "MEN_ATASAN",
+    "LADIES_ATASAN",
+    "ESSENTIAL_LIFESTYLE",
+    "WORKWEAR",
+    "SLEEPWEAR",
+    "SUKO_GO_ANY",
 ]
 
 SHARE_MODES = ["PROMO", "NEW_ARRIVAL", "NORMAL"]
@@ -202,6 +214,7 @@ def _default_state() -> Dict[str, Any]:
         "nextModeIdx": 0,
         "lastSharedAtMs": 0,
         "manualTriggerAt": 0,
+        "manualTriggerCount": 6,
         "todayDateWib": _wib_now().strftime("%Y-%m-%d"),
         "todayCount": 0,
         "recentArticles": [],
@@ -264,6 +277,8 @@ def _match_category(row: Dict[str, Any], cat_id: str) -> bool:
         return "SPORTS MEN" in dept or (dept == "SUKO CASUAL" and ck == "SPORT" and not LADIES_HINTS_RE.search(desc))
     if cat_id == "SUKO_GO_LADIES":
         return "SPORTS LADIES" in dept or (dept == "SUKO CASUAL" and ck == "SPORT" and bool(LADIES_HINTS_RE.search(desc)))
+    if cat_id == "SUKO_GO_ANY":
+        return "SPORTS" in dept or ck == "SPORT"
     if cat_id == "LADIES_DRESS_ROK":
         return dept == "SUKO CASUAL" and ck == "DRESS_ROK"
     if cat_id == "BOYS":
@@ -272,12 +287,16 @@ def _match_category(row: Dict[str, Any], cat_id: str) -> bool:
         return "GIRLS" in dept
     if cat_id == "CELANA_OUTER":
         return dept == "SUKO CASUAL" and ck in ("CELANA", "JAKET")
+    if cat_id == "WORKWEAR":
+        return "WORKWEAR" in dept
+    if cat_id == "SLEEPWEAR":
+        return "SLEEPWEAR" in dept
     if cat_id == "WORKWEAR_SLEEPWEAR":
         return "WORKWEAR" in dept or "SLEEPWEAR" in dept
     if cat_id == "ESSENTIAL_LIFESTYLE":
         return (
-            "HOME LIVING" in dept
-            or "ESSENTIAL" in dept
+            "ESSENTIAL" in dept
+            or "HOME LIVING" in dept
             or "TOYS" in dept
             or "UNDERWEAR" in dept
             or ck in ("SEPATU_SANDAL", "TAS_AKSESORIS")
@@ -622,137 +641,211 @@ def pick_and_build_auto_share(
     recent_set = {str(x).strip().upper() for x in (st.get("recentArticles") or [])}
     start_cat_idx = int(st.get("nextCategoryIdx") or 0) % len(AUTO_SHARE_CATEGORIES)
     mode_idx = int(st.get("nextModeIdx") or 0) % len(SHARE_MODES)
-    desired_mode = SHARE_MODES[mode_idx]
 
-    chosen_row: Optional[Dict[str, Any]] = None
-    chosen_cat_idx = start_cat_idx
-    chosen_mode = desired_mode
+    # Jika dipicu manual (klik Auto-Share ON atau tombol Gas Share 6 Produk), langsung pilih 6 produk inti:
+    # Men, Ladies, Essential, Workwear, Sleepwear, SUKO GO!
+    batch_count = max(5, min(8, int(st.get("manualTriggerCount") or 6))) if (is_manual and not dry_run) else 1
 
-    # Cari kategori giliran yang punya kandidat unik belum pernah di-share
-    for offset in range(len(AUTO_SHARE_CATEGORIES)):
-        c_idx = (start_cat_idx + offset) % len(AUTO_SHARE_CATEGORIES)
-        cat_meta = AUTO_SHARE_CATEGORIES[c_idx]
-        pool = [
-            r for r in rows
-            if _match_category(r, cat_meta["id"])
-            and str(r.get("article") or "").strip().upper() not in recent_set
-        ]
-        if not pool:
-            continue
+    cat_lookup = {c["id"]: c for c in AUTO_SHARE_CATEGORIES}
+    cat_lookup["SUKO_GO_ANY"] = {"id": "SUKO_GO_ANY", "label": "SUKO GO • Sports Activewear", "short": "SUKO GO"}
 
-        # Coba mode target dulu, bila kosong fallback ke kandidat terbaik kategori ini
-        mode_pool = pool
-        actual_mode = desired_mode
-        if desired_mode == "PROMO":
-            p_only = [r for r in pool if int(r.get("articleHasPromo") or 0) == 1]
-            if p_only:
-                mode_pool = p_only
-            else:
-                actual_mode = "NORMAL"
-        elif desired_mode == "NEW_ARRIVAL":
-            na_only = [r for r in pool if str(r.get("article") or "").strip().upper() in new_arrival_articles]
-            if na_only:
-                mode_pool = na_only
-        elif desired_mode == "NORMAL":
-            norm_only = [r for r in pool if int(r.get("articleHasPromo") or 0) == 0]
-            if norm_only:
-                mode_pool = norm_only
-            else:
-                actual_mode = "PROMO"
+    selected_tuples: List[Tuple[Dict[str, Any], Dict[str, Any], str, int]] = []
+    batch_used_articles: set = set()
 
-        scored = sorted(
-            mode_pool,
-            key=lambda r: _score_candidate(r, actual_mode, new_arrival_articles),
-            reverse=True,
-        )
-        if scored:
-            chosen_row = scored[0]
-            chosen_cat_idx = c_idx
-            chosen_mode = actual_mode
-            break
+    if batch_count > 1:
+        target_cat_ids = list(GAS_NOW_CATEGORY_IDS[:batch_count])
+        for slot_i, cid in enumerate(target_cat_ids):
+            c_meta = cat_lookup.get(cid) or AUTO_SHARE_CATEGORIES[slot_i % len(AUTO_SHARE_CATEGORIES)]
+            slot_mode = SHARE_MODES[(mode_idx + slot_i) % len(SHARE_MODES)]
+            pool = [
+                r for r in rows
+                if _match_category(r, cid)
+                and str(r.get("article") or "").strip().upper() not in recent_set
+                and str(r.get("article") or "").strip().upper() not in batch_used_articles
+            ]
+            if not pool:
+                # Fallback jika kategori sudah berputar penuh di recent_set: ambil terbaik dari kategori tsb tanpa duplikat di batch ini
+                pool = [
+                    r for r in rows
+                    if _match_category(r, cid)
+                    and str(r.get("article") or "").strip().upper() not in batch_used_articles
+                ]
+            if not pool:
+                continue
 
-    # Jika seluruh katalog sudah habis berputar -> reset recentArticles & pilih ulang!
-    if not chosen_row and rows:
-        recent_set.clear()
-        st["recentArticles"] = []
-        cat_meta = AUTO_SHARE_CATEGORIES[start_cat_idx]
-        pool = [r for r in rows if _match_category(r, cat_meta["id"])] or rows
-        chosen_row = max(pool, key=lambda r: _score_candidate(r, desired_mode, new_arrival_articles))
-        chosen_cat_idx = start_cat_idx
-        chosen_mode = "PROMO" if int(chosen_row.get("articleHasPromo") or 0) == 1 else desired_mode
+            mode_pool = pool
+            actual_mode = slot_mode
+            if slot_mode == "PROMO":
+                p_only = [r for r in pool if int(r.get("articleHasPromo") or 0) == 1]
+                if p_only:
+                    mode_pool = p_only
+                else:
+                    actual_mode = "NORMAL"
+            elif slot_mode == "NEW_ARRIVAL":
+                na_only = [r for r in pool if str(r.get("article") or "").strip().upper() in new_arrival_articles]
+                if na_only:
+                    mode_pool = na_only
+            elif slot_mode == "NORMAL":
+                norm_only = [r for r in pool if int(r.get("articleHasPromo") or 0) == 0]
+                if norm_only:
+                    mode_pool = norm_only
+                else:
+                    actual_mode = "PROMO"
 
-    if not chosen_row:
+            scored = sorted(
+                mode_pool,
+                key=lambda r: _score_candidate(r, actual_mode, new_arrival_articles),
+                reverse=True,
+            )
+            if scored:
+                top_row = scored[0]
+                art_u = str(top_row.get("article") or "").strip().upper()
+                batch_used_articles.add(art_u)
+                selected_tuples.append((top_row, c_meta, actual_mode, (start_cat_idx + slot_i) % len(AUTO_SHARE_CATEGORIES)))
+    else:
+        desired_mode = SHARE_MODES[mode_idx]
+        for offset in range(len(AUTO_SHARE_CATEGORIES)):
+            c_idx = (start_cat_idx + offset) % len(AUTO_SHARE_CATEGORIES)
+            cat_meta = AUTO_SHARE_CATEGORIES[c_idx]
+            pool = [
+                r for r in rows
+                if _match_category(r, cat_meta["id"])
+                and str(r.get("article") or "").strip().upper() not in recent_set
+            ]
+            if not pool:
+                continue
+
+            mode_pool = pool
+            actual_mode = desired_mode
+            if desired_mode == "PROMO":
+                p_only = [r for r in pool if int(r.get("articleHasPromo") or 0) == 1]
+                if p_only:
+                    mode_pool = p_only
+                else:
+                    actual_mode = "NORMAL"
+            elif desired_mode == "NEW_ARRIVAL":
+                na_only = [r for r in pool if str(r.get("article") or "").strip().upper() in new_arrival_articles]
+                if na_only:
+                    mode_pool = na_only
+            elif desired_mode == "NORMAL":
+                norm_only = [r for r in pool if int(r.get("articleHasPromo") or 0) == 0]
+                if norm_only:
+                    mode_pool = norm_only
+                else:
+                    actual_mode = "PROMO"
+
+            scored = sorted(
+                mode_pool,
+                key=lambda r: _score_candidate(r, actual_mode, new_arrival_articles),
+                reverse=True,
+            )
+            if scored:
+                selected_tuples.append((scored[0], cat_meta, actual_mode, c_idx))
+                break
+
+        if not selected_tuples and rows:
+            recent_set.clear()
+            st["recentArticles"] = []
+            cat_meta = AUTO_SHARE_CATEGORIES[start_cat_idx]
+            pool = [r for r in rows if _match_category(r, cat_meta["id"])] or rows
+            best_row = max(pool, key=lambda r: _score_candidate(r, desired_mode, new_arrival_articles))
+            act_m = "PROMO" if int(best_row.get("articleHasPromo") or 0) == 1 else desired_mode
+            selected_tuples.append((best_row, cat_meta, act_m, start_cat_idx))
+
+    if not selected_tuples:
         return {"success": False, "shouldSend": False, "reason": "NO_CANDIDATE_FOUND", "state": st}
 
-    cat_meta = AUTO_SHARE_CATEGORIES[chosen_cat_idx]
-    fallback_cap = _build_deterministic_boutique_caption(chosen_row, chosen_mode, cat_meta)
-    caption, copy_engine = _polish_boutique_copy_with_ai(
-        chosen_row, chosen_mode, cat_meta, fallback_cap, gemini_caller, cfg
-    )
-
-    art_code = str(chosen_row.get("article") or "").strip().upper()
-    title = _prettify_product_title(str(chosen_row.get("description") or ""), art_code)
-    img_url = str(chosen_row.get("imageUrl") or "").strip()
-
-    # Ambil fallback foto dari varian artikel di tabel Product bila imageUrl utama error saat download
-    fallback_images: List[str] = []
-    try:
-        img_rows = turso_query(
-            'SELECT "imageUrl" FROM "Product" WHERE article = ? AND "imageUrl" IS NOT NULL AND "imageUrl" != \'\' LIMIT 4',
-            (chosen_row.get("article"),),
-            timeout=2.0,
+    def _build_single_card(tup: Tuple[Dict[str, Any], Dict[str, Any], str, int]) -> Dict[str, Any]:
+        c_row, c_meta, c_mode, _ = tup
+        fallback_cap = _build_deterministic_boutique_caption(c_row, c_mode, c_meta)
+        caption, copy_engine = _polish_boutique_copy_with_ai(
+            c_row, c_mode, c_meta, fallback_cap, gemini_caller, cfg
         )
-        for ir in img_rows:
-            u = str(ir.get("imageUrl") or "").strip()
-            if u and u != img_url and u not in fallback_images:
-                fallback_images.append(u)
-    except Exception:
-        pass
+        art_code = str(c_row.get("article") or "").strip().upper()
+        title = _prettify_product_title(str(c_row.get("description") or ""), art_code)
+        img_url = str(c_row.get("imageUrl") or "").strip()
 
-    normal = float(chosen_row.get("hargaNormal") or 0)
-    promo = float(chosen_row.get("hargaPromo") or 0)
-    has_promo = bool(int(chosen_row.get("articleHasPromo") or 0))
-    price_text = (
-        _format_rp_compact(promo)
-        if (has_promo and promo > 0 and (normal <= 0 or promo < normal))
-        else (str(chosen_row.get("articlePromoLabel") or "") if has_promo and chosen_row.get("articlePromoLabel") else _format_rp_compact(normal))
-    )
+        fallback_images: List[str] = []
+        try:
+            img_rows = turso_query(
+                'SELECT "imageUrl" FROM "Product" WHERE article = ? AND "imageUrl" IS NOT NULL AND "imageUrl" != \'\' LIMIT 4',
+                (c_row.get("article"),),
+                timeout=2.0,
+            )
+            for ir in img_rows:
+                u = str(ir.get("imageUrl") or "").strip()
+                if u and u != img_url and u not in fallback_images:
+                    fallback_images.append(u)
+        except Exception:
+            pass
 
-    hist_entry = {
-        "id": f"sh_{now_ms}",
-        "wibTime": now_wib.strftime("%d/%m %H:%M WIB"),
-        "article": art_code,
-        "sku": str(chosen_row.get("sku") or ""),
-        "title": title,
-        "categoryId": cat_meta["id"],
-        "categoryLabel": cat_meta["label"],
-        "shareType": chosen_mode,
-        "priceText": price_text,
-        "imageUrl": img_url,
-        "targetGroupName": target_gname,
-        "copyEngine": copy_engine,
-        "isManual": is_manual,
-    }
+        normal = float(c_row.get("hargaNormal") or 0)
+        promo = float(c_row.get("hargaPromo") or 0)
+        has_promo = bool(int(c_row.get("articleHasPromo") or 0))
+        price_text = (
+            _format_rp_compact(promo)
+            if (has_promo and promo > 0 and (normal <= 0 or promo < normal))
+            else (
+                str(c_row.get("articlePromoLabel") or "")
+                if has_promo and c_row.get("articlePromoLabel")
+                else _format_rp_compact(normal)
+            )
+        )
+        hist_entry = {
+            "id": f"sh_{now_ms}_{art_code[:8]}",
+            "wibTime": now_wib.strftime("%d/%m %H:%M WIB"),
+            "article": art_code,
+            "sku": str(c_row.get("sku") or ""),
+            "title": title,
+            "categoryId": c_meta["id"],
+            "categoryLabel": c_meta["label"],
+            "shareType": c_mode,
+            "priceText": price_text,
+            "imageUrl": img_url,
+            "targetGroupName": target_gname,
+            "copyEngine": copy_engine,
+            "isManual": is_manual,
+        }
+        return {
+            "caption": caption,
+            "imageUrl": img_url,
+            "fallbackImages": fallback_images,
+            "meta": hist_entry,
+        }
+
+    # Bangun semua copywriting & fallback foto secara PARALEL (6 produk selesai dalam ~2-3 detik!)
+    if len(selected_tuples) > 1:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(selected_tuples))) as pool:
+            built_items = list(pool.map(_build_single_card, selected_tuples))
+    else:
+        built_items = [_build_single_card(selected_tuples[0])]
 
     if not dry_run:
-        st["recentArticles"] = [art_code] + [a for a in (st.get("recentArticles") or []) if str(a).upper() != art_code]
-        st["nextCategoryIdx"] = (chosen_cat_idx + 1) % len(AUTO_SHARE_CATEGORIES)
-        st["nextModeIdx"] = (mode_idx + 1) % len(SHARE_MODES)
+        new_articles = [item["meta"]["article"] for item in built_items]
+        existing_recent = [a for a in (st.get("recentArticles") or []) if str(a).upper() not in set(new_articles)]
+        st["recentArticles"] = new_articles + existing_recent
+        last_c_idx = selected_tuples[-1][3]
+        st["nextCategoryIdx"] = (last_c_idx + 1) % len(AUTO_SHARE_CATEGORIES)
+        st["nextModeIdx"] = (mode_idx + len(built_items)) % len(SHARE_MODES)
         st["lastSharedAtMs"] = now_ms
         st["todayDateWib"] = now_wib.strftime("%Y-%m-%d")
-        st["todayCount"] = int(st.get("todayCount") or 0) + 1
-        st["history"] = [hist_entry] + list(st.get("history") or [])
+        st["todayCount"] = int(st.get("todayCount") or 0) + len(built_items)
+        new_hist = [item["meta"] for item in reversed(built_items)]
+        st["history"] = new_hist + list(st.get("history") or [])
         save_auto_share_state(st, storage_write_bytes)
 
+    first = built_items[0]
     return {
         "success": True,
         "shouldSend": True,
         "targetGroupId": target_gid,
         "targetGroupName": target_gname,
-        "caption": caption,
-        "imageUrl": img_url,
-        "fallbackImages": fallback_images,
-        "meta": hist_entry,
+        "count": len(built_items),
+        "items": built_items,
+        "caption": first["caption"],
+        "imageUrl": first["imageUrl"],
+        "fallbackImages": first["fallbackImages"],
+        "meta": first["meta"],
         "state": st,
     }
 

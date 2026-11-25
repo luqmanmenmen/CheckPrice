@@ -4031,11 +4031,12 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
         from suko_auto_share import load_auto_share_state, save_auto_share_state, get_auto_share_ui_summary
         as_st = load_auto_share_state(storage_read_text)
         as_st["manualTriggerAt"] = int(time.time() * 1000)
+        as_st["manualTriggerCount"] = max(5, min(8, int(payload.get("count") or 6)))
         save_auto_share_state(as_st, storage_write_bytes)
         return {
             "success": True,
             "queued": True,
-            "message": "Perintah Tes Share 1 Produk dikirim ke Cloud Daemon — foto & caption akan masuk ke grup dalam ±10-20 detik!",
+            "message": f"🚀 Gas! {as_st['manualTriggerCount']} produk (Men, Ladies, Essential, Workwear, Sleepwear, SUKO GO) akan langsung dikirim berurutan ke grup tujuan dalam ±15 detik!",
             "autoShare": get_auto_share_ui_summary(cfg, storage_read_text),
         }
 
@@ -4069,6 +4070,7 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
     if action == "save-config":
         current = load_config()
         patch = payload.get("config") if isinstance(payload.get("config"), dict) else payload
+        prev_auto_share = bool(current.get("autoShareEnabled", False))
         for field in (
             "enabled", "autoSchedule", "openHourWib", "openMinuteWib", "closeHourWib", "closeMinuteWib",
             "ignorePrivateChats", "handoffToPrivateChat", "privateSessionMinutes", "replyGreetings",
@@ -4079,6 +4081,16 @@ def handle_wa_cs_request(payload: Dict[str, Any], header_secret: str = "") -> Di
         ):
             if field in patch and patch[field] is not None:
                 current[field] = patch[field]
+        # Jika saklar Auto-Share baru saja dinyalakan (MERAH -> HIJAU), langsung gas share 6 produk inti!
+        if bool(current.get("autoShareEnabled")) and not prev_auto_share:
+            try:
+                from suko_auto_share import load_auto_share_state, save_auto_share_state
+                as_st = load_auto_share_state(storage_read_text)
+                as_st["manualTriggerAt"] = int(time.time() * 1000)
+                as_st["manualTriggerCount"] = 6
+                save_auto_share_state(as_st, storage_write_bytes)
+            except Exception:
+                pass
         if patch.get("clearFonnteToken"):
             current["fonnteToken"] = ""
         elif isinstance(patch.get("fonnteToken"), str) and patch["fonnteToken"].strip():

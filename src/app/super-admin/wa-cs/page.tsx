@@ -1011,11 +1011,20 @@ export default function WaCsSuperAdminPage() {
                   const nextVal = !(config.autoShareEnabled ?? true);
                   setConfig({ ...config, autoShareEnabled: nextVal });
                   handleSaveSettings({ autoShareEnabled: nextVal });
+                  if (nextVal) {
+                    showToast(
+                      "ok",
+                      "● AUTO-SHARE AKTIF (HIJAU)! Langsung gas kirim 6 produk (Men, Ladies, Essential, Workwear, Sleepwear, SUKO GO) ke grup dalam ±15 detik!"
+                    );
+                    setTimeout(() => fetchData(true), 22000);
+                  } else {
+                    showToast("ok", "○ AUTO-SHARE NON-AKTIF (MERAH) — penjadwalan dijeda.");
+                  }
                 }}
-                className={`px-3.5 py-2 rounded-xl text-xs font-extrabold border transition cursor-pointer ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-extrabold border transition shadow-xs cursor-pointer ${
                   (config.autoShareEnabled ?? true)
-                    ? "bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700"
-                    : "bg-slate-100 text-slate-600 border-slate-300 hover:bg-slate-200"
+                    ? "bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700"
+                    : "bg-rose-600 text-white border-rose-700 hover:bg-rose-700"
                 }`}
               >
                 {(config.autoShareEnabled ?? true) ? "● AUTO-SHARE AKTIF" : "○ AUTO-SHARE NON-AKTIF"}
@@ -1029,15 +1038,15 @@ export default function WaCsSuperAdminPage() {
                     const res = await fetch("/api/admin/wa-cs", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ action: "auto-share-trigger-now" }),
+                      body: JSON.stringify({ action: "auto-share-trigger-now", count: 6 }),
                     });
                     const d = await res.json();
                     if (d?.success) {
                       if (d.autoShare) setAutoShare(d.autoShare);
-                      showToast("ok", d.message || "Tes share 1 produk dikirim ke grup target (±15 detik)!");
-                      setTimeout(() => fetchData(true), 16000);
+                      showToast("ok", d.message || "🚀 Gas share 6 produk dikirim ke grup tujuan (±15 detik)!");
+                      setTimeout(() => fetchData(true), 22000);
                     } else {
-                      showToast("err", d?.error || "Gagal memicu tes share");
+                      showToast("err", d?.error || "Gagal memicu gas share 6 produk");
                     }
                   } catch {
                     showToast("err", "Gagal menghubungi server");
@@ -1048,7 +1057,7 @@ export default function WaCsSuperAdminPage() {
                 className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-xs cursor-pointer"
               >
                 {triggeringShare ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-                <span>Tes Kirim 1 Produk Sekarang</span>
+                <span>Gas Share 6 Produk Sekarang</span>
               </button>
             </div>
           </div>

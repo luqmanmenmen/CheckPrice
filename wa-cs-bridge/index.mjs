@@ -56,7 +56,7 @@ const CLI_PAIR_MODE =
 
 const AUTH_DIR = path.resolve(process.env.WA_AUTH_DIR || "./auth_info");
 const HEALTH_PORT = Number(process.env.PORT || process.env.WA_BRIDGE_HEALTH_PORT || 0);
-const BRIDGE_VERSION = "v2.4-promo719-autoshare10";
+const BRIDGE_VERSION = "v2.5-autoshare-6pack";
 const logger = pino({ level: "silent" });
 const startUnixSec = Math.floor(Date.now() / 1000);
 
@@ -1353,42 +1353,57 @@ async function runAutoProductShare(forceNow = false) {
   try {
     const res = await callPythonWaCs(
       { action: "auto-share-next", force: Boolean(forceNow) },
-      25000
+      30000
     );
-    if (!res?.shouldSend || !res?.targetGroupId || !res?.caption) {
+    const items =
+      Array.isArray(res?.items) && res.items.length > 0
+        ? res.items
+        : res?.caption
+        ? [{ caption: res.caption, imageUrl: res.imageUrl, fallbackImages: res.fallbackImages, meta: res.meta }]
+        : [];
+    if (!res?.shouldSend || !res?.targetGroupId || items.length === 0) {
       if (forceNow) {
         console.log(`ℹ️ [AUTO-SHARE MANUAL] Tidak mengirim: ${res?.reason || "EMPTY"}`);
       }
       return;
     }
 
-    const imgBuf = res.imageUrl
-      ? await fetchImageBuffer(res.imageUrl, res.fallbackImages || [])
-      : null;
+    console.log(`📢 [AUTO-SHARE SUKO] Mengirim batch ${items.length} produk ke [${res.targetGroupName}]...`);
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (!item?.caption) continue;
+      const imgBuf = item.imageUrl
+        ? await fetchImageBuffer(item.imageUrl, item.fallbackImages || [])
+        : null;
 
-    let sent;
-    if (imgBuf) {
-      sent = await currentSock.sendMessage(res.targetGroupId, {
-        image: imgBuf,
-        caption: res.caption,
-      });
-    } else if (res.imageUrl) {
-      try {
+      let sent;
+      if (imgBuf) {
         sent = await currentSock.sendMessage(res.targetGroupId, {
-          image: { url: res.imageUrl },
-          caption: res.caption,
+          image: imgBuf,
+          caption: item.caption,
         });
-      } catch {
-        sent = await currentSock.sendMessage(res.targetGroupId, { text: res.caption });
+      } else if (item.imageUrl) {
+        try {
+          sent = await currentSock.sendMessage(res.targetGroupId, {
+            image: { url: item.imageUrl },
+            caption: item.caption,
+          });
+        } catch {
+          sent = await currentSock.sendMessage(res.targetGroupId, { text: item.caption });
+        }
+      } else {
+        sent = await currentSock.sendMessage(res.targetGroupId, { text: item.caption });
       }
-    } else {
-      sent = await currentSock.sendMessage(res.targetGroupId, { text: res.caption });
+      trackBotSent(sent);
+      console.log(
+        `   ✅ [${i + 1}/${items.length}] ${item.meta?.categoryLabel || "-"} (${item.meta?.shareType || "-"}) — ${item.meta?.title || "-"}`
+      );
+      if (i < items.length - 1) {
+        await sleep(3800);
+      }
     }
-    trackBotSent(sent);
     scheduleAuthCloudBackup(false);
-    console.log(
-      `📢 [AUTO-SHARE SUKO] Terkirim ke [${res.targetGroupName}] | ${res.meta?.categoryLabel || "-"} (${res.meta?.shareType || "-"}) — ${res.meta?.title || "-"}`
-    );
+    console.log(`🎉 [AUTO-SHARE SUKO] Batch ${items.length} produk selesai terkirim ke [${res.targetGroupName}]!\n`);
   } catch (err) {
     console.error("⚠️ [AUTO-SHARE SUKO] Error:", err?.message || err);
   } finally {
