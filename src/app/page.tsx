@@ -124,6 +124,98 @@ function CategoryVectorIcon({ catKey, className = "w-3.5 h-3.5 shrink-0" }: { ca
   }
 }
 
+type CategorySubheaderTheme = {
+  bar: string;
+  iconBox: string;
+  eyebrow: string;
+  title: string;
+  pill: string;
+  btn: string;
+};
+
+const CATEGORY_SUBHEADER_THEMES: Record<string, CategorySubheaderTheme> = {
+  JAKET: {
+    bar: "bg-gradient-to-r from-indigo-100 via-indigo-50/90 to-white border-indigo-300 border-l-indigo-600",
+    iconBox: "bg-indigo-600 text-white shadow-indigo-600/25",
+    eyebrow: "text-indigo-700",
+    title: "text-indigo-950",
+    pill: "bg-indigo-600/10 text-indigo-800 border-indigo-300",
+    btn: "text-indigo-800 bg-white hover:bg-indigo-600 hover:text-white border-indigo-300",
+  },
+  ATASAN: {
+    bar: "bg-gradient-to-r from-blue-100 via-sky-50/90 to-white border-blue-300 border-l-blue-600",
+    iconBox: "bg-blue-600 text-white shadow-blue-600/25",
+    eyebrow: "text-blue-700",
+    title: "text-blue-950",
+    pill: "bg-blue-600/10 text-blue-800 border-blue-300",
+    btn: "text-blue-800 bg-white hover:bg-blue-600 hover:text-white border-blue-300",
+  },
+  CELANA: {
+    bar: "bg-gradient-to-r from-teal-100 via-teal-50/90 to-white border-teal-300 border-l-teal-600",
+    iconBox: "bg-teal-600 text-white shadow-teal-600/25",
+    eyebrow: "text-teal-700",
+    title: "text-teal-950",
+    pill: "bg-teal-600/10 text-teal-800 border-teal-300",
+    btn: "text-teal-800 bg-white hover:bg-teal-600 hover:text-white border-teal-300",
+  },
+  SPORT: {
+    bar: "bg-gradient-to-r from-emerald-100 via-emerald-50/90 to-white border-emerald-300 border-l-emerald-600",
+    iconBox: "bg-emerald-600 text-white shadow-emerald-600/25",
+    eyebrow: "text-emerald-700",
+    title: "text-emerald-950",
+    pill: "bg-emerald-600/10 text-emerald-800 border-emerald-300",
+    btn: "text-emerald-800 bg-white hover:bg-emerald-600 hover:text-white border-emerald-300",
+  },
+  DRESS_ROK: {
+    bar: "bg-gradient-to-r from-rose-100 via-pink-50/90 to-white border-rose-300 border-l-rose-600",
+    iconBox: "bg-rose-600 text-white shadow-rose-600/25",
+    eyebrow: "text-rose-700",
+    title: "text-rose-950",
+    pill: "bg-rose-600/10 text-rose-800 border-rose-300",
+    btn: "text-rose-800 bg-white hover:bg-rose-600 hover:text-white border-rose-300",
+  },
+  SEPATU_SANDAL: {
+    bar: "bg-gradient-to-r from-violet-100 via-purple-50/90 to-white border-violet-300 border-l-violet-600",
+    iconBox: "bg-violet-600 text-white shadow-violet-600/25",
+    eyebrow: "text-violet-700",
+    title: "text-violet-950",
+    pill: "bg-violet-600/10 text-violet-800 border-violet-300",
+    btn: "text-violet-800 bg-white hover:bg-violet-600 hover:text-white border-violet-300",
+  },
+  TAS_AKSESORIS: {
+    bar: "bg-gradient-to-r from-amber-100 via-orange-50/90 to-white border-amber-400 border-l-amber-600",
+    iconBox: "bg-amber-600 text-white shadow-amber-600/25",
+    eyebrow: "text-amber-700",
+    title: "text-amber-950",
+    pill: "bg-amber-600/15 text-amber-900 border-amber-400",
+    btn: "text-amber-900 bg-white hover:bg-amber-600 hover:text-white border-amber-400",
+  },
+  BEAUTY: {
+    bar: "bg-gradient-to-r from-fuchsia-100 via-fuchsia-50/90 to-white border-fuchsia-300 border-l-fuchsia-600",
+    iconBox: "bg-fuchsia-600 text-white shadow-fuchsia-600/25",
+    eyebrow: "text-fuchsia-700",
+    title: "text-fuchsia-950",
+    pill: "bg-fuchsia-600/10 text-fuchsia-800 border-fuchsia-300",
+    btn: "text-fuchsia-800 bg-white hover:bg-fuchsia-600 hover:text-white border-fuchsia-300",
+  },
+  TIDUR_DALAM: {
+    bar: "bg-gradient-to-r from-sky-100 via-cyan-50/90 to-white border-sky-300 border-l-sky-600",
+    iconBox: "bg-sky-600 text-white shadow-sky-600/25",
+    eyebrow: "text-sky-700",
+    title: "text-sky-950",
+    pill: "bg-sky-600/10 text-sky-800 border-sky-300",
+    btn: "text-sky-800 bg-white hover:bg-sky-600 hover:text-white border-sky-300",
+  },
+  OTHER: {
+    bar: "bg-gradient-to-r from-slate-200 via-slate-100/90 to-white border-slate-300 border-l-slate-700",
+    iconBox: "bg-slate-700 text-white shadow-slate-700/25",
+    eyebrow: "text-slate-600",
+    title: "text-slate-900",
+    pill: "bg-slate-700/10 text-slate-800 border-slate-300",
+    btn: "text-slate-800 bg-white hover:bg-slate-700 hover:text-white border-slate-300",
+  },
+};
+
 type ProductData = {
   id: number;
   sku: string;
@@ -3972,23 +4064,32 @@ export default function Home() {
                 </button>
               </div>
             ) : shouldRenderBrandSections ? (
-              <div className="flex flex-col gap-5">
+              <div className="flex flex-col gap-7">
                 {mukuRenderedBrandSections.map((sec) => (
-                  <div key={sec.subBrand} className="flex flex-col gap-2.5">
-                    <div className="flex items-center justify-between gap-2 bg-emerald-50/70 border border-emerald-200/80 rounded-xl px-3 py-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-sm leading-none">🏷️</span>
-                        <h3 className="text-xs sm:text-sm font-black text-slate-800 uppercase tracking-wide whitespace-normal break-words">
-                          {sec.subBrand}
-                        </h3>
-                        <span className="text-[10px] font-bold bg-white text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full shrink-0 tabular-nums">
-                          {sec.count.toLocaleString("id-ID")} Artikel
+                  <div key={sec.subBrand} className="flex flex-col gap-3">
+                    <div className="flex items-center justify-between gap-2.5 bg-gradient-to-r from-emerald-100 via-emerald-50/90 to-white border border-emerald-300 border-l-4 border-l-emerald-600 rounded-xl px-3.5 py-2.5 shadow-sm">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className="w-8 h-8 rounded-lg bg-emerald-600 text-white shadow-sm shadow-emerald-600/25 flex items-center justify-center text-sm shrink-0">
+                          🏷️
                         </span>
+                        <div className="min-w-0">
+                          <span className="block text-[9px] font-extrabold uppercase tracking-widest text-emerald-700 leading-none mb-0.5">
+                            Sub-Header Brand
+                          </span>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h3 className="text-sm sm:text-base font-black text-emerald-950 uppercase tracking-wide whitespace-normal break-words leading-tight">
+                              {sec.subBrand}
+                            </h3>
+                            <span className="text-[10px] sm:text-[11px] font-extrabold bg-emerald-600/10 text-emerald-900 border border-emerald-300 px-2.5 py-0.5 rounded-full shrink-0 tabular-nums">
+                              {sec.count.toLocaleString("id-ID")} Artikel
+                            </span>
+                          </div>
+                        </div>
                       </div>
                       <button
                         type="button"
                         onClick={() => handleSubBrandFilterChange(sec.subBrand)}
-                        className="text-[10px] sm:text-[11px] font-bold text-emerald-700 hover:text-emerald-800 bg-white hover:bg-emerald-100 border border-emerald-300 px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                        className="text-[10px] sm:text-xs font-extrabold text-emerald-800 bg-white hover:bg-emerald-600 hover:text-white border border-emerald-300 px-3 py-1.5 rounded-lg shadow-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                       >
                         Lihat semua {sec.subBrand} →
                       </button>
@@ -4007,35 +4108,47 @@ export default function Home() {
                 </div>
               </div>
             ) : shouldRenderCategorySections ? (
-              <div className="flex flex-col gap-5">
-                {renderedCategorySections.map((section) => (
-                  <div key={section.catKey} className="flex flex-col gap-2.5">
-                    <div className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <CategoryVectorIcon catKey={section.catKey} className="w-4 h-4 text-slate-600 shrink-0" />
-                        <h3 className="text-xs sm:text-sm font-black text-slate-800 uppercase tracking-wide whitespace-normal break-words">
-                          {section.label}
-                        </h3>
-                        <span className="text-[10px] font-bold bg-white text-slate-600 border border-slate-200 px-2 py-0.5 rounded-full shrink-0 tabular-nums">
-                          {section.count.toLocaleString("id-ID")} Artikel
-                        </span>
+              <div className="flex flex-col gap-7">
+                {renderedCategorySections.map((section) => {
+                  const theme = CATEGORY_SUBHEADER_THEMES[section.catKey] || CATEGORY_SUBHEADER_THEMES.OTHER;
+                  return (
+                    <div key={section.catKey} className="flex flex-col gap-3">
+                      <div className={`flex items-center justify-between gap-2.5 border border-l-4 rounded-xl px-3.5 py-2.5 shadow-sm ${theme.bar}`}>
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className={`w-8 h-8 rounded-lg shadow-sm flex items-center justify-center shrink-0 ${theme.iconBox}`}>
+                            <CategoryVectorIcon catKey={section.catKey} className="w-4 h-4 shrink-0" />
+                          </span>
+                          <div className="min-w-0">
+                            <span className={`block text-[9px] font-extrabold uppercase tracking-widest leading-none mb-0.5 ${theme.eyebrow}`}>
+                              Kategori Produk
+                            </span>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h3 className={`text-sm sm:text-base font-black uppercase tracking-wide whitespace-normal break-words leading-tight ${theme.title}`}>
+                                {section.label}
+                              </h3>
+                              <span className={`text-[10px] sm:text-[11px] font-extrabold border px-2.5 py-0.5 rounded-full shrink-0 tabular-nums ${theme.pill}`}>
+                                {section.count.toLocaleString("id-ID")} Artikel
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                        {section.catKey !== "OTHER" && (
+                          <button
+                            type="button"
+                            onClick={() => handleCategoryFilterChange(section.catKey)}
+                            className={`text-[10px] sm:text-xs font-extrabold border px-3 py-1.5 rounded-lg shadow-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer ${theme.btn}`}
+                          >
+                            Lihat semua {section.label} →
+                          </button>
+                        )}
                       </div>
-                      {section.catKey !== "OTHER" && (
-                        <button
-                          type="button"
-                          onClick={() => handleCategoryFilterChange(section.catKey)}
-                          className="text-[10px] sm:text-[11px] font-bold text-indigo-700 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                        >
-                          Lihat semua {section.label} →
-                        </button>
-                      )}
-                    </div>
 
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2.5 sm:gap-3">
-                      {section.items.map(renderProductCard)}
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2.5 sm:gap-3">
+                        {section.items.map(renderProductCard)}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
 
                 <div className="bg-indigo-50/60 border border-indigo-200 rounded-xl px-3.5 py-2 text-[11px] text-indigo-800 font-semibold">
                   Ringkasan kategori Hal {currentPage}/{totalPages} (setiap kategori tampil 1x, anti-dobel lintas halaman) • Pilih kategori di atas atau klik <strong>Per Kategori</strong> untuk mode daftar rata.
