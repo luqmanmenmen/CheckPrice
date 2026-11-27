@@ -344,10 +344,16 @@ export async function GET(req: Request) {
             }
 
             const cleanStepName = String(s.name || '')
-              .replace(/MDS\s*[-]?\s*BISA/gi, 'luqman org')
-              .replace(/StoreHub/gi, 'luqman org')
-              .replace(/(?:https?:\/\/)?(?:www\.)?matahari\.com/gi, 'luqman org')
-              .replace(/\bMatahari\b/gi, 'luqman org');
+              .replace(/https?:\/\/storehub\.mdsretailing\.id[^\s"']*/gi, 'https://luqman.org')
+              .replace(/storehub\.mdsretailing\.id/gi, 'luqman.org')
+              .replace(/(?:https?:\/\/)?(?:www\.)?matahari\.com/gi, 'luqman.org')
+              .replace(/(?:https?:\/\/)?cdn\.shopify\.com[^\s"']*/gi, 'luqman.org')
+              .replace(/MDS\s*(?:[-]?\s*BISA|Retailing|RETAIL)/gi, 'luqman.org')
+              .replace(/\bMDS\b/gi, 'luqman.org')
+              .replace(/\bStoreHub\b/gi, 'luqman.org')
+              .replace(/\bMatahari\b/gi, 'luqman.org')
+              .replace(/\bShopify\b/gi, 'luqman.org')
+              .replace(/\bM223515\b|\bM223708\b/gi, 'server');
             if (isFailed) {
               hasError = true;
               errorStepName = cleanStepName;
@@ -418,10 +424,14 @@ export async function GET(req: Request) {
       raw
         .replace(/https?:\/\/storehub\.mdsretailing\.id[^\s"']*/gi, 'https://luqman.org')
         .replace(/storehub\.mdsretailing\.id/gi, 'luqman.org')
-        .replace(/(?:https?:\/\/)?(?:www\.)?matahari\.com/gi, 'luqman org')
-        .replace(/MDS\s*[-]?\s*BISA/gi, 'luqman org')
-        .replace(/StoreHub/gi, 'luqman org')
-        .replace(/\bMatahari\b/gi, 'luqman org');
+        .replace(/(?:https?:\/\/)?(?:www\.)?matahari\.com/gi, 'luqman.org')
+        .replace(/(?:https?:\/\/)?cdn\.shopify\.com[^\s"']*/gi, 'luqman.org')
+        .replace(/MDS\s*(?:[-]?\s*BISA|Retailing|RETAIL)/gi, 'luqman.org')
+        .replace(/\bMDS\b/gi, 'luqman.org')
+        .replace(/\bStoreHub\b/gi, 'luqman.org')
+        .replace(/\bMatahari\b/gi, 'luqman.org')
+        .replace(/\bShopify\b/gi, 'luqman.org')
+        .replace(/\bM223515\b|\bM223708\b/gi, 'server');
 
     const cleanSyncHistory = dbSyncHistory.map((h) => {
       const cleanName = h.fileName ? maskSourceBranding(String(h.fileName)) : h.fileName;

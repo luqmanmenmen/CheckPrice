@@ -501,12 +501,12 @@ def _polish_boutique_copy_with_ai(
         price_block = f"*Harga: {_format_rp_compact(normal)}* ✨"
 
     system_prompt = (
-        "Kamu adalah Copywriter resmi grup WhatsApp 'SUKO EXCLUSIVE MEMBER' (brand fashion minimalis modern SUKO di Matahari PTC Surabaya). "
+        "Kamu adalah Copywriter resmi grup WhatsApp 'SUKO EXCLUSIVE MEMBER' (brand fashion minimalis modern SUKO Official Store PTC Surabaya). "
         "Tugasmu menulis 2 kalimat deskripsi produk yang hangat, aesthetic, clean, natural, dan menjual — PERSIS gaya admin butik SUKO.\n"
         "ATURAN WAJIB:\n"
         "1. HANYA tulis 2 kalimat pendek deskripsi (maksimal 220 karakter total). JANGAN tulis judul, harga, warna, atau sapaan.\n"
         "2. DILARANG KERAS mengarang persentase kain (mis. 100% katun/poliester) jika tidak tertulis di data produk.\n"
-        "3. DILARANG menyebut angka stok, SKU, kode artikel, atau nama database.\n"
+        "3. DILARANG menyebut angka stok, SKU, kode artikel, nama database, maupun kata MDS, StoreHub, Matahari, atau Shopify.\n"
         "4. Bahasa Indonesia santai-elegan (boleh pakai istilah wajar seperti 'daily look', 'effortless', 'clean', 'mix & match')."
     )
     user_prompt = (

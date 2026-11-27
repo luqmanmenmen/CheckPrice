@@ -94,18 +94,35 @@ def sanitize_log_line(line: str) -> str:
     text = re.sub(r"\bgithub_pat_[A-Za-z0-9_]{16,}", "github_pat_***MASKED***", text)
     text = re.sub(r"\bAIza[A-Za-z0-9_\-]{16,}", "AIza***MASKED***", text)
 
-    for secret_env in ("TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN", "DATABASE_URL", "DIRECT_URL", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_KEY", "GEMINI_API_KEY", "GITHUB_TOKEN", "MDS_PASSWORD"):
+    for secret_env in (
+        "TURSO_DATABASE_URL",
+        "TURSO_AUTH_TOKEN",
+        "DATABASE_URL",
+        "DIRECT_URL",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "SUPABASE_KEY",
+        "GEMINI_API_KEY",
+        "GITHUB_TOKEN",
+        "MDS_PASSWORD",
+        "MDS_MUKU_PASSWORD",
+        "MDS_USERNAME",
+        "MDS_MUKU_USERNAME",
+    ):
         val = (os.environ.get(secret_env) or "").strip()
-        if val and len(val) >= 8 and val in text:
-            text = text.replace(val, f"***{secret_env}***")
+        if val and len(val) >= 6 and val in text:
+            text = text.replace(val, "***MASKED***")
 
-    # Samarkan nama sumber internal agar tidak terekspos di UI Console Log
+    # Samarkan nama sumber internal agar tidak pernah terekspos di UI Console Log
     text = re.sub(r"https?://storehub\.mdsretailing\.id[^\s\"']*", "https://luqman.org", text, flags=re.IGNORECASE)
     text = re.sub(r"storehub\.mdsretailing\.id", "luqman.org", text, flags=re.IGNORECASE)
-    text = re.sub(r"(?:https?://)?(?:www\.)?matahari\.com", "luqman org", text, flags=re.IGNORECASE)
-    text = re.sub(r"MDS\s*[-]?\s*BISA", "luqman org", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bStoreHub\b", "luqman org", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bMatahari\b", "luqman org", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?:https?://)?(?:www\.)?matahari\.com", "luqman.org", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?:https?://)?cdn\.shopify\.com[^\s\"']*", "luqman.org", text, flags=re.IGNORECASE)
+    text = re.sub(r"MDS\s*(?:[-]?\s*BISA|Retailing|RETAIL)", "luqman.org", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bMDS\b", "luqman.org", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bStoreHub\b", "luqman.org", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bMatahari\b", "luqman.org", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bShopify\b", "luqman.org", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(?:M223515|M223708)\b", "server", text, flags=re.IGNORECASE)
 
     return text
 

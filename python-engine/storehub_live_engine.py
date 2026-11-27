@@ -279,7 +279,7 @@ def _extract_item_stock(item: Optional[Dict[str, Any]]) -> Optional[int]:
 def normalize_brand_and_dept(item: Dict[str, Any]) -> Tuple[str, str]:
     raw_group = str(item.get("Brand") or item.get("GroupName") or item.get("brand") or "").strip()
     raw_dept = str(
-        item.get("DeptName") or item.get("Department") or item.get("dept") or raw_group or "MDS RETAIL"
+        item.get("DeptName") or item.get("Department") or item.get("dept") or raw_group or "LUQMAN ORG"
     ).strip()
     raw_sub = str(item.get("SubclassName") or item.get("ClassName") or "").strip()
     raw_style = str(item.get("StyleCode") or item.get("styleCode") or "").strip().upper()
@@ -327,7 +327,7 @@ def normalize_brand_and_dept(item: Dict[str, Any]) -> Tuple[str, str]:
     elif raw_sub and raw_dept.upper().startswith("AOS"):
         brand = raw_sub
     else:
-        brand = raw_dept if (raw_dept and raw_dept != "MDS RETAIL") else (raw_group or "MUKU")
+        brand = raw_dept if (raw_dept and raw_dept not in ("MDS RETAIL", "LUQMAN ORG")) else (raw_group or "MUKU")
 
     return brand, raw_dept
 
@@ -2281,7 +2281,7 @@ def run_fast_stock(
             if not m_off.get("color"):
                 m_off["color"] = _extract_item_color(m_off)
             acc_prof_off = ACCOUNT_PROFILES.get(owner_acc) or {}
-            owner_lbl_off = f"{acc_prof_off.get('label', owner_acc.upper())} ({acc_prof_off.get('username', '')})"
+            owner_lbl_off = f"luqman.org • {acc_prof_off.get('label', owner_acc.upper())}"
             return {
                 "success": True,
                 "sku": clean_sku,
@@ -2479,7 +2479,7 @@ def run_fast_stock(
             "success": False,
             "sku": clean_sku,
             "ownerAccount": owner_acc,
-            "message": "Data live tidak tersedia dari server MDS saat ini.",
+            "message": "Data live tidak tersedia dari server luqman.org saat ini.",
             "elapsedMs": int((time.time() - t0) * 1000),
         }
 
@@ -2488,7 +2488,7 @@ def run_fast_stock(
     final_stok = int((main_product or {}).get("stok") if main_product else updates_map.get(clean_sku, 0))
 
     acc_prof = ACCOUNT_PROFILES.get(owner_acc) or {}
-    owner_acc_label = f"{acc_prof.get('label', owner_acc.upper())} ({acc_prof.get('username', '')})"
+    owner_acc_label = f"luqman.org • {acc_prof.get('label', owner_acc.upper())}"
 
     return {
         "success": True,

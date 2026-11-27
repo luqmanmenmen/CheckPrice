@@ -674,7 +674,7 @@ def execute_catalog_expansion(collections_only: bool = False, max_collections: i
                     f"sync_{uuid.uuid4().hex[:20]}",
                     row_u[0],
                     "PHOTO_SYNC",
-                    f"Ekspansi Artikel Matahari.com (+{len(insert_list):,} SKU, +{len(new_articles_found):,} Artikel)",
+                    f"Ekspansi Artikel luqman.org (+{len(insert_list):,} SKU, +{len(new_articles_found):,} Artikel)",
                     "SUCCESS",
                     len(insert_list) + len(patch_list),
                     now_dt,

@@ -2156,3 +2156,13 @@ Semua aksi dipicu secara instan via GitHub Actions Cloud Runner tanpa membebani 
   2. **Turso Cloud Auth Session Sync (`secrets/wa-bridge-auth.json`):** Endpoint secret-protected `bridge-auth-get` & `bridge-auth-save` di [`python-engine/wa_cs_engine.py`](file:///c:/Max%20Display/price-checker/python-engine/wa_cs_engine.py) dan auto-restore/auto-backup + graceful `SIGTERM` di [`wa-cs-bridge/index.mjs`](file:///c:/Max%20Display/price-checker/wa-cs-bridge/index.mjs). Saat container cloud boot ulang, sesi `+6285771123000` otomatis pulih dari Turso tanpa perlu pairing ulang.
   3. **Verifikasi Live:** `bridgeOnline: true`, `connected: true` (`+6285771123000`), `0` local background tasks, seluruh repo tersimpan bersih di GitHub (`luqmanmenmen/CheckPrice`).
   4. **Catatan Kuota:** Vercel Hobby Daemons = 420 GB-jam/bulan (reset tgl 1 tiap bulan); `wa-cs-bridge/Dockerfile` & `fly.toml` juga siap dipindah ke Oracle Cloud Always Free / VPS kapan pun dibutuhkan untuk 720 jam nonstop/bulan.
+
+
+---
+
+## ATURAN KERAHASIAAN SUMBER DATA (HARAM BOCOR DI UI / API / PESAN!)
+- **DILARANG KERAS (HARAM)** menampilkan atau membocorkan nama sumber scraping / sistem internal (`MDS`, `MDS Retailing`, `MDS BISA`, `StoreHub`, `storehub.mdsretailing.id`, `Matahari`, `matahari.com`, `Shopify`, `cdn.shopify.com`, maupun username akun internal `M223515` / `M223708`) di:
+  1. Seluruh tampilan UI (tombol, judul kartu promo, badge, toast, tooltip, pesan error, tabel riwayat, console log web).
+  2. Pesan JSON API yang ditampilkan ke layar pengguna.
+  3. Caption / balasan otomatis bot WhatsApp.
+- **WAJIB GANTI DENGAN:** **`Server`** atau **`luqman.org`**.

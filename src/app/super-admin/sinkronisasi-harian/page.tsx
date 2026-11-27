@@ -1527,15 +1527,23 @@ export default function UpdateProdukPage() {
                               : "bg-sky-50 text-sky-700 border border-sky-200"
                           }`}
                         >
-                          {item.type.replace(/MDS_BISA/gi, "LUQMAN_ORG").replace(/MDS_SALES/gi, "LUQMAN_ORG_SALES")}
+                          {item.type
+                            .replace(/MDS_BISA/gi, "LUQMAN_ORG")
+                            .replace(/MDS_SALES/gi, "LUQMAN_ORG_SALES")
+                            .replace(/\bMDS\b/gi, "SERVER")}
                         </span>
                       </td>
                       <td className="px-3.5 py-2.5 text-slate-600 whitespace-normal break-words max-w-md">
                         {item.fileName
-                          ?.replace(/MDS\s*[-]?\s*BISA/gi, "luqman org")
-                          .replace(/StoreHub/gi, "luqman org")
-                          .replace(/(?:https?:\/\/)?(?:www\.)?matahari\.com/gi, "luqman org")
-                          .replace(/\bMatahari\b/gi, "luqman org")}
+                          ?.replace(/(?:https?:\/\/)?storehub\.mdsretailing\.id[^\s"']*/gi, "luqman.org")
+                          .replace(/(?:https?:\/\/)?(?:www\.)?matahari\.com/gi, "luqman.org")
+                          .replace(/(?:https?:\/\/)?cdn\.shopify\.com[^\s"']*/gi, "luqman.org")
+                          .replace(/MDS\s*(?:[-]?\s*BISA|Retailing|RETAIL)/gi, "luqman.org")
+                          .replace(/\bMDS\b/gi, "luqman.org")
+                          .replace(/\bStoreHub\b/gi, "luqman.org")
+                          .replace(/\bMatahari\b/gi, "luqman.org")
+                          .replace(/\bShopify\b/gi, "luqman.org")
+                          .replace(/\bM223515\b|\bM223708\b/gi, "server")}
                       </td>
                       <td className="px-3.5 py-2.5 text-right whitespace-nowrap">
                         {(item.newSkusAdded ?? 0) > 0 || (item.newArticlesAdded ?? 0) > 0 ? (

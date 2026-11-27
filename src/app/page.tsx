@@ -4514,11 +4514,11 @@ export default function Home() {
                     )}
                     <span>{productBrandMeta.shortLabel}</span>
                   </span>
-                  {product.dept && (
-                    <span className="font-semibold text-slate-600 whitespace-normal break-words hidden sm:inline">
-                      {product.dept}
-                    </span>
-                  )}
+                    {product.dept && product.dept.toUpperCase() !== "MDS RETAIL" && (
+                      <span className="font-semibold text-slate-600 whitespace-normal break-words hidden sm:inline">
+                        {product.dept}
+                      </span>
+                    )}
                 </div>
               </div>
 
@@ -4711,7 +4711,7 @@ export default function Home() {
                       <div className="flex flex-wrap items-center justify-between gap-1.5">
                         <span className="font-black uppercase tracking-wide text-[11px] flex items-center gap-1.5">
                           <Tag className="w-3.5 h-3.5 shrink-0" />
-                          <span>{isPwpPromo ? "Detail Promo PWP / Tebus Murah" : "Detail Promo Aktif MDS"}</span>
+                          <span>{isPwpPromo ? "Detail Promo PWP / Tebus Murah" : "Detail Promo Resmi Server"}</span>
                         </span>
                         {product.diskon && (
                           <span
@@ -4773,7 +4773,7 @@ export default function Home() {
                         type="button"
                         onClick={() => handleCheckLiveStock({ silent: false })}
                         disabled={checkingLiveStock}
-                        title="Sinkronkan langsung semua data live dari MDS Retailing: Stok seluruh warna & size, Harga Normal, Promo/Diskon SP, Barcode, & Detail Produk"
+                        title="Sinkronkan langsung semua data live dari server luqman.org: Stok seluruh warna & size, Harga Normal, Promo/Diskon SP, Barcode, & Detail Produk"
                         className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-50 active:scale-95 cursor-pointer border ${
                           !heroImages.length || sourceSiblings.length <= 1
                             ? "bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white border-indigo-700 shadow-sm"
@@ -4787,7 +4787,7 @@ export default function Home() {
                         )}
                         <span className="whitespace-normal break-words">
                           {checkingLiveStock
-                            ? "Menyinkronkan MDS..."
+                            ? "Menyinkronkan Server..."
                             : !heroImages.length || sourceSiblings.length <= 1
                             ? "Live Sinkron + Foto"
                             : "Live Sinkron"}

@@ -749,10 +749,15 @@ export async function GET(request: NextRequest) {
     const sanitizeBrandText = (val?: string | null) =>
       val
         ? val
-          .replace(/MDS\s*[-]?\s*BISA/gi, 'luqman org')
-          .replace(/StoreHub/gi, 'luqman org')
-          .replace(/(?:https?:\/\/)?(?:www\.)?matahari\.com/gi, 'luqman org')
-          .replace(/\bMatahari\b/gi, 'luqman org')
+          .replace(/(?:https?:\/\/)?storehub\.mdsretailing\.id[^\s"']*/gi, 'luqman.org')
+          .replace(/(?:https?:\/\/)?(?:www\.)?matahari\.com/gi, 'luqman.org')
+          .replace(/(?:https?:\/\/)?cdn\.shopify\.com[^\s"']*/gi, 'luqman.org')
+          .replace(/MDS\s*(?:[-]?\s*BISA|Retailing|RETAIL)/gi, 'luqman.org')
+          .replace(/\bMDS\b/gi, 'luqman.org')
+          .replace(/\bStoreHub\b/gi, 'luqman.org')
+          .replace(/\bMatahari\b/gi, 'luqman.org')
+          .replace(/\bShopify\b/gi, 'luqman.org')
+          .replace(/\bM223515\b|\bM223708\b/gi, 'server')
         : null;
 
     const responseData = {

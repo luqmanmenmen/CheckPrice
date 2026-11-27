@@ -324,7 +324,7 @@ def build_product_knowledge_answer(message: str, sapaan: str = "Kak") -> str:
 
     if asks_tech and not asks_types:
         return (
-            f"Dengan senang hati saya jelaskan {sapaan}! 😊 Sebagai private brand *minimalist everyday wear* dari Matahari, "
+            f"Dengan senang hati saya jelaskan {sapaan}! 😊 Sebagai brand *minimalist everyday wear* modern, "
             f"*SUKO* punya beberapa teknologi & material andalan yang dirancang khusus untuk iklim tropis Indonesia:\n\n"
             f"1️⃣ *Lini SUKO Sports (SUKO GO):*\n"
             f"   • *4-Way Stretch & Ultra Stretch* — melar 4 arah, super fleksibel buat lari, gym, maupun duduk lama.\n"

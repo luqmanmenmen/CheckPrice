@@ -2216,8 +2216,8 @@ def execute_live_stock_sync(
 
     cookie = get_active_cookie()
     if not cookie:
-        print("❌ Cookie login StoreHub tidak ditemukan.")
-        log_sync_history("MUKU_STOCK_SYNC" if is_muku_mode else "STOCK_SYNC", "Gagal: Cookie StoreHub tidak ditemukan", 0, "FAILED")
+        print("❌ Cookie login server luqman.org tidak ditemukan.")
+        log_sync_history("MUKU_STOCK_SYNC" if is_muku_mode else "STOCK_SYNC", "Gagal: Cookie server luqman.org tidak ditemukan", 0, "FAILED")
         return
 
     online, cookie = ensure_store_online(cookie, run_once_cloud=True)
@@ -2505,8 +2505,8 @@ def execute_morning_sweep(
     """Eksekusi penuh pemindaian brutal multi-threaded (Turbo 28 Workers)."""
     cookie = get_active_cookie()
     if not cookie:
-        print("❌ Cookie login StoreHub tidak ditemukan.")
-        log_sync_history("MDS_BISA_SYNC", "Gagal: Cookie StoreHub tidak ditemukan", 0, "FAILED")
+        print("❌ Cookie login server luqman.org tidak ditemukan.")
+        log_sync_history("MDS_BISA_SYNC", "Gagal: Cookie server luqman.org tidak ditemukan", 0, "FAILED")
         return
 
     online, cookie = ensure_store_online(cookie, run_once_cloud=run_once_cloud, check_interval_sec=45)
