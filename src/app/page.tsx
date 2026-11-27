@@ -494,13 +494,17 @@ export default function Home() {
   const [liveStockVerified, setLiveStockVerified] = useState<string | null>(null);
   const [imageRefreshVersion, setImageRefreshVersion] = useState(0);
   const liveStockEpochRef = useRef(0);
+  const autoSyncedColorAtRef = useRef<Map<string, number>>(new Map());
 
-  const handleCheckLiveStock = async () => {
+  const handleCheckLiveStock = async (opts?: { silent?: boolean }) => {
+    const isSilent = Boolean(opts?.silent);
     if (!product?.sku || checkingLiveStock) return;
     setCheckingLiveStock(true);
     const requestEpoch = ++liveStockEpochRef.current;
     const targetSku = product.sku;
     const curSibs = siblings && siblings.length > 0 ? siblings : [product];
+    const syncColorKey = `${String(product.article || product.sku).trim().toUpperCase()}::${String(product.color || "").trim().toUpperCase()}`;
+    autoSyncedColorAtRef.current.set(syncColorKey, Date.now());
     const needsDiscovery = curSibs.length <= 1 || !curSibs.some((s) => Boolean(s.imageUrl));
     const familySkus = curSibs.map((s) => s.sku).filter(Boolean);
     const familyVariants = curSibs
@@ -518,7 +522,6 @@ export default function Home() {
       discoverFamily: needsDiscovery,
       withImages: needsDiscovery,
       syncAllSizes: true,
-      // Jalur tol khusus Live Stok: 1 request langsung ke StoreHub (+ peta relatedStock), 0 tunggu DB
       fastMode: !needsDiscovery,
       familySkus: !needsDiscovery ? familySkus : [],
       familyVariants: !needsDiscovery ? familyVariants : [],
@@ -675,13 +678,16 @@ export default function Home() {
         if (data.storeOffline) {
           const imgNote = data.imagesMatched > 0 ? ` + ${data.imagesMatched} foto studio` : '';
           setLiveStockVerified(`Tersimpan: ${resolvedStok} pcs${imgNote}`);
-          showToast(data.message || `Toko tutup (malam). Menampilkan stok tersimpan: ${resolvedStok} pcs${imgNote}`, "info");
+          if (!isSilent) {
+            showToast(data.message || `Toko tutup (malam). Menampilkan data tersimpan: ${resolvedStok} pcs${imgNote}`, "info");
+          }
         } else {
           const liveChecked = data.liveCheckedCount ?? totalUpdatedCount;
           const countText = liveChecked > 1 ? ` (${liveChecked} warna/size)` : '';
           const liveHargaPromo = data.data?.hargaPromo ?? data.hargaPromo ?? null;
           const liveDiskon = data.data?.diskon ?? data.livePromo?.diskon ?? null;
           const liveHargaNormal = data.data?.hargaNormal ?? data.hargaNormal ?? 0;
+          const accLabel = data.ownerAccountLabel ? ` [${data.ownerAccountLabel}]` : "";
           const promoText = liveHargaPromo
             ? `Promo Rp ${Number(liveHargaPromo).toLocaleString("id-ID")}${liveDiskon ? ` (${liveDiskon})` : ""}`
             : liveDiskon
@@ -689,23 +695,46 @@ export default function Home() {
             : liveHargaNormal > 0
             ? `Normal Rp ${Number(liveHargaNormal).toLocaleString("id-ID")}`
             : "";
-          setLiveStockVerified(`Sinkron: ${resolvedStok} pcs${countText}${promoText ? ` • ${promoText}` : ""}`);
-          showToast(
-            `⚡ Live Sinkron MDS sukses! ${promoText ? `${promoText} • ` : ""}Stok ${resolvedStok} pcs (${liveChecked} varian warna & size tersinkron).`,
-            "success"
-          );
+          setLiveStockVerified(`Sinkron${accLabel}: ${resolvedStok} pcs${countText}${promoText ? ` • ${promoText}` : ""}`);
+          const priceChanged =
+            (data.data?.hargaPromo ?? null) !== (product.hargaPromo ?? null) ||
+            (data.data?.hargaNormal ?? product.hargaNormal) !== product.hargaNormal;
+          const stockChanged = Number(resolvedStok) !== Number(product.stok ?? 0) || (data.changedCount ?? 0) > 0;
+          if (!isSilent || priceChanged || stockChanged) {
+            showToast(
+              `⚡ Live Sinkron${accLabel} sukses! ${promoText ? `${promoText} • ` : ""}Stok ${resolvedStok} pcs (${liveChecked} varian tersinkron).`,
+              "success"
+            );
+          }
         }
-      } else {
+      } else if (!isSilent) {
         showToast(data.message || "Menampilkan data tersimpan di sistem", "info");
       }
     } catch {
-      showToast("Gagal terhubung ke server Live Sinkron (timeout/jaringan). Coba tekan ulang.", "error");
+      if (!isSilent) {
+        showToast("Gagal terhubung ke server Live Sinkron (timeout/jaringan). Coba tekan ulang.", "error");
+      }
     } finally {
       if (liveStockEpochRef.current === requestEpoch) {
         setCheckingLiveStock(false);
       }
     }
   };
+
+  // AUTO LIVE-SINKRON OTOMATIS SAAT SCAN / BUKA PRODUK / PINDAH WARNA (0 KERJA 2 KALI!)
+  // Cooldown 60 detik per (artikel + warna) agar pindah size S->M->L tetap 0ms tanpa spam,
+  // tapi scan baru atau pindah warna otomatis menyinkronkan harga, promo, & stok 1 artikel sesuai role akun MDS!
+  useEffect(() => {
+    if (!product?.sku) return;
+    const syncColorKey = `${String(product.article || product.sku).trim().toUpperCase()}::${String(product.color || "").trim().toUpperCase()}`;
+    const lastSyncAt = autoSyncedColorAtRef.current.get(syncColorKey) || 0;
+    if (Date.now() - lastSyncAt < 60_000) return;
+    const timer = setTimeout(() => {
+      void handleCheckLiveStock({ silent: true });
+    }, 180);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product?.sku, product?.article, product?.color]);
 
   const [healingImageKey, setHealingImageKey] = useState<string | null>(null);
   const [updatingImages, setUpdatingImages] = useState(false);
@@ -4639,7 +4668,7 @@ export default function Home() {
                     <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
-                        onClick={handleCheckLiveStock}
+                        onClick={() => handleCheckLiveStock({ silent: false })}
                         disabled={checkingLiveStock}
                         title="Sinkronkan langsung semua data live dari MDS Retailing: Stok seluruh warna & size, Harga Normal, Promo/Diskon SP, Barcode, & Detail Produk"
                         className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-50 active:scale-95 cursor-pointer border ${

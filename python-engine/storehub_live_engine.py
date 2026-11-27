@@ -1839,59 +1839,103 @@ def run_fast_stock(
     if not clean_sku:
         return {"success": False, "error": "SKU wajib diisi"}
 
-    # Baca baris eksisting 1x (untuk ownerAccount, barcode, normal price hint, & fallback artikel)
+    # Baca baris eksisting 1x (untuk KUNCI ROLE AKUN MDS, barcode, normal price hint, imageUrl, & artikel)
     existing_rows = turso_query(
-        'SELECT sku, barcode, article, brand, dept, description, color, size, "hargaNormal", stok FROM "Product" WHERE sku = ? LIMIT 1',
+        'SELECT sku, barcode, article, brand, dept, description, color, size, "hargaNormal", stok, "imageUrl" FROM "Product" WHERE sku = ? LIMIT 1',
         (clean_sku,),
         timeout=2.2,
     )
     ex0 = existing_rows[0] if existing_rows else {}
-    bg = str(brand_group or "").strip().upper()
-    if bg not in ("SUKO", "MUKU", "ZES") and ex0:
-        bg = resolve_store_group(str(ex0.get("brand") or ""), str(ex0.get("dept") or ""), str(ex0.get("description") or ""))
+    bg_db = (
+        resolve_store_group(str(ex0.get("brand") or ""), str(ex0.get("dept") or ""), str(ex0.get("description") or ""))
+        if ex0 and (ex0.get("brand") or ex0.get("dept"))
+        else ""
+    )
+    bg_req = str(brand_group or "").strip().upper()
+    bg = bg_db if bg_db in ("SUKO", "MUKU", "ZES") else (bg_req if bg_req in ("SUKO", "MUKU", "ZES") else "")
+    role_locked = bg in ("SUKO", "MUKU", "ZES")
+    # KUNCI DETERMINISTIK ROLE AKUN MDS:
+    # - SUKO -> akun `suko` (M223515 — Luqman Arif)
+    # - Mu+Ku / ZES -> akun `muku` (M223708 — Aurel Sabrina Rahmadita)
     owner_acc = "suko" if bg == "SUKO" else "muku"
     alt_acc = "muku" if owner_acc == "suko" else "suko"
     normal_hint = int(round(float(ex0.get("hargaNormal") or 0))) if ex0 else 0
     existing_bc = str(ex0.get("barcode") or "").strip()
     resolved_article = str(article or ex0.get("article") or "").strip()
+    needs_img_heal = not bool(str(ex0.get("imageUrl") or "").strip())
 
     cookie = get_storehub_cookie(owner_acc, force_refresh=False)
     if not cookie:
         return {"success": False, "sku": clean_sku, "storeOffline": True, "message": "Sesi toko belum tersedia."}
 
-    def _run_parallel_trio(active_cookie: str, active_acc: str, budget: float = 4.2):
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+    def _run_parallel_trio(active_cookie: str, active_acc: str, budget: float = 4.2, fetch_img: bool = False):
+        workers = 4 if fetch_img else 3
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
             f_det = pool.submit(query_detail, "sku", clean_sku, active_cookie, active_acc, budget)
             f_mat = pool.submit(query_stock_matrix, clean_sku, active_cookie, active_acc, budget)
             f_pro = pool.submit(query_promotion_checked, "sku", clean_sku, active_cookie, active_acc, normal_hint, budget)
+            f_img = (
+                pool.submit(
+                    lookup_matahari_images,
+                    clean_sku,
+                    resolved_article,
+                    existing_bc,
+                    {clean_sku},
+                    None,
+                    str(ex0.get("color") or ""),
+                )
+                if fetch_img
+                else None
+            )
             d_r = f_det.result(timeout=budget + 0.5)
             m_r = f_mat.result(timeout=budget + 0.5)
             p_r = f_pro.result(timeout=budget + 0.5)
-        return d_r, m_r, p_r
+            imgs_r: List[str] = []
+            if f_img is not None:
+                try:
+                    imgs_r = f_img.result(timeout=min(2.6, budget))
+                except Exception:
+                    imgs_r = []
+        return d_r, m_r, p_r, imgs_r
 
     try:
-        d_res, m_res, p_res = _run_parallel_trio(cookie, owner_acc, 4.2)
+        d_res, m_res, p_res, healed_imgs = _run_parallel_trio(cookie, owner_acc, 4.2, fetch_img=needs_img_heal)
     except Exception:
-        d_res, m_res, p_res = {"items": []}, {"rows": []}, {"checked": False, "promo": None}
+        d_res, m_res, p_res, healed_imgs = {"items": []}, {"rows": []}, {"checked": False, "promo": None}, []
 
     cookie = d_res.get("cookie") or m_res.get("cookie") or cookie
     if (d_res.get("action_expired") or m_res.get("action_expired") or p_res.get("action_expired")) and resolve_action_hashes(cookie=cookie):
-        d_res, m_res, p_res = _run_parallel_trio(cookie, owner_acc, 4.0)
+        d_res, m_res, p_res, healed_imgs = _run_parallel_trio(cookie, owner_acc, 4.0, fetch_img=False)
     elif d_res.get("auth_failed") or m_res.get("auth_failed") or p_res.get("auth_failed"):
         fresh = get_storehub_cookie(owner_acc, force_refresh=True)
         if fresh:
             cookie = fresh
-            d_res, m_res, p_res = _run_parallel_trio(cookie, owner_acc, 4.0)
+            d_res, m_res, p_res, healed_imgs = _run_parallel_trio(cookie, owner_acc, 4.0, fetch_img=False)
 
-    # Jika akun pertama 0 hasil (misal produk ternyata milik akun toko satunya), coba akun alternatif 1x!
-    if not (d_res.get("items") or m_res.get("rows")) and not (d_res.get("offline") or m_res.get("offline")):
+    # STRICT ROLE LOCK:
+    # HANYA boleh mencoba akun alternatif jika role produk belum diketahui (`not role_locked`).
+    # Jika produk sudah jelas SUKO atau Mu+Ku, DILARANG mencampur ke akun toko lain!
+    if (not role_locked) and not (d_res.get("items") or m_res.get("rows")) and not (d_res.get("offline") or m_res.get("offline")):
         alt_cookie = get_storehub_cookie(alt_acc, force_refresh=False)
         if alt_cookie:
-            d2, m2, p2 = _run_parallel_trio(alt_cookie, alt_acc, 3.8)
+            d2, m2, p2, _ = _run_parallel_trio(alt_cookie, alt_acc, 3.8, fetch_img=False)
             if d2.get("items") or m2.get("rows"):
                 owner_acc = alt_acc
                 cookie = alt_cookie
                 d_res, m_res, p_res = d2, m2, p2
+
+    # Verifikasi silang owner sejati dari hasil checkItemDetail: bila tidak cocok role, wajib pindah tepat 1x ke pemilik sah!
+    if d_res.get("items"):
+        det_brand, det_dept = normalize_brand_and_dept(d_res["items"][0])
+        true_owner = resolve_owner_account(det_brand, det_dept, str(d_res["items"][0].get("Description") or ""))
+        if true_owner != owner_acc:
+            true_cookie = get_storehub_cookie(true_owner, force_refresh=False)
+            if true_cookie:
+                dt_r, mt_r, pt_r, _ = _run_parallel_trio(true_cookie, true_owner, 3.8, fetch_img=False)
+                if dt_r.get("items") or mt_r.get("rows"):
+                    owner_acc = true_owner
+                    cookie = true_cookie
+                    d_res, m_res, p_res = dt_r, mt_r, pt_r
 
     if (d_res.get("offline") or m_res.get("offline")) and not (d_res.get("items") or m_res.get("rows")):
         return {
@@ -1938,7 +1982,7 @@ def run_fast_stock(
             clean_sku,
             owner_acc,
             live_promo,
-            [],
+            healed_imgs,
             now_iso,
             promo_checked=promo_checked,
         )
@@ -2059,12 +2103,16 @@ def run_fast_stock(
     changed_count = sum(1 for k, v in updates_map.items() if k in old_map and old_map[k] != v)
     final_stok = int((main_product or {}).get("stok") if main_product else updates_map.get(clean_sku, 0))
 
+    acc_prof = ACCOUNT_PROFILES.get(owner_acc) or {}
+    owner_acc_label = f"{acc_prof.get('label', owner_acc.upper())} ({acc_prof.get('username', '')})"
+
     return {
         "success": True,
         "sku": clean_sku,
         "article": resolved_article or (main_product or {}).get("article"),
         "stok": final_stok,
         "ownerAccount": owner_acc,
+        "ownerAccountLabel": owner_acc_label,
         "data": main_product,
         "siblings": siblings,
         "variants": updated_variants,
@@ -2074,6 +2122,7 @@ def run_fast_stock(
         "changedCount": changed_count,
         "promoChecked": promo_checked,
         "livePromo": live_promo,
+        "imagesMatched": len(healed_imgs),
         "hargaNormal": (main_product or {}).get("hargaNormal") or live_normal,
         "hargaPromo": (main_product or {}).get("hargaPromo"),
         "fastMode": False,
