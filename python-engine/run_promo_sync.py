@@ -929,7 +929,10 @@ def build_upcoming_promo_preview(
         t_dt = item.get("tgl_akhir") or resolved_to
 
         desc = (ex.get("description") or item.get("description") or f"Produk {sku_str}").strip()
-        art = (ex.get("article") or item.get("article") or desc.split(":")[0].strip() or sku_str).strip()
+        raw_ex_art = str(ex.get("article") or item.get("article") or "").strip()
+        if raw_ex_art.upper() in ("", "0", "00", "000", "-", "--", "NONE", "NULL", "N/A", "PRODUK BARU") or "DUMMY" in raw_ex_art.upper():
+            raw_ex_art = ""
+        art = (raw_ex_art or desc.split(":")[0].strip() or sku_str).strip()
         is_row_promo = bool(item.get("is_promo"))
         raw_acara = item.get("acara") or (item.get("sumber_sheet") if is_row_promo else None)
         if raw_acara and any(k in str(raw_acara).upper() for k in ["NORMAL", "REGULAR"]):

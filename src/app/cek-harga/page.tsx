@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { Tag, Sparkles, AlertCircle, Camera, RefreshCw, Zap, Gift, Percent, Barcode, Loader2 } from "lucide-react";
 import ProductImageSlider from "@/components/ProductImageSlider";
+import { isValidRetailArticle } from "@/lib/smartSearchEngine";
 
 // Engine TextScanner — scan teks SKU 8 digit
 const TextScanner = dynamic(() => import("@/components/TextScanner"), { ssr: false });
@@ -320,8 +321,8 @@ export default function CekHargaPage() {
         };
 
         let sibs: ProductData[] = [prodData];
-        if (foundLocal.article) {
-          const localSibs = await db.products.where("article").equals(foundLocal.article).toArray();
+        if (isValidRetailArticle(foundLocal.article, foundLocal.sku)) {
+          const localSibs = await db.products.where("article").equals(foundLocal.article!).toArray();
           if (localSibs && localSibs.length > 0) {
             sibs = localSibs.map(s => ({
               sku: s.sku,

@@ -1,4 +1,5 @@
 import { prisma as db } from "@/lib/prisma";
+import { isValidRetailArticle, isIgnoredCatalogProduct } from "@/lib/smartSearchEngine";
 import {
   BrandGroupKey,
   CategoryKey,
@@ -196,35 +197,43 @@ export async function getProductSiblings(prod: any): Promise<any[]> {
   let siblings: any[] = [];
   const targetBrandGroup = classifyBrandGroup(prod);
   const targetCategory = classifyProductCategory(prod);
-  const matchesTargetScope = (s: any) =>
-    classifyBrandGroup(s) === targetBrandGroup &&
-    classifyProductCategory(s) === targetCategory;
+  const prodBrandNorm = getNormalizedSubBrand(prod);
+  const matchesTargetScope = (s: any) => {
+    if (!s || isIgnoredCatalogProduct(s)) return false;
+    if (classifyBrandGroup(s) !== targetBrandGroup) return false;
+    if (classifyProductCategory(s) !== targetCategory) return false;
+    if (targetBrandGroup === "MUKU" && prodBrandNorm && prodBrandNorm !== "MUKU") {
+      const sibSub = getNormalizedSubBrand(s);
+      if (sibSub && sibSub !== "MUKU" && sibSub !== prodBrandNorm) return false;
+    }
+    return true;
+  };
 
-  if (
-    prod.article &&
-    prod.article.trim() &&
-    !["0", "-", "PRODUK BARU"].includes(prod.article.trim().toUpperCase())
-  ) {
+  if (isValidRetailArticle(prod.article, prod.sku)) {
     const allSiblings = await db.product.findMany({
       where: { article: prod.article },
       orderBy: [{ color: "asc" }, { size: "asc" }, { description: "asc" }],
     });
     const scoped = allSiblings.filter(matchesTargetScope);
-    siblings = cleanPromoList(scoped.length > 0 ? scoped : allSiblings);
+    siblings = cleanPromoList(scoped.length > 0 ? scoped : [prod]);
   } else if (prod.description) {
     const parts = prod.description.split(":");
-    if (parts.length > 1) {
-      const parentName = parts[0].trim();
+    const parentName = parts[0]?.trim() || "";
+    if (parts.length > 1 && parentName.length >= 6 && !isIgnoredCatalogProduct(prod)) {
       const allSiblings = await db.product.findMany({
         where: {
           description: { startsWith: parentName + ":" },
           ...(prod.brand ? { brand: prod.brand } : {}),
+          ...(prod.dept ? { dept: prod.dept } : {}),
         },
         orderBy: { description: "asc" },
       });
       const scoped = allSiblings.filter(matchesTargetScope);
-      siblings = cleanPromoList(scoped.length > 0 ? scoped : allSiblings);
+      siblings = cleanPromoList(scoped.length > 0 ? scoped : [prod]);
     }
+  }
+  if (!siblings.some((s) => s?.sku === prod.sku)) {
+    siblings = [prod, ...siblings];
   }
   return siblings;
 }

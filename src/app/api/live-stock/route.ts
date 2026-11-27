@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
 
     const brandGroup = typeof body.brandGroup === 'string' ? body.brandGroup.trim().toUpperCase() : null;
 
-    if (body.fastMode === true && familyVariants.length > 0) {
+    if (body.fastMode === true) {
       const result = await invokePythonLiveEngine(
         {
           action: 'fast-stock',

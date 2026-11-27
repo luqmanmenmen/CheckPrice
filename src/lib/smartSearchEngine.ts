@@ -532,7 +532,46 @@ Balas HANYA dalam format JSON array berisi string huruf kapital, contoh: ["SWEAT
   }
 }
 
-const INVALID_ARTICLE_SET = new Set(["", "0", "-", "PRODUK BARU", "N/A", "NONE"]);
+const INVALID_ARTICLE_SET = new Set([
+  "",
+  "0",
+  "00",
+  "000",
+  "-",
+  "--",
+  ".",
+  "/",
+  "PRODUK BARU",
+  "N/A",
+  "NA",
+  "NONE",
+  "NULL",
+  "UNDEFINED",
+  "NO STYLE",
+  "NO ARTICLE",
+  "UNKNOWN",
+  "DEFAULT",
+  "ITEM TIDAK DIGUNAKAN",
+  "ITEM TIDAK DAPAT",
+  "TIDAK DIGUNAKAN",
+  "TIDAK DI GUNAKAN",
+]);
+
+/**
+ * Validasi tunggal kode artikel ritel di seluruh aplikasi (API, OfflineDB, & UI):
+ * Menolak kode dummy seperti "0", "-", "", "PRODUK BARU", "DUMMY*", atau kode < 2 karakter
+ * agar ribuan SKU tanpa StyleCode tidak pernah tergabung silang menjadi 1 artikel!
+ */
+export function isValidRetailArticle(raw?: string | null, ownSku?: string | null): boolean {
+  const s = String(raw || "").trim();
+  if (s.length < 2) return false;
+  const up = s.toUpperCase();
+  if (INVALID_ARTICLE_SET.has(up)) return false;
+  if (up.includes("DUMMY") || up.includes("TIDAK DIGUNAKAN") || up.includes("TIDAK DI GUNAKAN")) return false;
+  if (/^[0\-_./\s]+$/.test(up)) return false;
+  if (ownSku && up === String(ownSku).trim().toUpperCase()) return false;
+  return true;
+}
 
 /** Menandai SKU dummy / tidak digunakan agar tidak pernah masuk hasil katalog */
 export function isIgnoredCatalogProduct(p: { description?: string | null; name?: string | null; article?: string | null }): boolean {
@@ -564,7 +603,7 @@ export function getProductArticleGroupKey(item: {
   sku?: string | null;
 }): string {
   const rawArt = String(item?.article || "").trim().toUpperCase();
-  if (!INVALID_ARTICLE_SET.has(rawArt)) {
+  if (isValidRetailArticle(rawArt, item?.sku)) {
     const bGroup = classifyBrandGroup(item);
     const catKey = classifyProductCategory(item);
     return `ART::${bGroup}::${catKey}::${rawArt}`;

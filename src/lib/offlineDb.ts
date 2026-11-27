@@ -6,6 +6,7 @@ import {
   groupProductsByArticle,
   getProductArticleGroupKey,
   isIgnoredCatalogProduct,
+  isValidRetailArticle,
 } from "./smartSearchEngine";
 import {
   BrandGroupKey,
@@ -181,13 +182,14 @@ export function updateLocalFamilyStockInMemory(
   const normArt = String(articleCode || items.find((i) => i?.article)?.article || '')
     .trim()
     .toUpperCase();
+  const canMatchByArticle = isValidRetailArticle(normArt);
 
   if (memoryModelsCache) {
     const modelsToPersist: CachedArticleModel[] = [];
     for (let i = 0; i < memoryModelsCache.length; i++) {
       const m = memoryModelsCache[i];
       const upd = map.get(m.sku);
-      const sameArticle = Boolean(normArt && String(m.article || '').trim().toUpperCase() === normArt);
+      const sameArticle = Boolean(canMatchByArticle && String(m.article || '').trim().toUpperCase() === normArt);
       if (upd || sameArticle) {
         if (upd && typeof upd.stok === "number") m.stok = upd.stok;
         if (upd?.imageUrl && !m.imageUrl) m.imageUrl = upd.imageUrl;
@@ -272,17 +274,22 @@ export async function findOfflineProductByCode(rawCode: string): Promise<CachedP
       }
     } catch {}
 
-    const byArticle = await db.products.where("article").anyOfIgnoreCase(candidates).toArray();
-    if (byArticle.length > 0) {
-      byArticle.sort((a, b) => (b.stok ?? 0) - (a.stok ?? 0));
-      return byArticle[0];
+    const validArticleCands = candidates.filter((c) => isValidRetailArticle(c));
+    if (validArticleCands.length > 0) {
+      const byArticle = await db.products.where("article").anyOfIgnoreCase(validArticleCands).toArray();
+      if (byArticle.length > 0) {
+        byArticle.sort((a, b) => (b.stok ?? 0) - (a.stok ?? 0));
+        return byArticle[0];
+      }
     }
 
     if (trimmed.length >= 5) {
       const [prefSku, prefBc, prefArt] = await Promise.all([
         db.products.where("sku").startsWithAnyOf(candidates).limit(15).toArray().catch(() => []),
         db.products.where("barcode").startsWithAnyOf(candidates).limit(15).toArray().catch(() => []),
-        db.products.where("article").startsWithAnyOfIgnoreCase(candidates).limit(15).toArray().catch(() => []),
+        validArticleCands.length > 0
+          ? db.products.where("article").startsWithAnyOfIgnoreCase(validArticleCands).limit(15).toArray().catch(() => [])
+          : Promise.resolve([]),
       ]);
 
       const mergedMap = new Map<string, CachedProduct>();
@@ -614,7 +621,7 @@ export async function rebuildModelsIndexFromProducts(): Promise<CachedArticleMod
   }
 }
 
-const MODELS_TAXONOMY_VERSION = "v18_clean_beauty";
+const MODELS_TAXONOMY_VERSION = "v19_strict_article_guard";
 
 export async function ensureModelsIndexReady(): Promise<CachedArticleModel[] | null> {
   if (memoryModelsCache && memoryModelsCache.length >= 1000) {
@@ -625,6 +632,8 @@ export async function ensureModelsIndexReady(): Promise<CachedArticleModel[] | n
   modelsBuildPromise = (async () => {
     try {
       await ensureDbOpenSafe();
+      // Bersihkan entri model dummy key="0"/"-" yang mungkin sempat masuk ke IndexedDB lokal sebelumnya
+      await db.models.bulkDelete(["0", "-", "", "NONE", "NULL", "N/A"]).catch(() => {});
       const taxVer = typeof window !== "undefined" ? localStorage.getItem("suko_models_taxonomy_ver") : null;
       const modelCount = await db.models.count().catch(() => 0);
       if (modelCount >= 1000 && taxVer === MODELS_TAXONOMY_VERSION) {

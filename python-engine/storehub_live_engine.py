@@ -168,11 +168,112 @@ def parse_stock_int(raw: Any) -> Optional[int]:
         return None
 
 
-def sanitize_article_code(raw: Any) -> str:
+_INVALID_ARTICLE_EXACT = {
+    "",
+    "0",
+    "00",
+    "000",
+    "-",
+    "--",
+    ".",
+    "/",
+    "N/A",
+    "NA",
+    "NONE",
+    "NULL",
+    "UNDEFINED",
+    "PRODUK BARU",
+    "NO STYLE",
+    "NO ARTICLE",
+    "UNKNOWN",
+    "DEFAULT",
+    "ITEM TIDAK DIGUNAKAN",
+    "ITEM TIDAK DAPAT",
+    "TIDAK DIGUNAKAN",
+    "TIDAK DI GUNAKAN",
+}
+
+
+def is_valid_article_code(raw: Any, own_sku: str = "") -> bool:
     s = str(raw or "").strip()
-    if not s or s.lower() in ("none", "null", "n/a", "-"):
-        return ""
-    return s
+    if len(s) < 2:
+        return False
+    up = s.upper()
+    if up in _INVALID_ARTICLE_EXACT or "DUMMY" in up or "TIDAK DIGUNAKAN" in up or "TIDAK DI GUNAKAN" in up:
+        return False
+    if re.fullmatch(r"[0\-_./\s]+", up):
+        return False
+    if own_sku and up == str(own_sku).strip().upper():
+        return False
+    return True
+
+
+def sanitize_article_code(raw: Any, own_sku: str = "") -> str:
+    s = str(raw or "").strip()
+    return s if is_valid_article_code(s, own_sku=own_sku) else ""
+
+
+def is_ignored_dummy_row(row: Dict[str, Any]) -> bool:
+    desc_up = str(row.get("description") or row.get("Description") or "").strip().upper()
+    art_up = str(row.get("article") or row.get("StyleCode") or "").strip().upper()
+    return (
+        "SKU DUMMY" in desc_up
+        or "ITEM TIDAK DIGUNAKAN" in desc_up
+        or "ITEM TIDAK DAPAT" in desc_up
+        or "TIDAK DI GUNAKAN" in desc_up
+        or "DUMMYZES" in desc_up
+        or "DUMMY" in art_up
+    )
+
+
+def _extract_item_color(item: Optional[Dict[str, Any]], fallback: str = "") -> Optional[str]:
+    if isinstance(item, dict):
+        for k in ("COLOR", "Color", "ColorDesc", "ColorName", "ItemColor", "color"):
+            v = str(item.get(k) or "").strip()
+            if v and v.upper() not in ("NONE", "NULL", "-", "N/A"):
+                return v
+        desc = str(item.get("Description") or item.get("ItemDescription") or item.get("description") or "").strip()
+        parts = [p.strip() for p in desc.split(":")]
+        if len(parts) >= 2 and parts[1] and parts[1].upper() not in ("NONE", "NULL", "-"):
+            return parts[1]
+    fb = str(fallback or "").strip()
+    return fb if fb and fb.upper() not in ("NONE", "NULL", "-") else None
+
+
+def _extract_item_size(item: Optional[Dict[str, Any]], fallback: str = "") -> Optional[str]:
+    if isinstance(item, dict):
+        for k in ("SIZE", "Size", "SizeDesc", "SizeName", "ItemSize", "size"):
+            v = str(item.get(k) or "").strip()
+            if v and v.upper() not in ("NONE", "NULL", "-", "N/A"):
+                return v
+        desc = str(item.get("Description") or item.get("ItemDescription") or item.get("description") or "").strip()
+        parts = [p.strip() for p in desc.split(":")]
+        if len(parts) >= 3 and parts[2] and parts[2].upper() not in ("NONE", "NULL", "-"):
+            return parts[2]
+    fb = str(fallback or "").strip()
+    return fb if fb and fb.upper() not in ("NONE", "NULL", "-") else None
+
+
+def _extract_item_price(item: Optional[Dict[str, Any]]) -> Optional[int]:
+    if not isinstance(item, dict):
+        return None
+    for k in ("RetailPrice", "RETAILPRICE", "Price", "PRICE", "UnitPrice", "NormalPrice"):
+        if item.get(k) is not None:
+            parsed = parse_retail_price(item.get(k))
+            if parsed is not None and parsed > 0:
+                return parsed
+    return None
+
+
+def _extract_item_stock(item: Optional[Dict[str, Any]]) -> Optional[int]:
+    if not isinstance(item, dict):
+        return None
+    for k in ("StockOnHand", "STOCKONHAND", "stockOnHand", "SOH"):
+        if k in item and item.get(k) is not None:
+            parsed = parse_stock_int(item.get(k))
+            if parsed is not None:
+                return parsed
+    return None
 
 
 def normalize_brand_and_dept(item: Dict[str, Any]) -> Tuple[str, str]:
@@ -1044,7 +1145,7 @@ def lookup_matahari_images(
     target_color: str = "",
 ) -> List[str]:
     clean_sku = str(sku or "").strip()
-    clean_art = str(article or "").strip()
+    clean_art = sanitize_article_code(article, own_sku=clean_sku)
     clean_bc = str(barcode or "").strip()
     same_set = {str(s).strip() for s in (same_color_skus or set()) if str(s).strip()}
     if clean_sku:
@@ -1296,7 +1397,7 @@ def _probe_account_with_deadline(
     if remaining < 0.6:
         return {"account": account, "items": [], "timeout": True, "cookie": cookie}
 
-    t_out = min(2.4, max(0.9, remaining))
+    t_out = min(3.8, max(1.2, remaining))
 
     # TURBO PARALLEL PROBE: Tembak kandidat utama (`upc` + `sku`) BERSAMAAN dalam 1 round-trip (~300-600ms)!
     def _run_one(pair: Tuple[str, str], active_cookie: str, to_sec: float) -> Tuple[str, str, Dict[str, Any]]:
@@ -1364,17 +1465,19 @@ def _upsert_item_and_aliases(
         all_bcs.append(scanned_code)
 
     primary_bc = raw_bc or (scanned_code if scanned_code != sku else None)
-    article = sanitize_article_code(item.get("StyleCode") or item.get("styleCode") or item.get("article")) or sku
+    raw_style_clean = sanitize_article_code(
+        item.get("StyleCode") or item.get("styleCode") or item.get("article"),
+        own_sku=sku,
+    )
+    article = raw_style_clean or sku
     desc = str(item.get("Description") or item.get("ItemDescription") or article or sku).strip()
     brand, dept = normalize_brand_and_dept(item)
-    color = str(item.get("Color") or item.get("ColorDesc") or item.get("color") or "").strip() or None
-    size = str(item.get("Size") or item.get("SizeDesc") or item.get("size") or "").strip() or None
-    stok = parse_stock_int(item.get("StockOnHand") if "StockOnHand" in item else item.get("stockOnHand"))
+    color = _extract_item_color(item)
+    size = _extract_item_size(item)
+    stok = _extract_item_stock(item)
     if stok is None:
         stok = 0
-    harga_normal = parse_retail_price(
-        item.get("Price") or item.get("RetailPrice") or item.get("UnitPrice") or item.get("NormalPrice")
-    ) or 0
+    harga_normal = _extract_item_price(item) or 0
 
     hp = promo["hargaPromo"] if promo else None
     diskon = promo["diskon"] if promo else None
@@ -1417,7 +1520,11 @@ def _upsert_item_and_aliases(
             ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) '
             'ON CONFLICT(sku) DO UPDATE SET '
             'barcode = COALESCE(excluded.barcode, "Product".barcode), '
-            'article = CASE WHEN excluded.article != \'\' THEN excluded.article ELSE "Product".article END, '
+            'article = CASE '
+            'WHEN "Product".article IS NULL OR TRIM("Product".article) IN (\'\', \'0\', \'00\', \'000\', \'-\', \'--\', \'NONE\', \'NULL\', \'N/A\', \'PRODUK BARU\') '
+            'THEN excluded.article '
+            'WHEN excluded.article != \'\' AND excluded.article != excluded.sku THEN excluded.article '
+            'ELSE "Product".article END, '
             'description = CASE WHEN excluded.description != \'\' THEN excluded.description ELSE "Product".description END, '
             'brand = COALESCE(excluded.brand, "Product".brand), '
             'dept = COALESCE(excluded.dept, "Product".dept), '
@@ -1473,26 +1580,142 @@ def _upsert_item_and_aliases(
         "sku": sku,
         "barcode": primary_bc,
         "article": article,
+        "hasValidArticle": bool(raw_style_clean),
         "brand": brand,
         "dept": dept,
+        "color": color,
+        "size": size,
+        "description": desc,
         "stok": stok,
         "hargaNormal": harga_normal,
     }
+
+
+def _fetch_scoped_siblings(
+    clean_sku: str,
+    raw_article: Any,
+    ref_brand: str = "",
+    ref_dept: str = "",
+    ref_desc: str = "",
+) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]], bool]:
+    """
+    Mengambil `(main_product, scoped_siblings, has_valid_article)` secara 100% AMAN & TERISOLASI:
+    1. SELALU mengambil baris eksak `WHERE sku = clean_sku` terlebih dahulu agar produk utama TIDAK PERNAH
+       tertukar ke SKU asing (`siblings[0]`) meskipun ribuan SKU punya `article = '0'`.
+    2. HANYA mencari `WHERE article = ?` bila `is_valid_article_code(raw_article)` bernilai True.
+    3. Menyaring ketat seluruh kandidat `siblings` berdasarkan `store_group` (SUKO/ZES/MUKU),
+       `category_key` (SEPATU vs ATASAN dll.), dan kecocokan sub-brand (mencegah tabrakan kode artikel kembar
+       lintas brand seperti `SS03` SUKO vs MAXMURAH FOOTWEAR, `ANDREW` ZES vs VOLO, `CSL01` SUKO vs NEVADA).
+    """
+    exact_rows = turso_query('SELECT * FROM "Product" WHERE sku = ? LIMIT 1', (clean_sku,), timeout=2.5)
+    exact_main = _deserialize_product_row(exact_rows[0]) if exact_rows else None
+
+    eff_brand = str((exact_main or {}).get("brand") or ref_brand or "").strip()
+    eff_dept = str((exact_main or {}).get("dept") or ref_dept or "").strip()
+    eff_desc = str((exact_main or {}).get("description") or ref_desc or "").strip()
+    ref_group = resolve_store_group(eff_brand, eff_dept, eff_desc)
+    ref_cat = classify_category_key(eff_desc, eff_dept)
+
+    GENERIC_LABELS = {
+        "",
+        "MUKU",
+        "MU+KU",
+        "MDS RETAIL",
+        "DEPARTEMEN LAINNYA",
+        "MULTI BRANDS",
+        "LOCAL BRAND",
+        "LADIES CONTEMP",
+        "MEN CONTEMP CASUAL",
+        "MEN FORMAL",
+        "YOUNG FASHION",
+        "CHILDREN GIRLS",
+        "CHILDREN BOYS",
+        "MEN SHOES",
+        "LADIES SHOES",
+        "CHILDREN SHOES",
+        "INTIMATE",
+        "ACCESSORIES",
+        "HOME",
+    }
+    ref_brand_tokens = {
+        t.strip().upper()
+        for t in (eff_brand, eff_dept)
+        if t and t.strip().upper() not in GENERIC_LABELS
+    }
+
+    def _matches_family_scope(cand: Dict[str, Any]) -> bool:
+        if not cand or not cand.get("sku"):
+            return False
+        if str(cand.get("sku")).strip() == clean_sku:
+            return True
+        if is_ignored_dummy_row(cand):
+            return False
+        c_brand = str(cand.get("brand") or "").strip()
+        c_dept = str(cand.get("dept") or "").strip()
+        c_desc = str(cand.get("description") or "").strip()
+        if resolve_store_group(c_brand, c_dept, c_desc) != ref_group:
+            return False
+        c_cat = classify_category_key(c_desc, c_dept)
+        if ref_cat != "OTHER" and c_cat != "OTHER" and c_cat != ref_cat:
+            return False
+        if ref_group == "MUKU" and ref_brand_tokens:
+            c_tokens = {
+                t.strip().upper()
+                for t in (c_brand, c_dept)
+                if t and t.strip().upper() not in GENERIC_LABELS
+            }
+            if c_tokens and not (
+                (ref_brand_tokens & c_tokens)
+                or any(rt in ct or ct in rt for rt in ref_brand_tokens for ct in c_tokens)
+            ):
+                return False
+        return True
+
+    clean_art = sanitize_article_code(raw_article, own_sku=clean_sku)
+    if not clean_art and exact_main:
+        clean_art = sanitize_article_code(exact_main.get("article"), own_sku=clean_sku)
+
+    scoped: List[Dict[str, Any]] = []
+    if clean_art:
+        raw_sibs = turso_query(
+            'SELECT * FROM "Product" WHERE article = ? ORDER BY sku ASC LIMIT 120',
+            (clean_art,),
+            timeout=3.0,
+        )
+        scoped = [_deserialize_product_row(r) for r in raw_sibs]
+        scoped = [s for s in scoped if _matches_family_scope(s)]
+    elif eff_desc and ":" in eff_desc and eff_dept and not is_ignored_dummy_row(exact_main or {"description": eff_desc}):
+        parent_name = eff_desc.split(":", 1)[0].strip()
+        if len(parent_name) >= 6:
+            raw_sibs = turso_query(
+                'SELECT * FROM "Product" WHERE dept = ? AND description LIKE ? ORDER BY sku ASC LIMIT 60',
+                (eff_dept, f"{parent_name}:%"),
+                timeout=2.8,
+            )
+            scoped = [_deserialize_product_row(r) for r in raw_sibs]
+            scoped = [s for s in scoped if _matches_family_scope(s)]
+
+    if exact_main:
+        seen_skus = {str(s.get("sku") or "").strip() for s in scoped}
+        if clean_sku not in seen_skus:
+            scoped.insert(0, exact_main)
+        else:
+            scoped = [exact_main if str(s.get("sku") or "").strip() == clean_sku else s for s in scoped]
+
+    if not exact_main and scoped:
+        exact_main = next((s for s in scoped if str(s.get("sku") or "").strip() == clean_sku), None)
+
+    return exact_main, (scoped if scoped else ([exact_main] if exact_main else [])), bool(clean_art)
 
 
 def _sync_catalog_article_for_family(article: str, siblings: List[Dict[str, Any]], now_iso: str) -> None:
     if not siblings:
         return
     primary = siblings[0]
-    art_key = (article or primary.get("sku") or "").strip().upper()
-    if not art_key:
+    if is_ignored_dummy_row(primary):
         return
-    total_stok = sum(max(0, int(s.get("stok") or 0)) for s in siblings)
-    colors = sorted({str(s.get("color") or "").strip() for s in siblings if s.get("color")})
-    sizes = sorted({str(s.get("size") or "").strip() for s in siblings if s.get("size")})
-    img_url = next((s.get("imageUrl") for s in siblings if s.get("imageUrl")), None)
-    has_promo = any(bool(s.get("hargaPromo") or s.get("diskon")) for s in siblings)
-    promo_row = next((s for s in siblings if s.get("hargaPromo") or s.get("diskon")), primary)
+    primary_sku = str(primary.get("sku") or "").strip()
+    clean_art = sanitize_article_code(article or primary.get("article"), own_sku=primary_sku)
     brand_group = resolve_store_group(
         str(primary.get("brand") or ""),
         str(primary.get("dept") or ""),
@@ -1500,6 +1723,28 @@ def _sync_catalog_article_for_family(article: str, siblings: List[Dict[str, Any]
     )
     sub_brand = str(primary.get("brand") or primary.get("dept") or brand_group).strip().upper()[:60]
     cat_key = classify_category_key(str(primary.get("description") or ""), str(primary.get("dept") or ""))
+
+    if clean_art:
+        art_key = f"ART::{brand_group}::{cat_key}::{clean_art.upper()}"
+        stored_article = clean_art
+    else:
+        base_desc = str(primary.get("description") or "").split(":")[0].strip().upper()
+        if len(base_desc) >= 3:
+            brand_u = str(primary.get("brand") or "").strip().upper()
+            dept_u = str(primary.get("dept") or "").strip().upper()
+            art_key = f"DESC::{brand_u}::{dept_u}::{base_desc}"
+        elif primary_sku:
+            art_key = f"SKU::{primary_sku}"
+        else:
+            return
+        stored_article = primary_sku or None
+
+    total_stok = sum(max(0, int(s.get("stok") or 0)) for s in siblings)
+    colors = sorted({str(s.get("color") or "").strip() for s in siblings if s.get("color")})
+    sizes = sorted({str(s.get("size") or "").strip() for s in siblings if s.get("size")})
+    img_url = next((s.get("imageUrl") for s in siblings if s.get("imageUrl")), None)
+    has_promo = any(bool(s.get("hargaPromo") or s.get("diskon")) for s in siblings)
+    promo_row = next((s for s in siblings if s.get("hargaPromo") or s.get("diskon")), primary)
     # Sort rank selaras Page-1 Stock-First: stok > 0 di atas!
     sort_rank = (0 if total_stok > 0 else 1_000_000) + (0 if img_url else 100_000) + max(0, 50_000 - min(total_stok, 50_000))
 
@@ -1525,8 +1770,8 @@ def _sync_catalog_article_for_family(article: str, siblings: List[Dict[str, Any]
                         art_key,
                         primary.get("sku"),
                         primary.get("barcode"),
-                        article or primary.get("article"),
-                        primary.get("description") or article,
+                        stored_article,
+                        primary.get("description") or stored_article,
                         primary.get("brand"),
                         primary.get("dept"),
                         brand_group,
@@ -1606,14 +1851,14 @@ def run_live_scan(
     code: str,
     preferred_account: Optional[str] = None,
     with_images: bool = True,
-    max_seconds: float = 4.2,
+    max_seconds: float = 5.8,
 ) -> Dict[str, Any]:
     t0 = time.time()
     clean_code = str(code or "").strip()
     if not clean_code:
         return {"success": False, "error": "Kode barcode/SKU kosong"}
 
-    deadline = t0 + max(2.8, min(float(max_seconds), 4.5))
+    deadline = t0 + max(3.5, min(float(max_seconds), 6.5))
     candidates = build_probe_candidates(clean_code)
 
     # Tentukan akun pembuka cerdas: QR/Alfanumerik -> Mu+Ku duluan; EAN 234000* -> SUKO/Mu+Ku
@@ -1649,6 +1894,36 @@ def run_live_scan(
                 was_healed = True
 
     if outcome.get("offline"):
+        # Fallback Turso DB terisolasi ketat saat server toko tutup malam hari
+        db_hit = turso_query(
+            'SELECT sku, article, brand, dept, description FROM "Product" WHERE sku = ? OR barcode = ? LIMIT 1',
+            (clean_code, clean_code),
+            timeout=2.5,
+        )
+        if db_hit:
+            h0 = db_hit[0]
+            m_off, s_off, _ = _fetch_scoped_siblings(
+                str(h0["sku"]),
+                h0.get("article"),
+                str(h0.get("brand") or ""),
+                str(h0.get("dept") or ""),
+                str(h0.get("description") or ""),
+            )
+            if m_off:
+                if not m_off.get("color"):
+                    m_off["color"] = _extract_item_color(m_off)
+                return {
+                    "success": True,
+                    "sku": m_off.get("sku"),
+                    "barcode": m_off.get("barcode"),
+                    "article": sanitize_article_code(m_off.get("article"), own_sku=str(m_off.get("sku") or "")) or m_off.get("sku"),
+                    "stok": int(m_off.get("stok") or 0),
+                    "data": m_off,
+                    "siblings": s_off,
+                    "storeOffline": True,
+                    "message": "Server toko fisik sedang istirahat (malam hari). Menampilkan data tersimpan.",
+                    "elapsedMs": int((time.time() - t0) * 1000),
+                }
         return {
             "success": False,
             "sku": clean_code,
@@ -1688,12 +1963,14 @@ def run_live_scan(
             active_cookie = owner_probe.get("cookie") or active_cookie
 
     seed_sku = str(primary_raw.get("SKU") or primary_raw.get("sku") or clean_code).strip()
-    seed_article = sanitize_article_code(primary_raw.get("StyleCode") or primary_raw.get("styleCode"))
-    seed_normal = parse_retail_price(
-        primary_raw.get("Price") or primary_raw.get("RetailPrice") or primary_raw.get("UnitPrice")
-    ) or 0
+    seed_article = sanitize_article_code(primary_raw.get("StyleCode") or primary_raw.get("styleCode"), own_sku=seed_sku)
+    has_valid_style_code = bool(seed_article)
+    seed_normal = _extract_item_price(primary_raw) or 0
+    seed_color = _extract_item_color(primary_raw) or ""
 
     # Langkah 4: Jalankan PARALEL (Matrix Stock + Live Promo + Foto Studio) dalam 1 siklus kilat (< 2,2 dtk)!
+    # PENTING: JANGAN panggil `query_stock_matrix` bila `StyleCode` dummy ("0"/"-") karena MDS Retailing sendiri
+    # mencampur ratusan produk berbeda yang sama-sama ber-StyleCode "0" di tabel Relasi Stok!
     matrix_rows: List[Dict[str, Any]] = []
     live_promo: Optional[Dict[str, Any]] = None
     promo_checked = False
@@ -1701,7 +1978,11 @@ def run_live_scan(
 
     enrich_budget = max(1.4, min(2.4, deadline - time.time()))
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-        fut_matrix = pool.submit(query_stock_matrix, seed_sku, active_cookie, owner_acc, enrich_budget)
+        fut_matrix = (
+            pool.submit(query_stock_matrix, seed_sku, active_cookie, owner_acc, enrich_budget)
+            if has_valid_style_code
+            else None
+        )
         fut_promo = pool.submit(query_promotion_checked, active_kind, active_code, active_cookie, owner_acc, seed_normal, enrich_budget)
         fut_img = (
             pool.submit(
@@ -1711,16 +1992,17 @@ def run_live_scan(
                 clean_code,
                 {seed_sku},
                 None,
-                str(primary_raw.get("Color") or primary_raw.get("ColorDesc") or ""),
+                seed_color,
             )
             if with_images
             else None
         )
-        try:
-            m_res = fut_matrix.result(timeout=enrich_budget + 0.3)
-            matrix_rows = m_res.get("rows") or []
-        except Exception:
-            matrix_rows = []
+        if fut_matrix is not None:
+            try:
+                m_res = fut_matrix.result(timeout=enrich_budget + 0.3)
+                matrix_rows = m_res.get("rows") or []
+            except Exception:
+                matrix_rows = []
         try:
             p_res = fut_promo.result(timeout=enrich_budget + 0.3)
             promo_checked = bool(p_res.get("checked"))
@@ -1752,65 +2034,66 @@ def run_live_scan(
     saved_meta = _upsert_item_and_aliases(
         primary_raw, canonical_code, owner_acc, live_promo, found_images, now_iso, promo_checked=promo_checked
     )
-    # Upsert item tambahan bila StoreHub mengembalikan > 1 SKU dalam 1 response
-    for extra in items[1:12]:
-        try:
-            _upsert_item_and_aliases(
-                extra, canonical_code, owner_acc, live_promo, found_images, now_iso, promo_checked=promo_checked
-            )
-        except Exception:
-            pass
+    # Upsert item tambahan HANYA bila StyleCode valid & berasal dari artikel yang sama
+    if has_valid_style_code:
+        for extra in items[1:12]:
+            extra_art = sanitize_article_code(extra.get("StyleCode") or extra.get("styleCode"))
+            if extra_art and extra_art.upper() == seed_article.upper():
+                try:
+                    _upsert_item_and_aliases(
+                        extra, "", owner_acc, None, [], now_iso, promo_checked=False
+                    )
+                except Exception:
+                    pass
 
-    # Ambil seluruh siblings artikel dari Turso & terapkan Matrix Stock + sinkron harga/promo warna sama!
-    siblings_rows = (
-        turso_query('SELECT * FROM "Product" WHERE article = ? ORDER BY sku ASC LIMIT 120', (saved_meta["article"],), timeout=3.0)
-        if saved_meta["article"]
-        else turso_query('SELECT * FROM "Product" WHERE sku = ? LIMIT 1', (saved_meta["sku"],), timeout=3.0)
+    # Ambil keluarga artikel TERISOLASI KETAT (anti campur `article = '0'` & anti tabrakan lintas brand!)
+    main_product, siblings, has_scoped_article = _fetch_scoped_siblings(
+        saved_meta["sku"],
+        seed_article,
+        saved_meta.get("brand") or det_brand,
+        saved_meta.get("dept") or det_dept,
+        saved_meta.get("description") or "",
     )
-    siblings = [_deserialize_product_row(r) for r in siblings_rows]
 
-    primary_color_norm = _norm_color_key(
-        primary_raw.get("Color") or primary_raw.get("ColorDesc") or (siblings[0].get("color") if siblings else "")
-    )
+    primary_color_norm = _norm_color_key(seed_color or (main_product or {}).get("color") or "")
     updated_variants: List[Dict[str, Any]] = []
-    if siblings:
+    if siblings and has_valid_style_code:
         sync_stmts: List[Tuple[str, Tuple[Any, ...]]] = []
         for sib in siblings:
-            sib_sku = sib.get("sku")
-            if not sib_sku:
+            sib_sku = str(sib.get("sku") or "").strip()
+            if not sib_sku or sib_sku == saved_meta["sku"]:
                 continue
-            new_stok = sib.get("stok") or 0
+            new_stok = int(sib.get("stok") or 0)
             stok_changed = False
             if matrix_rows:
                 mq = match_matrix_qty(matrix_rows, sib.get("color"), sib.get("size"))
-                if mq is not None and mq != int(sib.get("stok") or 0):
+                if mq is not None and mq != new_stok:
                     new_stok = mq
                     sib["stok"] = mq
                     stok_changed = True
                     updated_variants.append({"sku": sib_sku, "stok": mq})
 
+            # ATURAN MUTLAK HARGA MDS:
+            # 1. DILARANG menimpa `hargaNormal` SKU lain bila SKU lain tsb sudah punya `hargaNormal > 0` yang berbeda!
+            # 2. Promo warna sama HANYA boleh disinkronkan ke size lain bila `hargaNormal` size tsb SAMA PERSIS dengan `seed_normal`!
+            sib_normal = int(sib.get("hargaNormal") or 0)
             same_color = bool(primary_color_norm and _norm_color_key(sib.get("color")) == primary_color_norm)
-            if same_color and sib_sku != saved_meta["sku"] and (seed_normal > 0 or promo_checked):
-                new_normal = seed_normal if seed_normal > 0 else (sib.get("hargaNormal") or 0)
-                sib["hargaNormal"] = new_normal
-                if promo_checked:
-                    sib["hargaPromo"] = live_promo["hargaPromo"] if live_promo else None
-                    sib["diskon"] = live_promo["diskon"] if live_promo else None
-                    sib["discountType"] = live_promo["discountType"] if live_promo else None
-                    sib["acara"] = live_promo["acara"] if live_promo else None
-                    sib["fromDate"] = None
-                    sib["toDate"] = None
+            same_base_price = bool(seed_normal > 0 and (sib_normal == seed_normal or sib_normal <= 0))
+
+            if same_color and same_base_price and promo_checked:
+                eff_normal = sib_normal if sib_normal > 0 else seed_normal
+                sib["hargaNormal"] = eff_normal
+                sib["hargaPromo"] = live_promo["hargaPromo"] if live_promo else None
+                sib["diskon"] = live_promo["diskon"] if live_promo else None
+                sib["discountType"] = live_promo["discountType"] if live_promo else None
+                sib["acara"] = live_promo["acara"] if live_promo else None
+                sib["fromDate"] = None
+                sib["toDate"] = None
                 sib["updatedAt"] = now_iso
-                if promo_checked:
-                    sync_stmts.append((
-                        'UPDATE "Product" SET stok = ?, "hargaNormal" = ?, "hargaPromo" = ?, diskon = ?, "discountType" = ?, acara = ?, "fromDate" = NULL, "toDate" = NULL, "updatedAt" = ? WHERE sku = ?',
-                        (new_stok, new_normal, sib["hargaPromo"], sib["diskon"], sib["discountType"], sib["acara"], now_iso, sib_sku),
-                    ))
-                else:
-                    sync_stmts.append((
-                        'UPDATE "Product" SET stok = ?, "hargaNormal" = ?, "updatedAt" = ? WHERE sku = ?',
-                        (new_stok, new_normal, now_iso, sib_sku),
-                    ))
+                sync_stmts.append((
+                    'UPDATE "Product" SET stok = ?, "hargaNormal" = ?, "hargaPromo" = ?, diskon = ?, "discountType" = ?, acara = ?, "fromDate" = NULL, "toDate" = NULL, "updatedAt" = ? WHERE sku = ?',
+                    (new_stok, eff_normal, sib["hargaPromo"], sib["diskon"], sib["discountType"], sib["acara"], now_iso, sib_sku),
+                ))
             elif stok_changed:
                 sib["updatedAt"] = now_iso
                 sync_stmts.append(('UPDATE "Product" SET stok = ?, "updatedAt" = ? WHERE sku = ?', (new_stok, now_iso, sib_sku)))
@@ -1821,7 +2104,8 @@ def run_live_scan(
             except Exception:
                 pass
 
-    main_product = next((s for s in siblings if s.get("sku") == saved_meta["sku"]), siblings[0] if siblings else None)
+    # Pastikan `main_product` SELALU SKU yang di-scan (TIDAK PERNAH fallback ke SKU asing!)
+    main_product = next((s for s in siblings if str(s.get("sku") or "") == saved_meta["sku"]), main_product)
     all_skus = [s["sku"] for s in siblings if s.get("sku")]
     aliases: List[Dict[str, Any]] = []
     if all_skus:
@@ -1904,7 +2188,8 @@ def run_fast_stock(
     alt_acc = "muku" if owner_acc == "suko" else "suko"
     normal_hint = int(round(float(ex0.get("hargaNormal") or 0))) if ex0 else 0
     existing_bc = str(ex0.get("barcode") or "").strip()
-    resolved_article = str(article or ex0.get("article") or "").strip()
+    resolved_article = sanitize_article_code(article or ex0.get("article"), own_sku=clean_sku)
+    has_valid_hint_art = bool(resolved_article)
     needs_img_heal = not bool(str(ex0.get("imageUrl") or "").strip())
 
     cookie = get_storehub_cookie(owner_acc, force_refresh=False)
@@ -1915,7 +2200,11 @@ def run_fast_stock(
         workers = 4 if fetch_img else 3
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
             f_det = pool.submit(query_detail, "sku", clean_sku, active_cookie, active_acc, budget)
-            f_mat = pool.submit(query_stock_matrix, clean_sku, active_cookie, active_acc, budget)
+            f_mat = (
+                pool.submit(query_stock_matrix, clean_sku, active_cookie, active_acc, budget)
+                if has_valid_hint_art
+                else None
+            )
             f_pro = pool.submit(query_promotion_checked, "sku", clean_sku, active_cookie, active_acc, normal_hint, budget)
             f_img = (
                 pool.submit(
@@ -1931,7 +2220,7 @@ def run_fast_stock(
                 else None
             )
             d_r = f_det.result(timeout=budget + 0.5)
-            m_r = f_mat.result(timeout=budget + 0.5)
+            m_r = f_mat.result(timeout=budget + 0.5) if f_mat is not None else {"rows": []}
             p_r = f_pro.result(timeout=budget + 0.5)
             imgs_r: List[str] = []
             if f_img is not None:
@@ -1981,6 +2270,33 @@ def run_fast_stock(
                     d_res, m_res, p_res = dt_r, mt_r, pt_r
 
     if (d_res.get("offline") or m_res.get("offline")) and not (d_res.get("items") or m_res.get("rows")):
+        m_off, s_off, _ = _fetch_scoped_siblings(
+            clean_sku,
+            resolved_article,
+            str(ex0.get("brand") or ""),
+            str(ex0.get("dept") or ""),
+            str(ex0.get("description") or ""),
+        )
+        if m_off:
+            if not m_off.get("color"):
+                m_off["color"] = _extract_item_color(m_off)
+            acc_prof_off = ACCOUNT_PROFILES.get(owner_acc) or {}
+            owner_lbl_off = f"{acc_prof_off.get('label', owner_acc.upper())} ({acc_prof_off.get('username', '')})"
+            return {
+                "success": True,
+                "sku": clean_sku,
+                "article": resolved_article or clean_sku,
+                "stok": int(m_off.get("stok") or 0),
+                "ownerAccount": owner_acc,
+                "ownerAccountLabel": owner_lbl_off,
+                "data": m_off,
+                "siblings": s_off,
+                "hargaNormal": m_off.get("hargaNormal"),
+                "hargaPromo": m_off.get("hargaPromo"),
+                "storeOffline": True,
+                "message": "Toko sedang tutup (malam hari). Menampilkan data tersimpan.",
+                "elapsedMs": int((time.time() - t0) * 1000),
+            }
         return {
             "success": False,
             "sku": clean_sku,
@@ -1994,15 +2310,26 @@ def run_fast_stock(
     promo_checked = bool(p_res.get("checked"))
     live_promo = p_res.get("promo")
 
-    # Tentukan harga normal live paling akurat dari checkItemDetail
+    # Tentukan harga normal & StyleCode live paling akurat dari checkItemDetail
     primary_raw = d_items[0] if d_items else None
-    live_normal = (
-        parse_retail_price(
-            primary_raw.get("Price") or primary_raw.get("RetailPrice") or primary_raw.get("UnitPrice")
-        )
+    live_style_clean = (
+        sanitize_article_code(primary_raw.get("StyleCode") or primary_raw.get("styleCode"), own_sku=clean_sku)
         if primary_raw
-        else None
-    ) or normal_hint
+        else resolved_article
+    )
+    has_valid_style_code = bool(live_style_clean)
+    # Bila ternyata DB belum punya hint artikel tapi MDS checkItemDetail baru menemukan StyleCode valid, tarik matrix 1x!
+    if has_valid_style_code and not matrix_rows and cookie:
+        try:
+            m_late = query_stock_matrix(clean_sku, cookie, owner_acc, timeout=2.2)
+            matrix_rows = m_late.get("rows") or []
+        except Exception:
+            matrix_rows = []
+    # Sebaliknya, bila StyleCode MDS adalah dummy ("0"/"-"), BUANG matrix_rows agar tidak mencemari stok produk lain!
+    if not has_valid_style_code:
+        matrix_rows = []
+
+    live_normal = (_extract_item_price(primary_raw) if primary_raw else None) or normal_hint
 
     # Jika harga normal live berbeda dari hint awal (atau hint awal 0), re-query promo bila persen / UPC fallback
     live_bc = str((primary_raw or {}).get("VendorBarcode") or existing_bc or "").strip()
@@ -2019,6 +2346,7 @@ def run_fast_stock(
             pass
 
     now_iso = utc_iso_now()
+    saved_meta: Dict[str, Any] = {}
     if primary_raw:
         saved_meta = _upsert_item_and_aliases(
             primary_raw,
@@ -2029,7 +2357,7 @@ def run_fast_stock(
             now_iso,
             promo_checked=promo_checked,
         )
-        resolved_article = saved_meta.get("article") or resolved_article
+        resolved_article = live_style_clean
     elif promo_checked:
         # Tetap simpan update harga/promo walau detail kosong
         hp = live_promo["hargaPromo"] if live_promo else None
@@ -2047,19 +2375,17 @@ def run_fast_stock(
         except Exception:
             pass
 
-    # Ambil seluruh keluarga varian terbaru dari Turso
-    siblings_rows = (
-        turso_query('SELECT * FROM "Product" WHERE article = ? ORDER BY sku ASC LIMIT 120', (resolved_article,), timeout=3.0)
-        if resolved_article
-        else turso_query('SELECT * FROM "Product" WHERE sku = ? LIMIT 1', (clean_sku,), timeout=3.0)
+    # Ambil keluarga varian TERISOLASI KETAT (0% campur `article = '0'` & 0% tabrakan lintas brand/kategori!)
+    main_product, siblings, _ = _fetch_scoped_siblings(
+        clean_sku,
+        resolved_article,
+        saved_meta.get("brand") or str(ex0.get("brand") or ""),
+        saved_meta.get("dept") or str(ex0.get("dept") or ""),
+        saved_meta.get("description") or str(ex0.get("description") or ""),
     )
-    siblings = [_deserialize_product_row(r) for r in siblings_rows]
 
     active_color_norm = _norm_color_key(
-        (primary_raw or {}).get("Color")
-        or (primary_raw or {}).get("ColorDesc")
-        or ex0.get("color")
-        or ""
+        _extract_item_color(primary_raw, fallback=str(ex0.get("color") or "")) or ""
     )
     old_map = {str(v.get("sku") or ""): v.get("stok") for v in family_variants if v.get("sku")}
     updates_map: Dict[str, int] = {}
@@ -2071,13 +2397,15 @@ def run_fast_stock(
             continue
         cur_stok = int(sib.get("stok") or 0)
         new_stok = cur_stok
-        if matrix_rows:
+        if has_valid_style_code and matrix_rows and s_sku != clean_sku:
             q = match_matrix_qty(matrix_rows, sib.get("color"), sib.get("size"))
             if q is not None:
                 new_stok = q
                 updates_map[s_sku] = q
-        if s_sku == clean_sku and primary_raw is not None:
-            q_det = parse_stock_int(primary_raw.get("StockOnHand"))
+        if s_sku == clean_sku:
+            q_det = _extract_item_stock(primary_raw) if primary_raw is not None else None
+            if q_det is None and has_valid_style_code and matrix_rows:
+                q_det = match_matrix_qty(matrix_rows, sib.get("color"), sib.get("size"))
             if q_det is not None:
                 new_stok = q_det
                 updates_map[s_sku] = q_det
@@ -2086,9 +2414,11 @@ def run_fast_stock(
         if stok_changed:
             sib["stok"] = new_stok
 
-        # Semua ukuran pada WARNA YANG SAMA wajib memiliki Harga Normal & Promo yang sama persis dengan MDS Retailing!
-        same_color = bool(active_color_norm and _norm_color_key(sib.get("color")) == active_color_norm)
-        if same_color and (live_normal > 0 or promo_checked):
+        # ATURAN MUTLAK HARGA MDS (100% AKURAT PER SKU):
+        # - Untuk `s_sku == clean_sku`: selalu gunakan `live_normal` + `live_promo` langsung dari MDS Retailing.
+        # - Untuk `s_sku != clean_sku`: HANYA sinkronkan promo warna sama bila artikel valid (`has_valid_style_code`)
+        #   DAN `hargaNormal` SKU sibling tsb SAMA PERSIS dengan `live_normal`! JANGAN PERNAH menimpa `hargaNormal` berbeda!
+        if s_sku == clean_sku:
             if live_normal > 0:
                 sib["hargaNormal"] = live_normal
             if promo_checked:
@@ -2098,27 +2428,37 @@ def run_fast_stock(
                 sib["acara"] = live_promo["acara"] if live_promo else None
                 sib["fromDate"] = None
                 sib["toDate"] = None
+            if stok_changed and not primary_raw:
+                sync_stmts.append(('UPDATE "Product" SET stok = ?, "updatedAt" = ? WHERE sku = ?', (new_stok, now_iso, s_sku)))
+            continue
+
+        sib_normal = int(sib.get("hargaNormal") or 0)
+        same_color = bool(has_valid_style_code and active_color_norm and _norm_color_key(sib.get("color")) == active_color_norm)
+        same_base_price = bool(live_normal > 0 and (sib_normal == live_normal or sib_normal <= 0))
+
+        if same_color and same_base_price and promo_checked:
+            eff_normal = sib_normal if sib_normal > 0 else live_normal
+            sib["hargaNormal"] = eff_normal
+            sib["hargaPromo"] = live_promo["hargaPromo"] if live_promo else None
+            sib["diskon"] = live_promo["diskon"] if live_promo else None
+            sib["discountType"] = live_promo["discountType"] if live_promo else None
+            sib["acara"] = live_promo["acara"] if live_promo else None
+            sib["fromDate"] = None
+            sib["toDate"] = None
             sib["updatedAt"] = now_iso
-            if s_sku != clean_sku or stok_changed:
-                if promo_checked:
-                    sync_stmts.append((
-                        'UPDATE "Product" SET stok = ?, "hargaNormal" = ?, "hargaPromo" = ?, diskon = ?, "discountType" = ?, acara = ?, "fromDate" = NULL, "toDate" = NULL, "updatedAt" = ? WHERE sku = ?',
-                        (
-                            new_stok,
-                            sib.get("hargaNormal") or 0,
-                            sib.get("hargaPromo"),
-                            sib.get("diskon"),
-                            sib.get("discountType"),
-                            sib.get("acara"),
-                            now_iso,
-                            s_sku,
-                        ),
-                    ))
-                else:
-                    sync_stmts.append((
-                        'UPDATE "Product" SET stok = ?, "hargaNormal" = ?, "updatedAt" = ? WHERE sku = ?',
-                        (new_stok, sib.get("hargaNormal") or 0, now_iso, s_sku),
-                    ))
+            sync_stmts.append((
+                'UPDATE "Product" SET stok = ?, "hargaNormal" = ?, "hargaPromo" = ?, diskon = ?, "discountType" = ?, acara = ?, "fromDate" = NULL, "toDate" = NULL, "updatedAt" = ? WHERE sku = ?',
+                (
+                    new_stok,
+                    eff_normal,
+                    sib.get("hargaPromo"),
+                    sib.get("diskon"),
+                    sib.get("discountType"),
+                    sib.get("acara"),
+                    now_iso,
+                    s_sku,
+                ),
+            ))
         elif stok_changed:
             sib["updatedAt"] = now_iso
             sync_stmts.append(('UPDATE "Product" SET stok = ?, "updatedAt" = ? WHERE sku = ?', (new_stok, now_iso, s_sku)))
@@ -2129,10 +2469,11 @@ def run_fast_stock(
         except Exception:
             pass
 
-    if resolved_article and siblings:
-        _sync_catalog_article_for_family(resolved_article, siblings, now_iso)
+    if siblings:
+        _sync_catalog_article_for_family(resolved_article or clean_sku, siblings, now_iso)
 
-    main_product = next((s for s in siblings if s.get("sku") == clean_sku), siblings[0] if siblings else None)
+    # JAMINAN 100%: `main_product` WAJIB baris milik `clean_sku` (TIDAK PERNAH fallback ke SKU asing!)
+    main_product = next((s for s in siblings if str(s.get("sku") or "") == clean_sku), main_product)
     if not main_product and not updates_map:
         return {
             "success": False,
@@ -2177,22 +2518,15 @@ def run_fast_stock(
 def run_heal_image(sku: str = "", article: str = "", barcode: str = "") -> Dict[str, Any]:
     t0 = time.time()
     clean_sku = str(sku or "").strip()
-    clean_art = str(article or "").strip()
+    clean_art = sanitize_article_code(article, own_sku=clean_sku)
     clean_bc = str(barcode or "").strip()
 
-    # Baca keluarga artikel dari Turso untuk memisahkan SKU warna aktif vs SKU warna lain (ANTI FOTO CAMPUR WARNA!)
-    if not clean_art and clean_sku:
-        r0 = turso_query('SELECT article FROM "Product" WHERE sku = ? LIMIT 1', (clean_sku,), timeout=2.0)
-        if r0 and r0[0].get("article"):
-            clean_art = str(r0[0]["article"]).strip()
-
-    pre_sib_rows = (
-        turso_query('SELECT sku, color FROM "Product" WHERE article = ? ORDER BY sku ASC LIMIT 120', (clean_art,), timeout=2.5)
-        if clean_art
-        else turso_query('SELECT sku, color FROM "Product" WHERE sku = ? LIMIT 1', (clean_sku,), timeout=2.0)
-    )
-    active_row = next((r for r in pre_sib_rows if str(r.get("sku") or "").strip() == clean_sku), pre_sib_rows[0] if pre_sib_rows else {})
-    active_color_raw = str(active_row.get("color") or "").strip()
+    # Baca keluarga artikel TERISOLASI KETAT dari Turso (ANTI `article = '0'` & ANTI FOTO CAMPUR WARNA!)
+    pre_main, pre_sib_rows, _ = _fetch_scoped_siblings(clean_sku, clean_art)
+    if not clean_art and pre_main:
+        clean_art = sanitize_article_code(pre_main.get("article"), own_sku=clean_sku)
+    active_row = pre_main or (pre_sib_rows[0] if pre_sib_rows else {})
+    active_color_raw = _extract_item_color(active_row) or ""
     active_color_norm = _norm_color_key(active_color_raw)
 
     same_color_skus: set = set()
@@ -2248,13 +2582,7 @@ def run_heal_image(sku: str = "", article: str = "", barcode: str = "") -> Dict[
             except Exception:
                 pass
 
-    sib_rows = (
-        turso_query('SELECT * FROM "Product" WHERE article = ? ORDER BY sku ASC LIMIT 120', (clean_art,), timeout=3.0)
-        if clean_art
-        else turso_query('SELECT * FROM "Product" WHERE sku = ? LIMIT 1', (clean_sku,), timeout=3.0)
-    )
-    siblings = [_deserialize_product_row(r) for r in sib_rows]
-    main_prod = next((s for s in siblings if s.get("sku") == clean_sku), siblings[0] if siblings else None)
+    main_prod, siblings, _ = _fetch_scoped_siblings(clean_sku, clean_art)
 
     existing_clean = _filter_strict_color_images(
         ((main_prod.get("images") or ([main_prod["imageUrl"]] if main_prod and main_prod.get("imageUrl") else [])) if main_prod else []),

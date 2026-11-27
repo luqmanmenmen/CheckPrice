@@ -15,6 +15,7 @@ import CatalogImageController from "@/components/CatalogImageController";
 import ShiftLoader, { SyncProgressModal } from "@/components/ShiftLoader";
 import type { SyncProgressDetails, CachedProduct, CachedArticleModel } from "@/lib/offlineDb";
 import ImageLightboxModal from "@/components/ImageLightboxModal";
+import { isValidRetailArticle, isIgnoredCatalogProduct } from "@/lib/smartSearchEngine";
 import { createPortal } from "react-dom";
 import {
   BrandGroupKey,
@@ -503,9 +504,9 @@ export default function Home() {
     const requestEpoch = ++liveStockEpochRef.current;
     const targetSku = product.sku;
     const curSibs = siblings && siblings.length > 0 ? siblings : [product];
-    const syncColorKey = `${String(product.article || product.sku).trim().toUpperCase()}::${String(product.color || "").trim().toUpperCase()}`;
-    autoSyncedColorAtRef.current.set(syncColorKey, Date.now());
-    const needsDiscovery = curSibs.length <= 1 || !curSibs.some((s) => Boolean(s.imageUrl));
+    const syncSkuKey = `SKU::${String(targetSku).trim().toUpperCase()}`;
+    autoSyncedColorAtRef.current.set(syncSkuKey, Date.now());
+    const validArt = isValidRetailArticle(product.article, targetSku) ? product.article : null;
     const familySkus = curSibs.map((s) => s.sku).filter(Boolean);
     const familyVariants = curSibs
       .filter((s) => Boolean(s.sku))
@@ -517,14 +518,14 @@ export default function Home() {
       }));
     const payload = JSON.stringify({
       sku: targetSku,
-      article: product.article || null,
+      article: validArt,
       brandGroup: product.brandGroup || classifyBrandGroup(product),
-      discoverFamily: needsDiscovery,
-      withImages: needsDiscovery,
-      syncAllSizes: true,
-      fastMode: !needsDiscovery,
-      familySkus: !needsDiscovery ? familySkus : [],
-      familyVariants: !needsDiscovery ? familyVariants : [],
+      discoverFamily: false,
+      withImages: !product.imageUrl,
+      syncAllSizes: Boolean(validArt),
+      fastMode: true,
+      familySkus,
+      familyVariants,
     });
 
     const callLiveStockOnce = async () => {
@@ -557,6 +558,8 @@ export default function Home() {
 
       const data = attempt.data;
       if (liveStockEpochRef.current !== requestEpoch) return;
+      // HARD SKU LOCK: Jangan pernah menimpa layar bila user sudah berpindah ke produk lain!
+      if (productRef.current && String(productRef.current.sku) !== String(targetSku)) return;
       if (data.success && (data.data || data.stok !== undefined)) {
         const variantStockMap = new Map<string, number>();
         if (Array.isArray(data.variants)) {
@@ -570,18 +573,29 @@ export default function Home() {
           variantStockMap.set(data.sku || targetSku, data.stok);
         }
 
-        if (data.data) {
-          const freshMainStok = variantStockMap.get(data.data.sku) ?? data.stok ?? data.data.stok ?? 0;
-          const updatedMain: ProductData = { ...data.data, stok: freshMainStok };
+        const returnedExactMain =
+          data.data && String(data.data.sku) === String(targetSku)
+            ? data.data
+            : Array.isArray(data.siblings)
+              ? data.siblings.find((s: ProductData) => String(s?.sku) === String(targetSku)) || null
+              : null;
+
+        if (returnedExactMain) {
+          const freshMainStok = variantStockMap.get(targetSku) ?? data.stok ?? returnedExactMain.stok ?? 0;
+          const updatedMain: ProductData = { ...returnedExactMain, stok: freshMainStok };
           const rawSiblings: ProductData[] =
             Array.isArray(data.siblings) && data.siblings.length > 0 ? data.siblings : [updatedMain];
           const nextSiblings: ProductData[] = rawSiblings.map((s) =>
             variantStockMap.has(s.sku) ? { ...s, stok: variantStockMap.get(s.sku)! } : s
           );
+          if (!nextSiblings.some((s) => String(s.sku) === String(targetSku))) {
+            nextSiblings.unshift(updatedMain);
+          }
           setProduct((cur) => {
-            if (cur && cur.sku !== updatedMain.sku) {
-              const curMatch = nextSiblings.find((s) => s.sku === cur.sku);
-              return curMatch || updatedMain;
+            if (!cur) return updatedMain;
+            if (String(cur.sku) !== String(targetSku)) {
+              const curMatch = nextSiblings.find((s) => String(s.sku) === String(cur.sku));
+              return curMatch || cur;
             }
             return updatedMain;
           });
@@ -597,7 +611,8 @@ export default function Home() {
           preloadProductImages([updatedMain.imageUrl, ...nextSiblings.map((s: ProductData) => s.imageUrl)], 400);
           persistServerFamilyToLocal(updatedMain, nextSiblings, targetSku);
           const updatedArticleTotal = nextSiblings.reduce((sum, s) => sum + Math.max(0, Number(s.stok ?? 0)), 0);
-          const normArtUpper = String(data.article || updatedMain.article || '').trim().toUpperCase();
+          const rawArt = String(data.article || updatedMain.article || '').trim();
+          const normArtUpper = isValidRetailArticle(rawArt, targetSku) ? rawArt.toUpperCase() : '';
           setProductsList((prevList) =>
             prevList.map((item) => {
               const itemArtUpper = String(item.article || '').trim().toUpperCase();
@@ -648,7 +663,8 @@ export default function Home() {
                 if (s.barcode) sessionCacheRef.current.set(s.barcode.toLowerCase(), { product: s, siblings: updated });
               });
               const updatedArticleTotal = updated.reduce((sum, s) => sum + Math.max(0, Number(s.stok ?? 0)), 0);
-              const normArtUpper = String(data.article || product.article || '').trim().toUpperCase();
+              const rawArt2 = String(data.article || product.article || '').trim();
+              const normArtUpper = isValidRetailArticle(rawArt2, targetSku) ? rawArt2.toUpperCase() : '';
               setProductsList((prevList) =>
                 prevList.map((item) => {
                   const itemArtUpper = String(item.article || '').trim().toUpperCase();
@@ -721,20 +737,20 @@ export default function Home() {
     }
   };
 
-  // AUTO LIVE-SINKRON OTOMATIS SAAT SCAN / BUKA PRODUK / PINDAH WARNA (0 KERJA 2 KALI!)
-  // Cooldown 60 detik per (artikel + warna) agar pindah size S->M->L tetap 0ms tanpa spam,
-  // tapi scan baru atau pindah warna otomatis menyinkronkan harga, promo, & stok 1 artikel sesuai role akun MDS!
+  // AUTO LIVE-SINKRON OTOMATIS SAAT SCAN / BUKA PRODUK / PILIH VARIAN SKU (100% AKURAT PERSIS MDS!)
+  // Cooldown 45 detik per SKU eksak agar klik bolak-balik SKU yang baru saja diverifikasi tetap 0ms,
+  // sementara setiap SKU baru yang di-scan atau dipilih langsung diverifikasi harga, promo, & stoknya ke MDS!
   useEffect(() => {
     if (!product?.sku) return;
-    const syncColorKey = `${String(product.article || product.sku).trim().toUpperCase()}::${String(product.color || "").trim().toUpperCase()}`;
-    const lastSyncAt = autoSyncedColorAtRef.current.get(syncColorKey) || 0;
-    if (Date.now() - lastSyncAt < 60_000) return;
+    const syncSkuKey = `SKU::${String(product.sku).trim().toUpperCase()}`;
+    const lastSyncAt = autoSyncedColorAtRef.current.get(syncSkuKey) || 0;
+    if (Date.now() - lastSyncAt < 45_000) return;
     const timer = setTimeout(() => {
       void handleCheckLiveStock({ silent: true });
     }, 180);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [product?.sku, product?.article, product?.color]);
+  }, [product?.sku]);
 
   const [healingImageKey, setHealingImageKey] = useState<string | null>(null);
   const [updatingImages, setUpdatingImages] = useState(false);
@@ -754,9 +770,10 @@ export default function Home() {
     setHealingImageKey(key);
     if (isManual) setUpdatingImages(true);
     try {
+      const safeHealArt = isValidRetailArticle(target.article, target.sku) ? (target.article || "") : "";
       const reqPayload = JSON.stringify({
         sku: target.sku || "",
-        article: target.article || "",
+        article: safeHealArt,
         barcode: target.barcode || "",
         targetColor: opts?.targetColor || "",
         force: isManual,
@@ -806,8 +823,8 @@ export default function Home() {
         if (healedMain || fallbackImgs.length > 0) {
           setProduct((cur) => {
             if (!cur) return cur;
-            const match = healedMain ? (sibMap.get(cur.sku) || (cur.sku === healedMain.sku ? healedMain : undefined)) : undefined;
-            if (healedMain && !match && (!cur.article || cur.article !== healedMain.article)) return cur;
+            const match = healedMain ? (sibMap.get(cur.sku) || (String(cur.sku) === String(healedMain.sku) ? healedMain : undefined)) : undefined;
+            if (healedMain && !match) return cur;
             const img = match?.imageUrl || healedMain?.imageUrl || fallbackImgs[0];
             const imgs = (match?.images && match.images.length > 0 ? match.images : null)
               || (healedMain?.images && healedMain.images.length > 0 ? healedMain.images : null)
@@ -2054,10 +2071,20 @@ export default function Home() {
       setError("");
       const localProduct = mapCachedToProduct(localItem);
       let currentSiblings: ProductData[] = [localProduct];
-      if (localItem.article) {
-        const localSiblings = await db.products.where('article').equals(localItem.article).toArray().catch(() => []);
+      if (isValidRetailArticle(localItem.article, localItem.sku)) {
+        const localSiblings = await db.products.where('article').equals(localItem.article!).toArray().catch(() => []);
         if (localSiblings && localSiblings.length > 0) {
-          currentSiblings = localSiblings.map(mapCachedToProduct);
+          const targetBg = classifyBrandGroup(localProduct);
+          const targetCat = classifyProductCategory(localProduct);
+          const scopedLocal = localSiblings
+            .filter((s) => !isIgnoredCatalogProduct(s))
+            .map(mapCachedToProduct)
+            .filter((s) => classifyBrandGroup(s) === targetBg && classifyProductCategory(s) === targetCat);
+          if (scopedLocal.length > 0) {
+            currentSiblings = scopedLocal.some((s) => s.sku === localProduct.sku)
+              ? scopedLocal
+              : [localProduct, ...scopedLocal];
+          }
         }
       }
       if (searchCounterRef.current !== currentSearch) return;
@@ -2082,15 +2109,18 @@ export default function Home() {
           if (searchCounterRef.current !== currentSearch) return;
           if (liveStockEpochRef.current !== bgStartEpoch) return;
           if (bgJson && bgJson.data && !Array.isArray(bgJson.data)) {
-            const bgSibs: ProductData[] = bgJson.siblings || [];
-            setSiblings(bgSibs);
-            setProduct((cur) => {
-              if (!cur) return bgJson.data as ProductData;
-              const matched = bgSibs.find((s) => s.sku === cur.sku);
-              return matched || (bgJson.data as ProductData);
-            });
-            preloadProductImages([bgJson.data?.imageUrl, ...bgSibs.map((s) => s.imageUrl)], 400);
-            syncServerProductToLocal(bgJson.data, bgSibs, (bgJson as any).aliases);
+            const bgMain = bgJson.data as ProductData;
+            const bgSibs: ProductData[] = Array.isArray(bgJson.siblings) && bgJson.siblings.length > 0 ? bgJson.siblings : [bgMain];
+            if (String(bgMain.sku) === String(localProduct.sku) || bgSibs.some((s) => String(s.sku) === String(localProduct.sku))) {
+              setSiblings(bgSibs);
+              setProduct((cur) => {
+                if (!cur) return bgMain;
+                const matched = bgSibs.find((s) => String(s.sku) === String(cur.sku));
+                return matched || cur;
+              });
+              preloadProductImages([bgMain?.imageUrl, ...bgSibs.map((s) => s.imageUrl)], 400);
+              syncServerProductToLocal(bgMain, bgSibs, (bgJson as any).aliases);
+            }
           }
         })
         .catch(() => {})
@@ -4493,7 +4523,7 @@ export default function Home() {
               </div>
 
               <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono">
-                {product.article && (
+                {isValidRetailArticle(product.article, product.sku) && (
                   <button
                     type="button"
                     onClick={() => handleCopyText(product.article!, "Artikel")}
