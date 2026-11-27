@@ -809,9 +809,9 @@ def query_promotion_checked(kind: str, code: str, cookie: str, account: str, nor
 
         clean_ev = "" if ev_low in ("scan item", "scan", "item", "order end") else ev_desc
         if br_name and msg and br_name.lower() not in msg.lower():
-            acara = f"{br_name} — {msg}"[:140]
+            acara = f"{br_name} — {msg}"[:260]
         else:
-            acara = (br_name or msg or clean_ev or "Promo Live Store")[:140]
+            acara = (br_name or msg or clean_ev or "Promo Live Store")[:260]
 
         try:
             pct = float(pr.get("DiscountPercentage") or 0)
@@ -1179,6 +1179,23 @@ def lookup_matahari_images(
 
     # Terapkan saringan anti-campur-warna final!
     strict_cands = _filter_strict_color_images(candidates, same_color_skus=same_set, other_color_skus=other_set)
+
+    # Jalur Alternatif Kilat (Anti-Buntu): bila search suggest Matahari.com belum mengindeks produk ini,
+    # coba probe langsung CDN Shopify `{sku}-1.jpg` & `{sku}_1.jpg` secara paralel (~300ms)!
+    if not strict_cands and clean_sku and clean_sku.isdigit():
+        cdn_base = "https://cdn.shopify.com/s/files/1/0666/9212/0727/files"
+        direct_probes = [
+            f"{cdn_base}/{clean_sku}-1.jpg",
+            f"{cdn_base}/{clean_sku}_1.jpg",
+            f"{cdn_base}/{clean_sku}-2.jpg",
+            f"{cdn_base}/{clean_sku}_2.jpg",
+        ]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(direct_probes)) as pool:
+            d_flags = list(pool.map(lambda u: _verify_image_not_grey_logo(u, timeout=1.1), direct_probes))
+        strict_cands = [u for u, ok in zip(direct_probes, d_flags) if ok]
+        if strict_cands:
+            return strict_cands[:6]
+
     if not strict_cands:
         return []
 

@@ -2788,8 +2788,23 @@ export default function Home() {
 
   const isBogoPromo = product && product.discountType && (/B\dG\d|B\dD\d+|B\dX\d+/i.test(product.discountType) || /BELI \d+ (GRATIS|DISKON) \d+/i.test(product.discountType)) && !isPromoExpired;
   const isPercentPromo = product && product.discountType && product.discountType.includes('%') && !isPromoExpired;
+  const isPwpPromo = Boolean(
+    product &&
+    !isPromoExpired &&
+    (/PWP|TEBUS\s*MURAH|GWP|FREE\s*GIFT|VOUCHER/i.test(String(product.discountType || "")) ||
+      /PWP|TEBUS\s*MURAH/i.test(String(product.diskon || "")))
+  );
+  const isBundleOrOtherPromo = Boolean(
+    product &&
+    !isPromoExpired &&
+    (
+      (product.discountType && !/^(NORMAL|REGULAR|NORMAL\s*PRICE|-)$/i.test(product.discountType.trim()) && /BUNDL|PWP|TEBUS|PROMO|DISKON|DISC|SPECIAL|GRATIS|BUY|BELI|GIFT/i.test(product.discountType)) ||
+      (product.diskon && !/^(0|0%|NORMAL|REGULAR|-)$/i.test(product.diskon.trim())) ||
+      (product.acara && !/^(NORMAL|REGULAR|NORMAL\s*PRICE|-)$/i.test(product.acara.trim()))
+    )
+  );
   const hasHargaPromo = product && product.hargaPromo && product.hargaPromo > 0 && product.hargaPromo !== product.hargaNormal;
-  const isOnPromo = (hasHargaPromo || isBogoPromo || isPercentPromo) && !isPromoExpired;
+  const isOnPromo = (hasHargaPromo || isBogoPromo || isPercentPromo || isPwpPromo || isBundleOrOtherPromo) && !isPromoExpired;
   
   const discountPct = (hasHargaPromo && product)
     ? Math.round(((product.hargaNormal - product.hargaPromo!) / product.hargaNormal) * 100)
@@ -4515,16 +4530,28 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Discount Badge Header saat Promo Aktif */}
+            {/* Discount Badge Header saat Promo Aktif (SP / Diskon % / Bundling / PWP Tebus Murah) */}
             {isOnPromo && (
-              <div className="bg-gradient-to-r from-purple-600 via-indigo-600 to-rose-600 px-4 sm:px-5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-white">
+              <div
+                className={`px-4 sm:px-5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-white ${
+                  isPwpPromo
+                    ? "bg-gradient-to-r from-amber-600 via-orange-600 to-rose-600"
+                    : "bg-gradient-to-r from-purple-600 via-indigo-600 to-rose-600"
+                }`}
+              >
                 <div className="flex items-center gap-2 font-bold text-xs sm:text-sm min-w-0">
-                  <Tag className="w-4 h-4 shrink-0 text-amber-300" />
-                  <span className="whitespace-normal break-words">{product.discountType ? product.discountType : "SPECIAL PRICE"}</span>
+                  <Tag className="w-4 h-4 shrink-0 text-amber-200" />
+                  <span className="whitespace-normal break-words">
+                    {product.discountType ? product.discountType : product.diskon ? product.diskon : "PROMO SPESIAL"}
+                  </span>
                 </div>
                 {hasHargaPromo ? (
                   <span className="bg-white text-red-600 font-extrabold text-xs px-3 py-0.5 rounded-full shadow-sm shrink-0">
                     HEMAT {formatRupiah(product.hargaNormal - product.hargaPromo!)}
+                  </span>
+                ) : product.diskon ? (
+                  <span className="bg-white text-orange-700 font-extrabold text-xs px-3 py-0.5 rounded-full shadow-sm shrink-0">
+                    {product.diskon}
                   </span>
                 ) : (
                   <span className="bg-white/20 backdrop-blur-sm text-white font-extrabold text-[11px] px-2.5 py-0.5 rounded-full shadow-sm shrink-0 uppercase tracking-wider">
@@ -4643,13 +4670,54 @@ export default function Home() {
 
                 {/* Box Harga + Sisa Stok EOH + Live Stok + Info Varian Aktif & Cetak Label */}
                 <div className="bg-slate-50/90 rounded-2xl p-4 border border-slate-200/80 flex flex-col gap-3.5">
+                  {isOnPromo && (product.acara || (!hasHargaPromo && (product.diskon || product.discountType))) && (
+                    <div
+                      className={`rounded-xl p-3 border text-xs space-y-1 ${
+                        isPwpPromo
+                          ? "bg-amber-50 border-amber-300 text-amber-950"
+                          : "bg-rose-50/80 border-rose-200 text-rose-950"
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-1.5">
+                        <span className="font-black uppercase tracking-wide text-[11px] flex items-center gap-1.5">
+                          <Tag className="w-3.5 h-3.5 shrink-0" />
+                          <span>{isPwpPromo ? "Detail Promo PWP / Tebus Murah" : "Detail Promo Aktif MDS"}</span>
+                        </span>
+                        {product.diskon && (
+                          <span
+                            className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                              isPwpPromo ? "bg-amber-600 text-white" : "bg-rose-600 text-white"
+                            }`}
+                          >
+                            {product.diskon}
+                          </span>
+                        )}
+                      </div>
+                      {product.acara && (
+                        <p className="text-[11px] sm:text-xs font-bold leading-snug whitespace-normal break-words">
+                          {product.acara}
+                        </p>
+                      )}
+                      {!hasHargaPromo && (
+                        <p className="text-[10px] font-semibold opacity-80">
+                          * Harga satuan produk ini tetap normal ({formatRupiah(product.hargaNormal)}) — promo berlaku sesuai syarat di kasir.
+                        </p>
+                      )}
+                    </div>
+                  )}
                   <div className="flex flex-wrap items-end justify-between gap-3">
                     <div>
                       <p className="text-[11px] text-slate-500 uppercase font-bold tracking-wider">
-                        {isOnPromo && hasHargaPromo ? "Harga Promo Spesial" : isOnPromo ? "Harga Normal Satuan" : "Harga Normal"}
+                        {isOnPromo && hasHargaPromo
+                          ? "Harga Promo Spesial"
+                          : isPwpPromo
+                          ? "Harga Normal (+ Promo Tebus Murah)"
+                          : isOnPromo
+                          ? "Harga Normal Satuan (+ Promo)"
+                          : "Harga Normal"}
                       </p>
                       <div className="flex items-baseline gap-2.5 mt-0.5">
-                        <p className={`text-3xl sm:text-4xl font-black tabular-nums leading-none ${isOnPromo ? "text-red-600" : "text-slate-900"}`}>
+                        <p className={`text-3xl sm:text-4xl font-black tabular-nums leading-none ${isOnPromo && hasHargaPromo ? "text-red-600" : "text-slate-900"}`}>
                           {formatRupiah(isOnPromo && product.hargaPromo && product.hargaPromo > 0 ? product.hargaPromo : product.hargaNormal)}
                         </p>
                         {isOnPromo && hasHargaPromo && (
@@ -4660,6 +4728,11 @@ export default function Home() {
                         {isOnPromo && hasHargaPromo && discountPct > 0 && (
                           <span className="bg-red-600 text-white text-[11px] font-black px-2 py-0.5 rounded-md">
                             -{discountPct}%
+                          </span>
+                        )}
+                        {isOnPromo && !hasHargaPromo && product.diskon && (
+                          <span className="bg-orange-600 text-white text-[11px] font-black px-2.5 py-0.5 rounded-md">
+                            {product.diskon}
                           </span>
                         )}
                       </div>
