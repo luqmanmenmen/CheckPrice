@@ -600,9 +600,21 @@ export default function Home() {
               const itemArtUpper = String(item.article || '').trim().toUpperCase();
               const matchedSib = nextSiblings.find((s) => s.sku === item.sku);
               if (matchedSib || (normArtUpper && itemArtUpper === normArtUpper)) {
+                const anyPromoSib = nextSiblings.find((s) => Boolean(s.hargaPromo || s.diskon));
                 return {
                   ...item,
-                  ...(matchedSib ? { stok: matchedSib.stok ?? item.stok } : {}),
+                  ...(matchedSib
+                    ? {
+                        stok: matchedSib.stok ?? item.stok,
+                        hargaNormal: matchedSib.hargaNormal ?? item.hargaNormal,
+                        hargaPromo: matchedSib.hargaPromo ?? null,
+                        diskon: matchedSib.diskon ?? null,
+                        discountType: matchedSib.discountType ?? null,
+                        acara: matchedSib.acara ?? null,
+                      }
+                    : {}),
+                  articleHasPromo: Boolean(anyPromoSib),
+                  articlePromoLabel: anyPromoSib ? (anyPromoSib.diskon || anyPromoSib.acara || null) : null,
                   articleTotalStok: updatedArticleTotal,
                 };
               }
@@ -666,22 +678,28 @@ export default function Home() {
           showToast(data.message || `Toko tutup (malam). Menampilkan stok tersimpan: ${resolvedStok} pcs${imgNote}`, "info");
         } else {
           const liveChecked = data.liveCheckedCount ?? totalUpdatedCount;
-          const changed =
-            data.changedCount ??
-            curSibs.filter((s) => variantStockMap.has(s.sku) && variantStockMap.get(s.sku) !== (s.stok ?? 0)).length;
           const countText = liveChecked > 1 ? ` (${liveChecked} warna/size)` : '';
-          setLiveStockVerified(`Live: ${resolvedStok} pcs${countText}`);
-          if (changed > 0) {
-            showToast(`⚡ Live Stok sukses: ${liveChecked} varian dicek (${changed} berubah) — semua warna & size tersinkron!`, "success");
-          } else {
-            showToast(`⚡ Live Stok sukses: ${liveChecked} varian dicek live dari luqman org (stok saat ini sudah sesuai).`, "success");
-          }
+          const liveHargaPromo = data.data?.hargaPromo ?? data.hargaPromo ?? null;
+          const liveDiskon = data.data?.diskon ?? data.livePromo?.diskon ?? null;
+          const liveHargaNormal = data.data?.hargaNormal ?? data.hargaNormal ?? 0;
+          const promoText = liveHargaPromo
+            ? `Promo Rp ${Number(liveHargaPromo).toLocaleString("id-ID")}${liveDiskon ? ` (${liveDiskon})` : ""}`
+            : liveDiskon
+            ? `Promo ${liveDiskon}`
+            : liveHargaNormal > 0
+            ? `Normal Rp ${Number(liveHargaNormal).toLocaleString("id-ID")}`
+            : "";
+          setLiveStockVerified(`Sinkron: ${resolvedStok} pcs${countText}${promoText ? ` • ${promoText}` : ""}`);
+          showToast(
+            `⚡ Live Sinkron MDS sukses! ${promoText ? `${promoText} • ` : ""}Stok ${resolvedStok} pcs (${liveChecked} varian warna & size tersinkron).`,
+            "success"
+          );
         }
       } else {
-        showToast(data.message || "Menampilkan stok tersimpan di sistem", "info");
+        showToast(data.message || "Menampilkan data tersimpan di sistem", "info");
       }
     } catch {
-      showToast("Gagal terhubung ke server Live Stok (timeout/jaringan). Coba tekan ulang.", "error");
+      showToast("Gagal terhubung ke server Live Sinkron (timeout/jaringan). Coba tekan ulang.", "error");
     } finally {
       if (liveStockEpochRef.current === requestEpoch) {
         setCheckingLiveStock(false);
@@ -4566,7 +4584,7 @@ export default function Home() {
                         type="button"
                         onClick={handleCheckLiveStock}
                         disabled={checkingLiveStock}
-                        title="Periksa stok langsung luqman org, lengkapi varian 1 keluarga artikel, & tarik foto studio"
+                        title="Sinkronkan langsung semua data live dari MDS Retailing: Stok seluruh warna & size, Harga Normal, Promo/Diskon SP, Barcode, & Detail Produk"
                         className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-50 active:scale-95 cursor-pointer border ${
                           !heroImages.length || sourceSiblings.length <= 1
                             ? "bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white border-indigo-700 shadow-sm"
@@ -4580,10 +4598,10 @@ export default function Home() {
                         )}
                         <span className="whitespace-normal break-words">
                           {checkingLiveStock
-                            ? "Scrap 1 Artikel & Foto..."
+                            ? "Menyinkronkan MDS..."
                             : !heroImages.length || sourceSiblings.length <= 1
-                            ? "Live Stok & Scrap 1 Artikel + Foto"
-                            : "Live Stok"}
+                            ? "Live Sinkron + Foto"
+                            : "Live Sinkron"}
                         </span>
                       </button>
 

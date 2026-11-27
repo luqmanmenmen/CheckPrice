@@ -709,6 +709,10 @@ def query_stock_matrix(sku: str, cookie: str, account: str, timeout: float = 3.5
     return {"rows": rows, "cookie": res["cookie"]}
 
 
+def _norm_color_key(val: Any) -> str:
+    return re.sub(r"[^A-Z0-9]+", "", str(val or "").strip().upper())
+
+
 def match_matrix_qty(matrix_rows: List[Dict[str, Any]], color: Any, size: Any) -> Optional[int]:
     if not matrix_rows:
         return None
@@ -752,11 +756,23 @@ def match_matrix_qty(matrix_rows: List[Dict[str, Any]], color: Any, size: Any) -
     return None
 
 
-def query_promotion(kind: str, code: str, cookie: str, account: str, normal_price: int, timeout: float = 3.0) -> Optional[Dict[str, Any]]:
+def query_promotion_checked(kind: str, code: str, cookie: str, account: str, normal_price: int, timeout: float = 3.0) -> Dict[str, Any]:
+    """
+    Menarik Detail Promo Live dari StoreHub MDS Retailing (`checkItemPromotion`).
+    Mengembalikan `{"checked": bool, "promo": dict | None, "rawCount": int}` agar pemanggil tahu
+    bedanya antara 'API gagal/offline' (`checked=False`) vs 'MDS mengonfirmasi TIDAK ADA PROMO / Harga Normal' (`checked=True, promo=None`).
+    Mendukung penuh:
+    - Line Discount (%) -> mis. MUKU SBY 30%
+    - Special Price (ActionId='Others' / 'Line Discount', DiscountType='Disc. Amount', BR-NAME 'BR - ... - SP - 1 - 129000.00')
+    - Potongan Nominal (Disc. Amount non-SP)
+    - Promo Bundling / Bersyarat (Buy 2, B1G1, B2G1, Min. Belanja)
+    """
     res = _storehub_action_post("promo", [kind, code], cookie, account, timeout=timeout)
     if not res.get("ok"):
-        return None
+        return {"checked": False, "promo": None, "rawCount": 0, "offline": bool(res.get("offline")), "auth_failed": bool(res.get("auth_failed")), "action_expired": bool(res.get("action_expired"))}
+
     promos: List[Dict[str, Any]] = []
+    parsed_any = False
     for line in res["text"].split("\n"):
         ci = line.find(":")
         if 0 < ci <= 3:
@@ -764,13 +780,20 @@ def query_promotion(kind: str, code: str, cookie: str, account: str, normal_pric
                 parsed = json.loads(line[ci + 1 :])
             except Exception:
                 continue
+            if isinstance(parsed, dict) and "result" in parsed:
+                parsed_any = True
             data = ((parsed.get("result") or {}).get("data")) if isinstance(parsed, dict) else None
             if isinstance(data, dict):
+                parsed_any = True
                 for rows in data.values():
                     if isinstance(rows, list):
                         promos.extend([r for r in rows if isinstance(r, dict)])
+            elif isinstance(data, list):
+                parsed_any = True
+                promos.extend([r for r in data if isinstance(r, dict)])
+
     if not promos:
-        return None
+        return {"checked": parsed_any, "promo": None, "rawCount": 0}
 
     best: Optional[Dict[str, Any]] = None
     for pr in promos:
@@ -781,8 +804,6 @@ def query_promotion(kind: str, code: str, cookie: str, account: str, normal_pric
         ev_desc = str(pr.get("EventDesc") or "").strip()
         action_id = str(pr.get("ActionId") or pr.get("ActionID") or "").strip()
 
-        # Prioritaskan BR-NAME (nama program promo asli, misal "MUKU SBY 30%") + MESSAGE,
-        # JANGAN pakai EventDesc ("Scan Item") sebagai nama acara promo!
         clean_ev = "" if ev_desc.lower() in ("scan item", "scan", "item") else ev_desc
         if br_name and msg and br_name.lower() not in msg.lower():
             acara = f"{br_name} — {msg}"[:120]
@@ -798,9 +819,8 @@ def query_promotion(kind: str, code: str, cookie: str, account: str, normal_pric
         except Exception:
             amt = 0.0
 
-        # Deteksi apakah promo ini diskon satuan langsung (Line Discount) atau promo bersyarat/bundling (Buy 2, B1G1, Min. Belanja)
+        # Deteksi promo bersyarat / bundling (Buy 2, B1G1, B2G1, Min. Belanja) vs promo satuan langsung (Line Discount & SP Others)
         rule_text = f"{br_name} {msg} {action_id} {dtype}".lower()
-        is_line_discount = ("line" in action_id.lower()) or (not action_id)
         is_conditional_bundle = bool(
             re.search(
                 r"\b(buy\s*[2-9]|beli\s*[2-9]|buy\s*1\s*get\s*1|b1g1|b2g1|get\s*\d|gratis\s*\d|"
@@ -809,22 +829,28 @@ def query_promotion(kind: str, code: str, cookie: str, account: str, normal_pric
             )
             or ("transaction" in action_id.lower())
         )
+        # Di MDS StoreHub, Special Price (SP) memakai ActionId="Others" + DiscountType="Disc. Amount" + BR-NAME "... - SP - 1 - 129000.00"!
+        is_direct_item_discount = (not is_conditional_bundle) and (
+            (not action_id)
+            or any(k in action_id.lower() for k in ("line", "other", "item", "price", "sp"))
+        )
 
         is_pct = ("percent" in dtype.lower() and pct > 0) or (pct > 0 and amt <= 0)
-        is_amt = (any(k in dtype.lower() for k in ("amount", "price", "rupiah")) and amt > 0) or (amt > 0 and not is_pct)
+        is_amt = (any(k in dtype.lower() for k in ("amount", "price", "rupiah", "special", "nett")) and amt > 0) or (amt > 0 and not is_pct)
 
         promo_meta = {
             "brid": brid,
             "brName": br_name,
             "message": msg,
             "discType": dtype,
+            "discAmount": amt,
+            "discPercentage": pct,
             "actionId": action_id,
             "eventDesc": ev_desc,
         }
 
         cand: Optional[Dict[str, Any]] = None
         if is_conditional_bundle:
-            # Promo bersyarat / bundling (misal Buy 1 Get 1 / Beli 2 Disc 30%): JANGAN potong harga satuan 1 pcs!
             cand = {
                 "hargaPromo": None,
                 "diskon": (br_name or msg)[:40],
@@ -832,7 +858,7 @@ def query_promotion(kind: str, code: str, cookie: str, account: str, normal_pric
                 "acara": acara,
                 "promoDetail": promo_meta,
             }
-        elif is_pct and is_line_discount and normal_price > 0 and 1 <= pct <= 95:
+        elif is_pct and is_direct_item_discount and normal_price > 0 and 1 <= pct <= 95:
             hp = int(round((normal_price * (100 - pct)) / 100))
             if 0 < hp < normal_price:
                 pct_str = f"{int(pct)}%" if pct == int(pct) else f"{pct:g}%"
@@ -843,16 +869,20 @@ def query_promotion(kind: str, code: str, cookie: str, account: str, normal_pric
                     "acara": acara,
                     "promoDetail": promo_meta,
                 }
-        elif is_amt and is_line_discount and amt > 0:
-            is_sp = any(k in dtype.lower() for k in ("special", "fixed", "nett", "price")) or bool(
-                re.search(r"\b(sp|special\s*price|harga\s*spesial)\b", f"{msg} {br_name}", re.IGNORECASE)
+        elif is_amt and is_direct_item_discount and amt > 0:
+            # Deteksi apakah amt adalah HARGA JADI (Special Price / SP) atau POTONGAN NOMINAL!
+            # Di MDS Retailing: BR-NAME "BR - 483233872 - SP - 1 - 129000.00" atau ActionId="Others" dengan amt Rp 129.000 adalah HARGA SPESIAL!
+            has_sp_marker = any(k in dtype.lower() for k in ("special", "fixed", "nett", "price")) or bool(
+                re.search(r"(?:\b|-)(?:sp|special\s*price|harga\s*spesial)(?:\b|-|\d)", f"{msg} {br_name}", re.IGNORECASE)
             )
+            is_others_sp = ("other" in action_id.lower()) and (normal_price <= 0 or (amt >= normal_price * 0.2 and amt < normal_price))
+            is_sp = has_sp_marker or is_others_sp
             hp = int(round(amt)) if (is_sp or normal_price <= 0) else int(round(normal_price - amt))
             if hp > 0 and (normal_price <= 0 or hp < normal_price):
                 cand = {
                     "hargaPromo": hp,
-                    "diskon": "SP" if is_sp else f"POT Rp {int(round(amt)):,}".replace(",", "."),
-                    "discountType": "SPECIAL_PRICE",
+                    "diskon": f"SP {hp}" if is_sp else f"POT Rp {int(round(amt)):,}".replace(",", "."),
+                    "discountType": f"HARGA SPESIAL {hp}" if is_sp else "SPECIAL_PRICE",
                     "acara": acara,
                     "promoDetail": promo_meta,
                 }
@@ -870,7 +900,11 @@ def query_promotion(kind: str, code: str, cookie: str, account: str, normal_pric
                 best = cand
             elif cand["hargaPromo"] is not None and (best["hargaPromo"] is None or cand["hargaPromo"] < best["hargaPromo"]):
                 best = cand
-    return best
+    return {"checked": True, "promo": best, "rawCount": len(promos)}
+
+
+def query_promotion(kind: str, code: str, cookie: str, account: str, normal_price: int, timeout: float = 3.0) -> Optional[Dict[str, Any]]:
+    return query_promotion_checked(kind, code, cookie, account, normal_price, timeout=timeout).get("promo")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1131,6 +1165,7 @@ def _upsert_item_and_aliases(
     promo: Optional[Dict[str, Any]],
     images: List[str],
     now_iso: str,
+    promo_checked: bool = False,
 ) -> Dict[str, Any]:
     sku = str(item.get("SKU") or item.get("sku") or scanned_code).strip()
     raw_bc = str(item.get("VendorBarcode") or item.get("vendorBarcode") or "").strip()
@@ -1167,6 +1202,24 @@ def _upsert_item_and_aliases(
         if conflict and str(conflict[0].get("sku") or "") != sku:
             primary_bc = None
 
+    # Jika promo_checked=True (sudah dicek live ke MDS Retailing), TIMPA langsung kolom promo
+    # agar promo baru masuk persis MDS DAN promo lama yang sudah berakhir otomatis dibersihkan ke Harga Normal!
+    promo_update_sql = (
+        '"hargaPromo" = excluded."hargaPromo", '
+        'diskon = excluded.diskon, '
+        '"discountType" = excluded."discountType", '
+        'acara = excluded.acara, '
+        '"fromDate" = NULL, '
+        '"toDate" = NULL, '
+        if promo_checked
+        else (
+            '"hargaPromo" = COALESCE(excluded."hargaPromo", "Product"."hargaPromo"), '
+            'diskon = COALESCE(excluded.diskon, "Product".diskon), '
+            '"discountType" = COALESCE(excluded."discountType", "Product"."discountType"), '
+            'acara = COALESCE(excluded.acara, "Product".acara), '
+        )
+    )
+
     stmts: List[Tuple[str, Tuple[Any, ...]]] = [
         (
             'INSERT INTO "Product" ('
@@ -1183,10 +1236,7 @@ def _upsert_item_and_aliases(
             'color = COALESCE(excluded.color, "Product".color), '
             'size = COALESCE(excluded.size, "Product".size), '
             '"hargaNormal" = CASE WHEN excluded."hargaNormal" > 0 THEN excluded."hargaNormal" ELSE "Product"."hargaNormal" END, '
-            '"hargaPromo" = COALESCE(excluded."hargaPromo", "Product"."hargaPromo"), '
-            'diskon = COALESCE(excluded.diskon, "Product".diskon), '
-            '"discountType" = COALESCE(excluded."discountType", "Product"."discountType"), '
-            'acara = COALESCE(excluded.acara, "Product".acara), '
+            + promo_update_sql +
             '"imageUrl" = COALESCE("Product"."imageUrl", excluded."imageUrl"), '
             'images = CASE WHEN "Product".images IS NULL OR "Product".images = \'[]\' THEN excluded.images ELSE "Product".images END, '
             'stok = excluded.stok, '
@@ -1455,48 +1505,67 @@ def run_live_scan(
         primary_raw.get("Price") or primary_raw.get("RetailPrice") or primary_raw.get("UnitPrice")
     ) or 0
 
-    # Langkah 4: Jalankan PARALEL (Matrix Stock + Live Promo + Foto Studio) dalam 1 siklus kilat (< 1,8 dtk)!
+    # Langkah 4: Jalankan PARALEL (Matrix Stock + Live Promo + Foto Studio) dalam 1 siklus kilat (< 2,2 dtk)!
     matrix_rows: List[Dict[str, Any]] = []
     live_promo: Optional[Dict[str, Any]] = None
+    promo_checked = False
     found_images: List[str] = []
 
-    enrich_budget = max(1.0, min(1.8, deadline - time.time()))
+    enrich_budget = max(1.4, min(2.4, deadline - time.time()))
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
         fut_matrix = pool.submit(query_stock_matrix, seed_sku, active_cookie, owner_acc, enrich_budget)
-        fut_promo = pool.submit(query_promotion, active_kind, active_code, active_cookie, owner_acc, seed_normal, enrich_budget)
+        fut_promo = pool.submit(query_promotion_checked, active_kind, active_code, active_cookie, owner_acc, seed_normal, enrich_budget)
         fut_img = (
             pool.submit(lookup_matahari_images, seed_sku, seed_article, clean_code)
             if with_images
             else None
         )
         try:
-            m_res = fut_matrix.result(timeout=enrich_budget + 0.2)
+            m_res = fut_matrix.result(timeout=enrich_budget + 0.3)
             matrix_rows = m_res.get("rows") or []
         except Exception:
             matrix_rows = []
         try:
-            live_promo = fut_promo.result(timeout=enrich_budget + 0.2)
+            p_res = fut_promo.result(timeout=enrich_budget + 0.3)
+            promo_checked = bool(p_res.get("checked"))
+            live_promo = p_res.get("promo")
         except Exception:
             live_promo = None
+            promo_checked = False
         if fut_img is not None:
             try:
                 found_images = fut_img.result(timeout=enrich_budget + 0.3)
             except Exception:
                 found_images = []
 
+    # Fallback Promo Probe: bila tadi scan pakai UPC/QR & hasil 0 promo, coba 1x cepat pakai SKU!
+    if not live_promo and active_kind != "sku" and seed_sku and (deadline - time.time()) > 0.6:
+        try:
+            p_fb = query_promotion_checked("sku", seed_sku, active_cookie, owner_acc, seed_normal, min(1.8, deadline - time.time()))
+            if p_fb.get("checked"):
+                promo_checked = True
+                if p_fb.get("promo"):
+                    live_promo = p_fb["promo"]
+        except Exception:
+            pass
+
     # Langkah 5: Simpan ke Turso (`Product` + `BarcodeAlias`)
     # Gunakan active_code (kode terverifikasi StoreHub) agar kode typo hangtag buram tidak mencemari BarcodeAlias!
     canonical_code = active_code if was_healed else clean_code
     now_iso = utc_iso_now()
-    saved_meta = _upsert_item_and_aliases(primary_raw, canonical_code, owner_acc, live_promo, found_images, now_iso)
+    saved_meta = _upsert_item_and_aliases(
+        primary_raw, canonical_code, owner_acc, live_promo, found_images, now_iso, promo_checked=promo_checked
+    )
     # Upsert item tambahan bila StoreHub mengembalikan > 1 SKU dalam 1 response
     for extra in items[1:12]:
         try:
-            _upsert_item_and_aliases(extra, canonical_code, owner_acc, live_promo, found_images, now_iso)
+            _upsert_item_and_aliases(
+                extra, canonical_code, owner_acc, live_promo, found_images, now_iso, promo_checked=promo_checked
+            )
         except Exception:
             pass
 
-    # Ambil seluruh siblings artikel dari Turso & terapkan Matrix Stock ke seluruh ukuran/warna!
+    # Ambil seluruh siblings artikel dari Turso & terapkan Matrix Stock + sinkron harga/promo warna sama!
     siblings_rows = (
         turso_query('SELECT * FROM "Product" WHERE article = ? ORDER BY sku ASC LIMIT 120', (saved_meta["article"],), timeout=3.0)
         if saved_meta["article"]
@@ -1504,19 +1573,55 @@ def run_live_scan(
     )
     siblings = [_deserialize_product_row(r) for r in siblings_rows]
 
+    primary_color_norm = _norm_color_key(
+        primary_raw.get("Color") or primary_raw.get("ColorDesc") or (siblings[0].get("color") if siblings else "")
+    )
     updated_variants: List[Dict[str, Any]] = []
-    if matrix_rows and siblings:
-        matrix_stmts: List[Tuple[str, Tuple[Any, ...]]] = []
+    if siblings:
+        sync_stmts: List[Tuple[str, Tuple[Any, ...]]] = []
         for sib in siblings:
-            mq = match_matrix_qty(matrix_rows, sib.get("color"), sib.get("size"))
-            if mq is not None and mq != int(sib.get("stok") or 0):
-                sib["stok"] = mq
+            sib_sku = sib.get("sku")
+            if not sib_sku:
+                continue
+            new_stok = sib.get("stok") or 0
+            stok_changed = False
+            if matrix_rows:
+                mq = match_matrix_qty(matrix_rows, sib.get("color"), sib.get("size"))
+                if mq is not None and mq != int(sib.get("stok") or 0):
+                    new_stok = mq
+                    sib["stok"] = mq
+                    stok_changed = True
+                    updated_variants.append({"sku": sib_sku, "stok": mq})
+
+            same_color = bool(primary_color_norm and _norm_color_key(sib.get("color")) == primary_color_norm)
+            if same_color and sib_sku != saved_meta["sku"] and (seed_normal > 0 or promo_checked):
+                new_normal = seed_normal if seed_normal > 0 else (sib.get("hargaNormal") or 0)
+                sib["hargaNormal"] = new_normal
+                if promo_checked:
+                    sib["hargaPromo"] = live_promo["hargaPromo"] if live_promo else None
+                    sib["diskon"] = live_promo["diskon"] if live_promo else None
+                    sib["discountType"] = live_promo["discountType"] if live_promo else None
+                    sib["acara"] = live_promo["acara"] if live_promo else None
+                    sib["fromDate"] = None
+                    sib["toDate"] = None
                 sib["updatedAt"] = now_iso
-                matrix_stmts.append(('UPDATE "Product" SET stok = ?, "updatedAt" = ? WHERE sku = ?', (mq, now_iso, sib["sku"])))
-                updated_variants.append({"sku": sib["sku"], "stok": mq})
-        if matrix_stmts:
+                if promo_checked:
+                    sync_stmts.append((
+                        'UPDATE "Product" SET stok = ?, "hargaNormal" = ?, "hargaPromo" = ?, diskon = ?, "discountType" = ?, acara = ?, "fromDate" = NULL, "toDate" = NULL, "updatedAt" = ? WHERE sku = ?',
+                        (new_stok, new_normal, sib["hargaPromo"], sib["diskon"], sib["discountType"], sib["acara"], now_iso, sib_sku),
+                    ))
+                else:
+                    sync_stmts.append((
+                        'UPDATE "Product" SET stok = ?, "hargaNormal" = ?, "updatedAt" = ? WHERE sku = ?',
+                        (new_stok, new_normal, now_iso, sib_sku),
+                    ))
+            elif stok_changed:
+                sib["updatedAt"] = now_iso
+                sync_stmts.append(('UPDATE "Product" SET stok = ?, "updatedAt" = ? WHERE sku = ?', (new_stok, now_iso, sib_sku)))
+
+        if sync_stmts:
             try:
-                turso_pipeline(matrix_stmts, timeout=3.0)
+                turso_pipeline(sync_stmts, timeout=3.5)
             except Exception:
                 pass
 
@@ -1568,109 +1673,258 @@ def run_fast_stock(
     article: Optional[str] = None,
     brand_group: Optional[str] = None,
 ) -> Dict[str, Any]:
+    """
+    LIVE SINKRON PENUH (100% Persis MDS Retailing dalam 1 Siklus Paralel!):
+    Menyinkronkan SEMUA data produk secara live dari StoreHub MDS Retailing:
+    1. Detail Barang (`checkItemDetail`): Harga Normal, Barcode UPC, StyleCode/Artikel, Deskripsi, Brand, Dept, Color, Size, SOH.
+    2. Detail Promo (`checkItemPromotion`): Harga Promo SP / Diskon % / Bundling / BR-NAME + otomatis bersihkan promo basi bila sudah Harga Normal!
+    3. Relasi Stok (`checkItemStock`): Stok seluruh varian warna & ukuran dalam 1 artikel.
+    4. Simpan penuh ke Turso (`Product` + `BarcodeAlias` + `CatalogArticle`) & kembalikan `data` + `siblings` terbaru ke UI & cache HP!
+    """
     t0 = time.time()
     clean_sku = str(sku or "").strip()
     if not clean_sku:
         return {"success": False, "error": "SKU wajib diisi"}
 
-    # Kunci akun role pemilik toko dari brandGroup (fallback cek DB 1 baris jika kosong)
+    # Baca baris eksisting 1x (untuk ownerAccount, barcode, normal price hint, & fallback artikel)
+    existing_rows = turso_query(
+        'SELECT sku, barcode, article, brand, dept, description, color, size, "hargaNormal", stok FROM "Product" WHERE sku = ? LIMIT 1',
+        (clean_sku,),
+        timeout=2.2,
+    )
+    ex0 = existing_rows[0] if existing_rows else {}
     bg = str(brand_group or "").strip().upper()
-    if bg not in ("SUKO", "MUKU", "ZES"):
-        row = turso_query('SELECT brand, dept, description FROM "Product" WHERE sku = ? LIMIT 1', (clean_sku,), timeout=2.0)
-        if row:
-            bg = resolve_store_group(str(row[0].get("brand") or ""), str(row[0].get("dept") or ""), str(row[0].get("description") or ""))
+    if bg not in ("SUKO", "MUKU", "ZES") and ex0:
+        bg = resolve_store_group(str(ex0.get("brand") or ""), str(ex0.get("dept") or ""), str(ex0.get("description") or ""))
     owner_acc = "suko" if bg == "SUKO" else "muku"
+    alt_acc = "muku" if owner_acc == "suko" else "suko"
+    normal_hint = int(round(float(ex0.get("hargaNormal") or 0))) if ex0 else 0
+    existing_bc = str(ex0.get("barcode") or "").strip()
+    resolved_article = str(article or ex0.get("article") or "").strip()
 
     cookie = get_storehub_cookie(owner_acc, force_refresh=False)
     if not cookie:
         return {"success": False, "sku": clean_sku, "storeOffline": True, "message": "Sesi toko belum tersedia."}
 
-    m_res = query_stock_matrix(clean_sku, cookie, owner_acc, timeout=4.0)
-    cookie = m_res.get("cookie") or cookie
-    if m_res.get("action_expired") and resolve_action_hashes(cookie=cookie):
-        m_res = query_stock_matrix(clean_sku, cookie, owner_acc, timeout=4.0)
-    elif m_res.get("auth_failed"):
+    def _run_parallel_trio(active_cookie: str, active_acc: str, budget: float = 4.2):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+            f_det = pool.submit(query_detail, "sku", clean_sku, active_cookie, active_acc, budget)
+            f_mat = pool.submit(query_stock_matrix, clean_sku, active_cookie, active_acc, budget)
+            f_pro = pool.submit(query_promotion_checked, "sku", clean_sku, active_cookie, active_acc, normal_hint, budget)
+            d_r = f_det.result(timeout=budget + 0.5)
+            m_r = f_mat.result(timeout=budget + 0.5)
+            p_r = f_pro.result(timeout=budget + 0.5)
+        return d_r, m_r, p_r
+
+    try:
+        d_res, m_res, p_res = _run_parallel_trio(cookie, owner_acc, 4.2)
+    except Exception:
+        d_res, m_res, p_res = {"items": []}, {"rows": []}, {"checked": False, "promo": None}
+
+    cookie = d_res.get("cookie") or m_res.get("cookie") or cookie
+    if (d_res.get("action_expired") or m_res.get("action_expired") or p_res.get("action_expired")) and resolve_action_hashes(cookie=cookie):
+        d_res, m_res, p_res = _run_parallel_trio(cookie, owner_acc, 4.0)
+    elif d_res.get("auth_failed") or m_res.get("auth_failed") or p_res.get("auth_failed"):
         fresh = get_storehub_cookie(owner_acc, force_refresh=True)
         if fresh:
             cookie = fresh
-            m_res = query_stock_matrix(clean_sku, cookie, owner_acc, timeout=4.0)
+            d_res, m_res, p_res = _run_parallel_trio(cookie, owner_acc, 4.0)
 
-    if m_res.get("offline"):
+    # Jika akun pertama 0 hasil (misal produk ternyata milik akun toko satunya), coba akun alternatif 1x!
+    if not (d_res.get("items") or m_res.get("rows")) and not (d_res.get("offline") or m_res.get("offline")):
+        alt_cookie = get_storehub_cookie(alt_acc, force_refresh=False)
+        if alt_cookie:
+            d2, m2, p2 = _run_parallel_trio(alt_cookie, alt_acc, 3.8)
+            if d2.get("items") or m2.get("rows"):
+                owner_acc = alt_acc
+                cookie = alt_cookie
+                d_res, m_res, p_res = d2, m2, p2
+
+    if (d_res.get("offline") or m_res.get("offline")) and not (d_res.get("items") or m_res.get("rows")):
         return {
             "success": False,
             "sku": clean_sku,
             "storeOffline": True,
-            "message": "Toko sedang tutup (malam hari). Menampilkan stok tersimpan.",
+            "message": "Toko sedang tutup (malam hari). Menampilkan data tersimpan.",
             "elapsedMs": int((time.time() - t0) * 1000),
         }
 
+    d_items = d_res.get("items") or []
     matrix_rows = m_res.get("rows") or []
-    updates_map: Dict[str, int] = {}
-    if matrix_rows and family_variants:
-        for v in family_variants:
-            v_sku = str(v.get("sku") or "").strip()
-            if not v_sku:
-                continue
-            q = match_matrix_qty(matrix_rows, v.get("color"), v.get("size"))
-            if q is not None:
-                updates_map[v_sku] = q
+    promo_checked = bool(p_res.get("checked"))
+    live_promo = p_res.get("promo")
 
-    # Fallback: jika matrix kosong untuk SKU tunggal, tembak detail 1x
-    if clean_sku not in updates_map:
-        d_res = query_detail("sku", clean_sku, cookie, owner_acc, timeout=3.5)
-        d_items = d_res.get("items") or []
-        if d_items:
-            q_single = parse_stock_int(d_items[0].get("StockOnHand"))
-            if q_single is not None:
-                updates_map[clean_sku] = q_single
+    # Tentukan harga normal live paling akurat dari checkItemDetail
+    primary_raw = d_items[0] if d_items else None
+    live_normal = (
+        parse_retail_price(
+            primary_raw.get("Price") or primary_raw.get("RetailPrice") or primary_raw.get("UnitPrice")
+        )
+        if primary_raw
+        else None
+    ) or normal_hint
 
-    if not updates_map:
-        return {
-            "success": False,
-            "sku": clean_sku,
-            "ownerAccount": owner_acc,
-            "message": "Stok tidak tersedia dari server toko saat ini.",
-            "elapsedMs": int((time.time() - t0) * 1000),
-        }
-
-    # Simpan delta stok ke Turso secara batch (hanya yang berubah!)
-    now_iso = utc_iso_now()
-    old_map = {str(v.get("sku") or ""): v.get("stok") for v in family_variants if v.get("sku")}
-    stmts: List[Tuple[str, Tuple[Any, ...]]] = []
-    for u_sku, u_qty in updates_map.items():
-        if old_map.get(u_sku) != u_qty:
-            stmts.append(('UPDATE "Product" SET stok = ?, "updatedAt" = ? WHERE sku = ?', (u_qty, now_iso, u_sku)))
-    if stmts:
+    # Jika harga normal live berbeda dari hint awal (atau hint awal 0), re-query promo bila persen / UPC fallback
+    live_bc = str((primary_raw or {}).get("VendorBarcode") or existing_bc or "").strip()
+    if (not live_promo and live_bc) or (live_normal > 0 and live_normal != normal_hint):
         try:
-            turso_pipeline(stmts, timeout=3.5)
+            probe_kind = "upc" if (not live_promo and live_bc) else "sku"
+            probe_code = live_bc if probe_kind == "upc" else clean_sku
+            p_retry = query_promotion_checked(probe_kind, probe_code, cookie, owner_acc, live_normal, timeout=2.5)
+            if p_retry.get("checked"):
+                promo_checked = True
+                if p_retry.get("promo") or probe_kind == "sku":
+                    live_promo = p_retry.get("promo")
         except Exception:
             pass
 
-    if article:
-        total_stok = sum(max(0, q) for q in updates_map.values())
+    now_iso = utc_iso_now()
+    if primary_raw:
+        saved_meta = _upsert_item_and_aliases(
+            primary_raw,
+            clean_sku,
+            owner_acc,
+            live_promo,
+            [],
+            now_iso,
+            promo_checked=promo_checked,
+        )
+        resolved_article = saved_meta.get("article") or resolved_article
+    elif promo_checked:
+        # Tetap simpan update harga/promo walau detail kosong
+        hp = live_promo["hargaPromo"] if live_promo else None
+        dk = live_promo["diskon"] if live_promo else None
+        dt = live_promo["discountType"] if live_promo else None
+        ac = live_promo["acara"] if live_promo else None
         try:
             turso_pipeline(
-                [
-                    (
-                        'UPDATE "CatalogArticle" SET "articleTotalStok" = ?, stok = ?, "updatedAt" = ? WHERE key = ?',
-                        (total_stok, updates_map.get(clean_sku, 0), now_iso, article.strip().upper()),
-                    )
-                ],
-                timeout=2.5,
+                [(
+                    'UPDATE "Product" SET "hargaPromo" = ?, diskon = ?, "discountType" = ?, acara = ?, "fromDate" = NULL, "toDate" = NULL, "updatedAt" = ? WHERE sku = ?',
+                    (hp, dk, dt, ac, now_iso, clean_sku),
+                )],
+                timeout=3.0,
             )
         except Exception:
             pass
 
+    # Ambil seluruh keluarga varian terbaru dari Turso
+    siblings_rows = (
+        turso_query('SELECT * FROM "Product" WHERE article = ? ORDER BY sku ASC LIMIT 120', (resolved_article,), timeout=3.0)
+        if resolved_article
+        else turso_query('SELECT * FROM "Product" WHERE sku = ? LIMIT 1', (clean_sku,), timeout=3.0)
+    )
+    siblings = [_deserialize_product_row(r) for r in siblings_rows]
+
+    active_color_norm = _norm_color_key(
+        (primary_raw or {}).get("Color")
+        or (primary_raw or {}).get("ColorDesc")
+        or ex0.get("color")
+        or ""
+    )
+    old_map = {str(v.get("sku") or ""): v.get("stok") for v in family_variants if v.get("sku")}
+    updates_map: Dict[str, int] = {}
+    sync_stmts: List[Tuple[str, Tuple[Any, ...]]] = []
+
+    for sib in siblings:
+        s_sku = str(sib.get("sku") or "").strip()
+        if not s_sku:
+            continue
+        cur_stok = int(sib.get("stok") or 0)
+        new_stok = cur_stok
+        if matrix_rows:
+            q = match_matrix_qty(matrix_rows, sib.get("color"), sib.get("size"))
+            if q is not None:
+                new_stok = q
+                updates_map[s_sku] = q
+        if s_sku == clean_sku and primary_raw is not None:
+            q_det = parse_stock_int(primary_raw.get("StockOnHand"))
+            if q_det is not None:
+                new_stok = q_det
+                updates_map[s_sku] = q_det
+
+        stok_changed = new_stok != cur_stok
+        if stok_changed:
+            sib["stok"] = new_stok
+
+        # Semua ukuran pada WARNA YANG SAMA wajib memiliki Harga Normal & Promo yang sama persis dengan MDS Retailing!
+        same_color = bool(active_color_norm and _norm_color_key(sib.get("color")) == active_color_norm)
+        if same_color and (live_normal > 0 or promo_checked):
+            if live_normal > 0:
+                sib["hargaNormal"] = live_normal
+            if promo_checked:
+                sib["hargaPromo"] = live_promo["hargaPromo"] if live_promo else None
+                sib["diskon"] = live_promo["diskon"] if live_promo else None
+                sib["discountType"] = live_promo["discountType"] if live_promo else None
+                sib["acara"] = live_promo["acara"] if live_promo else None
+                sib["fromDate"] = None
+                sib["toDate"] = None
+            sib["updatedAt"] = now_iso
+            if s_sku != clean_sku or stok_changed:
+                if promo_checked:
+                    sync_stmts.append((
+                        'UPDATE "Product" SET stok = ?, "hargaNormal" = ?, "hargaPromo" = ?, diskon = ?, "discountType" = ?, acara = ?, "fromDate" = NULL, "toDate" = NULL, "updatedAt" = ? WHERE sku = ?',
+                        (
+                            new_stok,
+                            sib.get("hargaNormal") or 0,
+                            sib.get("hargaPromo"),
+                            sib.get("diskon"),
+                            sib.get("discountType"),
+                            sib.get("acara"),
+                            now_iso,
+                            s_sku,
+                        ),
+                    ))
+                else:
+                    sync_stmts.append((
+                        'UPDATE "Product" SET stok = ?, "hargaNormal" = ?, "updatedAt" = ? WHERE sku = ?',
+                        (new_stok, sib.get("hargaNormal") or 0, now_iso, s_sku),
+                    ))
+        elif stok_changed:
+            sib["updatedAt"] = now_iso
+            sync_stmts.append(('UPDATE "Product" SET stok = ?, "updatedAt" = ? WHERE sku = ?', (new_stok, now_iso, s_sku)))
+
+    if sync_stmts:
+        try:
+            turso_pipeline(sync_stmts, timeout=3.5)
+        except Exception:
+            pass
+
+    if resolved_article and siblings:
+        _sync_catalog_article_for_family(resolved_article, siblings, now_iso)
+
+    main_product = next((s for s in siblings if s.get("sku") == clean_sku), siblings[0] if siblings else None)
+    if not main_product and not updates_map:
+        return {
+            "success": False,
+            "sku": clean_sku,
+            "ownerAccount": owner_acc,
+            "message": "Data live tidak tersedia dari server MDS saat ini.",
+            "elapsedMs": int((time.time() - t0) * 1000),
+        }
+
     updated_variants = [{"sku": k, "stok": v} for k, v in updates_map.items()]
+    changed_count = sum(1 for k, v in updates_map.items() if k in old_map and old_map[k] != v)
+    final_stok = int((main_product or {}).get("stok") if main_product else updates_map.get(clean_sku, 0))
+
     return {
         "success": True,
         "sku": clean_sku,
-        "stok": updates_map.get(clean_sku, next(iter(updates_map.values()))),
+        "article": resolved_article or (main_product or {}).get("article"),
+        "stok": final_stok,
         "ownerAccount": owner_acc,
-        "updatedCount": len(updated_variants),
+        "data": main_product,
+        "siblings": siblings,
+        "variants": updated_variants,
         "updatedVariants": updated_variants,
-        "fastMode": True,
-        "source": "PYTHON_TURBO_MATRIX",
+        "updatedCount": len(updated_variants) or len(siblings),
+        "liveCheckedCount": len(updated_variants) or len(siblings),
+        "changedCount": changed_count,
+        "promoChecked": promo_checked,
+        "livePromo": live_promo,
+        "hargaNormal": (main_product or {}).get("hargaNormal") or live_normal,
+        "hargaPromo": (main_product or {}).get("hargaPromo"),
+        "fastMode": False,
+        "source": "PYTHON_LIVE_SYNC_FULL",
         "elapsedMs": int((time.time() - t0) * 1000),
     }
 

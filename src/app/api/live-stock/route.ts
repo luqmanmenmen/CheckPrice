@@ -35,9 +35,9 @@ export async function POST(req: NextRequest) {
           article: typeof body.article === 'string' ? body.article : null,
           brandGroup,
         },
-        { requestUrl: req.url, timeoutMs: 4200 }
+        { requestUrl: req.url, timeoutMs: 8500 }
       );
-      return NextResponse.json({ ...result, fastMode: true });
+      return NextResponse.json(result);
     }
 
     const result = await invokePythonLiveEngine(
@@ -45,10 +45,10 @@ export async function POST(req: NextRequest) {
         action: 'scan',
         sku: String(sku),
         withImages: body.withImages !== false,
-        maxSeconds: 4.2,
+        maxSeconds: 5.5,
         preferredAccount: brandGroup === 'MUKU' ? 'muku' : brandGroup === 'SUKO' ? 'suko' : undefined,
       },
-      { requestUrl: req.url, timeoutMs: 5200 }
+      { requestUrl: req.url, timeoutMs: 9000 }
     );
     return NextResponse.json(result);
   } catch (err: any) {
