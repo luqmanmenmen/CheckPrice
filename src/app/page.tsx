@@ -4294,53 +4294,110 @@ export default function Home() {
 
         const normImgColor = (c?: string | null) =>
           String(c || "").trim().toUpperCase().replace(/[\s\-_./]+/g, "");
-        const getImgOwnerSku = (url?: string | null) => {
-          if (!url) return null;
+        const extractSkusFromImgUrl = (url?: string | null): string[] => {
+          if (!url) return [];
           const fn = String(url).split("?")[0].split("/").pop() || "";
-          const m = fn.match(/^(\d{7,9})(?:[-_.]|$)/);
-          return m?.[1] || null;
+          const matches = fn.match(/(?<!\d)\d{7,9}(?!\d)/g);
+          return matches ? Array.from(new Set(matches)) : [];
         };
         const activeColorNorm = normImgColor(parsedInfo.color || product.color);
-        const isUrlOwnedByOtherColor = (url?: string | null) => {
-          const ownerSku = getImgOwnerSku(url);
-          if (!ownerSku || !activeColorNorm) return null;
-          const ownerSib = sourceSiblings.find((s) => s.sku === ownerSku);
-          const ownerNorm = normImgColor(ownerSib?.color);
-          if (ownerSib && ownerNorm && ownerNorm !== activeColorNorm) {
-            return String(ownerSib.color || "").trim().toUpperCase();
+        const sameColorSkuSet = new Set<string>([product.sku].filter(Boolean));
+        const otherColorSkuMap = new Map<string, string>();
+        sourceSiblings.forEach((s) => {
+          if (!s.sku) return;
+          const sNorm = normImgColor(s.color);
+          if (activeColorNorm && sNorm) {
+            if (sNorm === activeColorNorm) {
+              sameColorSkuSet.add(s.sku);
+            } else {
+              otherColorSkuMap.set(s.sku, String(s.color || "").trim().toUpperCase());
+            }
+          }
+        });
+
+        const isUrlOwnedByOtherColor = (url?: string | null): string | null => {
+          const skus = extractSkusFromImgUrl(url);
+          if (skus.length === 0 || !activeColorNorm) return null;
+          for (const s of skus) {
+            if (sameColorSkuSet.has(s)) return null;
+            const otherCol = otherColorSkuMap.get(s);
+            if (otherCol) return otherCol;
           }
           return null;
+        };
+
+        // Saring KETAT seluruh slide galeri agar 100% HANYA foto milik warna aktif (anti slide #2/#3 bocor warna lain!).
+        // Jika warna aktif belum punya foto sendiri -> kembalikan [] (tampil placeholder ikon abu-abu rapi, BUKAN pinjam foto warna lain!).
+        const filterStrictSameColorUrls = (urls: (string | null | undefined)[]): string[] => {
+          const dedup: string[] = [];
+          const seen = new Set<string>();
+          for (const raw of urls) {
+            const u = String(raw || "").trim();
+            if (!u || seen.has(u)) continue;
+            if (isUrlOwnedByOtherColor(u)) continue;
+            seen.add(u);
+            dedup.push(u);
+          }
+          if (dedup.length === 0) return [];
+
+          // Jika ada foto yang secara eksplisit membawa SKU warna aktif, buang slide lain yang membawa SKU asing berbeda!
+          const hasExplicitSameColor = dedup.some((u) =>
+            extractSkusFromImgUrl(u).some((s) => sameColorSkuSet.has(s))
+          );
+          if (hasExplicitSameColor) {
+            return dedup.filter((u) => {
+              const skus = extractSkusFromImgUrl(u);
+              return skus.length === 0 || skus.some((s) => sameColorSkuSet.has(s));
+            });
+          }
+
+          // Jika produk punya beberapa warna di artikel ini, tapi foto membawa SKU asing yang tidak dikenal sebagai warna aktif -> tolak agar tidak ngawur!
+          if (otherColorSkuMap.size > 0) {
+            const safeUrls = dedup.filter((u) => {
+              const skus = extractSkusFromImgUrl(u);
+              return skus.length === 0 || skus.some((s) => sameColorSkuSet.has(s));
+            });
+            if (safeUrls.length === 0) return [];
+            return safeUrls;
+          }
+
+          // Produk 1 warna tunggal: tetap pastikan slide #2..N tidak membawa SKU berbeda dari slide #1!
+          const firstSkus = extractSkusFromImgUrl(dedup[0]);
+          if (firstSkus.length > 0) {
+            const anchorSet = new Set([...firstSkus, ...Array.from(sameColorSkuSet)]);
+            return dedup.filter((u) => {
+              const skus = extractSkusFromImgUrl(u);
+              return skus.length === 0 || skus.some((s) => anchorSet.has(s));
+            });
+          }
+          return dedup;
         };
 
         const heroImages = (() => {
           const sameColorSibs = sourceSiblings.filter(
             (s) => normImgColor(s.color) && normImgColor(s.color) === activeColorNorm
           );
-          const betterSameColorSib = sameColorSibs.find((s) => {
-            const imgs = s.images && s.images.length > 0 ? s.images : s.imageUrl ? [s.imageUrl] : [];
-            return imgs.length > 0 && !isUrlOwnedByOtherColor(imgs[0]);
-          });
-
-          const curList =
+          const curRaw =
             product.images && product.images.length > 0
               ? product.images
               : product.imageUrl
               ? [product.imageUrl]
               : [];
-          if (curList.length > 0 && !isUrlOwnedByOtherColor(curList[0])) {
-            return curList;
+          const curStrict = filterStrictSameColorUrls(curRaw);
+          if (curStrict.length > 0) {
+            return curStrict;
           }
-          if (betterSameColorSib) {
-            return betterSameColorSib.images && betterSameColorSib.images.length > 0
-              ? betterSameColorSib.images
-              : [betterSameColorSib.imageUrl!];
+          // Hanya boleh mengambil dari sibling dengan WARNA YANG SAMA (misal size S/M/L warna sama) — DILARANG pinjam dari warna lain!
+          for (const sib of sameColorSibs) {
+            const sibRaw = sib.images && sib.images.length > 0 ? sib.images : sib.imageUrl ? [sib.imageUrl] : [];
+            const sibStrict = filterStrictSameColorUrls(sibRaw);
+            if (sibStrict.length > 0) return sibStrict;
           }
-          if (curList.length > 0) return curList;
-          const anySibWithImg = sourceSiblings.find((s) => s.imageUrl);
-          return anySibWithImg?.imageUrl ? [anySibWithImg.imageUrl] : [];
+          // Tidak ada foto warna ini -> kembalikan kosong agar tampil placeholder ikon abu-abu bersih!
+          return [];
         })();
 
-        const mismatchedOwnerColor = heroImages.length > 0 ? isUrlOwnedByOtherColor(heroImages[0]) : null;
+        const mismatchedOwnerColor = null as string | null;
 
         const selectedVariantEntries = Object.entries(multiVariantQty).filter(([, q]) => q > 0);
         const selectedVariantsCount = selectedVariantEntries.length;

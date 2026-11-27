@@ -939,8 +939,96 @@ def _verify_image_not_grey_logo(url: str, timeout: float = 1.6) -> bool:
         return False
 
 
-def lookup_matahari_images(sku: str = "", article: str = "", barcode: str = "") -> List[str]:
-    queries = [q for q in dict.fromkeys([sku.strip(), article.strip(), barcode.strip()]) if q and len(q) >= 4][:2]
+def _extract_skus_from_image_url(url: str) -> List[str]:
+    """Ekstrak semua nomor SKU 7-9 digit yang tertanam pada nama file URL CDN (mis. 72410932-1.jpg, 9172-45411929-IMG1.jpg)."""
+    fn = str(url or "").split("?")[0].split("/")[-1]
+    if not fn:
+        return []
+    return re.findall(r"(?<!\d)(\d{7,9})(?!\d)", fn)
+
+
+def _filter_strict_color_images(
+    urls: List[str],
+    same_color_skus: Optional[set] = None,
+    other_color_skus: Optional[set] = None,
+) -> List[str]:
+    """
+    Filter super ketat anti foto campur warna:
+    1. Tolak semua URL yang mengandung SKU milik warna lain (`other_color_skus`).
+    2. Jika `same_color_skus` tersedia & ada URL yang secara eksplisit memuat SKU warna aktif,
+       buang URL lain yang membawa SKU 7-9 digit berbeda (foto warna lain yang belum terdaftar di DB!).
+    """
+    same_set = {str(s).strip() for s in (same_color_skus or set()) if str(s).strip()}
+    other_set = {str(s).strip() for s in (other_color_skus or set()) if str(s).strip()} - same_set
+
+    cleaned: List[str] = []
+    seen: set = set()
+    for u in urls:
+        us = str(u or "").strip()
+        if not us or us in seen or _is_junk_image_url(us):
+            continue
+        skus_in_url = _extract_skus_from_image_url(us)
+        # Tolak mutlak bila URL membawa SKU milik warna lain!
+        if other_set and any(s in other_set for s in skus_in_url):
+            continue
+        seen.add(us)
+        cleaned.append(us)
+
+    if not cleaned:
+        return []
+
+    # Jika ada URL yang eksplisit bertag SKU warna aktif, kunci galeri HANYA pada warna aktif
+    # (buang URL yang bertag SKU berbeda yang bukan anggota warna aktif!)
+    if same_set:
+        explicit_same = [
+            u for u in cleaned
+            if any(s in same_set for s in _extract_skus_from_image_url(u))
+        ]
+        if explicit_same:
+            return explicit_same
+        # Jika ada other_set (produk multi-warna), tapi semua URL membawa SKU asing lain yang bukan same_set, jangan pakai!
+        if other_set:
+            non_foreign = [
+                u for u in cleaned
+                if not _extract_skus_from_image_url(u)
+            ]
+            return non_foreign
+
+    # Fallback proteksi tambahan: bila URL #1 bertag 1 SKU spesifik (misal 72410932),
+    # buang slide berikutnya yang bertag SKU 7-9 digit BERBEDA (mencegah slide 1 hijau, slide 2 biru!)
+    first_skus = set(_extract_skus_from_image_url(cleaned[0]))
+    if first_skus:
+        allowed_skus = first_skus | same_set
+        strict_single = [
+            u for u in cleaned
+            if (not _extract_skus_from_image_url(u))
+            or any(s in allowed_skus for s in _extract_skus_from_image_url(u))
+        ]
+        if strict_single:
+            return strict_single
+    return cleaned
+
+
+def lookup_matahari_images(
+    sku: str = "",
+    article: str = "",
+    barcode: str = "",
+    same_color_skus: Optional[set] = None,
+    other_color_skus: Optional[set] = None,
+    target_color: str = "",
+) -> List[str]:
+    clean_sku = str(sku or "").strip()
+    clean_art = str(article or "").strip()
+    clean_bc = str(barcode or "").strip()
+    same_set = {str(s).strip() for s in (same_color_skus or set()) if str(s).strip()}
+    if clean_sku:
+        same_set.add(clean_sku)
+    other_set = {str(s).strip() for s in (other_color_skus or set()) if str(s).strip()} - same_set
+    target_color_norm = _norm_color_key(target_color)
+
+    # Prioritaskan pencarian berdasarkan SKU (dan barcode) agar langsung mengenai halaman warna tepat;
+    # jangan mengandalkan article saja jika bisa mencampur warna lain!
+    queries = [q for q in dict.fromkeys([clean_sku, clean_bc, clean_art]) if q and len(q) >= 4][:2]
     if not queries:
         return []
 
@@ -970,7 +1058,7 @@ def lookup_matahari_images(sku: str = "", article: str = "", barcode: str = "") 
                 q_low in img.lower()
                 or q_low in handle.lower()
                 or q_low in url_p
-                or (article and article.lower() in title)
+                or (clean_art and clean_art.lower() in title)
             )
             if not matched_q:
                 continue
@@ -991,28 +1079,85 @@ def lookup_matahari_images(sku: str = "", article: str = "", barcode: str = "") 
                 if h not in found_handles:
                     found_handles.append(h)
 
-    # Bonus: coba Ajax Shopify `/products/<handle>.js` (ringan, tanpa rate-limit .json) untuk sudut foto lengkap
+    # Ambil sudut foto dari Ajax Shopify `/products/<handle>.js` SECARA KETAT PER WARNA!
+    # JANGAN pernah mengambil mentah semua `pjs["images"]` bila produk punya >1 warna karena akan mencampur warna lain!
     if found_handles:
-        st_js, txt_js = _http_get_text(f"https://matahari.com/products/{found_handles[0]}.js", timeout=1.4)
+        st_js, txt_js = _http_get_text(f"https://matahari.com/products/{found_handles[0]}.js", timeout=1.6)
         if st_js == 200 and txt_js:
             try:
                 pjs = json.loads(txt_js)
+                variants = pjs.get("variants") or []
                 raw_imgs = pjs.get("images") or []
-                for raw_u in raw_imgs[:8]:
+
+                # 1. Identifikasi SKU & featured_image milik warna target vs warna lain di halaman Shopify ini
+                shopify_same_skus = set(same_set)
+                shopify_other_skus = set(other_set)
+                matched_featured: List[str] = []
+                distinct_colors = set()
+
+                for v in variants:
+                    if not isinstance(v, dict):
+                        continue
+                    v_sku = str(v.get("sku") or "").strip()
+                    v_opt_text = " ".join(
+                        str(v.get(k) or "") for k in ("option1", "option2", "option3", "title")
+                    )
+                    v_col_norm = _norm_color_key(v.get("option1") or "")
+                    if v_col_norm:
+                        distinct_colors.add(v_col_norm)
+                    is_same_v = (
+                        (v_sku and v_sku in same_set)
+                        or (target_color_norm and (target_color_norm == v_col_norm or target_color_norm in _norm_color_key(v_opt_text)))
+                    )
+                    if is_same_v:
+                        if v_sku:
+                            shopify_same_skus.add(v_sku)
+                        f_img = v.get("featured_image")
+                        f_src = f_img.get("src") if isinstance(f_img, dict) else (f_img if isinstance(f_img, str) else "")
+                        f_src = str(f_src or "").strip()
+                        if f_src.startswith("//"):
+                            f_src = f"https:{f_src}"
+                        if "cdn.shopify.com/s/files/1/0666/9212/0727/" in f_src and not _is_junk_image_url(f_src):
+                            if f_src not in matched_featured:
+                                matched_featured.append(f_src)
+                    elif v_sku and (same_set or target_color_norm):
+                        shopify_other_skus.add(v_sku)
+
+                same_set |= shopify_same_skus
+                other_set |= (shopify_other_skus - same_set)
+
+                # Masukkan featured_image warna cocok di posisi paling depan
+                for fu in matched_featured:
+                    if fu not in candidates:
+                        candidates.insert(0, fu)
+
+                # Kumpulkan sudut foto tambahan HANYA jika cocok SKU warna aktif (atau produk memang cuma 1 warna tunggal!)
+                is_multi_color_page = len(distinct_colors) > 1 or bool(other_set)
+                for raw_u in raw_imgs[:24]:
                     u = str(raw_u or "").strip()
                     if u.startswith("//"):
                         u = f"https:{u}"
-                    if "cdn.shopify.com/s/files/1/0666/9212/0727/" in u and not _is_junk_image_url(u):
-                        if u not in candidates:
-                            candidates.append(u)
+                    if "cdn.shopify.com/s/files/1/0666/9212/0727/" not in u or _is_junk_image_url(u):
+                        continue
+                    u_skus = _extract_skus_from_image_url(u)
+                    if other_set and any(s in other_set for s in u_skus):
+                        continue
+                    if is_multi_color_page:
+                        # Pada produk multi-warna, HANYA terima sudut foto tambahan yang bertag SKU warna aktif!
+                        if not (u_skus and any(s in same_set for s in u_skus)):
+                            continue
+                    if u not in candidates:
+                        candidates.append(u)
             except Exception:
                 pass
 
-    if not candidates:
+    # Terapkan saringan anti-campur-warna final!
+    strict_cands = _filter_strict_color_images(candidates, same_color_skus=same_set, other_color_skus=other_set)
+    if not strict_cands:
         return []
 
     # Verifikasi paralel anti logo abu-abu (2.238B / 3.163B) dalam 1 round-trip (~200-400ms!)
-    top_cands = candidates[:6]
+    top_cands = strict_cands[:6]
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(top_cands)) as pool:
         ok_flags = list(pool.map(lambda u: _verify_image_not_grey_logo(u, timeout=1.2), top_cands))
     return [u for u, ok in zip(top_cands, ok_flags) if ok]
@@ -1516,7 +1661,15 @@ def run_live_scan(
         fut_matrix = pool.submit(query_stock_matrix, seed_sku, active_cookie, owner_acc, enrich_budget)
         fut_promo = pool.submit(query_promotion_checked, active_kind, active_code, active_cookie, owner_acc, seed_normal, enrich_budget)
         fut_img = (
-            pool.submit(lookup_matahari_images, seed_sku, seed_article, clean_code)
+            pool.submit(
+                lookup_matahari_images,
+                seed_sku,
+                seed_article,
+                clean_code,
+                {seed_sku},
+                None,
+                str(primary_raw.get("Color") or primary_raw.get("ColorDesc") or ""),
+            )
             if with_images
             else None
         )
@@ -1935,13 +2088,46 @@ def run_heal_image(sku: str = "", article: str = "", barcode: str = "") -> Dict[
     clean_art = str(article or "").strip()
     clean_bc = str(barcode or "").strip()
 
-    # Jika artikel belum dikirim, baca dari Turso agar seluruh keluarga varian ikut ter-update
+    # Baca keluarga artikel dari Turso untuk memisahkan SKU warna aktif vs SKU warna lain (ANTI FOTO CAMPUR WARNA!)
     if not clean_art and clean_sku:
         r0 = turso_query('SELECT article FROM "Product" WHERE sku = ? LIMIT 1', (clean_sku,), timeout=2.0)
         if r0 and r0[0].get("article"):
             clean_art = str(r0[0]["article"]).strip()
 
-    imgs = lookup_matahari_images(sku=clean_sku, article=clean_art, barcode=clean_bc)
+    pre_sib_rows = (
+        turso_query('SELECT sku, color FROM "Product" WHERE article = ? ORDER BY sku ASC LIMIT 120', (clean_art,), timeout=2.5)
+        if clean_art
+        else turso_query('SELECT sku, color FROM "Product" WHERE sku = ? LIMIT 1', (clean_sku,), timeout=2.0)
+    )
+    active_row = next((r for r in pre_sib_rows if str(r.get("sku") or "").strip() == clean_sku), pre_sib_rows[0] if pre_sib_rows else {})
+    active_color_raw = str(active_row.get("color") or "").strip()
+    active_color_norm = _norm_color_key(active_color_raw)
+
+    same_color_skus: set = set()
+    other_color_skus: set = set()
+    for r in pre_sib_rows:
+        r_sku = str(r.get("sku") or "").strip()
+        if not r_sku:
+            continue
+        r_col_norm = _norm_color_key(r.get("color"))
+        if active_color_norm and r_col_norm:
+            if r_col_norm == active_color_norm:
+                same_color_skus.add(r_sku)
+            else:
+                other_color_skus.add(r_sku)
+        elif r_sku == clean_sku:
+            same_color_skus.add(r_sku)
+    if clean_sku:
+        same_color_skus.add(clean_sku)
+
+    imgs = lookup_matahari_images(
+        sku=clean_sku,
+        article=clean_art,
+        barcode=clean_bc,
+        same_color_skus=same_color_skus,
+        other_color_skus=other_color_skus,
+        target_color=active_color_raw,
+    )
     now_iso = utc_iso_now()
     updated_count = 0
 
@@ -1949,29 +2135,27 @@ def run_heal_image(sku: str = "", article: str = "", barcode: str = "") -> Dict[
         primary_img = imgs[0]
         imgs_json = json.dumps(imgs[:6], ensure_ascii=False)
         stmts: List[Tuple[str, Tuple[Any, ...]]] = []
-        if clean_art:
+        # HANYA update SKU pada WARNA YANG SAMA — DILARANG KERAS menimpa seluruh `WHERE article = ?` (mencegah warna lain tertimpa!)
+        target_skus = sorted(same_color_skus) if same_color_skus else ([clean_sku] if clean_sku else [])
+        for t_sku in target_skus:
             stmts.append(
-                ('UPDATE "Product" SET "imageUrl" = ?, images = ?, "updatedAt" = ? WHERE article = ?', (primary_img, imgs_json, now_iso, clean_art))
+                ('UPDATE "Product" SET "imageUrl" = ?, images = ?, "updatedAt" = ? WHERE sku = ?', (primary_img, imgs_json, now_iso, t_sku))
             )
+        if clean_art and not other_color_skus:
             stmts.append(
                 ('UPDATE "CatalogArticle" SET "imageUrl" = ?, "updatedAt" = ? WHERE key = ? OR article = ?', (primary_img, now_iso, clean_art.upper(), clean_art))
             )
         elif clean_sku:
             stmts.append(
-                ('UPDATE "Product" SET "imageUrl" = ?, images = ?, "updatedAt" = ? WHERE sku = ?', (primary_img, imgs_json, now_iso, clean_sku))
-            )
-            stmts.append(
-                ('UPDATE "CatalogArticle" SET "imageUrl" = ?, "updatedAt" = ? WHERE sku = ?', (primary_img, now_iso, clean_sku))
+                ('UPDATE "CatalogArticle" SET "imageUrl" = COALESCE("imageUrl", ?), "updatedAt" = ? WHERE sku = ?', (primary_img, now_iso, clean_sku))
             )
         if stmts:
             try:
                 turso_pipeline(stmts, timeout=3.5)
-                updated_count = 1
+                updated_count = len(target_skus)
             except Exception:
                 pass
 
-    # WAJIB kembalikan `data` + `siblings` terbaru dari Turso agar UI HP & IndexedDB langsung sinkron
-    # (bahkan bila HP tadinya memegang URL foto lama yang rusak sementara Turso sudah punya foto bersih!)
     sib_rows = (
         turso_query('SELECT * FROM "Product" WHERE article = ? ORDER BY sku ASC LIMIT 120', (clean_art,), timeout=3.0)
         if clean_art
@@ -1980,13 +2164,14 @@ def run_heal_image(sku: str = "", article: str = "", barcode: str = "") -> Dict[
     siblings = [_deserialize_product_row(r) for r in sib_rows]
     main_prod = next((s for s in siblings if s.get("sku") == clean_sku), siblings[0] if siblings else None)
 
-    final_imgs = imgs[:6] if imgs else ((main_prod.get("images") or ([main_prod["imageUrl"]] if main_prod and main_prod.get("imageUrl") else [])) if main_prod else [])
-    final_primary = final_imgs[0] if final_imgs else (main_prod.get("imageUrl") if main_prod else None)
+    existing_clean = _filter_strict_color_images(
+        ((main_prod.get("images") or ([main_prod["imageUrl"]] if main_prod and main_prod.get("imageUrl") else [])) if main_prod else []),
+        same_color_skus=same_color_skus,
+        other_color_skus=other_color_skus,
+    )
+    final_imgs = imgs[:6] if imgs else existing_clean
+    final_primary = final_imgs[0] if final_imgs else None
     healed_ok = bool(final_imgs)
-    if healed_ok and updated_count == 0 and siblings:
-        updated_count = len(siblings)
-    elif updated_count > 0 and siblings:
-        updated_count = len(siblings)
 
     return {
         "success": True,
@@ -1998,11 +2183,11 @@ def run_heal_image(sku: str = "", article: str = "", barcode: str = "") -> Dict[
         "data": main_prod,
         "siblings": siblings,
         "message": (
-            f"Berhasil menyinkronkan {len(final_imgs)} foto studio terbaru ke layar & cache HP."
+            f"Berhasil menyinkronkan {len(final_imgs)} foto khusus warna {active_color_raw or clean_sku} (0% campur warna lain)."
             if healed_ok
-            else "Foto produk ini belum tersedia di katalog online saat ini."
+            else f"Foto khusus warna {active_color_raw or 'ini'} belum tersedia di katalog online — menampilkan placeholder ikon abu-abu."
         ),
-        "source": "PYTHON_IMAGE_HEALER",
+        "source": "PYTHON_IMAGE_HEALER_STRICT_COLOR",
         "elapsedMs": int((time.time() - t0) * 1000),
     }
 

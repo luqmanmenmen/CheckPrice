@@ -143,11 +143,16 @@ export default function ProductImageSlider({
   if (cleanImages.length === 0) {
     return (
       <div
-        className={`relative ${className} ${roundedClass} bg-gradient-to-br from-slate-100 to-slate-200/70 flex flex-col items-center justify-center border border-slate-200 text-slate-400 p-4`}
+        className={`relative ${className} ${roundedClass} bg-gradient-to-br from-slate-100 via-slate-200/70 to-slate-100 flex flex-col items-center justify-center border border-slate-200/90 text-slate-400 p-5 text-center`}
       >
-        <ImageIcon className="w-10 h-10 opacity-40 mb-1.5" />
-        <span className="text-[11px] font-bold uppercase tracking-wider opacity-70">
-          Foto Belum Tersedia
+        <div className="w-16 h-16 rounded-2xl bg-slate-200/80 border border-slate-300/60 flex items-center justify-center mb-2.5 shadow-inner">
+          <ImageIcon className="w-8 h-8 text-slate-400" />
+        </div>
+        <span className="text-xs font-extrabold uppercase tracking-wider text-slate-500">
+          {colorBadge ? `Foto Warna ${colorBadge}` : "Foto Produk"}
+        </span>
+        <span className="text-[11px] font-semibold text-slate-400 mt-0.5">
+          Belum Tersedia
         </span>
       </div>
     );
