@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import base64
 import concurrent.futures
+import html
 import json
 import os
 import re
@@ -799,16 +800,18 @@ def query_promotion_checked(kind: str, code: str, cookie: str, account: str, nor
     for pr in promos:
         brid = str(pr.get("BusinessRuleId") or pr.get("BRID") or "").strip()
         dtype = str(pr.get("DiscountType") or "").strip()
-        msg = str(pr.get("Message") or "").strip()
-        br_name = str(pr.get("BusinessRuleName") or "").strip()
+        msg = html.unescape(html.unescape(str(pr.get("Message") or "").strip()))
+        br_name = html.unescape(html.unescape(str(pr.get("BusinessRuleName") or "").strip()))
         ev_desc = str(pr.get("EventDesc") or "").strip()
         action_id = str(pr.get("ActionId") or pr.get("ActionID") or "").strip()
+        action_low = action_id.lower()
+        ev_low = ev_desc.lower()
 
-        clean_ev = "" if ev_desc.lower() in ("scan item", "scan", "item") else ev_desc
+        clean_ev = "" if ev_low in ("scan item", "scan", "item", "order end") else ev_desc
         if br_name and msg and br_name.lower() not in msg.lower():
-            acara = f"{br_name} — {msg}"[:120]
+            acara = f"{br_name} — {msg}"[:140]
         else:
-            acara = (br_name or msg or clean_ev or "Promo Live Store")[:120]
+            acara = (br_name or msg or clean_ev or "Promo Live Store")[:140]
 
         try:
             pct = float(pr.get("DiscountPercentage") or 0)
@@ -819,20 +822,32 @@ def query_promotion_checked(kind: str, code: str, cookie: str, account: str, nor
         except Exception:
             amt = 0.0
 
-        # Deteksi promo bersyarat / bundling (Buy 2, B1G1, B2G1, Min. Belanja) vs promo satuan langsung (Line Discount & SP Others)
         rule_text = f"{br_name} {msg} {action_id} {dtype}".lower()
+
+        # 1. Deteksi Promo PWP / Tebus Murah / Group Discounted Item / Order End:
+        #    Contoh MDS: BR-NAME "2026 H1 SAVRO WALLET & BELT PWP 99,000", ACTION ID "Group Discounted Item", EVENT DESC "Order End".
+        #    HARGA BARANG UTAMA TETAP NORMAL (JANGAN DIPOTONG!), karena diskon Rp 100.900 berlaku untuk barang tebus murah!
+        is_pwp = bool(
+            re.search(r"\b(pwp|tebus\s*murah|purchase\s*with\s*purchase|gwp|free\s*gift|hadiah|voucher|cashback)\b", rule_text)
+            or ("group" in action_low)
+            or ("order end" in ev_low)
+        )
+
+        # 2. Deteksi Promo Bundling / Bersyarat (Buy 2, B1G1, B2G1, Min. Belanja, Transaction)
         is_conditional_bundle = bool(
             re.search(
                 r"\b(buy\s*[2-9]|beli\s*[2-9]|buy\s*1\s*get\s*1|b1g1|b2g1|get\s*\d|gratis\s*\d|"
                 r"min(?:imal)?\.?\s*(?:belanja|pembelian|trx|transaksi|\d+\s*pcs)|bundle|bundling|paket)\b",
                 rule_text,
             )
-            or ("transaction" in action_id.lower())
+            or ("transaction" in action_low)
         )
-        # Di MDS StoreHub, Special Price (SP) memakai ActionId="Others" + DiscountType="Disc. Amount" + BR-NAME "... - SP - 1 - 129000.00"!
-        is_direct_item_discount = (not is_conditional_bundle) and (
-            (not action_id)
-            or any(k in action_id.lower() for k in ("line", "other", "item", "price", "sp"))
+
+        # 3. Promo langsung potong harga satuan barang: HANYA untuk Line Discount atau SP (Others) pada Scan Item (BUKAN Group/Order End/PWP!)
+        is_direct_item_discount = (not is_pwp) and (not is_conditional_bundle) and (
+            (not action_low)
+            or ("line" in action_low)
+            or (action_low in ("others", "other", "special price", "item discount"))
         )
 
         is_pct = ("percent" in dtype.lower() and pct > 0) or (pct > 0 and amt <= 0)
@@ -850,7 +865,18 @@ def query_promotion_checked(kind: str, code: str, cookie: str, account: str, nor
         }
 
         cand: Optional[Dict[str, Any]] = None
-        if is_conditional_bundle:
+        if is_pwp:
+            # Ekstrak harga tebus murah bila tertulis di BR-NAME (mis. "PWP 99,000" -> "PWP Rp 99.000")
+            m_pwp_price = re.search(r"pwp\s*(?:rp\.?\s*)?(\d{2,3}[.,]\d{3})", br_name, re.IGNORECASE)
+            pwp_badge = f"PWP Rp {m_pwp_price.group(1).replace(',', '.')}" if m_pwp_price else "PWP / TEBUS MURAH"
+            cand = {
+                "hargaPromo": None,
+                "diskon": pwp_badge,
+                "discountType": "PWP / TEBUS MURAH",
+                "acara": acara,
+                "promoDetail": promo_meta,
+            }
+        elif is_conditional_bundle:
             cand = {
                 "hargaPromo": None,
                 "diskon": (br_name or msg)[:40],
