@@ -198,13 +198,34 @@ export async function getProductSiblings(prod: any): Promise<any[]> {
   const targetBrandGroup = classifyBrandGroup(prod);
   const targetCategory = classifyProductCategory(prod);
   const prodBrandNorm = getNormalizedSubBrand(prod);
+  const prodDescStem = String(prod?.description || "")
+    .split(":")[0]
+    .trim()
+    .toUpperCase()
+    .split(/\s+/)
+    .slice(0, 2)
+    .join(" ");
+
   const matchesTargetScope = (s: any) => {
     if (!s || isIgnoredCatalogProduct(s)) return false;
+    if (s.sku === prod.sku) return true;
     if (classifyBrandGroup(s) !== targetBrandGroup) return false;
-    if (classifyProductCategory(s) !== targetCategory) return false;
-    if (targetBrandGroup === "MUKU" && prodBrandNorm && prodBrandNorm !== "MUKU") {
+    const sibCat = classifyProductCategory(s);
+    if (targetCategory !== "OTHER" && sibCat !== "OTHER" && sibCat !== targetCategory) return false;
+    if (targetBrandGroup === "MUKU" && prodBrandNorm && !["MUKU", "LAINNYA"].includes(prodBrandNorm)) {
       const sibSub = getNormalizedSubBrand(s);
-      if (sibSub && sibSub !== "MUKU" && sibSub !== prodBrandNorm) return false;
+      if (sibSub && !["MUKU", "LAINNYA"].includes(sibSub) && sibSub !== prodBrandNorm) {
+        const sibStem = String(s?.description || "")
+          .split(":")[0]
+          .trim()
+          .toUpperCase()
+          .split(/\s+/)
+          .slice(0, 2)
+          .join(" ");
+        if (!prodDescStem || prodDescStem.length < 4 || sibStem !== prodDescStem) {
+          return false;
+        }
+      }
     }
     return true;
   };

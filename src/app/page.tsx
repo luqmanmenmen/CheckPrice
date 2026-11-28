@@ -492,10 +492,87 @@ export default function Home() {
   };
 
   const [checkingLiveStock, setCheckingLiveStock] = useState(false);
+  const [expandingFamilyArticle, setExpandingFamilyArticle] = useState<string | null>(null);
   const [liveStockVerified, setLiveStockVerified] = useState<string | null>(null);
   const [imageRefreshVersion, setImageRefreshVersion] = useState(0);
   const liveStockEpochRef = useRef(0);
   const autoSyncedColorAtRef = useRef<Map<string, number>>(new Map());
+  const expandedFamilyAtRef = useRef<Map<string, number>>(new Map());
+
+  /**
+   * FASE 2 NON-BLOCKING: Setelah SKU utama langsung tampil di layar (prioritas < 1 dtk),
+   * otomatis cari seluruh sisa ukuran & warna artikel tersebut di server luqman.org di background!
+   */
+  const triggerBackgroundFamilyExpansion = async (
+    seedSku: string,
+    seedArticle?: string | null,
+    seedBrandGroup?: string | null,
+    force: boolean = false
+  ) => {
+    const cleanSku = String(seedSku || "").trim();
+    const cleanArt = String(seedArticle || "").trim();
+    if (!cleanSku || !isValidRetailArticle(cleanArt, cleanSku)) return;
+    const artKey = cleanArt.toUpperCase();
+    const lastExp = expandedFamilyAtRef.current.get(artKey) || 0;
+    if (!force && Date.now() - lastExp < 90_000) return;
+
+    expandedFamilyAtRef.current.set(artKey, Date.now());
+    setExpandingFamilyArticle(artKey);
+    try {
+      const res = await fetch("/api/live-stock", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "expand-family",
+          sku: cleanSku,
+          article: cleanArt,
+          brandGroup: seedBrandGroup || null,
+        }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success || !Array.isArray(json.siblings) || json.siblings.length === 0) {
+        return;
+      }
+
+      const fullSibs: ProductData[] = json.siblings;
+      const newCount = Number(json.newlyDiscoveredCount || 0);
+
+      // Jaga produk aktif user tetap di SKU yang sedang dilihat (0% lompat SKU!),
+      // sambil melengkapi matriks warna & ukuran di bawahnya secara mulus!
+      setSiblings((prevSibs) => {
+        if (fullSibs.length < prevSibs.length) return prevSibs;
+        return fullSibs;
+      });
+      setProduct((cur) => {
+        if (!cur) return cur;
+        const matched = fullSibs.find((s) => String(s.sku) === String(cur.sku));
+        return matched ? { ...cur, ...matched } : cur;
+      });
+
+      const anchorProd =
+        fullSibs.find((s) => String(s.sku) === cleanSku) || json.data || fullSibs[0];
+      if (anchorProd) {
+        preloadProductImages([anchorProd.imageUrl, ...fullSibs.map((s) => s.imageUrl)], 400);
+        persistServerFamilyToLocal(anchorProd, fullSibs, cleanSku, json.aliases);
+      }
+      listCacheRef.current.clear();
+
+      if (newCount > 0) {
+        const uniqColors = new Set(
+          fullSibs.map((s) => String(s.color || "").trim().toUpperCase()).filter(Boolean)
+        ).size;
+        showToast(
+          `✨ Artikel lengkap! Ditemukan ${uniqColors || 1} warna • ${fullSibs.length} ukuran dari server luqman.org.`,
+          "success"
+        );
+      }
+    } catch {
+      // Non-blocking background expansion: abaikan error jaringan sesaat
+    } finally {
+      setExpandingFamilyArticle((cur) => (cur === artKey ? null : cur));
+    }
+  };
 
   const handleCheckLiveStock = async (opts?: { silent?: boolean }) => {
     const isSilent = Boolean(opts?.silent);
@@ -720,6 +797,14 @@ export default function Home() {
             showToast(
               `⚡ Live Sinkron${accLabel} sukses! ${promoText ? `${promoText} • ` : ""}Stok ${resolvedStok} pcs (${liveChecked} varian tersinkron).`,
               "success"
+            );
+          }
+          if (data.needsFamilyExpansion && validArt) {
+            void triggerBackgroundFamilyExpansion(
+              targetSku,
+              validArt,
+              product.brandGroup || classifyBrandGroup(product),
+              !isSilent
             );
           }
         }
@@ -2295,8 +2380,19 @@ export default function Home() {
               preloadProductImages([fastJson.data?.imageUrl, ...srvSibs.map((s: ProductData) => s.imageUrl)], 400);
               syncServerProductToLocal(fastJson.data, srvSibs, fastJson.aliases);
               if (fastJson.source === "MDS_BISA_LIVE" || fastJson.source === "PYTHON_LIVE_ENGINE") {
-                const storeBadge = fastJson.ownerAccount === "muku" ? "Mu+Ku" : fastJson.ownerAccount === "suko" ? "SUKO" : "luqman org";
-                showToast(`Produk baru ditemukan & disimpan otomatis (${storeBadge}) — kini bisa di-scan semua crew!`, "success");
+                const storeBadge = fastJson.ownerAccount === "muku" ? "Mu+Ku" : fastJson.ownerAccount === "suko" ? "SUKO" : "luqman.org";
+                showToast(`Produk ditemukan & ditampilkan instan (${storeBadge}) — melengkapi varian artikel di background...`, "success");
+              }
+              if (
+                (fastJson.needsFamilyExpansion || srvSibs.length <= 1) &&
+                isValidRetailArticle(fastJson.data?.article, fastJson.data?.sku)
+              ) {
+                void triggerBackgroundFamilyExpansion(
+                  fastJson.data.sku,
+                  fastJson.data.article,
+                  fastJson.ownerAccount === "suko" ? "SUKO" : "MUKU",
+                  true
+                );
               }
             }
             return;
@@ -2456,8 +2552,19 @@ export default function Home() {
           preloadProductImages([data.data?.imageUrl, ...serverSiblings.map((s: ProductData) => s.imageUrl)], 400);
           syncServerProductToLocal(data.data, serverSiblings, (data as any).aliases);
           if ((data as any).source === "MDS_BISA_LIVE" || (data as any).source === "PYTHON_LIVE_ENGINE") {
-            const storeBadge = (data as any).ownerAccount === "muku" ? "Mu+Ku" : (data as any).ownerAccount === "suko" ? "SUKO" : "luqman org";
-            showToast(`Produk baru ditemukan & disimpan otomatis (${storeBadge}) — kini bisa di-scan semua crew!`, "success");
+            const storeBadge = (data as any).ownerAccount === "muku" ? "Mu+Ku" : (data as any).ownerAccount === "suko" ? "SUKO" : "luqman.org";
+            showToast(`Produk ditemukan & ditampilkan instan (${storeBadge}) — melengkapi varian artikel di background...`, "success");
+          }
+          if (
+            ((data as any).needsFamilyExpansion || serverSiblings.length <= 1) &&
+            isValidRetailArticle(data.data?.article, data.data?.sku)
+          ) {
+            void triggerBackgroundFamilyExpansion(
+              data.data.sku,
+              data.data.article,
+              (data as any).ownerAccount === "suko" ? "SUKO" : "MUKU",
+              true
+            );
           }
         }
         if (isScanning) setIsScanning(false);
@@ -4878,9 +4985,17 @@ export default function Home() {
                   <div className="flex flex-col gap-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
-                        <h3 className="text-sm font-black text-slate-800 flex items-center gap-2">
+                        <h3 className="text-sm font-black text-slate-800 flex flex-wrap items-center gap-2">
                           <span className={`w-2.5 h-2.5 rounded-full ${isFacingAction ? "bg-emerald-500" : "bg-indigo-500"}`} />
                           <span>Pilihan Warna &amp; Ukuran ({colorGroupsList.length} Warna • {sourceSiblings.length} Varian)</span>
+                          {expandingFamilyArticle &&
+                            product.article &&
+                            expandingFamilyArticle === String(product.article).trim().toUpperCase() && (
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-extrabold animate-pulse">
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                <span>Melengkapi warna &amp; size lain dari server...</span>
+                              </span>
+                            )}
                         </h3>
                         <p className="text-[11px] text-slate-500 mt-0.5">
                           Ketuk warna untuk lihat foto di atas • Ketuk kotak size untuk cek detail • Gunakan tombol <strong>+</strong> untuk tambah jumlah

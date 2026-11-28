@@ -276,6 +276,71 @@ def _extract_item_stock(item: Optional[Dict[str, Any]]) -> Optional[int]:
     return None
 
 
+def normalize_sub_brand_key(brand: str = "", dept: str = "", style_code: str = "", desc: str = "") -> str:
+    """Normalisasi nama sub-brand & singkatan kode departemen ERP (mis. CNX -> CONNEXION, NVD -> NEVADA)."""
+    b_up = str(brand or "").strip().upper()
+    d_up = str(dept or "").strip().upper()
+    s_up = str(style_code or "").strip().upper()
+    combined = f"{b_up} {d_up} {desc}".upper()
+    tokens = set(re.findall(r"[A-Z0-9&]+", f"{b_up} {d_up}"))
+
+    if "MUKU" in combined or "MU+KU" in combined or s_up.startswith("MK-") or "-MK" in s_up:
+        return "MUKU"
+    if "ZES" in tokens or "ZES" in b_up or "ZES" in d_up:
+        return "ZES"
+    if "SUKO" in combined:
+        return "SUKO"
+    if "MAXMURAH" in combined or "MAX MURAH" in combined or "MXM" in tokens:
+        return "MAXMURAH"
+    if "NAYOUNG" in combined or "NA-YOUNG" in combined or b_up == "ELFORMULA":
+        return "NAYOUNG"
+    if "BYRCH" in combined:
+        return "BYRCH & CO"
+    if "ST YVES" in combined or "ST. YVES" in combined or "SAINT YVES" in combined or "STY" in tokens:
+        return "ST YVES"
+    if "LITTLE M" in combined or "LTLM" in tokens:
+        return "LITTLE M"
+    if "CONNEXION" in combined or "CNX" in tokens or s_up.startswith("CK"):
+        return "CONNEXION"
+    if "NEVADA" in combined or "NVD" in tokens or "NEV" in tokens:
+        return "NEVADA"
+    if "STANLEY ADAMS" in combined or "STANLEY" in tokens:
+        return "STANLEY ADAMS"
+    if "COLE" in tokens:
+        return "COLE"
+    if "VOLO" in tokens or "VLO" in tokens:
+        return "VOLO"
+    if "PIPA" in tokens:
+        return "PIPA"
+    if "SUPER T" in combined:
+        return "SUPER T"
+    if "DETAILS" in tokens or "DTL" in tokens:
+        return "DETAILS"
+    if "PHENOMENAL" in combined:
+        return "PHENOMENAL"
+    if "AMERICAN JEANS" in combined or "AMJ" in tokens:
+        return "AMERICAN JEANS"
+    if "TRISSE" in tokens:
+        return "TRISSE"
+    if "FLADEO" in tokens:
+        return "FLADEO"
+    if "YONGKI" in combined:
+        return "YONGKI KOMALADI"
+    if "SAVRO" in tokens or "SAVRO" in combined:
+        return "SAVRO"
+    if "ANNISA" in tokens:
+        return "ANNISA"
+    if "DISNEY" in combined or d_up == "THATS DONALD":
+        return "DISNEY"
+    if d_up in ("GABS", "THE GABS") or b_up in ("GABS", "THE GABS"):
+        return "GABS"
+    if d_up.startswith("EXIT") or b_up.startswith("EXIT"):
+        return "EXIT"
+    if d_up.startswith("LICENSE") or b_up == "CHARACTER" or d_up == "CHARACTER":
+        return "CHARACTER"
+    return ""
+
+
 def normalize_brand_and_dept(item: Dict[str, Any]) -> Tuple[str, str]:
     raw_group = str(item.get("Brand") or item.get("GroupName") or item.get("brand") or "").strip()
     raw_dept = str(
@@ -284,46 +349,10 @@ def normalize_brand_and_dept(item: Dict[str, Any]) -> Tuple[str, str]:
     raw_sub = str(item.get("SubclassName") or item.get("ClassName") or "").strip()
     raw_style = str(item.get("StyleCode") or item.get("styleCode") or "").strip().upper()
     raw_desc = str(item.get("Description") or item.get("ItemDescription") or "").strip().upper()
-    combined = f"{raw_group} {raw_dept} {raw_sub} {raw_desc}".upper()
 
-    if "MUKU" in combined or "MU+KU" in combined or raw_style.startswith("MK-") or "-MK" in raw_style:
-        brand = "MUKU"
-    elif "ZES" in combined:
-        brand = "ZES"
-    elif "SUKO" in combined:
-        brand = "SUKO"
-    elif "BYRCH" in combined:
-        brand = "BYRCH & CO"
-    elif "NEVADA" in combined:
-        brand = "NEVADA"
-    elif "STANLEY ADAMS" in combined:
-        brand = "STANLEY ADAMS"
-    elif "COLE" in combined:
-        brand = "COLE"
-    elif "CONNEXION" in combined:
-        brand = "CONNEXION"
-    elif "ST YVES" in combined or "ST. YVES" in combined:
-        brand = "ST YVES"
-    elif "VOLO" in combined:
-        brand = "VOLO"
-    elif "LITTLE M" in combined:
-        brand = "LITTLE M"
-    elif "PIPA" in combined:
-        brand = "PIPA"
-    elif "SUPER T" in combined:
-        brand = "SUPER T"
-    elif "DETAILS" in combined:
-        brand = "DETAILS"
-    elif "PHENOMENAL" in combined:
-        brand = "PHENOMENAL"
-    elif "AMERICAN JEANS" in combined:
-        brand = "AMERICAN JEANS"
-    elif "TRISSE" in combined:
-        brand = "TRISSE"
-    elif "FLADEO" in combined:
-        brand = "FLADEO"
-    elif "YONGKI" in combined:
-        brand = "YONGKI KOMALADI"
+    mapped = normalize_sub_brand_key(raw_group, raw_dept, raw_style, f"{raw_sub} {raw_desc}")
+    if mapped:
+        brand = mapped
     elif raw_sub and raw_dept.upper().startswith("AOS"):
         brand = raw_sub
     else:
@@ -1526,7 +1555,7 @@ def _upsert_item_and_aliases(
             'WHEN excluded.article != \'\' AND excluded.article != excluded.sku THEN excluded.article '
             'ELSE "Product".article END, '
             'description = CASE WHEN excluded.description != \'\' THEN excluded.description ELSE "Product".description END, '
-            'brand = COALESCE(excluded.brand, "Product".brand), '
+            'brand = CASE WHEN excluded.brand IS NOT NULL AND excluded.brand != \'\' THEN excluded.brand ELSE "Product".brand END, '
             'dept = COALESCE(excluded.dept, "Product".dept), '
             'color = COALESCE(excluded.color, "Product".color), '
             'size = COALESCE(excluded.size, "Product".size), '
@@ -1613,14 +1642,21 @@ def _fetch_scoped_siblings(
     eff_brand = str((exact_main or {}).get("brand") or ref_brand or "").strip()
     eff_dept = str((exact_main or {}).get("dept") or ref_dept or "").strip()
     eff_desc = str((exact_main or {}).get("description") or ref_desc or "").strip()
+    clean_art = sanitize_article_code(raw_article, own_sku=clean_sku)
+    if not clean_art and exact_main:
+        clean_art = sanitize_article_code(exact_main.get("article"), own_sku=clean_sku)
+
     ref_group = resolve_store_group(eff_brand, eff_dept, eff_desc)
     ref_cat = classify_category_key(eff_desc, eff_dept)
+    ref_sub_brand = normalize_sub_brand_key(eff_brand, eff_dept, clean_art, eff_desc)
+    ref_desc_stem = " ".join(eff_desc.split(":")[0].strip().upper().split()[:2])
 
     GENERIC_LABELS = {
         "",
         "MUKU",
         "MU+KU",
         "MDS RETAIL",
+        "LUQMAN ORG",
         "DEPARTEMEN LAINNYA",
         "MULTI BRANDS",
         "LOCAL BRAND",
@@ -1658,22 +1694,29 @@ def _fetch_scoped_siblings(
         c_cat = classify_category_key(c_desc, c_dept)
         if ref_cat != "OTHER" and c_cat != "OTHER" and c_cat != ref_cat:
             return False
-        if ref_group == "MUKU" and ref_brand_tokens:
-            c_tokens = {
-                t.strip().upper()
-                for t in (c_brand, c_dept)
-                if t and t.strip().upper() not in GENERIC_LABELS
-            }
-            if c_tokens and not (
-                (ref_brand_tokens & c_tokens)
-                or any(rt in ct or ct in rt for rt in ref_brand_tokens for ct in c_tokens)
-            ):
+        if ref_group == "MUKU":
+            c_sub = normalize_sub_brand_key(c_brand, c_dept, clean_art, c_desc)
+            if ref_sub_brand and c_sub:
+                if ref_sub_brand == c_sub:
+                    return True
+                c_stem = " ".join(c_desc.split(":")[0].strip().upper().split()[:2])
+                if ref_desc_stem and len(ref_desc_stem) >= 4 and c_stem == ref_desc_stem:
+                    return True
                 return False
+            if ref_brand_tokens:
+                c_tokens = {
+                    t.strip().upper()
+                    for t in (c_brand, c_dept)
+                    if t and t.strip().upper() not in GENERIC_LABELS
+                }
+                if c_tokens and not (
+                    (ref_brand_tokens & c_tokens)
+                    or any(rt in ct or ct in rt for rt in ref_brand_tokens for ct in c_tokens)
+                ):
+                    c_stem = " ".join(c_desc.split(":")[0].strip().upper().split()[:2])
+                    if not (ref_desc_stem and len(ref_desc_stem) >= 4 and c_stem == ref_desc_stem):
+                        return False
         return True
-
-    clean_art = sanitize_article_code(raw_article, own_sku=clean_sku)
-    if not clean_art and exact_main:
-        clean_art = sanitize_article_code(exact_main.get("article"), own_sku=clean_sku)
 
     scoped: List[Dict[str, Any]] = []
     if clean_art:
@@ -1706,6 +1749,78 @@ def _fetch_scoped_siblings(
         exact_main = next((s for s in scoped if str(s.get("sku") or "").strip() == clean_sku), None)
 
     return exact_main, (scoped if scoped else ([exact_main] if exact_main else [])), bool(clean_art)
+
+
+def _make_mds_sku8(base7: int) -> str:
+    """Bangun 8-digit SKU ritel valid dari 7-digit nomor urut menggunakan bobot Modulo-10 (1,2,1,2,1,2,1)."""
+    if base7 <= 0 or base7 > 9_999_999:
+        return ""
+    s = f"{base7:07d}"
+    weights = (1, 2, 1, 2, 1, 2, 1)
+    chk = (10 - (sum(int(s[i]) * weights[i] for i in range(7)) % 10)) % 10
+    return f"{s}{chk}"
+
+
+def _inspect_matrix_completeness(
+    matrix_rows: List[Dict[str, Any]],
+    siblings: List[Dict[str, Any]],
+    has_valid_style_code: bool,
+) -> Dict[str, Any]:
+    """
+    Membandingkan matriks `Relasi Stok` (warna × ukuran) dari server dengan daftar `siblings` di DB
+    untuk mendeteksi apakah masih ada warna atau ukuran yang belum terdaftar di DB.
+    """
+    if not has_valid_style_code or not matrix_rows:
+        return {
+            "needsFamilyExpansion": False,
+            "expectedColorsCount": 0,
+            "missingColorsCount": 0,
+            "missingVariantsHint": 0,
+        }
+
+    matrix_colors: set = set()
+    nonzero_cells: set = set()
+    total_cells = 0
+    for r in matrix_rows:
+        col_raw = str(r.get("COLOR & SIZE") or r.get("COLOR") or r.get("Color") or "").strip()
+        col_norm = _norm_color_key(col_raw)
+        if col_norm:
+            matrix_colors.add(col_norm)
+        for k, v in r.items():
+            k_up = str(k).strip().upper()
+            if k_up in ("COLOR & SIZE", "COLOR", "TOTAL", "GRAND TOTAL"):
+                continue
+            sz_norm = normalize_code_key(k_up)
+            if not sz_norm:
+                continue
+            total_cells += 1
+            qty = parse_stock_int(v) or 0
+            if qty > 0 and col_norm:
+                nonzero_cells.add((col_norm, sz_norm))
+
+    db_colors: set = set()
+    db_cells: set = set()
+    for s in siblings:
+        c_n = _norm_color_key(s.get("color"))
+        sz_n = normalize_code_key(s.get("size"))
+        if c_n:
+            db_colors.add(c_n)
+        if c_n and sz_n:
+            db_cells.add((c_n, sz_n))
+
+    missing_colors = matrix_colors - db_colors
+    missing_nonzero = nonzero_cells - db_cells
+    needs_exp = bool(
+        missing_colors
+        or missing_nonzero
+        or (len(siblings) <= 1 and total_cells > 1)
+    )
+    return {
+        "needsFamilyExpansion": needs_exp,
+        "expectedColorsCount": len(matrix_colors),
+        "missingColorsCount": len(missing_colors),
+        "missingVariantsHint": max(len(missing_nonzero), len(missing_colors), (total_cells - 1 if len(siblings) <= 1 and total_cells > 1 else 0)),
+    }
 
 
 def _sync_catalog_article_for_family(article: str, siblings: List[Dict[str, Any]], now_iso: str) -> None:
@@ -2128,6 +2243,8 @@ def run_live_scan(
             owner_acc,
         )
 
+    matrix_meta = _inspect_matrix_completeness(matrix_rows, siblings, has_valid_style_code)
+
     return {
         "success": True,
         "sku": saved_meta["sku"],
@@ -2142,6 +2259,10 @@ def run_live_scan(
         "imagesMatched": len(found_images),
         "healedFrom": clean_code if was_healed else None,
         "resolvedCode": active_code,
+        "needsFamilyExpansion": matrix_meta["needsFamilyExpansion"],
+        "expectedColorsCount": matrix_meta["expectedColorsCount"],
+        "missingColorsCount": matrix_meta["missingColorsCount"],
+        "missingVariantsHint": matrix_meta["missingVariantsHint"],
         "source": "PYTHON_LIVE_ENGINE",
         "elapsedMs": int((time.time() - t0) * 1000),
     }
@@ -2489,6 +2610,7 @@ def run_fast_stock(
 
     acc_prof = ACCOUNT_PROFILES.get(owner_acc) or {}
     owner_acc_label = f"luqman.org • {acc_prof.get('label', owner_acc.upper())}"
+    matrix_meta = _inspect_matrix_completeness(matrix_rows, siblings, has_valid_style_code)
 
     return {
         "success": True,
@@ -2509,8 +2631,395 @@ def run_fast_stock(
         "imagesMatched": len(healed_imgs),
         "hargaNormal": (main_product or {}).get("hargaNormal") or live_normal,
         "hargaPromo": (main_product or {}).get("hargaPromo"),
+        "needsFamilyExpansion": matrix_meta["needsFamilyExpansion"],
+        "expectedColorsCount": matrix_meta["expectedColorsCount"],
+        "missingColorsCount": matrix_meta["missingColorsCount"],
+        "missingVariantsHint": matrix_meta["missingVariantsHint"],
         "fastMode": False,
         "source": "PYTHON_LIVE_SYNC_FULL",
+        "elapsedMs": int((time.time() - t0) * 1000),
+    }
+
+
+def run_expand_article_family(
+    sku: str,
+    article: Optional[str] = None,
+    brand_group: Optional[str] = None,
+    max_seconds: float = 14.0,
+) -> Dict[str, Any]:
+    """
+    FASE 2 NON-BLOCKING: DISCOVERY SELURUH WARNA & UKURAN 1 ARTIKEL (100% AKURAT SERVER):
+    Setelah SKU utama langsung tampil di layar (prioritas < 1 dtk), fungsi ini menyapu:
+    1. Katalog Online Multi-Handle (`suggest.json` -> `/products/<handle>.js` untuk semua warna).
+    2. Modulo-10 Sequential SKU Neighborhood (`base7 - 24 .. base7 + 24`, gelombang adaptif) langsung ke server
+       untuk menemukan seluruh warna & ukuran (bahkan produk khusus offline seperti SAVRO `DMR-1`!).
+    3. Promo live per kelompok warna/harga + foto studio strict per warna (0% campur warna!).
+    4. Simpan permanen ke Turso DB (`Product` + `BarcodeAlias` + `CatalogArticle`).
+    """
+    t0 = time.time()
+    deadline = t0 + max(5.0, min(float(max_seconds or 14.0), 22.0))
+    clean_sku = str(sku or "").strip()
+    if not clean_sku:
+        return {"success": False, "error": "SKU wajib diisi"}
+
+    seed_main, initial_sibs, _ = _fetch_scoped_siblings(clean_sku, article)
+    clean_art = sanitize_article_code(
+        article or (seed_main or {}).get("article"),
+        own_sku=clean_sku,
+    )
+    if not clean_art:
+        return {
+            "success": True,
+            "expanded": False,
+            "newlyDiscoveredCount": 0,
+            "sku": clean_sku,
+            "article": clean_sku,
+            "data": seed_main,
+            "siblings": initial_sibs,
+            "elapsedMs": int((time.time() - t0) * 1000),
+        }
+
+    bg_db = (
+        resolve_store_group(
+            str((seed_main or {}).get("brand") or ""),
+            str((seed_main or {}).get("dept") or ""),
+            str((seed_main or {}).get("description") or ""),
+        )
+        if seed_main and ((seed_main.get("brand") or seed_main.get("dept")))
+        else ""
+    )
+    bg_req = str(brand_group or "").strip().upper()
+    bg = bg_db if bg_db in ("SUKO", "MUKU", "ZES") else (bg_req if bg_req in ("SUKO", "MUKU", "ZES") else "")
+    owner_acc = "suko" if bg == "SUKO" else "muku"
+
+    cookie = get_storehub_cookie(owner_acc, force_refresh=False)
+    if not cookie:
+        return {
+            "success": True,
+            "expanded": False,
+            "storeOffline": True,
+            "newlyDiscoveredCount": 0,
+            "sku": clean_sku,
+            "article": clean_art,
+            "data": seed_main,
+            "siblings": initial_sibs,
+            "elapsedMs": int((time.time() - t0) * 1000),
+        }
+
+    m_res = query_stock_matrix(clean_sku, cookie, owner_acc, timeout=3.5)
+    if m_res.get("auth_failed"):
+        fresh = get_storehub_cookie(owner_acc, force_refresh=True)
+        if fresh:
+            cookie = fresh
+            m_res = query_stock_matrix(clean_sku, cookie, owner_acc, timeout=3.5)
+    elif m_res.get("action_expired") and resolve_action_hashes(cookie=cookie):
+        m_res = query_stock_matrix(clean_sku, cookie, owner_acc, timeout=3.5)
+
+    if m_res.get("offline"):
+        return {
+            "success": True,
+            "expanded": False,
+            "storeOffline": True,
+            "newlyDiscoveredCount": 0,
+            "sku": clean_sku,
+            "article": clean_art,
+            "data": seed_main,
+            "siblings": initial_sibs,
+            "elapsedMs": int((time.time() - t0) * 1000),
+        }
+
+    matrix_rows = m_res.get("rows") or []
+    comp0 = _inspect_matrix_completeness(matrix_rows, initial_sibs, True)
+    existing_sku_set = {str(s.get("sku") or "").strip() for s in initial_sibs if s.get("sku")}
+    skus_missing_bc = {
+        str(s.get("sku") or "").strip()
+        for s in initial_sibs
+        if s.get("sku") and not str(s.get("barcode") or "").strip()
+    }
+
+    if not comp0["needsFamilyExpansion"] and not skus_missing_bc:
+        return {
+            "success": True,
+            "expanded": False,
+            "newlyDiscoveredCount": 0,
+            "sku": clean_sku,
+            "article": clean_art,
+            "data": seed_main,
+            "siblings": initial_sibs,
+            "elapsedMs": int((time.time() - t0) * 1000),
+        }
+
+    # ── LAYER 1: Panen SKU & Foto per Warna dari Katalog Online Multi-Handle (~0.6 dtk) ──
+    web_skus: List[str] = []
+    web_color_imgs: Dict[str, List[str]] = {}
+    art_low = clean_art.lower()
+    try:
+        qs = urllib.parse.urlencode({"q": clean_art, "resources[type]": "product", "resources[limit]": "10"})
+        st_s, txt_s = _http_get_text(f"https://matahari.com/search/suggest.json?{qs}", timeout=1.8)
+        handles: List[str] = []
+        if st_s == 200 and txt_s:
+            s_prods = (((json.loads(txt_s).get("resources") or {}).get("results") or {}).get("products")) or []
+            for p in s_prods:
+                h = str(p.get("handle") or "").strip()
+                if h and h not in handles:
+                    handles.append(h)
+
+        def _fetch_handle_js(h: str):
+            st_j, txt_j = _http_get_text(f"https://matahari.com/products/{h}.js", timeout=1.8)
+            if st_j != 200 or not txt_j:
+                return None
+            try:
+                return json.loads(txt_j)
+            except Exception:
+                return None
+
+        if handles and (deadline - time.time()) > 2.5:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(handles))) as pool:
+                for pjs in pool.map(_fetch_handle_js, handles[:8]):
+                    if not isinstance(pjs, dict):
+                        continue
+                    body_h = str(pjs.get("body_html") or "").lower()
+                    title_h = str(pjs.get("title") or "").lower()
+                    variants = pjs.get("variants") or []
+                    v_skus_in_page = {str(v.get("sku") or "").strip() for v in variants if isinstance(v, dict)}
+                    # Pastikan halaman benar-benar milik artikel ini (ada kode artikel di judul/body ATAU memuat salah satu SKU yang sudah dikenal)
+                    if (art_low not in body_h and art_low not in title_h) and not (v_skus_in_page & existing_sku_set):
+                        continue
+                    for v in variants:
+                        if not isinstance(v, dict):
+                            continue
+                        v_sku = str(v.get("sku") or "").strip()
+                        if v_sku and v_sku.isdigit() and v_sku not in web_skus:
+                            web_skus.append(v_sku)
+                        v_col_norm = _norm_color_key(v.get("option1") or "")
+                        f_img = v.get("featured_image")
+                        f_src = f_img.get("src") if isinstance(f_img, dict) else (f_img if isinstance(f_img, str) else "")
+                        f_src = str(f_src or "").strip()
+                        if f_src.startswith("//"):
+                            f_src = f"https:{f_src}"
+                        if v_col_norm and "cdn.shopify.com/s/files/1/0666/9212/0727/" in f_src and not _is_junk_image_url(f_src):
+                            web_color_imgs.setdefault(v_col_norm, [])
+                            if f_src not in web_color_imgs[v_col_norm]:
+                                web_color_imgs[v_col_norm].append(f_src)
+    except Exception:
+        pass
+
+    # ── LAYER 2: Sapuan Paralel Modulo-10 SKU Neighborhood ke Server (~1.0 - 2.5 dtk) ──
+    discovered_items: Dict[str, Dict[str, Any]] = {}
+    probed_skus: set = {clean_sku}
+
+    def _probe_sku_batch(sku_batch: List[str]) -> Tuple[int, set]:
+        batch_clean = [s for s in sku_batch if s and s not in probed_skus]
+        for s in batch_clean:
+            probed_skus.add(s)
+        if not batch_clean or (deadline - time.time()) < 1.2:
+            return 0, set()
+        hits_cnt = 0
+        hit_skus_local: set = set()
+        per_to = min(2.8, max(1.1, deadline - time.time()))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(batch_clean))) as pool:
+            futs = {pool.submit(query_detail, "sku", s, cookie, owner_acc, per_to): s for s in batch_clean}
+            for f in concurrent.futures.as_completed(futs):
+                try:
+                    r_d = f.result()
+                except Exception:
+                    continue
+                for it in (r_d.get("items") or []):
+                    it_sku = str(it.get("SKU") or it.get("sku") or "").strip()
+                    it_art = sanitize_article_code(it.get("StyleCode") or it.get("styleCode"), own_sku=it_sku)
+                    if it_sku and it_art.upper() == clean_art.upper():
+                        discovered_items[it_sku] = it
+                        hit_skus_local.add(it_sku)
+                        hits_cnt += 1
+        return hits_cnt, hit_skus_local
+
+    # 2A. Tembak dulu SKU dari katalog online + SKU eksisting yang belum punya barcode
+    priority_web = [s for s in (web_skus + sorted(skus_missing_bc)) if s != clean_sku]
+    if priority_web:
+        _probe_sku_batch(priority_web[:48])
+
+    # Cek apakah seluruh warna & sel stok > 0 di matriks sudah tertutup
+    def _still_missing_matrix_cells() -> bool:
+        virtual_sibs = list(initial_sibs) + [
+            {
+                "sku": k,
+                "color": _extract_item_color(v),
+                "size": _extract_item_size(v),
+            }
+            for k, v in discovered_items.items()
+            if k not in existing_sku_set
+        ]
+        chk = _inspect_matrix_completeness(matrix_rows, virtual_sibs, True)
+        return chk["needsFamilyExpansion"]
+
+    # 2B. Bila masih ada warna/size yang belum ketemu (mis. barang offline atau warna baru belum naik web),
+    #     sapu tetangga Modulo-10 di sekitar `clean_sku` secara spiral keluar!
+    if _still_missing_matrix_cells() and len(clean_sku) == 8 and clean_sku.isdigit() and (deadline - time.time()) > 1.8:
+        anchor_bases = sorted(
+            {
+                int(s[:7])
+                for s in ([clean_sku] + [x for x in existing_sku_set if len(x) == 8 and x.isdigit()])
+            }
+        )
+        base0 = anchor_bases[0]
+        base_max = anchor_bases[-1]
+        wave1_offsets: List[int] = []
+        for delta in range(1, 17):
+            wave1_offsets.append(base0 - delta)
+            wave1_offsets.append(base_max + delta)
+        # Sertakan juga celah di antara anchor_bases jika ada
+        for b_mid in range(base0 + 1, min(base_max, base0 + 30)):
+            wave1_offsets.insert(0, b_mid)
+
+        wave1_cands = [_make_mds_sku8(b) for b in dict.fromkeys(wave1_offsets) if b > 0]
+        _, w1_hits = _probe_sku_batch(wave1_cands)
+
+        # Gelombang 2 adaptif bila tepi luar masih mengenai artikel yang sama & masih ada sel matriks belum terisi
+        if _still_missing_matrix_cells() and w1_hits and (deadline - time.time()) > 2.0:
+            low_edge_hit = any(_make_mds_sku8(base0 - d) in w1_hits for d in (14, 15, 16))
+            high_edge_hit = any(_make_mds_sku8(base_max + d) in w1_hits for d in (14, 15, 16))
+            wave2_bases: List[int] = []
+            if low_edge_hit:
+                wave2_bases.extend(base0 - d for d in range(17, 35))
+            if high_edge_hit:
+                wave2_bases.extend(base_max + d for d in range(17, 35))
+            if wave2_bases:
+                _probe_sku_batch([_make_mds_sku8(b) for b in wave2_bases if b > 0])
+
+    newly_found_skus = [k for k in discovered_items.keys() if k not in existing_sku_set]
+
+    # ── LAYER 3: Cek Promo per Kelompok (Warna, Harga) & Foto Strict per Warna ──
+    promo_by_color_price: Dict[Tuple[str, int], Tuple[bool, Optional[Dict[str, Any]]]] = {}
+    if discovered_items and (deadline - time.time()) > 1.3:
+        rep_groups: Dict[Tuple[str, int], str] = {}
+        for it_sku, it_raw in discovered_items.items():
+            c_norm = _norm_color_key(_extract_item_color(it_raw) or "")
+            p_val = _extract_item_price(it_raw) or 0
+            gk = (c_norm, p_val)
+            if gk not in rep_groups:
+                rep_groups[gk] = it_sku
+
+        def _check_group_promo(gk_sku: Tuple[Tuple[str, int], str]):
+            gk, r_sku = gk_sku
+            pr_res = query_promotion_checked("sku", r_sku, cookie, owner_acc, gk[1], timeout=2.0)
+            return gk, bool(pr_res.get("checked")), pr_res.get("promo")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, max(1, len(rep_groups)))) as pool:
+            for gk, p_chk, p_obj in pool.map(_check_group_promo, list(rep_groups.items())[:6]):
+                promo_by_color_price[gk] = (p_chk, p_obj)
+
+    # Kumpulkan peta warna -> kumpulan SKU untuk saringan ketat foto per warna
+    skus_by_color: Dict[str, set] = {}
+    raw_color_label: Dict[str, str] = {}
+    for s in initial_sibs:
+        cn = _norm_color_key(s.get("color"))
+        if cn and s.get("sku"):
+            skus_by_color.setdefault(cn, set()).add(str(s["sku"]))
+            raw_color_label.setdefault(cn, str(s.get("color") or ""))
+    for it_sku, it_raw in discovered_items.items():
+        c_raw = _extract_item_color(it_raw) or ""
+        cn = _norm_color_key(c_raw)
+        if cn:
+            skus_by_color.setdefault(cn, set()).add(it_sku)
+            raw_color_label.setdefault(cn, c_raw)
+
+    all_family_sku_union = set().union(*skus_by_color.values()) if skus_by_color else set()
+    verified_imgs_by_color: Dict[str, List[str]] = {}
+    colors_needing_img = [
+        cn
+        for cn in skus_by_color.keys()
+        if not any(
+            _norm_color_key(s.get("color")) == cn and str(s.get("imageUrl") or "").strip()
+            for s in initial_sibs
+        )
+    ]
+    if colors_needing_img and (deadline - time.time()) > 1.2:
+        def _resolve_color_imgs(cn: str) -> Tuple[str, List[str]]:
+            same_c = skus_by_color.get(cn) or set()
+            other_c = all_family_sku_union - same_c
+            rep_s = sorted(same_c)[0] if same_c else ""
+            imgs = lookup_matahari_images(
+                sku=rep_s,
+                article=clean_art,
+                barcode="",
+                same_color_skus=same_c,
+                other_color_skus=other_c,
+                target_color=raw_color_label.get(cn, ""),
+            )
+            if not imgs and web_color_imgs.get(cn):
+                strict_w = _filter_strict_color_images(web_color_imgs[cn], same_color_skus=same_c, other_color_skus=other_c)
+                imgs = [u for u in strict_w[:4] if _verify_image_not_grey_logo(u, timeout=1.1)]
+            return cn, imgs
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(colors_needing_img))) as pool:
+            for cn, c_imgs in pool.map(_resolve_color_imgs, colors_needing_img[:6]):
+                if c_imgs:
+                    verified_imgs_by_color[cn] = c_imgs
+
+    # ── LAYER 4: Simpan seluruh varian baru & pembaruan ke Turso DB ──
+    now_iso = utc_iso_now()
+    for it_sku, it_raw in discovered_items.items():
+        c_norm = _norm_color_key(_extract_item_color(it_raw) or "")
+        p_val = _extract_item_price(it_raw) or 0
+        p_chk, p_obj = promo_by_color_price.get((c_norm, p_val), (False, None))
+        c_imgs = verified_imgs_by_color.get(c_norm, [])
+        try:
+            _upsert_item_and_aliases(
+                it_raw,
+                "",
+                owner_acc,
+                p_obj,
+                c_imgs,
+                now_iso,
+                promo_checked=p_chk,
+            )
+        except Exception:
+            pass
+
+    # Segarkan seluruh keluarga artikel dari Turso + terapkan matriks stok terbaru
+    final_main, final_sibs, _ = _fetch_scoped_siblings(clean_sku, clean_art)
+    if matrix_rows and final_sibs:
+        st_updates: List[Tuple[str, Tuple[Any, ...]]] = []
+        for sib in final_sibs:
+            s_sku = str(sib.get("sku") or "").strip()
+            if not s_sku:
+                continue
+            mq = match_matrix_qty(matrix_rows, sib.get("color"), sib.get("size"))
+            if mq is not None and mq != int(sib.get("stok") or 0):
+                sib["stok"] = mq
+                st_updates.append(('UPDATE "Product" SET stok = ?, "updatedAt" = ? WHERE sku = ?', (mq, now_iso, s_sku)))
+        if st_updates:
+            try:
+                turso_pipeline(st_updates, timeout=3.5)
+            except Exception:
+                pass
+
+    if final_sibs:
+        _sync_catalog_article_for_family(clean_art, final_sibs, now_iso)
+
+    all_skus_final = [str(s["sku"]) for s in final_sibs if s.get("sku")]
+    aliases_final: List[Dict[str, Any]] = []
+    if all_skus_final:
+        ph = ",".join("?" for _ in all_skus_final[:80])
+        aliases_final = turso_query(
+            f'SELECT barcode, "barcodeNorm", sku FROM "BarcodeAlias" WHERE sku IN ({ph})',
+            tuple(all_skus_final[:80]),
+            timeout=2.5,
+        )
+
+    final_main = next((s for s in final_sibs if str(s.get("sku") or "") == clean_sku), final_main)
+    return {
+        "success": True,
+        "expanded": bool(newly_found_skus),
+        "newlyDiscoveredCount": len(newly_found_skus),
+        "totalVariants": len(final_sibs),
+        "sku": clean_sku,
+        "article": clean_art,
+        "ownerAccount": owner_acc,
+        "data": final_main,
+        "siblings": final_sibs,
+        "aliases": aliases_final,
+        "source": "PYTHON_FAMILY_EXPANDER",
         "elapsedMs": int((time.time() - t0) * 1000),
     }
 
@@ -2649,6 +3158,13 @@ def handle_live_request(payload: Dict[str, Any]) -> Dict[str, Any]:
             family_variants=payload.get("familyVariants") or [],
             article=payload.get("article"),
             brand_group=payload.get("brandGroup"),
+        )
+    if action == "expand-family":
+        return run_expand_article_family(
+            sku=str(payload.get("sku") or ""),
+            article=payload.get("article"),
+            brand_group=payload.get("brandGroup"),
+            max_seconds=float(payload.get("maxSeconds") or 14.0),
         )
     if action == "heal-image":
         return run_heal_image(

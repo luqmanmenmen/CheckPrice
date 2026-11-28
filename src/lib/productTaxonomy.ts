@@ -854,22 +854,29 @@ export function getNormalizedSubBrand(p: TaxonomyInput): string {
     return "LAINNYA";
   }
 
-  if (raw.includes("NEVADA")) return "NEVADA";
-  if (raw.includes("CONNEXION")) return "CONNEXION";
+  if (raw.includes("NEVADA") || raw === "NVD" || raw.startsWith("NVD ") || raw === "NEV") return "NEVADA";
+  if (raw.includes("CONNEXION") || raw === "CNX" || raw.startsWith("CNX ")) return "CONNEXION";
   if (raw === "COLE" || raw.startsWith("COLE ")) return "COLE";
+  if (raw.includes("STANLEY ADAMS") || raw === "STANLEY") return "STANLEY ADAMS";
   if (raw.includes("DISNEY") || raw === "THATS DONALD") return "DISNEY";
   if (raw.includes("SHE SENSE")) return "SHE SENSE";
-  if (raw.startsWith("CARDINAL")) return "CARDINAL";
+  if (raw.startsWith("CARDINAL") || raw === "CRD") return "CARDINAL";
   if (raw.startsWith("CROCODILE")) return "CROCODILE";
   if (raw === "KHA" || raw === "KHA BAG") return "KHA";
-  if (raw === "EXIT" || raw === "EXITKIDS") return "EXIT";
+  if (raw === "EXIT" || raw === "EXITKIDS" || raw.startsWith("EXIT ")) return "EXIT";
+  if (raw === "GABS" || raw === "THE GABS") return "GABS";
+  if (raw.includes("SAVRO")) return "SAVRO";
+  if (raw.includes("ANNISA")) return "ANNISA";
+  if (raw.includes("DETAILS") || raw === "DTL") return "DETAILS";
+  if (raw.includes("PHENOMENAL")) return "PHENOMENAL";
+  if (raw.includes("AMERICAN JEANS") || raw === "AMJ") return "AMERICAN JEANS";
   if (raw.startsWith("OSELLA")) return "OSELLA";
   if (raw.startsWith("ARROW")) return "ARROW";
   if (raw.startsWith("PIERRE CARDIN")) return "PIERRE CARDIN";
   if (raw.startsWith("LEVIS")) return "LEVIS";
   if (raw === "AOS MENS" || raw === "AOS LADIES") return "AOS";
   if (raw === "LICENSE ESS" || raw === "LICENSE BABY" || raw === "LICENSE") return "CHARACTER";
-  if (raw === "VOLO") return "VOLO";
+  if (raw === "VOLO" || raw === "VLO") return "VOLO";
 
   return raw;
 }

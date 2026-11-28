@@ -26,6 +26,20 @@ export async function POST(req: NextRequest) {
 
     const brandGroup = typeof body.brandGroup === 'string' ? body.brandGroup.trim().toUpperCase() : null;
 
+    if (body.action === 'expand-family') {
+      const result = await invokePythonLiveEngine(
+        {
+          action: 'expand-family',
+          sku: String(sku),
+          article: typeof body.article === 'string' ? body.article : null,
+          brandGroup,
+          maxSeconds: 14.0,
+        },
+        { requestUrl: req.url, timeoutMs: 18000 }
+      );
+      return NextResponse.json(result);
+    }
+
     if (body.fastMode === true) {
       const result = await invokePythonLiveEngine(
         {
